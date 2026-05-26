@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 
 export const supervisorModules = [
-  { label: 'Home', path: '/supervisor/home', description: 'Supervisor overview' },
+  { label: 'Dashboard', path: '/supervisor/dashboard', description: 'Supervisor overview' },
   {
     label: 'Bookings',
     path: '/supervisor/bookings',
@@ -29,6 +29,19 @@ export const supervisorModules = [
 const supIconClassName = 'h-5 w-5 stroke-current'
 
 const supIcons = {
+  Dashboard: (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      strokeWidth="1.6"
+      className={supIconClassName}
+      aria-hidden="true"
+    >
+      <path d="M3 11.5 12 4l9 7.5" />
+      <path d="M5.5 10.5V20h13V10.5" />
+      <path d="M9.5 20v-6h5v6" />
+    </svg>
+  ),
   Home: (
     <svg
       viewBox="0 0 24 24"
@@ -111,7 +124,7 @@ const supIcons = {
   )
 }
 
-function SupLayout({ title, background, children }) {
+function SupLayout({ title, background, children, bg = 'bg-white' }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     if (typeof window === 'undefined') {
       return false
@@ -124,12 +137,12 @@ function SupLayout({ title, background, children }) {
   }, [isExpanded])
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-white text-slate-900">
+    <main className={`relative h-screen overflow-hidden ${bg} text-slate-900`}>
       {background}
 
-      <section className="relative mx-auto flex min-h-screen w-full max-w-none gap-0">
+      <section className="relative mx-auto flex h-full w-full max-w-none gap-0">
         <aside
-          className={`flex flex-col items-center gap-5 border-r border-blue-200/70 bg-blue-50/80 px-2 py-4 backdrop-blur transition-all duration-200 ${
+          className={`sticky top-0 flex h-screen shrink-0 flex-col items-center gap-5 border-r border-blue-200/70 bg-blue-50/80 px-2 py-4 backdrop-blur transition-all duration-200 ${
             isExpanded ? 'w-48 sm:w-56' : 'w-16 sm:w-20'
           }`}
           onClick={() => setIsExpanded((prev) => !prev)}
@@ -173,7 +186,7 @@ function SupLayout({ title, background, children }) {
           </nav>
         </aside>
 
-        <div className="flex-1 min-w-0 px-4 py-4 sm:px-8 sm:py-8 lg:px-12">
+        <div className="flex-1 min-w-0 overflow-y-auto px-4 py-4 sm:px-8 sm:py-8 lg:px-12">
           {children}
         </div>
       </section>

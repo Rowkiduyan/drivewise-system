@@ -41,12 +41,12 @@ function MechanicLayout({ title, background, children }) {
   }, [isExpanded])
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-white text-slate-900">
+    <main className="relative h-screen overflow-hidden bg-white text-slate-900">
       {background}
 
-      <section className="relative mx-auto flex min-h-screen w-full max-w-none gap-0">
+      <section className="relative mx-auto flex h-full w-full max-w-none gap-0">
         <aside
-          className={`flex flex-col items-center gap-5 border-r border-cyan-200/70 bg-cyan-50/80 px-2 py-4 backdrop-blur transition-all duration-200 ${
+          className={`sticky top-0 flex h-screen shrink-0 flex-col items-center gap-5 border-r border-cyan-200/70 bg-cyan-50/80 px-2 py-4 backdrop-blur transition-all duration-200 ${
             isExpanded ? 'w-48 sm:w-56' : 'w-16 sm:w-20'
           }`}
           onClick={() => setIsExpanded((prev) => !prev)}
@@ -90,7 +90,7 @@ function MechanicLayout({ title, background, children }) {
           </nav>
         </aside>
 
-        <div className="flex-1 min-w-0 px-4 py-4 sm:px-8 sm:py-8 lg:px-12">
+        <div className="flex-1 min-w-0 overflow-y-auto px-4 py-4 sm:px-8 sm:py-8 lg:px-12">
           {children}
         </div>
       </section>

@@ -12,7 +12,7 @@ import MechanicTrucks from './pages/MechanicTrucks.jsx'
 import SupBookings from './pages/SupBookings.jsx'
 import SupDeliveryCrew from './pages/SupDeliveryCrew.jsx'
 import SupDeliveries from './pages/SupDeliveries.jsx'
-import SupHome from './pages/SupHome.jsx'
+import SupDashboard from './pages/SupDashboard.jsx'
 import SupProfile from './pages/SupProfile.jsx'
 import SupTrucks from './pages/SupTrucks.jsx'
 
@@ -34,9 +34,9 @@ function App() {
       <Route path="/driver/profile" element={<DriverProfile />} />
       <Route
         path="/supervisor"
-        element={<Navigate to="/supervisor/home" replace />}
+        element={<Navigate to="/supervisor/dashboard" replace />}
       />
-      <Route path="/supervisor/home" element={<SupHome />} />
+      <Route path="/supervisor/dashboard" element={<SupDashboard />} />
       <Route path="/supervisor/bookings" element={<SupBookings />} />
       <Route path="/supervisor/delivery-crew" element={<SupDeliveryCrew />} />
       <Route path="/supervisor/deliveries" element={<SupDeliveries />} />
