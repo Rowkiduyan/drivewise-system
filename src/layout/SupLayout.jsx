@@ -28,6 +28,15 @@ export const supervisorModules = [
 
 const supIconClassName = 'h-5 w-5 stroke-current'
 
+const supervisorSidebarTheme = {
+  sidebar: 'border-blue-900/80 bg-blue-950',
+  badge: 'bg-blue-900 text-white',
+  divider: 'bg-blue-800',
+  activeLink: 'border-blue-400 bg-blue-900 text-white',
+  inactiveLink: 'text-blue-200 hover:border-blue-700',
+  labelText: 'text-blue-100'
+}
+
 const supIcons = {
   Dashboard: (
     <svg
@@ -137,21 +146,25 @@ function SupLayout({ title, background, children, bg = 'bg-white' }) {
   }, [isExpanded])
 
   return (
-    <main className={`relative h-screen overflow-hidden ${bg} text-slate-900`}>
+    <main
+      className={`sup-layout relative h-screen overflow-hidden ${bg} text-slate-900`}
+      style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
+    >
+      <style>{`.sup-layout .font-display { font-family: Inter, system-ui, sans-serif !important; }`}</style>
       {background}
 
       <section className="relative mx-auto flex h-full w-full max-w-none gap-0">
         <aside
-          className={`sticky top-0 flex h-screen shrink-0 flex-col items-center gap-5 border-r border-blue-200/70 bg-blue-50/80 px-2 py-4 backdrop-blur transition-all duration-200 ${
+          className={`sticky top-0 flex h-screen shrink-0 flex-col items-center gap-5 border-r px-2 py-4 backdrop-blur transition-all duration-200 ${supervisorSidebarTheme.sidebar} ${
             isExpanded ? 'w-48 sm:w-56' : 'w-16 sm:w-20'
           }`}
           onClick={() => setIsExpanded((prev) => !prev)}
         >
           <div className="flex flex-col items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-100 text-lg font-semibold text-blue-700">
+            <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${supervisorSidebarTheme.badge} text-lg font-semibold`}>
               SP
             </div>
-            <div className="h-px w-full bg-blue-200/70" />
+            <div className={`h-px w-full ${supervisorSidebarTheme.divider}`} />
           </div>
 
           <nav className="flex w-full flex-1 flex-col items-center gap-3">
@@ -166,14 +179,14 @@ function SupLayout({ title, background, children, bg = 'bg-white' }) {
                     isExpanded ? 'w-full justify-start' : 'w-12 justify-center sm:w-14'
                   } ${
                     isActive
-                      ? 'border-blue-300 bg-blue-100 text-blue-800'
-                      : 'text-blue-700 hover:border-blue-300'
+                      ? supervisorSidebarTheme.activeLink
+                      : supervisorSidebarTheme.inactiveLink
                   }`
                 }
               >
                 {supIcons[module.label]}
                 <span
-                  className={`pointer-events-none inline-flex whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] text-blue-800 transition-[max-width,opacity,transform] duration-200 ease-out ${
+                  className={`pointer-events-none inline-flex whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] ${supervisorSidebarTheme.labelText} transition-[max-width,opacity,transform] duration-200 ease-out ${
                     isExpanded
                       ? 'max-w-[160px] translate-x-0 opacity-100'
                       : 'max-w-0 translate-x-1 opacity-0'
