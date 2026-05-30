@@ -1,25 +1,20 @@
 import ClientLayout from '../layout/ClientLayout.jsx'
 
-const background = (
-  <>
-    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.18),_transparent_55%),radial-gradient(circle_at_20%_60%,_rgba(134,239,172,0.16),_transparent_45%)]" />
-    <div className="pointer-events-none absolute -top-28 right-0 h-72 w-72 rounded-full bg-emerald-300/40 blur-[120px]" />
-    <div className="pointer-events-none absolute bottom-0 left-0 h-72 w-72 rounded-full bg-emerald-200/30 blur-[120px]" />
-  </>
-)
+const background = null
 
 function ClientHome() {
   return (
     <ClientLayout title="Client Home" background={background}>
       <div className="flex flex-col gap-6">
-        <header className="space-y-2">
-          <p className="text-xs uppercase tracking-[0.3em] text-emerald-600">
+        {/* Header Section */}
+        <header className="space-y-2 md:space-y-3">
+          <p className="text-xs uppercase tracking-[0.3em] text-emerald-600 font-medium">
             Client Interface
           </p>
-          <h1 className="font-display text-3xl font-semibold sm:text-4xl">
-            Client Home
+          <h1 className="text-2xl sm:text-3xl md:text-4xl font-semibold leading-tight text-slate-900">
+            Home
           </h1>
-          <p className="max-w-2xl text-sm text-slate-600">
+          <p className="max-w-3xl text-sm md:text-base text-slate-600 leading-relaxed">
             Overview of your active bookings, recent deliveries, and account
             updates.
           </p>

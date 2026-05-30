@@ -24,15 +24,15 @@ function LandingPage() {
           : 'text-[#e64439]'
 
   return (
-    <main className="bg-white text-[#1c120f]">
+    <main className="bg-white text-[#1c120f]" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
       <section className="relative min-h-screen overflow-hidden">
         <img
           src={marvelTrucks}
           alt="Marvel fleet"
           className="absolute inset-0 h-full w-full object-cover"
         />
-        <div className="absolute inset-0 bg-black/15" />
-        <div className="absolute inset-0 bg-gradient-to-br from-white/95 via-white/92 to-white/85" />
+        <div className="absolute inset-0 bg-black/40" />
+        <div className="absolute inset-0 bg-gradient-to-br from-white/60 via-white/50 to-white/40" />
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(230,68,57,0.12),_transparent_55%),radial-gradient(circle_at_70%_40%,_rgba(247,167,96,0.16),_transparent_50%)]" />
 
         <div className="relative flex min-h-screen w-full flex-col gap-12 px-5 pb-8 pt-0 sm:px-8 lg:px-12">
@@ -48,14 +48,14 @@ function LandingPage() {
               />
               <div className="leading-tight">
                 <p
-                  className={`text-sm uppercase tracking-[0.28em] ${wordmarkPrimaryClass} ${
+                  className={`text-base uppercase tracking-[0.28em] ${wordmarkPrimaryClass} ${
                     wordmarkStyle === 'italic' ? 'italic' : ''
                   }`}
                 >
                   Marvel Trucking
                 </p>
                 <p
-                  className={`text-xs uppercase tracking-[0.36em] ${wordmarkSecondaryClass} ${
+                  className={`text-sm uppercase tracking-[0.36em] ${wordmarkSecondaryClass} ${
                     wordmarkStyle === 'italic' ? 'italic' : ''
                   }`}
                 >
@@ -64,7 +64,7 @@ function LandingPage() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-5">
-              <nav className="flex items-center gap-5 text-xs uppercase tracking-[0.3em] text-white/85">
+              <nav className="flex items-center gap-5 text-sm uppercase tracking-[0.3em] text-white/85">
                 {['Overview', 'Fleet', 'Services', 'Contact'].map((item) => (
                   <button
                     key={item}
@@ -80,22 +80,22 @@ function LandingPage() {
 
           <div className="flex min-h-[60vh] items-end">
             <div className="space-y-5">
-              <p className="text-xs uppercase tracking-[0.35em] text-[#e64439]">
+              <p className="text-sm uppercase tracking-[0.3em] font-medium text-[#e64439]">
                 Pasig City, Philippines
               </p>
-              <p className="text-4xl font-bold uppercase tracking-[0.18em] sm:text-5xl">
+              <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-semibold leading-tight tracking-tight">
                 <span className="bg-gradient-to-r from-[#7e1609] via-[#e64439] to-[#f7a760] bg-clip-text text-transparent">
                   Marvel Trucking Solutions, Inc.
                 </span>
-              </p>
-              <p className="max-w-2xl text-base text-[#4b2a25] sm:text-lg">
+              </h1>
+              <p className="max-w-3xl text-base md:text-lg text-[#4b2a25] leading-relaxed">
                 Marvel Trucking Solutions, Inc. is a growing logistics and
                 trucking provider delivering safe, reliable transport across
                 Luzon for businesses of every size.
               </p>
               <button
                 type="button"
-                className="rounded-full bg-[#e64439] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#cc3a31]"
+                className="rounded-full bg-[#e64439] px-8 py-3 text-base font-semibold text-white transition hover:bg-[#cc3a31]"
               >
                 Book Marvel
               </button>
