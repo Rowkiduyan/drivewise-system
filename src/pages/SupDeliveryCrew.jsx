@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 
 function SupDeliveryCrew() {
@@ -152,29 +153,47 @@ function SupDeliveryCrew() {
             </div>
 
             <div className="divide-y divide-slate-200 bg-white">
-              {filteredCrew.map((crew) => (
-                <div
-                  key={crew.name}
-                  className="grid grid-cols-12 items-center px-4 py-4 text-sm text-slate-700 transition hover:bg-slate-50"
-                >
-                  <div className="col-span-5">
-                    <p className="font-medium text-slate-900">
-                      {crew.lastName}, {crew.firstName} {crew.middleName}
-                    </p>
-                    <p className="text-xs text-slate-400">
-                      Updated {crew.lastUpdated}
-                    </p>
+              {filteredCrew.map((crew) => {
+                const content = (
+                  <div className="grid grid-cols-12 items-center px-4 py-4 text-sm text-slate-700 transition hover:bg-slate-50">
+                    <div className="col-span-5">
+                      <p className="font-medium text-slate-900">
+                        {crew.lastName}, {crew.firstName} {crew.middleName}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Updated {crew.lastUpdated}
+                      </p>
+                    </div>
+                    <div className="col-span-3 text-slate-700">
+                      {crew.position}
+                    </div>
+                    <div className="col-span-4 flex flex-col items-end gap-1">
+                      <span className="inline-flex w-fit rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                        {crew.status}
+                      </span>
+                    </div>
                   </div>
-                  <div className="col-span-3 text-slate-700">
-                    {crew.position}
-                  </div>
-                  <div className="col-span-4 flex flex-col items-end gap-1">
-                    <span className="inline-flex w-fit rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                      {crew.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+
+                if (crew.position !== "Driver") {
+                  return (
+                    <div key={crew.name}>
+                      {content}
+                    </div>
+                  );
+                }
+
+                return (
+                  <Link
+                    key={crew.name}
+                    to="/supervisor/analysis/indiv"
+                    aria-label={`View analysis for ${crew.firstName} ${crew.lastName}`}
+                    className="block"
+                  >
+                    {content}
+                  </Link>
+                );
+              })}
 
               {filteredCrew.length === 0 && (
                 <div className="px-4 py-8 text-center text-sm text-slate-500">

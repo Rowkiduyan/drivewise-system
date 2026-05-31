@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import SupLayout from "../layout/SupLayout.jsx";
-import { supabase } from "../lib/supabaseClient.js";
 
 const ALERT_TYPE_LABELS = {
   prolonged_eye_closure: "Prolonged Eye Closure",
@@ -62,189 +61,93 @@ function Panel({ title, children, right }) {
   );
 }
 
-function SupAnalysisSpecific() {
-  const [alerts, setAlerts] = useState([]);
-  const [sessions, setSessions] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
+function SupAnalysisIndiv() {
   const [alertPage, setAlertPage] = useState(0);
-  const [timePage, setTimePage] = useState(0);
 
-  useEffect(() => {
-    let isMounted = true;
-    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const kpis = [
+    { label: "Total alerts (7d)", value: "18", hint: "Dummy sample" },
+    { label: "High-risk events", value: "3", hint: "Repeated eye-closure" },
+    { label: "Avg alerts / session", value: "2.1", hint: "Dummy sessions" },
+    { label: "Total sessions", value: "8", hint: "Captured sessions" },
+  ];
 
-    async function load() {
-      setIsLoading(true);
-      setError("");
+  const alertTypes = [
+    { type: ALERT_TYPE_LABELS.prolonged_eye_closure, share: "44%", percent: 44 },
+    { type: ALERT_TYPE_LABELS.pattern_eye_closure_yawn, share: "33%", percent: 33 },
+    { type: ALERT_TYPE_LABELS.pattern_repeated_eye_closure, share: "23%", percent: 23 },
+  ];
 
-      const [alertsRes, sessionsRes] = await Promise.all([
-        supabase
-          .from("alerts")
-          .select("id, created_at, event_type, duration, session_id")
-          .gte("created_at", since)
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("sessions")
-          .select(
-            "session_id, created_at, start_time, end_time, total_alerts, session_duration",
-          )
-          .gte("created_at", since)
-          .order("created_at", { ascending: false }),
-      ]);
+  const recentSessions = [
+    {
+      sessionId: "S-4821",
+      alerts: 3,
+      duration: 5400,
+      start: "2026-05-31T06:10:00Z",
+      end: "2026-05-31T07:40:00Z",
+    },
+    {
+      sessionId: "S-4820",
+      alerts: 2,
+      duration: 3600,
+      start: "2026-05-30T12:00:00Z",
+      end: "2026-05-30T13:00:00Z",
+    },
+    {
+      sessionId: "S-4819",
+      alerts: 1,
+      duration: 2700,
+      start: "2026-05-29T08:15:00Z",
+      end: "2026-05-29T09:00:00Z",
+    },
+  ];
 
-      if (!isMounted) {
-        return;
-      }
+  const latestAlerts = [
+    {
+      id: "A-110",
+      type: ALERT_TYPE_LABELS.pattern_eye_closure_yawn,
+      duration: 42,
+      createdAt: "2026-05-31T06:42:00Z",
+      sessionId: "S-4821",
+    },
+    {
+      id: "A-109",
+      type: ALERT_TYPE_LABELS.prolonged_eye_closure,
+      duration: 18,
+      createdAt: "2026-05-31T06:20:00Z",
+      sessionId: "S-4821",
+    },
+    {
+      id: "A-108",
+      type: ALERT_TYPE_LABELS.pattern_repeated_eye_closure,
+      duration: 55,
+      createdAt: "2026-05-30T12:48:00Z",
+      sessionId: "S-4820",
+    },
+    {
+      id: "A-107",
+      type: ALERT_TYPE_LABELS.pattern_eye_closure_yawn,
+      duration: 33,
+      createdAt: "2026-05-30T12:10:00Z",
+      sessionId: "S-4820",
+    },
+    {
+      id: "A-106",
+      type: ALERT_TYPE_LABELS.prolonged_eye_closure,
+      duration: 21,
+      createdAt: "2026-05-29T08:40:00Z",
+      sessionId: "S-4819",
+    },
+    {
+      id: "A-105",
+      type: ALERT_TYPE_LABELS.pattern_repeated_eye_closure,
+      duration: 60,
+      createdAt: "2026-05-28T18:12:00Z",
+      sessionId: "S-4818",
+    },
+  ];
 
-      if (alertsRes.error || sessionsRes.error) {
-        setError(
-          alertsRes.error?.message ||
-            sessionsRes.error?.message ||
-            "Unable to load data.",
-        );
-        setAlerts([]);
-        setSessions([]);
-      } else {
-        setAlerts(alertsRes.data || []);
-        setSessions(sessionsRes.data || []);
-      }
-
-      setIsLoading(false);
-    }
-
-    load();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const {
-    kpis,
-    alertTypes,
-    recentSessions,
-    latestAlerts,
-    totalDuration,
-    hasAlertToday,
-    hourly,
-    maxAlerts,
-  } =
-    useMemo(() => {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const hasAlertTodayLocal = alerts.some(
-        (item) => new Date(item.created_at) >= todayStart,
-      );
-      const totalAlerts = alerts.length;
-      const highRisk = alerts.filter(
-        (item) => item.event_type === "pattern_repeated_eye_closure",
-      ).length;
-      const sessionCount = sessions.length;
-      const totalSessionAlerts = sessions.reduce(
-        (sum, session) => sum + (session.total_alerts || 0),
-        0,
-      );
-      const avgAlerts = sessionCount
-        ? (totalAlerts / sessionCount).toFixed(1)
-        : "0.0";
-      const avgAlertsPerTrip = sessionCount
-        ? (totalSessionAlerts / sessionCount).toFixed(1)
-        : "0.0";
-      const totalSeconds = sessions.reduce(
-        (sum, session) => sum + (session.session_duration || 0),
-        0,
-      );
-
-      const alertsByType = {};
-      const hourlyCounts = Array.from({ length: 24 }, (_, hour) => ({
-        hour,
-        alerts: 0,
-      }));
-      alerts.forEach((item) => {
-        const hour = new Date(item.created_at).getHours();
-        hourlyCounts[hour].alerts += 1;
-        if (item.event_type) {
-          alertsByType[item.event_type] =
-            (alertsByType[item.event_type] || 0) + 1;
-        }
-      });
-
-      const typesRows = Object.keys(ALERT_TYPE_LABELS).map((key) => {
-        const count = alertsByType[key] || 0;
-        const percent = totalAlerts
-          ? Math.round((count / totalAlerts) * 100)
-          : 0;
-        const share = `${percent}%`;
-        return { type: ALERT_TYPE_LABELS[key], count, share, percent };
-      });
-
-      const recentRows = sessions.slice(0, 6).map((session) => ({
-        sessionId: session.session_id,
-        alerts: session.total_alerts ?? 0,
-        duration: session.session_duration,
-        start: session.start_time,
-        end: session.end_time,
-      }));
-
-      const latestRows = alerts.map((item) => ({
-        id: item.id,
-        type:
-          ALERT_TYPE_LABELS[item.event_type] || item.event_type || "Unknown",
-        duration: item.duration,
-        createdAt: item.created_at,
-        sessionId: item.session_id,
-      }));
-
-      const hourlyRows = hourlyCounts.map((entry) => ({
-        hour: `${String(entry.hour).padStart(2, "0")}:00`,
-        alerts: entry.alerts,
-      }));
-
-      return {
-        kpis: [
-          {
-            label: "Total alerts (7d)",
-            value: String(totalAlerts),
-            hint: "Using current data only",
-          },
-          {
-            label: "Avg alerts / trip",
-            value: avgAlertsPerTrip,
-            hint: "From session totals",
-          },
-          {
-            label: "High-risk events",
-            value: String(highRisk),
-            hint: "Repeated eye-closure events",
-          },
-          {
-            label: "Avg alerts / session",
-            value: avgAlerts,
-            hint: "Sessions in last 7 days",
-          },
-          {
-            label: "Total sessions",
-            value: String(sessionCount),
-            hint: "Captured tracking sessions",
-          },
-        ],
-        alertTypes: typesRows,
-        recentSessions: recentRows,
-        latestAlerts: latestRows,
-        totalDuration: totalSeconds,
-        hasAlertToday: hasAlertTodayLocal,
-        hourly: hourlyRows,
-        maxAlerts: Math.max(...hourlyRows.map((row) => row.alerts), 0),
-      };
-    }, [alerts, sessions]);
-
-  const HOURS_PER_PAGE = 8;
-  const totalTimePages = Math.max(Math.ceil(hourly.length / HOURS_PER_PAGE), 1);
-  const currentTimePage = Math.min(timePage, totalTimePages - 1);
-  const pagedHours = hourly.slice(
-    currentTimePage * HOURS_PER_PAGE,
-    currentTimePage * HOURS_PER_PAGE + HOURS_PER_PAGE,
-  );
+  const totalDuration = 11700;
+  const hasAlertToday = false;
 
   const ALERTS_PER_PAGE = 5;
   const totalAlertPages = Math.max(
@@ -267,7 +170,7 @@ function SupAnalysisSpecific() {
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <h1 className="flex flex-wrap items-center gap-3 text-2xl sm:text-3xl md:text-4xl font-semibold leading-tight text-slate-900">
-                Alexis Duain
+                Juan D. Santos
                 <span
                   className={`rounded-full px-3 py-1 text-xs font-semibold ${
                     hasAlertToday
@@ -279,8 +182,7 @@ function SupAnalysisSpecific() {
                 </span>
               </h1>
               <p className="mt-2 max-w-3xl text-sm md:text-base text-slate-600 leading-relaxed">
-                Specific driver analysis built from the current alert and
-                session data.
+                Specific driver analysis built from dummy alert and session data.
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -294,25 +196,19 @@ function SupAnalysisSpecific() {
           </div>
         </header>
 
-        {error ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-            {error}
-          </div>
-        ) : null}
-
         <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="rounded-3xl border border-blue-200/70 bg-white p-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="flex items-center gap-4">
                 <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-xl font-semibold text-blue-700">
-                  AD
+                  JS
                 </div>
                 <div>
                   <p className="text-xs uppercase tracking-[0.24em] text-blue-600">
                     Driver profile
                   </p>
                   <p className="mt-2 text-lg font-semibold text-slate-900">
-                    Alexis Duain
+                    Juan D. Santos
                   </p>
                   <p className="text-sm text-slate-500">
                     Last 7 days of alert activity
@@ -321,10 +217,10 @@ function SupAnalysisSpecific() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                  Total time {isLoading ? "..." : formatDuration(totalDuration)}
+                  Total time {formatDuration(totalDuration)}
                 </span>
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                  Sessions {isLoading ? "..." : sessions.length}
+                  Sessions {recentSessions.length}
                 </span>
               </div>
             </div>
@@ -334,7 +230,7 @@ function SupAnalysisSpecific() {
                 <StatCard
                   key={kpi.label}
                   label={kpi.label}
-                  value={isLoading ? "..." : kpi.value}
+                  value={kpi.value}
                   hint={kpi.hint}
                 />
               ))}
@@ -351,7 +247,7 @@ function SupAnalysisSpecific() {
                   Most frequent alert
                 </p>
                 <p className="mt-1 text-lg font-semibold text-slate-900">
-                  {isLoading ? "..." : alertTypes[0]?.type || "No alerts"}
+                  {alertTypes[0]?.type || "No alerts"}
                 </p>
               </div>
               <div>
@@ -361,7 +257,7 @@ function SupAnalysisSpecific() {
                     <div key={row.type} className="space-y-1">
                       <div className="flex items-center justify-between text-xs text-slate-600">
                         <span>{row.type}</span>
-                        <span>{isLoading ? "..." : row.share}</span>
+                        <span>{row.share}</span>
                       </div>
                       <div className="h-2 w-full rounded-full bg-slate-100">
                         <div
@@ -374,64 +270,6 @@ function SupAnalysisSpecific() {
                   ))}
                 </div>
               </div>
-              <div>
-                <p className="text-sm font-medium text-slate-700">Alerts by time</p>
-                <div className="mt-2 space-y-3">
-                  {pagedHours.map((row) => {
-                    const pct = maxAlerts
-                      ? Math.round((row.alerts / maxAlerts) * 100)
-                      : 0;
-                    return (
-                      <div key={row.hour} className="flex items-center gap-3">
-                        <div className="w-14 text-xs font-medium text-slate-700">
-                          {row.hour}
-                        </div>
-                        <div className="flex-1">
-                          <div className="h-2 w-full rounded-full bg-slate-100">
-                            <div
-                              className="h-2 rounded-full bg-blue-500"
-                              style={{ width: `${pct}%` }}
-                              aria-label={`${row.hour} ${row.alerts} alerts`}
-                            />
-                          </div>
-                        </div>
-                        <div className="w-10 text-right text-xs font-semibold text-slate-700">
-                          {isLoading ? "..." : row.alerts}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  <div className="flex items-center justify-between pt-2 text-xs text-slate-500">
-                    <span>
-                      Page {currentTimePage + 1} of {totalTimePages}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-                        onClick={() =>
-                          setTimePage((prev) => Math.max(prev - 1, 0))
-                        }
-                        disabled={currentTimePage === 0 || isLoading}
-                      >
-                        Prev
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-                        onClick={() =>
-                          setTimePage((prev) =>
-                            Math.min(prev + 1, totalTimePages - 1),
-                          )
-                        }
-                        disabled={currentTimePage >= totalTimePages - 1 || isLoading}
-                      >
-                        Next
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </section>
@@ -439,7 +277,7 @@ function SupAnalysisSpecific() {
         <div className="grid gap-4 lg:grid-cols-2">
           <Panel title="Recent Alerts" right="Latest events">
             <div className="space-y-3">
-              {(isLoading ? [] : pagedAlerts).map((alert) => (
+              {pagedAlerts.map((alert) => (
                 <div
                   key={alert.id}
                   className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
@@ -450,10 +288,7 @@ function SupAnalysisSpecific() {
                     </p>
                     {(() => {
                       const displayDuration = formatDuration(alert.duration);
-                      if (
-                        displayDuration === "--" ||
-                        displayDuration === "0m"
-                      ) {
+                      if (displayDuration === "--" || displayDuration === "0m") {
                         return null;
                       }
                       return (
@@ -469,12 +304,7 @@ function SupAnalysisSpecific() {
                   </div>
                 </div>
               ))}
-              {!isLoading && latestAlerts.length === 0 ? (
-                <p className="text-sm text-slate-500">
-                  No alerts found in the last 7 days.
-                </p>
-              ) : null}
-              {!isLoading && latestAlerts.length > ALERTS_PER_PAGE ? (
+              {latestAlerts.length > ALERTS_PER_PAGE ? (
                 <div className="flex items-center justify-between pt-2 text-xs text-slate-500">
                   <span>
                     Page {currentAlertPage + 1} of {totalAlertPages}
@@ -520,7 +350,7 @@ function SupAnalysisSpecific() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {(isLoading ? [] : recentSessions).map((session) => (
+                  {recentSessions.map((session) => (
                     <tr key={session.sessionId} className="bg-white">
                       <td className="px-4 py-3 text-slate-700">
                         {formatTimestamp(session.start)}
@@ -539,11 +369,6 @@ function SupAnalysisSpecific() {
                 </tbody>
               </table>
             </div>
-            {!isLoading && recentSessions.length === 0 ? (
-              <p className="mt-3 text-sm text-slate-500">
-                No sessions found in the last 7 days.
-              </p>
-            ) : null}
           </Panel>
         </div>
       </div>
@@ -551,4 +376,4 @@ function SupAnalysisSpecific() {
   );
 }
 
-export default SupAnalysisSpecific;
+export default SupAnalysisIndiv;
