@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Link } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
@@ -11,6 +11,8 @@ function SupDeliveryCrew() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
   const [tempPassword, setTempPassword] = useState("");
+  const [crewRecords, setCrewRecords] = useState([]);
+  const [crewError, setCrewError] = useState("");
   const [formData, setFormData] = useState({
     lastName: "",
     firstName: "",
@@ -22,6 +24,73 @@ function SupDeliveryCrew() {
   });
 
   const PROFILE_BUCKET = "driver-profile-pics";
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCrew() {
+      const { data, error } = await supabase
+        .from("driver_records")
+        .select("id, last_name, first_name, middle_name, position")
+        .order("last_name", { ascending: true });
+
+
+      if (!isMounted) {
+        return;
+      }
+
+      const fallback = [
+        {
+          id: "dummy-1",
+          fullName: "Santos, Juan D.",
+          position: "Driver",
+          status: "On Route",
+          lastUpdated: "Just now",
+        },
+        {
+          id: "dummy-2",
+          fullName: "Reyes, Maria A.",
+          position: "Helper",
+          status: "Available",
+          lastUpdated: "Just now",
+        },
+        {
+          id: "dummy-3",
+          fullName: "Flores, Andre L.",
+          position: "Driver",
+          status: "On Route",
+          lastUpdated: "Just now",
+        },
+      ];
+
+      if (error) {
+        setCrewError(error.message || "Unable to load crew records.");
+        setCrewRecords(fallback);
+        return;
+      }
+
+      const mapped = (data || []).map((record) => {
+        const middle = record.middle_name ? ` ${record.middle_name}` : "";
+        return {
+          id: record.id,
+          fullName: `${record.last_name}, ${record.first_name}${middle}`,
+          position: record.position,
+          status: "On Route",
+          lastUpdated: "Just now",
+        };
+      });
+
+      setCrewError("");
+      setCrewRecords([...mapped, ...fallback]);
+      setSelectedStatus("All");
+    }
+
+    loadCrew();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const generateTempPassword = () => {
     const buffer = new Uint32Array(4);
@@ -73,6 +142,10 @@ function SupDeliveryCrew() {
         password: generatedPassword,
       });
 
+      console.log("signUp session:", authData?.session);
+      const { data: sessionData } = await supabase.auth.getSession();
+      console.log("getSession:", sessionData?.session);
+
       if (authError) {
         throw authError;
       }
@@ -82,6 +155,7 @@ function SupDeliveryCrew() {
       if (!authId) {
         throw new Error("Unable to create auth user.");
       }
+
 
       const safeFileName = formData.idPicture.name
         .replace(/\s+/g, "-")
@@ -107,7 +181,8 @@ function SupDeliveryCrew() {
       const { error: driverError } = await supabase
         .from("driver_records")
         .insert({
-          auth_id: authId,
+          id: authId,
+          birthdate: formData.birthdate,
           last_name: formData.lastName.trim(),
           first_name: formData.firstName.trim(),
           middle_name: formData.middleName.trim(),
@@ -117,6 +192,7 @@ function SupDeliveryCrew() {
         });
 
       if (driverError) {
+        console.log("driver_records error:", driverError);
         throw driverError;
       }
 
@@ -152,54 +228,13 @@ function SupDeliveryCrew() {
     }
   };
 
-  const crewRecords = [
-    {
-      lastName: "Santos",
-      firstName: "Juan",
-      middleName: "D.",
-      position: "Driver",
-      status: "On Route",
-      lastUpdated: "10 mins ago",
-    },
-    {
-      lastName: "Reyes",
-      firstName: "Maria",
-      middleName: "A.",
-      position: "Helper",
-      status: "Standby",
-      lastUpdated: "25 mins ago",
-    },
-    {
-      lastName: "Flores",
-      firstName: "Andre",
-      middleName: "L.",
-      position: "Driver",
-      status: "Available",
-      lastUpdated: "1 hr ago",
-    },
-    {
-      lastName: "Cruz",
-      firstName: "Sofia",
-      middleName: "M.",
-      position: "Helper",
-      status: "Off Duty",
-      lastUpdated: "2 hrs ago",
-    },
-  ];
-
   const filteredCrew = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
 
     return crewRecords.filter((crew) => {
       const matchesSearch = !query
         ? true
-        : [
-            crew.lastName,
-            crew.firstName,
-            crew.middleName,
-            crew.position,
-            crew.status,
-          ]
+        : [crew.fullName, crew.position, crew.status]
             .join(" ")
             .toLowerCase()
             .includes(query);
@@ -292,19 +327,18 @@ function SupDeliveryCrew() {
 
           <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200">
             <div className="grid grid-cols-12 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-              <div className="col-span-5">Name</div>
-              <div className="col-span-3">Position</div>
+              <div className="col-span-5">Full name</div>
+              <div className="col-span-3">Role</div>
               <div className="col-span-4 text-right">Status</div>
             </div>
 
             <div className="divide-y divide-slate-200 bg-white">
-              {filteredCrew.map((crew) => {
+              {filteredCrew.map((crew, index) => {
+                const crewKey = `${crew.id || crew.fullName}-${crew.position}-${index}`;
                 const content = (
                   <div className="grid grid-cols-12 items-center px-4 py-4 text-sm text-slate-700 transition hover:bg-slate-50">
                     <div className="col-span-5">
-                      <p className="font-medium text-slate-900">
-                        {crew.lastName}, {crew.firstName} {crew.middleName}
-                      </p>
+                      <p className="font-medium text-slate-900">{crew.fullName}</p>
                       <p className="text-xs text-slate-400">
                         Updated {crew.lastUpdated}
                       </p>
@@ -322,7 +356,7 @@ function SupDeliveryCrew() {
 
                 if (crew.position !== "Driver") {
                   return (
-                    <div key={crew.name}>
+                    <div key={crewKey}>
                       {content}
                     </div>
                   );
@@ -330,9 +364,9 @@ function SupDeliveryCrew() {
 
                 return (
                   <Link
-                    key={crew.name}
+                    key={crewKey}
                     to="/supervisor/analysis/indiv"
-                    aria-label={`View analysis for ${crew.firstName} ${crew.lastName}`}
+                    aria-label={`View analysis for ${crew.fullName}`}
                     className="block"
                   >
                     {content}
@@ -342,7 +376,7 @@ function SupDeliveryCrew() {
 
               {filteredCrew.length === 0 && (
                 <div className="px-4 py-8 text-center text-sm text-slate-500">
-                  No crew records match your search.
+                  {crewError || "No crew records match your search."}
                 </div>
               )}
             </div>
@@ -351,7 +385,7 @@ function SupDeliveryCrew() {
 
         {isAddModalOpen && (
           <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-4 py-8 backdrop-blur-sm">
-            <div className="mt-8 w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-xl font-semibold text-slate-900">
