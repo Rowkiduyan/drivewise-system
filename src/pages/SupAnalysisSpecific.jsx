@@ -236,7 +236,7 @@ function SupAnalysisSpecific() {
           {
             label: "Avg alerts / trip",
             value: avgAlertsPerTrip,
-            hint: "From session totals",
+            hint: "From trip totals",
           },
           {
             label: "Peak drowsiness time",
@@ -244,14 +244,9 @@ function SupAnalysisSpecific() {
             hint: "",
           },
           {
-            label: "Avg alerts / session",
-            value: avgAlerts,
-            hint: "Sessions in last 7 days",
-          },
-          {
-            label: "Total sessions",
+            label: "Total Trips",
             value: String(sessionCount),
-            hint: "Captured tracking sessions",
+            hint: "Captured tracking Trips",
           },
         ],
         alertTypes: typesRows,
@@ -333,7 +328,7 @@ function SupAnalysisSpecific() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                  Sessions {isLoading ? "..." : sessions.length}
+                  Trips {isLoading ? "..." : sessions.length}
                 </span>
               </div>
             </div>
@@ -516,7 +511,7 @@ function SupAnalysisSpecific() {
             </div>
           </Panel>
 
-          <Panel title="Session Log" right="Last 7 days">
+          <Panel title="Trip Log" right="Last 7 days">
             <div className="overflow-hidden rounded-2xl border border-slate-200">
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase tracking-[0.2em] text-slate-600">
