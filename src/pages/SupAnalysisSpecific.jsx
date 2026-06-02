@@ -25,13 +25,37 @@ function formatTimestamp(value) {
   if (!value) {
     return "--";
   }
-  const date = new Date(value);
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const raw = String(value);
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (!isoMatch) {
+    return raw;
+  }
+  const year = Number(isoMatch[1]);
+  const monthIndex = Number(isoMatch[2]) - 1;
+  const day = Number(isoMatch[3]);
+  const hour24 = Number(isoMatch[4]);
+  const minute = isoMatch[5];
+  const hour12 = ((hour24 + 11) % 12) + 1;
+  const suffix = hour24 >= 12 ? "pm" : "am";
+  const monthLabels = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+  const monthLabel = monthLabels[monthIndex] || "";
+  if (!monthLabel || !year) {
+    return `${hour12}:${minute} ${suffix}`;
+  }
+  return `${monthLabel} ${day}, ${hour12}:${minute} ${suffix}`;
 }
 
 function StatCard({ label, value, hint }) {
@@ -136,9 +160,6 @@ function SupAnalysisSpecific() {
         (item) => new Date(item.created_at) >= todayStart,
       );
       const totalAlerts = alerts.length;
-      const highRisk = alerts.filter(
-        (item) => item.event_type === "pattern_repeated_eye_closure",
-      ).length;
       const sessionCount = sessions.length;
       const totalSessionAlerts = sessions.reduce(
         (sum, session) => sum + (session.total_alerts || 0),
@@ -199,6 +220,11 @@ function SupAnalysisSpecific() {
         hour: `${String(entry.hour).padStart(2, "0")}:00`,
         alerts: entry.alerts,
       }));
+      const peakHour = hourlyRows.reduce(
+        (currentPeak, row) =>
+          row.alerts > currentPeak.alerts ? row : currentPeak,
+        { hour: "--", alerts: 0 },
+      ).hour;
 
       return {
         kpis: [
@@ -213,9 +239,9 @@ function SupAnalysisSpecific() {
             hint: "From session totals",
           },
           {
-            label: "High-risk events",
-            value: String(highRisk),
-            hint: "Repeated eye-closure events",
+            label: "Peak drowsiness time",
+            value: peakHour,
+            hint: "",
           },
           {
             label: "Avg alerts / session",
@@ -261,9 +287,6 @@ function SupAnalysisSpecific() {
     <SupLayout title="Supervisor Analysis" background={null} bg="bg-[#FAF9F6]">
       <div className="flex flex-col gap-6">
         <header className="space-y-2 md:space-y-3">
-          <p className="text-xs uppercase tracking-[0.3em] text-blue-600 font-medium">
-            Supervisor Interface
-          </p>
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <h1 className="flex flex-wrap items-center gap-3 text-2xl sm:text-3xl md:text-4xl font-semibold leading-tight text-slate-900">
@@ -278,18 +301,7 @@ function SupAnalysisSpecific() {
                   {hasAlertToday ? "Alert today" : "No alerts today"}
                 </span>
               </h1>
-              <p className="mt-2 max-w-3xl text-sm md:text-base text-slate-600 leading-relaxed">
-                Specific driver analysis built from the current alert and
-                session data.
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
-                Active driver
-              </span>
-              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
-                Review focus
-              </span>
+              
             </div>
           </div>
         </header>
@@ -320,9 +332,6 @@ function SupAnalysisSpecific() {
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                  Total time {isLoading ? "..." : formatDuration(totalDuration)}
-                </span>
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
                   Sessions {isLoading ? "..." : sessions.length}
                 </span>
@@ -464,7 +473,6 @@ function SupAnalysisSpecific() {
                     })()}
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-600">
-                    <span>Session {alert.sessionId || "--"}</span>
                     <span>{formatTimestamp(alert.createdAt)}</span>
                   </div>
                 </div>
