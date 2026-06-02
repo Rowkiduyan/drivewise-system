@@ -58,13 +58,60 @@ function formatTimestamp(value) {
   return `${monthLabel} ${day}, ${hour12}:${minute} ${suffix}`;
 }
 
-function StatCard({ label, value, hint }) {
+function StatCard({
+  label,
+  value,
+  hint,
+  tone,
+  labelClassName,
+  valueClassName,
+  className,
+  statusLabel,
+  statusClassName,
+}) {
+  const toneClasses = {
+    emerald: "border-emerald-200/70 bg-emerald-50",
+    amber: "border-amber-200/70 bg-amber-50",
+    red: "border-red-200/70 bg-red-50",
+  };
+  const containerClassName = tone
+    ? toneClasses[tone] || "border-blue-200/70 bg-white"
+    : "border-blue-200/70 bg-white";
   return (
-    <div className="rounded-3xl border border-blue-200/70 bg-white p-6">
-      <p className="text-xs uppercase tracking-[0.24em] text-blue-600">
-        {label}
-      </p>
-      <p className="mt-3 text-2xl font-semibold text-slate-900">{value}</p>
+    <div
+      className={`rounded-3xl border p-6 ${containerClassName} ${
+        className || ""
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <p
+          className={`text-xs uppercase tracking-[0.24em] ${
+            labelClassName || "text-blue-600"
+          }`}
+        >
+          {label}
+        </p>
+        {statusLabel ? (
+          <span
+            className={`text-xs font-semibold uppercase tracking-[0.2em] ${
+              statusClassName || "text-slate-600"
+            }`}
+          >
+            {statusLabel}
+          </span>
+        ) : null}
+      </div>
+      {typeof value === "string" || typeof value === "number" ? (
+        <p
+          className={`mt-3 text-2xl font-semibold ${
+            valueClassName || "text-slate-900"
+          }`}
+        >
+          {value}
+        </p>
+      ) : (
+        <div className="mt-4">{value}</div>
+      )}
       {hint ? <p className="mt-2 text-xs text-slate-500">{hint}</p> : null}
     </div>
   );
@@ -175,6 +222,94 @@ function SupAnalysisSpecific() {
         (sum, session) => sum + (session.session_duration || 0),
         0,
       );
+      const latestSession = sessions[0];
+      const hasOngoingTrip = latestSession && !latestSession.end_time;
+      const tripStatusLabel = hasOngoingTrip
+        ? "Ongoing Trip"
+        : "Last Completed Trip";
+      const latestSessionId = latestSession?.session_id;
+      const latestSessionAlerts = latestSessionId
+        ? alerts.filter((item) => item.session_id === latestSessionId)
+        : [];
+      const latestDetection = latestSessionAlerts[0]?.event_type;
+      const detectedLabels = Array.from(
+        new Set(
+          latestSessionAlerts
+            .map((item) => item.event_type)
+            .filter(Boolean)
+            .map((eventType) => ALERT_TYPE_LABELS[eventType] || eventType),
+        ),
+      );
+      const detectedText = detectedLabels.length
+        ? detectedLabels.join(", ")
+        : "--";
+      const tripAlertCount = hasOngoingTrip
+        ? latestSessionAlerts.length
+        : latestSession?.total_alerts ?? 0;
+      let tripStatusValue = "--";
+      let tripStatusTone = "";
+      let tripStatusBadge = "";
+      let tripStatusBadgeClass = "";
+      let tripStatusHint = "";
+      if (latestSession) {
+        const startLabel = latestSession.start_time
+          ? formatTimestamp(latestSession.start_time)
+          : "--";
+        const endLabel = latestSession.end_time
+          ? formatTimestamp(latestSession.end_time)
+          : "--";
+        if (tripAlertCount >= 4) {
+          tripStatusTone = "red";
+          tripStatusBadge = "High Risk";
+          tripStatusBadgeClass = "text-red-700";
+        } else if (tripAlertCount >= 2) {
+          tripStatusTone = "amber";
+          tripStatusBadge = "Moderate";
+          tripStatusBadgeClass = "text-amber-700";
+        } else {
+          tripStatusTone = "emerald";
+          tripStatusBadge = "Safe";
+          tripStatusBadgeClass = "text-emerald-700";
+        }
+        const detectionLabel = latestDetection
+          ? ALERT_TYPE_LABELS[latestDetection] || latestDetection
+          : "--";
+        const detectedList = detectedLabels.length ? (
+          <ul className="list-disc pl-4 text-sm text-slate-700">
+            {detectedLabels.map((entry) => (
+              <li key={entry}>{entry}</li>
+            ))}
+          </ul>
+        ) : (
+          <span className="text-sm text-slate-700">--</span>
+        );
+        const details = hasOngoingTrip
+          ? [
+              { label: "Started", value: startLabel },
+              { label: "Current alerts", value: tripAlertCount },
+              { label: "Current detection", value: detectionLabel },
+              { label: "Alerts Detected", value: detectedList },
+            ]
+          : [
+              { label: "Start", value: startLabel },
+              { label: "End", value: endLabel },
+              { label: "Total alerts", value: tripAlertCount },
+              { label: "Last Detection", value: detectionLabel },
+              { label: "Alerts Detected", value: detectedList },
+            ];
+        tripStatusValue = (
+          <div className="grid gap-3 text-sm text-slate-700 sm:grid-cols-2">
+            {details.map((item) => (
+              <div key={item.label} className="space-y-1">
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                  {item.label}
+                </p>
+                <p className="text-sm text-slate-700">{item.value}</p>
+              </div>
+            ))}
+          </div>
+        );
+      }
 
       const alertsByType = {};
       const hourlyCounts = Array.from({ length: 24 }, (_, hour) => ({
@@ -228,6 +363,15 @@ function SupAnalysisSpecific() {
 
       return {
         kpis: [
+          {
+            label: tripStatusLabel,
+            value: tripStatusValue,
+            hint: tripStatusHint,
+            tone: tripStatusTone,
+            className: "sm:col-span-2",
+            statusLabel: tripStatusBadge,
+            statusClassName: tripStatusBadgeClass,
+          },
           {
             label: "Total alerts (7d)",
             value: String(totalAlerts),
@@ -285,16 +429,10 @@ function SupAnalysisSpecific() {
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <h1 className="flex flex-wrap items-center gap-3 text-2xl sm:text-3xl md:text-4xl font-semibold leading-tight text-slate-900">
-                Alexis Duain
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                    hasAlertToday
-                      ? "bg-red-100 text-red-700"
-                      : "bg-emerald-100 text-emerald-700"
-                  }`}
-                >
-                  {hasAlertToday ? "Alert today" : "No alerts today"}
+                <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-100 text-lg font-semibold text-blue-700">
+                  AD
                 </span>
+                Alexis Duain
               </h1>
               
             </div>
@@ -309,30 +447,6 @@ function SupAnalysisSpecific() {
 
         <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="rounded-3xl border border-blue-200/70 bg-white p-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="flex items-center gap-4">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-xl font-semibold text-blue-700">
-                  AD
-                </div>
-                <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-blue-600">
-                    Driver profile
-                  </p>
-                  <p className="mt-2 text-lg font-semibold text-slate-900">
-                    Alexis Duain
-                  </p>
-                  <p className="text-sm text-slate-500">
-                    Last 7 days of alert activity
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                  Trips {isLoading ? "..." : sessions.length}
-                </span>
-              </div>
-            </div>
-
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               {kpis.map((kpi) => (
                 <StatCard
@@ -340,8 +454,19 @@ function SupAnalysisSpecific() {
                   label={kpi.label}
                   value={isLoading ? "..." : kpi.value}
                   hint={kpi.hint}
+                  tone={kpi.tone}
+                  labelClassName={kpi.labelClassName}
+                  valueClassName={kpi.valueClassName}
+                  className={kpi.className}
+                  statusLabel={kpi.statusLabel}
+                  statusClassName={kpi.statusClassName}
                 />
               ))}
+            </div>
+            <div className="mt-4 flex justify-end">
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                No. of trips: {isLoading ? "..." : sessions.length}
+              </span>
             </div>
           </div>
 
