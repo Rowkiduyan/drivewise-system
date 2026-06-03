@@ -182,7 +182,7 @@ function SupAnalysisIndiv() {
                 </span>
               </h1>
               <p className="mt-2 max-w-3xl text-sm md:text-base text-slate-600 leading-relaxed">
-                Specific driver analysis built from dummy alert and session data.
+                Specific driver analysis built from alerts and session data.
               </p>
             </div>
             <div className="flex items-center gap-3">

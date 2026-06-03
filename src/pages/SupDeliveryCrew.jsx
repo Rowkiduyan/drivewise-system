@@ -34,7 +34,6 @@ function SupDeliveryCrew() {
         .select("id, last_name, first_name, middle_name, position")
         .order("last_name", { ascending: true });
 
-
       if (!isMounted) {
         return;
       }
@@ -59,6 +58,13 @@ function SupDeliveryCrew() {
           fullName: "Flores, Andre L.",
           position: "Driver",
           status: "On Route",
+          lastUpdated: "Just now",
+        },
+        {
+          id: "dummy-4",
+          fullName: "Cruz, Miguel R.",
+          position: "Driver",
+          status: "Unavailable",
           lastUpdated: "Just now",
         },
       ];
@@ -156,7 +162,6 @@ function SupDeliveryCrew() {
         throw new Error("Unable to create auth user.");
       }
 
-
       const safeFileName = formData.idPicture.name
         .replace(/\s+/g, "-")
         .replace(/[^a-zA-Z0-9.-]/g, "");
@@ -244,12 +249,14 @@ function SupDeliveryCrew() {
 
       return matchesSearch && matchesStatus;
     });
-  }, [searchTerm, selectedStatus]);
+  }, [searchTerm, selectedStatus, crewRecords]);
 
   const statusCounts = {
     All: crewRecords.length,
     "On Route": crewRecords.filter((crew) => crew.status === "On Route").length,
     Available: crewRecords.filter((crew) => crew.status === "Available").length,
+    Unavailable: crewRecords.filter((crew) => crew.status === "Unavailable")
+      .length,
   };
 
   return (
@@ -272,19 +279,47 @@ function SupDeliveryCrew() {
         {/* Search and Filter Section */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex w-full flex-col gap-3 sm:max-w-2xl sm:flex-row sm:items-center">
-              <div className="w-full sm:max-w-sm">
-                <label className="sr-only" htmlFor="crew-search">
-                  Search crew records
-                </label>
-                <input
-                  id="crew-search"
-                  type="text"
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Search crew, lead, status..."
-                  className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
-                />
+            <div className="flex-1">
+              <label className="sr-only" htmlFor="crew-search">
+                Search crew records
+              </label>
+              <input
+                id="crew-search"
+                type="text"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="Search crew, lead, status..."
+                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-3">
+              <div className="flex flex-wrap gap-3">
+                {["All", "On Route", "Available", "Unavailable"].map(
+                  (status) => (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => setSelectedStatus(status)}
+                      className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                        selectedStatus === status
+                          ? "border-blue-600 bg-blue-600 text-white"
+                          : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
+                      }`}
+                    >
+                      <span>{status}</span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs ${
+                          selectedStatus === status
+                            ? "bg-white/20 text-white"
+                            : "bg-slate-200 text-slate-700"
+                        }`}
+                      >
+                        {statusCounts[status]}
+                      </span>
+                    </button>
+                  ),
+                )}
               </div>
 
               <button
@@ -294,34 +329,6 @@ function SupDeliveryCrew() {
               >
                 Add Employee
               </button>
-            </div>
-          </div>
-
-          <div className="mt-4 border-t border-slate-200 pt-4">
-            <div className="flex flex-wrap gap-3">
-              {["All", "On Route", "Available"].map((status) => (
-                <button
-                  key={status}
-                  type="button"
-                  onClick={() => setSelectedStatus(status)}
-                  className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                    selectedStatus === status
-                      ? "border-blue-600 bg-blue-600 text-white"
-                      : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
-                  }`}
-                >
-                  <span>{status}</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs ${
-                      selectedStatus === status
-                        ? "bg-white/20 text-white"
-                        : "bg-slate-200 text-slate-700"
-                    }`}
-                  >
-                    {statusCounts[status]}
-                  </span>
-                </button>
-              ))}
             </div>
           </div>
 
@@ -338,7 +345,9 @@ function SupDeliveryCrew() {
                 const content = (
                   <div className="grid grid-cols-12 items-center px-4 py-4 text-sm text-slate-700 transition hover:bg-slate-50">
                     <div className="col-span-5">
-                      <p className="font-medium text-slate-900">{crew.fullName}</p>
+                      <p className="font-medium text-slate-900">
+                        {crew.fullName}
+                      </p>
                       <p className="text-xs text-slate-400">
                         Updated {crew.lastUpdated}
                       </p>
@@ -355,11 +364,7 @@ function SupDeliveryCrew() {
                 );
 
                 if (crew.position !== "Driver") {
-                  return (
-                    <div key={crewKey}>
-                      {content}
-                    </div>
-                  );
+                  return <div key={crewKey}>{content}</div>;
                 }
 
                 return (
@@ -493,7 +498,9 @@ function SupDeliveryCrew() {
                     onChange={handleFileChange}
                     className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none file:mr-4 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                   />
-                  <p className="text-xs text-slate-400">Supported: JPG, PNG. Max file size 10MB.</p>
+                  <p className="text-xs text-slate-400">
+                    Supported: JPG, PNG. Max file size 10MB.
+                  </p>
                 </div>
 
                 <div className="space-y-2 sm:col-span-2">
