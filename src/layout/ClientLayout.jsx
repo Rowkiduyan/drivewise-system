@@ -58,7 +58,7 @@ function ClientLayout({ title, background, children }) {
   const [isHovered, setIsHovered] = useState(false)
 
   return (
-    <main className="relative flex h-screen w-screen overflow-hidden bg-white text-slate-900">
+    <main className="relative flex h-screen w-screen overflow-hidden bg-white text-slate-900" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
       {background}
 
       <section className="relative flex h-full w-full">

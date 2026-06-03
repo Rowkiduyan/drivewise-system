@@ -48,7 +48,7 @@ function Register() {
   const showError = status === 'error'
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-white text-slate-900">
+    <main className="relative min-h-screen overflow-hidden bg-white text-slate-900" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.2),_transparent_55%),radial-gradient(circle_at_20%_60%,_rgba(45,212,191,0.18),_transparent_45%)]" />
       <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-sky-300/40 blur-[120px]" />
       <div className="pointer-events-none absolute bottom-0 left-0 h-72 w-72 rounded-full bg-teal-200/30 blur-[120px]" />

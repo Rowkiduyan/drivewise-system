@@ -41,7 +41,7 @@ function MechanicLayout({ title, background, children }) {
   }, [isExpanded])
 
   return (
-    <main className="relative h-screen overflow-hidden bg-white text-slate-900">
+    <main className="relative h-screen overflow-hidden bg-white text-slate-900" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
       {background}
 
       <section className="relative mx-auto flex h-full w-full max-w-none gap-0">
