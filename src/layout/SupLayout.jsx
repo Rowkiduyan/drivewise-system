@@ -175,7 +175,7 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
       <section className="relative flex h-full w-full">
         <aside
           className={`sticky top-0 flex h-screen shrink-0 flex-col gap-4 border-r border-blue-900 py-4 backdrop-blur transition-all duration-300 ${supervisorSidebarTheme.sidebar} ${
-            isHovered ? "w-56" : "w-16"
+            isHovered ? "w-64" : "w-16"
           }`}
           role="navigation"
           aria-label="Main navigation"

@@ -93,7 +93,7 @@ function AdminLayout({ title, background, children }) {
       <section className="relative flex h-full w-full">
         <aside
           className={`sticky top-0 flex h-screen shrink-0 flex-col gap-4 border-r border-violet-900/80 py-4 backdrop-blur transition-all duration-300 bg-violet-950 ${
-            isHovered ? 'w-56' : 'w-16'
+            isHovered ? 'w-64' : 'w-16'
           }`}
           role="navigation"
           aria-label="Main navigation"
