@@ -9,6 +9,10 @@ import LandingPage from './pages/LandingPage.jsx'
 import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
 import MechanicTrucks from './pages/MechanicTrucks.jsx'
+import AdminHome from './pages/AdminHome.jsx'
+import AdminDeviceManagement from './pages/AdminDeviceManagement.jsx'
+import AdminAnalysis from './pages/AdminAnalysis.jsx'
+import AdminProfile from './pages/AdminProfile.jsx'
 import SupBookings from './pages/SupBookings.jsx'
 import SupDeliveryCrew from './pages/SupDeliveryCrew.jsx'
 import SupDeliveries from './pages/SupDeliveries.jsx'
@@ -53,6 +57,21 @@ function App() {
         element={<Navigate to="/mechanic/trucks" replace />}
       />
       <Route path="/mechanic/trucks" element={<MechanicTrucks />} />
+      <Route
+        path="/admin"
+        element={<Navigate to="/admin/user-management" replace />}
+      />
+      <Route
+        path="/admin/home"
+        element={<Navigate to="/admin/user-management" replace />}
+      />
+      <Route path="/admin/user-management" element={<AdminHome />} />
+      <Route
+        path="/admin/device-management"
+        element={<AdminDeviceManagement />}
+      />
+      <Route path="/admin/analysis" element={<AdminAnalysis />} />
+      <Route path="/admin/profile" element={<AdminProfile />} />
       <Route path="/register" element={<Register />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
