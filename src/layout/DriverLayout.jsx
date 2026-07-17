@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { NavLink } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { NavLink, useNavigate } from 'react-router-dom'
 
 export const driverModules = [
   {
@@ -65,21 +65,130 @@ const driverIcons = {
 }
 
 function DriverLayout({ title, background, children }) {
-  const [isHovered, setIsHovered] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(() => {
+    if (typeof window === 'undefined') {
+      return false
+    }
+
+    return window.localStorage.getItem('driver-sidebar-expanded') === 'true'
+  })
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const navigate = useNavigate()
+
+  const closeMobileMenu = () => setIsMobileMenuOpen(false)
+  const closeMobileMenuAfterDelay = (path) => {
+    closeMobileMenu()
+    window.setTimeout(() => {
+      navigate(path)
+    }, 300)
+  }
+
+  useEffect(() => {
+    window.localStorage.setItem('driver-sidebar-expanded', String(isExpanded))
+  }, [isExpanded])
+
+  const navigateAfterMobileClose = (path) => {
+    closeMobileMenuAfterDelay(path)
+  }
+
+  const renderDriverNav = (isExpanded, onItemClick) => (
+    <nav className="flex w-full flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-2">
+      {driverModules.map((module) => (
+        <NavLink
+          key={module.path}
+          to={module.path}
+          aria-label={module.label}
+          onClick={(event) => {
+            event.stopPropagation()
+
+            if (!onItemClick) {
+              return
+            }
+
+            event.preventDefault()
+            onItemClick(module.path)
+          }}
+          className={({ isActive }) =>
+            `flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
+              isActive
+                ? 'border-amber-400 bg-amber-900 text-white rounded-lg'
+                : 'text-amber-200 hover:border-amber-700'
+            }`
+          }
+        >
+          <span className="h-5 w-5 flex-shrink-0">{driverIcons[module.label]}</span>
+          {isExpanded && (
+            <span className="inline-flex whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] text-amber-100 transition-opacity duration-200">
+              {module.label}
+            </span>
+          )}
+        </NavLink>
+      ))}
+    </nav>
+  )
 
   return (
-    <main className="relative flex h-screen w-screen overflow-hidden bg-white text-slate-900" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+    <main
+      className="relative flex h-screen w-screen overflow-hidden bg-white text-slate-900"
+      style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
+    >
       {background}
+
+      <div className="fixed left-0 right-0 top-0 z-40 flex items-center border-b border-amber-900/80 bg-amber-950 px-4 py-3 text-white md:hidden">
+        <button
+          type="button"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-amber-700 text-amber-100 transition-colors hover:bg-amber-900"
+          aria-label="Open navigation menu"
+          aria-expanded={isMobileMenuOpen}
+          onClick={() => setIsMobileMenuOpen((currentValue) => !currentValue)}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5" aria-hidden="true">
+            <path d="M4 6h16" />
+            <path d="M4 12h16" />
+            <path d="M4 18h16" />
+          </svg>
+        </button>
+
+        <div className="ml-auto flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-900 text-sm font-semibold text-white flex-shrink-0">
+            DR
+          </div>
+        </div>
+      </div>
+
+      <div
+        className={`fixed inset-0 z-30 bg-black/40 transition-opacity duration-300 md:hidden ${
+          isMobileMenuOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'
+        }`}
+        aria-hidden="true"
+        onClick={closeMobileMenu}
+      />
+
+      <aside
+        className={`fixed left-0 top-0 z-40 flex h-screen w-56 flex-col gap-4 border-r border-amber-900/80 bg-amber-950 py-4 backdrop-blur transition-transform duration-300 md:hidden ${
+          isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+        role="navigation"
+        aria-label="Mobile navigation"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex flex-col items-center gap-3 px-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-900 text-lg font-semibold text-white flex-shrink-0">
+            DR
+          </div>
+        </div>
+
+        {renderDriverNav(true, navigateAfterMobileClose)}
+      </aside>
 
       <section className="relative flex h-full w-full">
         <aside
-          className={`sticky top-0 flex h-screen shrink-0 flex-col gap-4 border-r border-amber-900/80 py-4 backdrop-blur transition-all duration-300 bg-amber-950 ${
-            isHovered ? 'w-56' : 'w-16'
+          className={`sticky top-0 hidden h-screen shrink-0 flex-col gap-4 border-r border-amber-900/80 py-4 backdrop-blur transition-all duration-300 bg-amber-950 md:flex ${
+            isExpanded ? 'w-64' : 'w-16'
           }`}
           role="navigation"
           aria-label="Main navigation"
-          onMouseEnter={() => setIsHovered(true)}
-          onMouseLeave={() => setIsHovered(false)}
+          onClick={() => setIsExpanded((currentValue) => !currentValue)}
         >
           {/* Header */}
           <div className="flex flex-col items-center gap-3 px-3">
@@ -89,35 +198,11 @@ function DriverLayout({ title, background, children }) {
           </div>
 
           {/* Navigation */}
-          <nav className="flex w-full flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-2">
-            {driverModules.map((module) => (
-              <NavLink
-                key={module.path}
-                to={module.path}
-                aria-label={module.label}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
-                    isHovered ? 'justify-start' : 'justify-center'
-                  } ${
-                    isActive
-                      ? 'border-amber-400 bg-amber-900 text-white rounded-lg'
-                      : 'text-amber-200 hover:border-amber-700'
-                  }`
-                }
-              >
-                <span className="h-5 w-5 flex-shrink-0">{driverIcons[module.label]}</span>
-                {isHovered && (
-                  <span className="inline-flex whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] text-amber-100 transition-opacity duration-200">
-                    {module.label}
-                  </span>
-                )}
-              </NavLink>
-            ))}
-          </nav>
+          {renderDriverNav(isExpanded, undefined)}
         </aside>
 
         {/* Main Content */}
-        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden pt-16 md:pt-0">
           <div className="flex-1 overflow-y-auto">
             <div className="h-full px-4 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8 lg:px-12 lg:py-10">
               {children}
