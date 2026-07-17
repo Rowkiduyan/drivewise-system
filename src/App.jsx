@@ -8,7 +8,6 @@ import DriverProfile from './pages/DriverProfile.jsx'
 import LandingPage from './pages/LandingPage.jsx'
 import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
-import MechanicTrucks from './pages/MechanicTrucks.jsx'
 import AdminHome from './pages/AdminHome.jsx'
 import AdminDeviceManagement from './pages/AdminDeviceManagement.jsx'
 import AdminAnalysis from './pages/AdminAnalysis.jsx'
@@ -52,11 +51,6 @@ function App() {
       <Route path="/supervisor/deliveries" element={<SupDeliveries />} />
       <Route path="/supervisor/profile" element={<SupProfile />} />
       <Route path="/supervisor/trucks" element={<SupTrucks />} />
-      <Route
-        path="/mechanic"
-        element={<Navigate to="/mechanic/trucks" replace />}
-      />
-      <Route path="/mechanic/trucks" element={<MechanicTrucks />} />
       <Route
         path="/admin"
         element={<Navigate to="/admin/user-management" replace />}
