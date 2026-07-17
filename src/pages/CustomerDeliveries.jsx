@@ -16,12 +16,14 @@ const background = null
 
 // Philippine truck models
 const truckTypes = [
-  { value: '2T', label: '2 Ton (Small Pickup)' },
-  { value: '4T', label: '4 Ton (Light Truck)' },
-  { value: '6T', label: '6 Ton (Medium Truck)' },
-  { value: '10T', label: '10 Ton (Large Truck)' },
-  { value: '20T', label: '20 Ton (Container Truck)' },
-  { value: '40T', label: '40 Ton (Semi-Trailer)' }
+  { value: 'L300', label: 'L300 - Light commercial vehicle for small cargo, ideal for urban deliveries' },
+  { value: 'AUV', label: 'AUV - Utility vehicle for light cargo, suitable for small loads and flexible operations' },
+  { value: '1T_DRY', label: '1T DRY - One-ton dry van for transporting general cargo securely' },
+  { value: '2T_DRY', label: '2T DRY - Two-ton dry van for transporting bulk cargo' },
+  { value: '1T_REF', label: '1T REF - One-ton reefer truck for perishable cargo with temperature control' },
+  { value: '2T_REF', label: '2T REF - Two-ton reefer for temperature-sensitive cargo' },
+  { value: '4T_DRY', label: '4T DRY - Four-ton dry van for large cargo transport' },
+  { value: '4T_REF', label: '4T REF - Four-ton reefer for large volume cold-chain operations' }
 ]
 
 // Item categories (dry or refrigerated only)
