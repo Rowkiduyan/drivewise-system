@@ -186,7 +186,7 @@ function SupDeliveryCrew() {
       const { error: driverError } = await supabase
         .from("driver_records")
         .insert({
-          id: authId,
+          auth_id: authId,
           birthdate: formData.birthdate,
           last_name: formData.lastName.trim(),
           first_name: formData.firstName.trim(),

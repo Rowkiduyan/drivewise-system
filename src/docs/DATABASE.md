@@ -64,7 +64,7 @@ Stores driver profile information separate from authentication data.
 
 ### Relationships
 
-- Belongs to one user account.
+- `auth_id` references `users.id`.
 
 ---
 
