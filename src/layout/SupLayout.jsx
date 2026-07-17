@@ -50,6 +50,8 @@ const supervisorSidebarTheme = {
   labelText: "text-blue-100",
 };
 
+const supervisorSidebarStorageKey = "supervisor-sidebar-expanded";
+
 const supIcons = {
   Dashboard: (
     <svg
@@ -162,25 +164,36 @@ const supIcons = {
 };
 
 function SupLayout({ title, background, children, bg = "bg-white" }) {
-  const [isHovered, setIsHovered] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    return window.localStorage.getItem(supervisorSidebarStorageKey) === "true";
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      supervisorSidebarStorageKey,
+      String(isExpanded)
+    );
+  }, [isExpanded]);
 
   return (
     <main
       className={`sup-layout relative flex h-screen w-screen overflow-hidden ${bg} text-slate-900`}
       style={{ fontFamily: "Inter, system-ui, sans-serif" }}
     >
-      <style>{`.sup-layout .font-display { font-family: Inter, system-ui, sans-serif !important; }`}</style>
       {background}
 
       <section className="relative flex h-full w-full">
         <aside
           className={`sticky top-0 flex h-screen shrink-0 flex-col gap-4 border-r border-blue-900 py-4 backdrop-blur transition-all duration-300 ${supervisorSidebarTheme.sidebar} ${
-            isHovered ? "w-64" : "w-16"
+            isExpanded ? "w-64" : "w-16"
           }`}
           role="navigation"
           aria-label="Main navigation"
-          onMouseEnter={() => setIsHovered(true)}
-          onMouseLeave={() => setIsHovered(false)}
+          onClick={() => setIsExpanded((currentValue) => !currentValue)}
         >
           {/* Header */}
           <div className="flex flex-col items-center gap-3 px-3">
@@ -198,10 +211,9 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
                 key={module.path}
                 to={module.path}
                 aria-label={module.label}
+                onClick={(event) => event.stopPropagation()}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
-                    isHovered ? "justify-start" : "justify-center"
-                  } ${
+                  `flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
                     isActive
                       ? `${supervisorSidebarTheme.activeLink} rounded-lg`
                       : `${supervisorSidebarTheme.inactiveLink} hover:rounded-lg hover:bg-blue-900/40`
@@ -211,11 +223,15 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
                 <span className="h-5 w-5 flex-shrink-0">
                   {supIcons[module.label]}
                 </span>
-                {isHovered && (
-                  <span className="inline-flex whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] transition-opacity duration-200">
-                    {module.label}
-                  </span>
-                )}
+                <span
+                  className={`inline-flex overflow-hidden whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] transition-all duration-200 ease-out ${
+                    isExpanded
+                      ? "max-w-40 opacity-100 translate-x-0"
+                      : "max-w-0 opacity-0 -translate-x-2"
+                  }`}
+                >
+                  {module.label}
+                </span>
               </NavLink>
             ))}
           </nav>

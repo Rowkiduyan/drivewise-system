@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 
 const adminModules = [
@@ -80,8 +80,20 @@ const adminIcons = {
   )
 }
 
+const adminSidebarStorageKey = 'admin-sidebar-expanded'
+
 function AdminLayout({ title, background, children }) {
-  const [isHovered, setIsHovered] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(() => {
+    if (typeof window === 'undefined') {
+      return false
+    }
+
+    return window.localStorage.getItem(adminSidebarStorageKey) === 'true'
+  })
+
+  useEffect(() => {
+    window.localStorage.setItem(adminSidebarStorageKey, String(isExpanded))
+  }, [isExpanded])
 
   return (
     <main
@@ -93,12 +105,11 @@ function AdminLayout({ title, background, children }) {
       <section className="relative flex h-full w-full">
         <aside
           className={`sticky top-0 flex h-screen shrink-0 flex-col gap-4 border-r border-violet-900/80 py-4 backdrop-blur transition-all duration-300 bg-violet-950 ${
-            isHovered ? 'w-64' : 'w-16'
+            isExpanded ? 'w-64' : 'w-16'
           }`}
           role="navigation"
           aria-label="Main navigation"
-          onMouseEnter={() => setIsHovered(true)}
-          onMouseLeave={() => setIsHovered(false)}
+          onClick={() => setIsExpanded((currentValue) => !currentValue)}
         >
           <div className="flex flex-col items-center gap-3 px-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-900 text-lg font-semibold text-white flex-shrink-0">
@@ -112,10 +123,9 @@ function AdminLayout({ title, background, children }) {
                 key={module.path}
                 to={module.path}
                 aria-label={module.label}
+                onClick={(event) => event.stopPropagation()}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
-                    isHovered ? 'justify-start' : 'justify-center'
-                  } ${
+                  `flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 $
                     isActive
                       ? 'border-violet-400 bg-violet-900 text-white rounded-lg'
                       : 'text-violet-200 hover:border-violet-700'
@@ -125,11 +135,15 @@ function AdminLayout({ title, background, children }) {
                 <span className="h-5 w-5 flex-shrink-0">
                   {adminIcons[module.label]}
                 </span>
-                {isHovered && (
-                  <span className="inline-flex whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] text-violet-100 transition-opacity duration-200">
-                    {module.label}
-                  </span>
-                )}
+                <span
+                  className={`inline-flex overflow-hidden whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] text-violet-100 transition-all duration-200 ease-out ${
+                    isExpanded
+                      ? 'max-w-40 opacity-100 translate-x-0'
+                      : 'max-w-0 opacity-0 -translate-x-2'
+                  }`}
+                >
+                  {module.label}
+                </span>
               </NavLink>
             ))}
           </nav>
