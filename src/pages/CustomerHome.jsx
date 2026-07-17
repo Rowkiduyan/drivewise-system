@@ -1,15 +1,15 @@
-import ClientLayout from '../layout/ClientLayout.jsx'
+import CustomerLayout from '../layout/CustomerLayout.jsx'
 
 const background = null
 
-function ClientHome() {
+function CustomerHome() {
   return (
-    <ClientLayout title="Client Home" background={background}>
+    <CustomerLayout title="Customer Home" background={background}>
       <div className="flex flex-col gap-6">
         {/* Header Section */}
         <header className="space-y-2 md:space-y-3">
           <p className="text-xs uppercase tracking-[0.3em] text-emerald-600 font-medium">
-            Client Interface
+            Customer Interface
           </p>
           <h1 className="text-2xl sm:text-3xl md:text-4xl font-semibold leading-tight text-slate-900">
             Home
@@ -35,8 +35,8 @@ function ClientHome() {
           </div>
         </div>
       </div>
-    </ClientLayout>
+    </CustomerLayout>
   )
 }
 
-export default ClientHome
+export default CustomerHome

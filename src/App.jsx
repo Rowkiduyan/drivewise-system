@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
-import ClientBookings from './pages/ClientBookings.jsx'
-import ClientHome from './pages/ClientHome.jsx'
-import ClientProfile from './pages/ClientProfile.jsx'
+import CustomerBookings from './pages/CustomerBookings.jsx'
+import CustomerHome from './pages/CustomerHome.jsx'
+import CustomerProfile from './pages/CustomerProfile.jsx'
 import DriverDeliveries from './pages/DriverDeliveries.jsx'
 import DriverPerformance from './pages/DriverPerformance.jsx'
 import DriverProfile from './pages/DriverProfile.jsx'
@@ -27,10 +27,10 @@ function App() {
     <Routes>
       <Route path="/" element={<Login />} />
       <Route path="/landing" element={<LandingPage />} />
-      <Route path="/client" element={<Navigate to="/client/home" replace />} />
-      <Route path="/client/home" element={<ClientHome />} />
-      <Route path="/client/bookings" element={<ClientBookings />} />
-      <Route path="/client/profile" element={<ClientProfile />} />
+      <Route path="/customer" element={<Navigate to="/customer/home" replace />} />
+      <Route path="/customer/home" element={<CustomerHome />} />
+      <Route path="/customer/bookings" element={<CustomerBookings />} />
+      <Route path="/customer/profile" element={<CustomerProfile />} />
       <Route
         path="/driver"
         element={<Navigate to="/driver/performance" replace />}

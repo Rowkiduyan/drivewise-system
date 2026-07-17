@@ -2,13 +2,13 @@ import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 
 export const clientModules = [
-  { label: 'Home', path: '/client/home', description: 'Client overview' },
+  { label: 'Home', path: '/customer/home', description: 'Customer overview' },
   {
     label: 'Bookings',
-    path: '/client/bookings',
+    path: '/customer/bookings',
     description: 'Requests and shipments'
   },
-  { label: 'Profile', path: '/client/profile', description: 'Account details' }
+  { label: 'Profile', path: '/customer/profile', description: 'Account details' }
 ]
 
 const clientIconClassName = 'h-5 w-5 stroke-current'
@@ -54,7 +54,7 @@ const clientIcons = {
   )
 }
 
-function ClientLayout({ title, background, children }) {
+function CustomerLayout({ title, background, children }) {
   const [isHovered, setIsHovered] = useState(false)
 
   return (
@@ -119,4 +119,4 @@ function ClientLayout({ title, background, children }) {
   )
 }
 
-export default ClientLayout
+export default CustomerLayout
