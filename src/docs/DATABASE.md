@@ -74,7 +74,7 @@ Stores driver profile information separate from authentication data.
 
 Represents one drowsiness monitoring session.
 
-A session begins when monitoring starts and ends when monitoring stops.
+A session begins when raspberry pi is turned on and monitoring starts and ends when monitoring stops.
 
 ### Key Fields
 
