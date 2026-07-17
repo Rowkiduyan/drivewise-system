@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
-import CustomerBookings from './pages/CustomerBookings.jsx'
+import CustomerDeliveries from './pages/CustomerDeliveries.jsx'
 import CustomerHome from './pages/CustomerHome.jsx'
 import CustomerProfile from './pages/CustomerProfile.jsx'
 import DriverDeliveries from './pages/DriverDeliveries.jsx'
@@ -29,7 +29,7 @@ function App() {
       <Route path="/landing" element={<LandingPage />} />
       <Route path="/customer" element={<Navigate to="/customer/home" replace />} />
       <Route path="/customer/home" element={<CustomerHome />} />
-      <Route path="/customer/bookings" element={<CustomerBookings />} />
+      <Route path="/customer/deliveries" element={<CustomerDeliveries />} />
       <Route path="/customer/profile" element={<CustomerProfile />} />
       <Route
         path="/driver"

@@ -11,8 +11,11 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.2",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^1.25.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "react-leaflet": "^5.0.0",
     "react-router-dom": "^6.26.2",
     "recharts": "^2.6.2"
   },

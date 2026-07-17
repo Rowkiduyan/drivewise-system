@@ -4,9 +4,9 @@ import { NavLink } from 'react-router-dom'
 export const clientModules = [
   { label: 'Home', path: '/customer/home', description: 'Customer overview' },
   {
-    label: 'Bookings',
-    path: '/customer/bookings',
-    description: 'Requests and shipments'
+    label: 'Deliveries',
+    path: '/customer/deliveries',
+    description: 'Active shipments'
   },
   { label: 'Profile', path: '/customer/profile', description: 'Account details' }
 ]
@@ -27,7 +27,7 @@ const clientIcons = {
       <path d="M9.5 20v-6h5v6" />
     </svg>
   ),
-  Bookings: (
+  Deliveries: (
     <svg
       viewBox="0 0 24 24"
       fill="none"
