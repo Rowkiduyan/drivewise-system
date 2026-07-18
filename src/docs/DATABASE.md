@@ -53,18 +53,19 @@ Stores driver profile information separate from authentication data.
 
 ### Key Fields
 
-- id
+- id (TEXT, Primary Key)
 - auth_id
 - first_name
 - middle_name
 - last_name
 - birthdate
 - position
+- email
 - profile_picture
 
 ### Relationships
 
-- `auth_id` references `users.id`.
+- `auth_id` references `users.id` (foreign key). `id` is an independently generated text value and is no longer the same as the linked user's auth id.
 
 ---
 
@@ -79,6 +80,7 @@ A session begins when raspberry pi is turned on and monitoring starts and ends w
 ### Key Fields
 
 - session_id
+- created_at
 - start_time
 - end_time
 - total_alerts
