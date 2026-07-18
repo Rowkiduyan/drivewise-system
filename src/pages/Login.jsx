@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail } from 'lucide-react'
-import marvelLogo from '../assets/MarvelLogo.png'
+import logoMark from '../layout/images/Logoo.png'
+import marvelEmployees from '../layout/images/MarvelEmployees.png'
+import marvelTrucks1 from '../layout/images/MarvelTrucks1.png'
+import marvelTrucks2 from '../layout/images/MarvelTrucks2.jpg'
 
 const initialForm = {
   email: '',
@@ -51,40 +54,63 @@ function Login() {
     ? 'border-red-300 bg-red-50'
     : 'border-slate-200 bg-white hover:border-slate-300'
 
+  const slideshowImages = [
+    { src: marvelTrucks1, alt: 'Marvel Trucking fleet truck 1' },
+    { src: marvelEmployees, alt: 'Marvel Trucking employees' },
+    { src: marvelTrucks2, alt: 'Marvel Trucking fleet truck 2' }
+  ]
+
   return (
     <main
-      className="min-h-screen w-full bg-slate-50 text-slate-900 lg:flex"
+      className="relative flex min-h-screen w-full overflow-hidden bg-slate-50 text-slate-900 lg:flex-row"
       style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
     >
-      <div className="relative flex flex-col items-center justify-center overflow-hidden bg-gradient-to-br from-iron-950 via-slate-900 to-iron-950 px-6 py-12 sm:py-16 lg:w-1/2 lg:px-12 lg:py-0">
-        <div className="pointer-events-none absolute -right-16 -top-24 h-72 w-72 rounded-full bg-ember-500/25 blur-[110px]" />
-        <div className="pointer-events-none absolute -bottom-16 -left-12 h-72 w-72 rounded-full bg-ember-400/20 blur-[110px]" />
+      <header className="absolute inset-x-0 top-0 z-20 flex h-14 items-center border-b border-white/10 bg-slate-950 px-4 lg:hidden">
+        <img
+          src={logoMark}
+          alt="Marvel Trucking Solutions Inc. logo"
+          className="h-8 w-auto object-contain"
+        />
+      </header>
 
-        <div className="relative flex flex-col items-center text-center">
-          <img
-            src={marvelLogo}
-            alt="Marvel Trucking Solutions Inc. logo"
-            className="h-28 w-auto object-contain sm:h-32 lg:h-40"
-          />
-          <p className="mt-6 max-w-xs text-sm leading-relaxed text-slate-300 sm:max-w-sm sm:text-base">
-            Real-time fleet visibility and driver safety monitoring, in one dashboard.
-          </p>
+      <div className="relative hidden min-h-0 flex-1 overflow-hidden bg-slate-950 px-5 py-5 lg:flex lg:w-1/2 lg:flex-none lg:px-8 lg:py-8">
+        <div className="absolute inset-0">
+          {slideshowImages.map((image, index) => (
+            <img
+              key={image.src}
+              src={image.src}
+              alt={image.alt}
+              className="absolute inset-0 h-full w-full object-cover"
+              style={{
+                animation: 'loginSlideshowFade 18s ease-in-out infinite',
+                animationDelay: `${index * 6}s`
+              }}
+            />
+          ))}
+          <div className="absolute inset-0 bg-black/55" />
+          <div className="absolute inset-0 bg-gradient-to-br from-black/35 via-black/20 to-black/60" />
         </div>
+
+        <img
+          src={logoMark}
+          alt="Marvel Trucking Solutions Inc. logo"
+          className="pointer-events-none absolute left-4 top-4 z-10 h-12 w-auto object-contain sm:left-5 sm:top-5 sm:h-14 lg:h-16"
+        />
       </div>
 
-      <div className="flex flex-1 items-center justify-center px-5 py-10 sm:px-6 lg:w-1/2 lg:px-12">
-        <div className="w-full max-w-md">
-          <div className="mb-8 text-center lg:text-left">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden px-5 pb-6 pt-20 sm:px-6 sm:pb-8 sm:pt-24 lg:w-1/2 lg:flex-none lg:px-12 lg:py-8">
+        <div className="w-full max-w-sm lg:max-w-md">
+          <div className="mb-6 text-center lg:mb-8 lg:text-left">
             <h1 className="font-display text-2xl font-semibold text-slate-900 sm:text-3xl">
-              Welcome back
+              Welcome
             </h1>
             <p className="mt-2 text-sm text-slate-500">
-              Sign in to access your dashboard.
+              Sign in to continue to your account.
             </p>
           </div>
 
-          <form className="space-y-5" onSubmit={handleSubmit} noValidate>
-            <div className="space-y-2">
+          <form className="space-y-4 sm:space-y-5" onSubmit={handleSubmit} noValidate>
+            <div className="space-y-1.5 sm:space-y-2">
               <label
                 htmlFor="email"
                 className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500"
@@ -110,7 +136,7 @@ function Login() {
               </div>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-1.5 sm:space-y-2">
               <label
                 htmlFor="password"
                 className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500"
@@ -172,6 +198,35 @@ function Login() {
           </form>
         </div>
       </div>
+
+      <style>{`
+        @keyframes loginSlideshowFade {
+          0% {
+            opacity: 0;
+            transform: scale(1.08);
+          }
+
+          10% {
+            opacity: 1;
+            transform: scale(1);
+          }
+
+          33.333% {
+            opacity: 1;
+            transform: scale(1);
+          }
+
+          43.333% {
+            opacity: 0;
+            transform: scale(1.08);
+          }
+
+          100% {
+            opacity: 0;
+            transform: scale(1.08);
+          }
+        }
+      `}</style>
     </main>
   )
 }
