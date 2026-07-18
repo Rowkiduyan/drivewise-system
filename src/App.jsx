@@ -7,7 +7,6 @@ import DriverPerformance from './pages/DriverPerformance.jsx'
 import DriverProfile from './pages/DriverProfile.jsx'
 import LandingPage from './pages/LandingPage.jsx'
 import Login from './pages/Login.jsx'
-import Register from './pages/Register.jsx'
 import AdminHome from './pages/AdminHome.jsx'
 import AdminDeviceManagement from './pages/AdminDeviceManagement.jsx'
 import AdminAnalysis from './pages/AdminAnalysis.jsx'
@@ -66,7 +65,6 @@ function App() {
       />
       <Route path="/admin/analysis" element={<AdminAnalysis />} />
       <Route path="/admin/profile" element={<AdminProfile />} />
-      <Route path="/register" element={<Register />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
