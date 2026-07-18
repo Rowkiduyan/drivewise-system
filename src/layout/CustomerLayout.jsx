@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
+import LogoutButton from './LogoutButton.jsx'
 
 export const clientModules = [
   { label: 'Home', path: '/customer/home', description: 'Customer overview' },
@@ -169,6 +170,10 @@ function CustomerLayout({ title, background, children }) {
         </div>
 
         {renderClientNav(true, navigateAfterMobileClose)}
+
+        <div className="border-t border-emerald-900/80 px-2 pt-2">
+          <LogoutButton isExpanded />
+        </div>
       </aside>
 
       <section className="relative flex h-full w-full">
@@ -189,6 +194,10 @@ function CustomerLayout({ title, background, children }) {
 
           {/* Navigation */}
           {renderClientNav(isExpanded, undefined)}
+
+          <div className="border-t border-emerald-900/80 px-2 pt-2">
+            <LogoutButton isExpanded={isExpanded} />
+          </div>
         </aside>
 
         {/* Main Content */}

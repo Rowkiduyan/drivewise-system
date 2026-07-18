@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
+import { supabase } from '../lib/supabaseClient.js'
+import LogoutButton from './LogoutButton.jsx'
 
 const adminModules = [
   {
@@ -82,6 +84,20 @@ const adminIcons = {
 
 const adminSidebarStorageKey = 'admin-sidebar-expanded'
 
+function deriveInitials(name, email) {
+  const source = name?.trim() || email?.split('@')[0]?.trim() || ''
+  if (!source) {
+    return '?'
+  }
+
+  const parts = source.split(/[\s._-]+/).filter(Boolean)
+  const initials = parts.length > 1
+    ? parts[0][0] + parts[parts.length - 1][0]
+    : source.slice(0, 2)
+
+  return initials.toUpperCase()
+}
+
 function AdminLayout({ title, background, children }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     if (typeof window === 'undefined') {
@@ -90,10 +106,43 @@ function AdminLayout({ title, background, children }) {
 
     return window.localStorage.getItem(adminSidebarStorageKey) === 'true'
   })
+  const [userInitials, setUserInitials] = useState('')
 
   useEffect(() => {
     window.localStorage.setItem(adminSidebarStorageKey, String(isExpanded))
   }, [isExpanded])
+
+  useEffect(() => {
+    let isMounted = true
+
+    async function loadCurrentUser() {
+      const {
+        data: { user }
+      } = await supabase.auth.getUser()
+
+      if (!user || !isMounted) {
+        return
+      }
+
+      const { data: userRow } = await supabase
+        .from('users')
+        .select('full_name')
+        .eq('id', user.id)
+        .single()
+
+      if (!isMounted) {
+        return
+      }
+
+      setUserInitials(deriveInitials(userRow?.full_name, user.email))
+    }
+
+    loadCurrentUser()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   return (
     <main
@@ -113,7 +162,7 @@ function AdminLayout({ title, background, children }) {
         >
           <div className="flex flex-col items-center gap-3 px-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-900 text-lg font-semibold text-white flex-shrink-0">
-              AD
+              {userInitials || '...'}
             </div>
           </div>
 
@@ -147,6 +196,10 @@ function AdminLayout({ title, background, children }) {
               </NavLink>
             ))}
           </nav>
+
+          <div className="border-t border-violet-900/80 px-2 pt-2">
+            <LogoutButton isExpanded={isExpanded} />
+          </div>
         </aside>
 
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden">

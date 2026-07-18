@@ -22,7 +22,7 @@ The system aims to:
 
 ## Admin
 
-Responsible for overall system management.
+Responsible for overall system management, including creating and managing user accounts (Supervisor, Admin, Driver, Helper, Customer roles).
 
 ## Supervisor
 
@@ -38,6 +38,15 @@ Responsible for overall system management.
 - Confirms assigned trips.
 - Performs deliveries.
 - Is monitored for drowsiness during trips.
+
+## Helper
+
+- Assists the driver during deliveries.
+
+## Customer
+
+- Requests deliveries.
+- Views their own delivery/booking activity.
 
 ---
 
@@ -149,6 +158,9 @@ Completed
 
 - Initial project planning
 - Drowsiness detection prototype
+- Login authentication (Supabase Auth, role-based routing to each portal: Admin, Supervisor, Driver, Customer)
+- Logout (confirmation modal, single-click guard, wired into all four portals: Admin, Supervisor, Driver, Customer)
+- Admin account management (create, update role/name/email, deactivate, reset password — via the `admin-users` Edge Function and Admin panel; supports Supervisor/Admin/Driver/Helper/Customer roles)
 
 In Progress
 

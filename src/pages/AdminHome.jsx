@@ -1,61 +1,68 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import AdminLayout from '../layout/AdminLayout.jsx'
+import { supabase } from '../lib/supabaseClient.js'
 
 const background = null
 
-function deriveNameFromEmail(email) {
-  const localPart = email.split('@')[0]?.trim()
-  if (!localPart) {
-    return 'New User'
-  }
-  return localPart
-    .split(/[._-]/)
-    .filter(Boolean)
-    .map((chunk) => chunk[0].toUpperCase() + chunk.slice(1))
-    .join(' ')
-}
+const ROLE_OPTIONS = ['Supervisor', 'Admin', 'Driver', 'Helper', 'Customer']
 
 function AdminHome() {
   const [newUserForm, setNewUserForm] = useState({
     role: '',
-    email: '',
-    contactNumber: ''
+    email: ''
   })
   const [formError, setFormError] = useState('')
-  const [users, setUsers] = useState([
-    {
-      id: 'U-1001',
-      name: 'Lara Mendoza',
-      role: 'Admin',
-      email: 'lara.mendoza@drivewise.com',
-      contactNumber: '+63 917 100 1001',
-      status: 'active'
-    },
-    {
-      id: 'U-1002',
-      name: 'Noel Ramirez',
-      role: 'Supervisor',
-      email: 'noel.ramirez@drivewise.com',
-      contactNumber: '+63 917 100 1002',
-      status: 'active'
-    },
-    {
-      id: 'U-1003',
-      name: 'Judy Perez',
-      role: 'Operations',
-      email: 'judy.perez@drivewise.com',
-      contactNumber: '+63 917 100 1003',
-      status: 'inactive'
-    }
-  ])
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [tempPassword, setTempPassword] = useState('')
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
+  const [isAddConfirmOpen, setIsAddConfirmOpen] = useState(false)
+  const [users, setUsers] = useState([])
+  const [usersError, setUsersError] = useState('')
   const [selectedUserId, setSelectedUserId] = useState('')
+  const [manageError, setManageError] = useState('')
   const [manageForm, setManageForm] = useState({
     name: '',
     role: '',
     email: '',
-    contactNumber: '',
     status: 'active'
   })
+
+  useEffect(() => {
+    let isMounted = true
+
+    async function loadUsers() {
+      const { data, error } = await supabase
+        .from('users')
+        .select('id, full_name, role, email')
+        .order('full_name', { ascending: true })
+
+      if (!isMounted) {
+        return
+      }
+
+      if (error) {
+        setUsersError(error.message || 'Unable to load users.')
+        return
+      }
+
+      setUsersError('')
+      setUsers(
+        (data || []).map((user) => ({
+          id: user.id,
+          name: user.full_name,
+          role: user.role,
+          email: user.email,
+          status: 'active'
+        }))
+      )
+    }
+
+    loadUsers()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   const selectedUser = useMemo(
     () => users.find((user) => user.id === selectedUserId) || null,
@@ -64,6 +71,7 @@ function AdminHome() {
 
   const closeManageDialog = () => {
     setSelectedUserId('')
+    setManageError('')
   }
 
   const handleAddInputChange = (event) => {
@@ -74,14 +82,19 @@ function AdminHome() {
     }
   }
 
+  const resetForm = () => {
+    setNewUserForm({ role: '', email: '' })
+  }
+
   const handleAddUser = (event) => {
     event.preventDefault()
+    setFormError('')
+
     const role = newUserForm.role.trim()
     const email = newUserForm.email.trim().toLowerCase()
-    const contactNumber = newUserForm.contactNumber.trim()
 
-    if (!role || !email || !contactNumber) {
-      setFormError('Role, email, and contact number are required.')
+    if (!role || !email) {
+      setFormError('Role and email are required.')
       return
     }
 
@@ -91,27 +104,54 @@ function AdminHome() {
       return
     }
 
+    setIsAddConfirmOpen(true)
+  }
+
+  const cancelAddUser = () => {
+    setIsAddConfirmOpen(false)
+  }
+
+  const confirmAddUser = async () => {
+    setFormError('')
+
+    const role = newUserForm.role.trim()
+    const email = newUserForm.email.trim().toLowerCase()
+
+    setIsAddConfirmOpen(false)
+    setIsSubmitting(true)
+
+    const { data, error } = await supabase.functions.invoke('admin-users', {
+      body: { action: 'create-user', email, role }
+    })
+
+    if (error) {
+      setFormError(error.message || 'Unable to add user.')
+      setIsSubmitting(false)
+      return
+    }
+
     const newUser = {
-      id: `U-${Date.now()}`,
-      name: deriveNameFromEmail(email),
-      role,
-      email,
-      contactNumber,
+      id: data.user.id,
+      name: data.user.full_name,
+      role: data.user.role,
+      email: data.user.email,
       status: 'active'
     }
 
     setUsers((current) => [newUser, ...current])
-    setNewUserForm({ role: '', email: '', contactNumber: '' })
-    setFormError('')
+    resetForm()
+    setTempPassword(data.tempPassword)
+    setIsPasswordModalOpen(true)
+    setIsSubmitting(false)
   }
 
   const openManageDialog = (user) => {
     setSelectedUserId(user.id)
+    setManageError('')
     setManageForm({
       name: user.name,
       role: user.role,
       email: user.email,
-      contactNumber: user.contactNumber,
       status: user.status
     })
   }
@@ -121,27 +161,61 @@ function AdminHome() {
     setManageForm((current) => ({ ...current, [name]: value }))
   }
 
-  const handleSaveManagedAccount = (event) => {
+  const handleSaveManagedAccount = async (event) => {
     event.preventDefault()
+    setManageError('')
+
+    const name = manageForm.name.trim()
+    const role = manageForm.role.trim()
+    const email = manageForm.email.trim().toLowerCase()
+
+    const { error } = await supabase
+      .from('users')
+      .update({ full_name: name, role, email })
+      .eq('id', selectedUserId)
+
+    if (error) {
+      setManageError(error.message || 'Unable to save changes.')
+      return
+    }
+
     setUsers((current) =>
       current.map((user) =>
         user.id === selectedUserId
-          ? {
-              ...user,
-              name: manageForm.name.trim(),
-              role: manageForm.role.trim(),
-              email: manageForm.email.trim().toLowerCase(),
-              contactNumber: manageForm.contactNumber.trim(),
-              status: manageForm.status
-            }
+          ? { ...user, name, role, email, status: manageForm.status }
           : user
       )
     )
     closeManageDialog()
   }
 
-  const handleDeactivateAccount = () => {
+  const handleDeactivateAccount = async () => {
+    setManageError('')
+    const { error } = await supabase.functions.invoke('admin-users', {
+      body: { action: 'deactivate', userId: selectedUserId }
+    })
+
+    if (error) {
+      setManageError(error.message || 'Unable to deactivate account.')
+      return
+    }
+
     setManageForm((current) => ({ ...current, status: 'inactive' }))
+  }
+
+  const handleResetPassword = async () => {
+    setManageError('')
+    const { data, error } = await supabase.functions.invoke('admin-users', {
+      body: { action: 'reset-password', userId: selectedUserId }
+    })
+
+    if (error) {
+      setManageError(error.message || 'Unable to reset password.')
+      return
+    }
+
+    setTempPassword(data.tempPassword)
+    setIsPasswordModalOpen(true)
   }
 
   return (
@@ -163,19 +237,24 @@ function AdminHome() {
           <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
             Add User (Individual)
           </p>
-          <form className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]" onSubmit={handleAddUser}>
+          <form className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_auto]" onSubmit={handleAddUser}>
             <label className="space-y-2">
               <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
                 Role
               </span>
-              <input
-                type="text"
+              <select
                 name="role"
-                placeholder="e.g. Supervisor"
                 value={newUserForm.role}
                 onChange={handleAddInputChange}
-                className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
-              />
+                className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
+              >
+                <option value="">Select role</option>
+                {ROLE_OPTIONS.map((role) => (
+                  <option key={role} value={role}>
+                    {role}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="space-y-2">
               <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
@@ -190,24 +269,12 @@ function AdminHome() {
                 className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
               />
             </label>
-            <label className="space-y-2">
-              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Contact Number
-              </span>
-              <input
-                type="text"
-                name="contactNumber"
-                placeholder="+63 9XX XXX XXXX"
-                value={newUserForm.contactNumber}
-                onChange={handleAddInputChange}
-                className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
-              />
-            </label>
             <button
               type="submit"
-              className="h-[46px] rounded-2xl bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-500 md:self-end"
+              disabled={isSubmitting}
+              className="h-[46px] rounded-2xl bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60 md:self-end"
             >
-              Add User
+              {isSubmitting ? 'Adding...' : 'Add User'}
             </button>
           </form>
           {formError ? (
@@ -219,6 +286,11 @@ function AdminHome() {
 
         <section className="rounded-3xl border border-violet-200/70 bg-white p-6 sm:p-8">
           <p className="text-xs uppercase tracking-[0.24em] text-violet-600">Users</p>
+          {usersError ? (
+            <p className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {usersError}
+            </p>
+          ) : null}
           <div className="mt-4 overflow-hidden rounded-2xl border border-violet-100">
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-[0.2em] text-slate-600">
@@ -226,7 +298,6 @@ function AdminHome() {
                   <th className="px-4 py-3 font-medium">Name</th>
                   <th className="px-4 py-3 font-medium">Role</th>
                   <th className="px-4 py-3 font-medium">Email</th>
-                  <th className="px-4 py-3 font-medium">Contact Number</th>
                   <th className="px-4 py-3 font-medium">Manage Account</th>
                 </tr>
               </thead>
@@ -236,7 +307,6 @@ function AdminHome() {
                     <td className="px-4 py-3 font-medium text-slate-900">{user.name}</td>
                     <td className="px-4 py-3 text-slate-700">{user.role}</td>
                     <td className="px-4 py-3 text-slate-700">{user.email}</td>
-                    <td className="px-4 py-3 text-slate-700">{user.contactNumber}</td>
                     <td className="px-4 py-3">
                       <button
                         type="button"
@@ -293,13 +363,18 @@ function AdminHome() {
                   <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
                     Role
                   </span>
-                  <input
-                    type="text"
+                  <select
                     name="role"
                     value={manageForm.role}
                     onChange={handleManageInputChange}
                     className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
-                  />
+                  >
+                    {ROLE_OPTIONS.map((role) => (
+                      <option key={role} value={role}>
+                        {role}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="space-y-2 sm:col-span-2">
                   <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
@@ -313,19 +388,13 @@ function AdminHome() {
                     className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
                   />
                 </label>
-                <label className="space-y-2 sm:col-span-2">
-                  <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                    Contact Number
-                  </span>
-                  <input
-                    type="text"
-                    name="contactNumber"
-                    value={manageForm.contactNumber}
-                    onChange={handleManageInputChange}
-                    className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
-                  />
-                </label>
               </div>
+
+              {manageError ? (
+                <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {manageError}
+                </p>
+              ) : null}
 
               <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-slate-700">
                 Account status:{' '}
@@ -337,6 +406,7 @@ function AdminHome() {
                   <button
                     type="button"
                     className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:border-amber-300 hover:bg-amber-50"
+                    onClick={handleResetPassword}
                   >
                     Reset Password
                   </button>
@@ -358,6 +428,80 @@ function AdminHome() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {isAddConfirmOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-md rounded-3xl border border-violet-200/70 bg-white p-6 shadow-xl sm:p-8">
+            <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
+              Confirm New User
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-slate-900">
+              Add this user?
+            </h2>
+            <div className="mt-4 space-y-2 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-slate-700">
+              <p>
+                <span className="font-semibold">Role:</span>{' '}
+                {newUserForm.role.trim()}
+              </p>
+              <p>
+                <span className="font-semibold">Email:</span>{' '}
+                {newUserForm.email.trim().toLowerCase()}
+              </p>
+            </div>
+            <p className="mt-3 text-sm text-slate-600">
+              A temporary password will be generated and the account created
+              immediately.
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                className="rounded-2xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300"
+                onClick={cancelAddUser}
+                disabled={isSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-2xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60"
+                onClick={confirmAddUser}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? 'Adding...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isPasswordModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-md rounded-3xl border border-violet-200/70 bg-white p-6 shadow-xl sm:p-8">
+            <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
+              Account Created
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-slate-900">
+              Share this temporary password
+            </h2>
+            <p className="mt-3 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 font-mono text-sm text-slate-900">
+              {tempPassword}
+            </p>
+            <p className="mt-3 text-sm text-slate-600">
+              This password will not be shown again. Send it to the new user securely.
+            </p>
+            <button
+              type="button"
+              className="mt-6 w-full rounded-2xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-500"
+              onClick={() => {
+                setIsPasswordModalOpen(false)
+                setTempPassword('')
+              }}
+            >
+              Done
+            </button>
           </div>
         </div>
       ) : null}

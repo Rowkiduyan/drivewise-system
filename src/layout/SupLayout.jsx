@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
+import LogoutButton from "./LogoutButton.jsx";
 
 export const supervisorModules = [
   {
@@ -235,6 +236,10 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
               </NavLink>
             ))}
           </nav>
+
+          <div className="border-t border-blue-800 px-2 pt-2">
+            <LogoutButton isExpanded={isExpanded} />
+          </div>
         </aside>
 
         {/* Main Content */}

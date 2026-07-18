@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
+import LogoutButton from './LogoutButton.jsx'
 
 export const driverModules = [
   {
@@ -179,6 +180,10 @@ function DriverLayout({ title, background, children }) {
         </div>
 
         {renderDriverNav(true, navigateAfterMobileClose)}
+
+        <div className="border-t border-amber-900/80 px-2 pt-2">
+          <LogoutButton isExpanded />
+        </div>
       </aside>
 
       <section className="relative flex h-full w-full">
@@ -199,6 +204,10 @@ function DriverLayout({ title, background, children }) {
 
           {/* Navigation */}
           {renderDriverNav(isExpanded, undefined)}
+
+          <div className="border-t border-amber-900/80 px-2 pt-2">
+            <LogoutButton isExpanded={isExpanded} />
+          </div>
         </aside>
 
         {/* Main Content */}

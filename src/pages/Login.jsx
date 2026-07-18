@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail } from 'lucide-react'
+import { supabase } from '../lib/supabaseClient.js'
 import logoMark from '../layout/images/Logoo.png'
 import marvelEmployees from '../layout/images/MarvelEmployees.png'
 import marvelTrucks1 from '../layout/images/MarvelTrucks1.png'
@@ -10,17 +12,26 @@ const initialForm = {
   password: ''
 }
 
+const ROLE_HOME_ROUTES = {
+  Admin: '/admin/user-management',
+  Supervisor: '/supervisor/dashboard',
+  Driver: '/driver/performance',
+  Customer: '/customer/home'
+}
+
 function Login() {
+  const navigate = useNavigate()
   const [formValues, setFormValues] = useState(initialForm)
   const [status, setStatus] = useState('empty')
+  const [errorMessage, setErrorMessage] = useState('')
   const [showPassword, setShowPassword] = useState(false)
 
   const formHint = useMemo(() => {
     if (status === 'error') {
-      return 'Please enter a valid email and password.'
+      return errorMessage || 'Please enter a valid email and password.'
     }
     return ''
-  }, [status])
+  }, [status, errorMessage])
 
   const handleInputChange = (event) => {
     const { name, value } = event.target
@@ -30,22 +41,56 @@ function Login() {
     }
   }
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
 
-    const isValid =
-      formValues.email.trim().length > 4 &&
-      formValues.password.trim().length > 5
+    const email = formValues.email.trim()
+    const password = formValues.password.trim()
+    const isValid = email.length > 4 && password.length > 5
 
     if (!isValid) {
+      setErrorMessage('Please enter a valid email and password.')
       setStatus('error')
       return
     }
 
     setStatus('loading')
-    setTimeout(() => {
-      setStatus('empty')
-    }, 1200)
+
+    const { data: authData, error: authError } =
+      await supabase.auth.signInWithPassword({ email, password })
+
+    if (authError) {
+      setErrorMessage(authError.message || 'Invalid email or password.')
+      setStatus('error')
+      return
+    }
+
+    const userId = authData.user?.id
+
+    const { data: userRow, error: userError } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', userId)
+      .single()
+
+    if (userError || !userRow) {
+      await supabase.auth.signOut()
+      setErrorMessage('Unable to load your account. Please try again.')
+      setStatus('error')
+      return
+    }
+
+    const homeRoute = ROLE_HOME_ROUTES[userRow.role]
+
+    if (!homeRoute) {
+      await supabase.auth.signOut()
+      setErrorMessage(`The ${userRow.role} portal isn't available yet.`)
+      setStatus('error')
+      return
+    }
+
+    setStatus('empty')
+    navigate(homeRoute, { replace: true })
   }
 
   const isLoading = status === 'loading'
