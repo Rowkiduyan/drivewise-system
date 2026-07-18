@@ -13,6 +13,7 @@ import AdminAnalysis from './pages/AdminAnalysis.jsx'
 import AdminProfile from './pages/AdminProfile.jsx'
 import SupBookings from './pages/SupBookings.jsx'
 import SupDeliveryCrew from './pages/SupDeliveryCrew.jsx'
+import SupCrewProfile from './pages/SupCrewProfile.jsx'
 import SupDeliveries from './pages/SupDeliveries.jsx'
 import SupDashboard from './pages/SupDashboard.jsx'
 import SupAlertAnalysis from './pages/SupAlertAnalysis.jsx'
@@ -47,6 +48,7 @@ function App() {
       <Route path="/supervisor/analysis/specific" element={<SupAnalysisSpecific />} />
       <Route path="/supervisor/bookings" element={<SupBookings />} />
       <Route path="/supervisor/delivery-crew" element={<SupDeliveryCrew />} />
+      <Route path="/supervisor/delivery-crew/profile" element={<SupCrewProfile />} />
       <Route path="/supervisor/deliveries" element={<SupDeliveries />} />
       <Route path="/supervisor/profile" element={<SupProfile />} />
       <Route path="/supervisor/trucks" element={<SupTrucks />} />

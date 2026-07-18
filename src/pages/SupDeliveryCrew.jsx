@@ -1,268 +1,241 @@
-import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../lib/supabaseClient.js";
-import { Link } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
+import { Search, Truck, Users, CircleCheck, ChevronRight, X } from "lucide-react";
+
+// ---------------------------------------------------------------------------
+// Dummy crew roster — frontend only, no backend/API/database.
+// ---------------------------------------------------------------------------
+
+const FIRST_NAMES = [
+  "Juan", "Maria", "Jose", "Ana", "Pedro", "Rosa", "Carlos", "Elena",
+  "Miguel", "Carmen", "Antonio", "Teresa", "Francisco", "Luz", "Manuel",
+  "Corazon", "Ricardo", "Josefina", "Eduardo", "Remedios", "Fernando",
+  "Concepcion", "Roberto", "Milagros", "Alfredo", "Estrella", "Rodrigo",
+  "Perla", "Andres", "Divina", "Emilio", "Flordeliza", "Gregorio",
+  "Herminia", "Ignacio", "Julieta", "Leonardo", "Marilou", "Nestor", "Ofelia",
+];
+
+const LAST_NAMES = [
+  "Santos", "Reyes", "Cruz", "Bautista", "Ocampo", "Garcia", "Torres",
+  "Flores", "Ramos", "Mendoza", "Castillo", "Villanueva", "Aquino",
+  "Del Rosario", "Gonzales", "Fernandez", "Domingo", "Pascual", "Salazar",
+  "Navarro", "Aguilar", "Marquez", "Rivera", "Dizon", "Tolentino", "Manalo",
+  "Valdez", "Lazaro", "Serrano", "Roque", "Aranda", "Belmonte", "Cabrera",
+  "Diaz", "Espino", "Franco", "Guevarra", "Herrera",
+];
+
+const MIDDLE_INITIALS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+const CLIENT_SPECIALTIES = [
+  "Jollibee", "McDonald's", "Chowking", "KFC", "Mang Inasal", "Greenwich",
+  "Shakey's", "Red Ribbon", "Goldilocks", "Max's Restaurant",
+];
+
+const SHIFTS = ["Morning Shift", "Afternoon Shift", "Night Shift"];
+const STATUS_SEQUENCE = ["Available", "Available", "On Delivery", "On Delivery", "Off Duty"];
+const JOIN_MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function buildMockCrew(count) {
+  return Array.from({ length: count }, (_, i) => {
+    const firstName = FIRST_NAMES[i % FIRST_NAMES.length];
+    const lastName = LAST_NAMES[(i * 7 + 3) % LAST_NAMES.length];
+    const middleInitial = MIDDLE_INITIALS[(i * 3) % MIDDLE_INITIALS.length];
+    const position = i % 5 < 3 ? "Driver" : "Helper";
+    const status = STATUS_SEQUENCE[(i * 11) % STATUS_SEQUENCE.length];
+
+    const primaryClient = CLIENT_SPECIALTIES[(i * 3 + 1) % CLIENT_SPECIALTIES.length];
+    const secondaryClient = CLIENT_SPECIALTIES[(i * 5 + 2) % CLIENT_SPECIALTIES.length];
+    const clientSpecialties =
+      secondaryClient !== primaryClient ? [primaryClient, secondaryClient] : [primaryClient];
+
+    const shift = SHIFTS[i % SHIFTS.length];
+    const areaCode = 917 + (i % 3);
+    const contactNumber = `09${areaCode}-${String(100 + i).padStart(3, "0")}-${String(
+      1000 + ((i * 137) % 9000),
+    ).padStart(4, "0")}`;
+    const employeeId = `DWC-${String(1001 + i)}`;
+    const dateJoined = `${JOIN_MONTHS[(i * 5) % JOIN_MONTHS.length]} ${2026 - (i % 5)}`;
+
+    return {
+      id: `crew-${i + 1}`,
+      fullName: `${lastName}, ${firstName} ${middleInitial}.`,
+      position,
+      status,
+      clientSpecialties,
+      shift,
+      contactNumber,
+      employeeId,
+      dateJoined,
+    };
+  });
+}
+
+const MOCK_CREW = buildMockCrew(68);
+
+function getInitials(fullName) {
+  const [last = "", rest = ""] = fullName.split(",").map((part) => part.trim());
+  const first = rest.split(" ")[0] || "";
+  return (`${last.charAt(0)}${first.charAt(0)}`.toUpperCase()) || "?";
+}
+
+const STATUS_BADGE_CLASSES = {
+  Available: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+  "On Delivery": "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
+  "Off Duty": "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
+};
+
+function StatusBadge({ status }) {
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${
+        STATUS_BADGE_CLASSES[status] || STATUS_BADGE_CLASSES["Off Duty"]
+      }`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function PositionTag({ position }) {
+  const isDriver = position === "Driver";
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${
+        isDriver ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"
+      }`}
+    >
+      {position}
+    </span>
+  );
+}
+
+function StatTile({ icon: Icon, label, value, accent = "blue" }) {
+  const accentClasses = {
+    blue: "bg-blue-50 text-blue-600",
+    emerald: "bg-emerald-50 text-emerald-600",
+    violet: "bg-violet-50 text-violet-600",
+    slate: "bg-slate-100 text-slate-600",
+  }[accent];
+
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${accentClasses}`}>
+        <Icon className="h-5 w-5" />
+      </div>
+      <div>
+        <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
+          {label}
+        </p>
+        <p className="text-xl font-semibold text-slate-900">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+const STATUS_FILTERS = ["All", "Available", "On Delivery", "Off Duty"];
+const POSITION_FILTERS = ["All", "Driver", "Helper"];
+const PAGE_SIZE = 10;
 
 function SupDeliveryCrew() {
+  const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("All");
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formError, setFormError] = useState("");
-  const [tempPassword, setTempPassword] = useState("");
-  const [crewRecords, setCrewRecords] = useState([]);
-  const [crewError, setCrewError] = useState("");
-  const [formData, setFormData] = useState({
-    lastName: "",
-    firstName: "",
-    middleName: "",
-    birthdate: "",
-    email: "",
-    position: "Driver",
-    idPicture: null,
-  });
+  const [selectedPosition, setSelectedPosition] = useState("All");
+  const [selectedClient, setSelectedClient] = useState("All");
+  const [currentPage, setCurrentPage] = useState(1);
 
-  const PROFILE_BUCKET = "driver-profile-pics";
+  const clientOptions = useMemo(() => ["All", ...CLIENT_SPECIALTIES], []);
 
-  useEffect(() => {
-    let isMounted = true;
+  const statusCounts = useMemo(
+    () => ({
+      All: MOCK_CREW.length,
+      Available: MOCK_CREW.filter((crew) => crew.status === "Available").length,
+      "On Delivery": MOCK_CREW.filter((crew) => crew.status === "On Delivery").length,
+      "Off Duty": MOCK_CREW.filter((crew) => crew.status === "Off Duty").length,
+    }),
+    [],
+  );
 
-    async function loadCrew() {
-      const { data, error } = await supabase
-        .from("driver_records")
-        .select("id, last_name, first_name, middle_name, position")
-        .order("last_name", { ascending: true });
-
-      if (!isMounted) {
-        return;
-      }
-
-      const fallback = [
-        {
-          id: "dummy-1",
-          fullName: "Santos, Juan D.",
-          position: "Driver",
-          status: "On Route",
-          lastUpdated: "Just now",
-        },
-        {
-          id: "dummy-2",
-          fullName: "Reyes, Maria A.",
-          position: "Helper",
-          status: "Available",
-          lastUpdated: "Just now",
-        },
-        {
-          id: "dummy-3",
-          fullName: "Flores, Andre L.",
-          position: "Driver",
-          status: "On Route",
-          lastUpdated: "Just now",
-        },
-        {
-          id: "dummy-4",
-          fullName: "Cruz, Miguel R.",
-          position: "Driver",
-          status: "Unavailable",
-          lastUpdated: "Just now",
-        },
-      ];
-
-      if (error) {
-        setCrewError(error.message || "Unable to load crew records.");
-        setCrewRecords(fallback);
-        return;
-      }
-
-      const mapped = (data || []).map((record) => {
-        const middle = record.middle_name ? ` ${record.middle_name}` : "";
-        return {
-          id: record.id,
-          fullName: `${record.last_name}, ${record.first_name}${middle}`,
-          position: record.position,
-          status: "On Route",
-          lastUpdated: "Just now",
-        };
-      });
-
-      setCrewError("");
-      setCrewRecords([...mapped, ...fallback]);
-      setSelectedStatus("All");
-    }
-
-    loadCrew();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const generateTempPassword = () => {
-    const buffer = new Uint32Array(4);
-    crypto.getRandomValues(buffer);
-    const token = Array.from(buffer)
-      .map((value) => value.toString(36))
-      .join("");
-    return `Temp${token}!`;
-  };
-
-  const handleInputChange = (event) => {
-    const { name, value } = event.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const handleFileChange = (event) => {
-    const file = event.target.files?.[0] ?? null;
-    setFormData((prev) => ({ ...prev, idPicture: file }));
-  };
-
-  const resetForm = () => {
-    setFormData({
-      lastName: "",
-      firstName: "",
-      middleName: "",
-      birthdate: "",
-      email: "",
-      position: "Driver",
-      idPicture: null,
-    });
-    setFormError("");
-  };
-
-  const handleAddEmployee = async (event) => {
-    event.preventDefault();
-    setFormError("");
-
-    if (!formData.idPicture) {
-      setFormError("Please upload an ID picture.");
-      return;
-    }
-
-    setIsSubmitting(true);
-
-    try {
-      const generatedPassword = generateTempPassword();
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: formData.email.trim(),
-        password: generatedPassword,
-      });
-
-      console.log("signUp session:", authData?.session);
-      const { data: sessionData } = await supabase.auth.getSession();
-      console.log("getSession:", sessionData?.session);
-
-      if (authError) {
-        throw authError;
-      }
-
-      const authId = authData.user?.id;
-
-      if (!authId) {
-        throw new Error("Unable to create auth user.");
-      }
-
-      const safeFileName = formData.idPicture.name
-        .replace(/\s+/g, "-")
-        .replace(/[^a-zA-Z0-9.-]/g, "");
-      const storagePath = `${authId}/${Date.now()}-${safeFileName}`;
-      const { error: uploadError } = await supabase.storage
-        .from(PROFILE_BUCKET)
-        .upload(storagePath, formData.idPicture, {
-          cacheControl: "3600",
-          upsert: false,
-          contentType: formData.idPicture.type,
-        });
-
-      if (uploadError) {
-        throw uploadError;
-      }
-
-      const { data: publicUrlData } = supabase.storage
-        .from(PROFILE_BUCKET)
-        .getPublicUrl(storagePath);
-      const profileUrl = publicUrlData.publicUrl;
-
-      const { error: driverError } = await supabase
-        .from("driver_records")
-        .insert({
-          auth_id: authId,
-          birthdate: formData.birthdate,
-          last_name: formData.lastName.trim(),
-          first_name: formData.firstName.trim(),
-          middle_name: formData.middleName.trim(),
-          position: formData.position,
-          email: formData.email.trim(),
-          profile_picture: profileUrl,
-        });
-
-      if (driverError) {
-        console.log("driver_records error:", driverError);
-        throw driverError;
-      }
-
-      const middleNameValue = formData.middleName.trim();
-      const fullName = [
-        formData.firstName.trim(),
-        middleNameValue,
-        formData.lastName.trim(),
-      ]
-        .filter(Boolean)
-        .join(" ");
-
-      const { error: userError } = await supabase.from("users").insert({
-        id: authId,
-        full_name: fullName,
-        role: formData.position,
-        email: formData.email.trim(),
-      });
-
-      if (userError) {
-        throw userError;
-      }
-
-      resetForm();
-      setIsAddModalOpen(false);
-      setTempPassword(generatedPassword);
-      setIsPasswordModalOpen(true);
-    } catch (error) {
-      const message = error?.message || "Unable to add employee.";
-      setFormError(message);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+  const positionCounts = useMemo(
+    () => ({
+      All: MOCK_CREW.length,
+      Driver: MOCK_CREW.filter((crew) => crew.position === "Driver").length,
+      Helper: MOCK_CREW.filter((crew) => crew.position === "Helper").length,
+    }),
+    [],
+  );
 
   const filteredCrew = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
 
-    return crewRecords.filter((crew) => {
+    return MOCK_CREW.filter((crew) => {
       const matchesSearch = !query
         ? true
-        : [crew.fullName, crew.position, crew.status]
+        : [crew.fullName, crew.position, crew.status, ...crew.clientSpecialties, crew.employeeId]
             .join(" ")
             .toLowerCase()
             .includes(query);
 
-      const matchesStatus =
-        selectedStatus === "All" || crew.status === selectedStatus;
+      const matchesStatus = selectedStatus === "All" || crew.status === selectedStatus;
+      const matchesPosition = selectedPosition === "All" || crew.position === selectedPosition;
+      const matchesClient =
+        selectedClient === "All" || crew.clientSpecialties.includes(selectedClient);
 
-      return matchesSearch && matchesStatus;
+      return matchesSearch && matchesStatus && matchesPosition && matchesClient;
     });
-  }, [searchTerm, selectedStatus, crewRecords]);
+  }, [searchTerm, selectedStatus, selectedPosition, selectedClient]);
 
-  const statusCounts = {
-    All: crewRecords.length,
-    "On Route": crewRecords.filter((crew) => crew.status === "On Route").length,
-    Available: crewRecords.filter((crew) => crew.status === "Available").length,
-    Unavailable: crewRecords.filter((crew) => crew.status === "Unavailable")
-      .length,
+  const totalPages = Math.max(1, Math.ceil(filteredCrew.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const pageStart = (safePage - 1) * PAGE_SIZE;
+  const pagedCrew = filteredCrew.slice(pageStart, pageStart + PAGE_SIZE);
+
+  const hasActiveFilters =
+    searchTerm.trim() !== "" ||
+    selectedStatus !== "All" ||
+    selectedPosition !== "All" ||
+    selectedClient !== "All";
+
+  const updateSearch = (value) => {
+    setSearchTerm(value);
+    setCurrentPage(1);
+  };
+
+  const updateStatus = (value) => {
+    setSelectedStatus(value);
+    setCurrentPage(1);
+  };
+
+  const updatePosition = (value) => {
+    setSelectedPosition(value);
+    setCurrentPage(1);
+  };
+
+  const updateClient = (value) => {
+    setSelectedClient(value);
+    setCurrentPage(1);
+  };
+
+  const clearFilters = () => {
+    setSearchTerm("");
+    setSelectedStatus("All");
+    setSelectedPosition("All");
+    setSelectedClient("All");
+    setCurrentPage(1);
+  };
+
+  const openProfile = (crew) => {
+    navigate("/supervisor/delivery-crew/profile", { state: { crew } });
   };
 
   return (
     <SupLayout title="Delivery Crew" background={null} bg="bg-white">
-      <div className="flex flex-col gap-6">
-        {/* Header Section */}
+      <div className="flex flex-col gap-6 pb-10">
+        {/* Header */}
         <header className="space-y-2 md:space-y-3">
           <p className="text-xs uppercase tracking-[0.3em] text-blue-600 font-medium">
             Supervisor Interface
@@ -271,322 +244,239 @@ function SupDeliveryCrew() {
             Delivery Crew
           </h1>
           <p className="max-w-3xl text-sm md:text-base text-slate-600 leading-relaxed">
-            Manage crew availability, assignments, and real-time location
-            tracking.
+            Browse your drivers and helpers. Select a crew member to view
+            their full profile, performance, and trip history.
           </p>
         </header>
 
-        {/* Search and Filter Section */}
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex-1">
-              <label className="sr-only" htmlFor="crew-search">
-                Search crew records
-              </label>
-              <input
-                id="crew-search"
-                type="text"
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Search crew, lead, status..."
-                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
-              />
-            </div>
+        {/* Summary Stat Tiles */}
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatTile icon={Users} label="Total Crew" value={MOCK_CREW.length} accent="blue" />
+          <StatTile icon={Truck} label="Drivers" value={positionCounts.Driver} accent="violet" />
+          <StatTile icon={Users} label="Helpers" value={positionCounts.Helper} accent="slate" />
+          <StatTile
+            icon={CircleCheck}
+            label="Available Now"
+            value={statusCounts.Available}
+            accent="emerald"
+          />
+        </section>
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-3">
-              <div className="flex flex-wrap gap-3">
-                {["All", "On Route", "Available", "Unavailable"].map(
-                  (status) => (
-                    <button
-                      key={status}
-                      type="button"
-                      onClick={() => setSelectedStatus(status)}
-                      className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                        selectedStatus === status
-                          ? "border-blue-600 bg-blue-600 text-white"
-                          : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
-                      }`}
-                    >
-                      <span>{status}</span>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs ${
-                          selectedStatus === status
-                            ? "bg-white/20 text-white"
-                            : "bg-slate-200 text-slate-700"
-                        }`}
-                      >
-                        {statusCounts[status]}
-                      </span>
-                    </button>
-                  ),
-                )}
+        {/* Search and Filter Toolbar */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="relative flex-1">
+                <label className="sr-only" htmlFor="crew-search">
+                  Search crew records
+                </label>
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  id="crew-search"
+                  type="text"
+                  value={searchTerm}
+                  onChange={(event) => updateSearch(event.target.value)}
+                  placeholder="Search by name, client, employee ID, or status..."
+                  className="w-full rounded-xl border border-slate-300 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                />
               </div>
 
-              <button
-                type="button"
-                onClick={() => setIsAddModalOpen(true)}
-                className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-200"
-              >
-                Add Employee
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200">
-            <div className="grid grid-cols-12 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-              <div className="col-span-5">Full name</div>
-              <div className="col-span-3">Role</div>
-              <div className="col-span-4 text-right">Status</div>
-            </div>
-
-            <div className="divide-y divide-slate-200 bg-white">
-              {filteredCrew.map((crew, index) => {
-                const crewKey = `${crew.id || crew.fullName}-${crew.position}-${index}`;
-                const content = (
-                  <div className="grid grid-cols-12 items-center px-4 py-4 text-sm text-slate-700 transition hover:bg-slate-50">
-                    <div className="col-span-5">
-                      <p className="font-medium text-slate-900">
-                        {crew.fullName}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        Updated {crew.lastUpdated}
-                      </p>
-                    </div>
-                    <div className="col-span-3 text-slate-700">
-                      {crew.position}
-                    </div>
-                    <div className="col-span-4 flex flex-col items-end gap-1">
-                      <span className="inline-flex w-fit rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                        {crew.status}
-                      </span>
-                    </div>
-                  </div>
-                );
-
-                if (crew.position !== "Driver") {
-                  return <div key={crewKey}>{content}</div>;
-                }
-
-                return (
-                  <Link
-                    key={crewKey}
-                    to="/supervisor/analysis/indiv"
-                    aria-label={`View analysis for ${crew.fullName}`}
-                    className="block"
+              <div className="sm:w-56">
+                <label className="sr-only" htmlFor="client-filter">
+                  Filter by client
+                </label>
+                <div className="relative">
+                  <select
+                    id="client-filter"
+                    value={selectedClient}
+                    onChange={(event) => updateClient(event.target.value)}
+                    className="w-full appearance-none rounded-xl border border-slate-300 bg-slate-50 py-3 pl-4 pr-4 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
                   >
-                    {content}
-                  </Link>
-                );
-              })}
-
-              {filteredCrew.length === 0 && (
-                <div className="px-4 py-8 text-center text-sm text-slate-500">
-                  {crewError || "No crew records match your search."}
+                    {clientOptions.map((client) => (
+                      <option key={client} value={client}>
+                        {client === "All" ? "All Clients" : client}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              )}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-wrap gap-2">
+                {STATUS_FILTERS.map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    onClick={() => updateStatus(status)}
+                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
+                      selectedStatus === status
+                        ? "border-blue-600 bg-blue-600 text-white"
+                        : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
+                    }`}
+                  >
+                    <span>{status}</span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs ${
+                        selectedStatus === status
+                          ? "bg-white/20 text-white"
+                          : "bg-slate-200 text-slate-700"
+                      }`}
+                    >
+                      {statusCounts[status]}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {POSITION_FILTERS.map((position) => (
+                  <button
+                    key={position}
+                    type="button"
+                    onClick={() => updatePosition(position)}
+                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
+                      selectedPosition === position
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
+                    }`}
+                  >
+                    <span>{position}</span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs ${
+                        selectedPosition === position
+                          ? "bg-white/20 text-white"
+                          : "bg-slate-200 text-slate-700"
+                      }`}
+                    >
+                      {positionCounts[position]}
+                    </span>
+                  </button>
+                ))}
+
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-transparent px-3 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </section>
 
-        {isAddModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-4 py-8 backdrop-blur-sm">
-            <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-semibold text-slate-900">
-                    Add Employee
-                  </h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Enter the crew member details for the roster.
-                  </p>
-                </div>
+        {/* Results summary */}
+        <p className="text-sm text-slate-500">
+          {filteredCrew.length === 0
+            ? "No crew members match your filters."
+            : `Showing ${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, filteredCrew.length)} of ${filteredCrew.length} crew members`}
+        </p>
 
-                <button
-                  type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="rounded-full px-3 py-1 text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
-                >
-                  Close
-                </button>
-              </div>
+        {/* Crew List */}
+        {filteredCrew.length === 0 ? (
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-500 shadow-sm">
+            No crew records match your search. Try adjusting your filters.
+          </div>
+        ) : (
+          <>
+            {/* Crew table — same layout at every screen size; scrolls horizontally on narrow viewports */}
+            <section className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead>
+                  <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    <th className="px-5 py-3 font-semibold">Crew Member</th>
+                    <th className="px-5 py-3 font-semibold">Position</th>
+                    <th className="px-5 py-3 font-semibold">Client Specialty</th>
+                    <th className="px-5 py-3 font-semibold">Contact</th>
+                    <th className="px-5 py-3 font-semibold">Status</th>
+                    <th className="py-3 pl-2 pr-5 font-semibold">&nbsp;</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {pagedCrew.map((crew) => (
+                    <tr
+                      key={crew.id}
+                      onClick={() => openProfile(crew)}
+                      className="cursor-pointer transition hover:bg-slate-50"
+                    >
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-50 text-xs font-semibold text-blue-700">
+                            {getInitials(crew.fullName)}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate font-semibold text-slate-900">
+                              {crew.fullName}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <PositionTag position={crew.position} />
+                      </td>
+                      <td className="px-5 py-4 text-slate-700">
+                        {crew.clientSpecialties.join(", ")}
+                      </td>
+                      <td className="px-5 py-4 text-slate-700">{crew.contactNumber}</td>
+                      <td className="px-5 py-4">
+                        <StatusBadge status={crew.status} />
+                      </td>
+                      <td className="py-4 pl-2 pr-5 text-right">
+                        <ChevronRight className="ml-auto h-4 w-4 text-slate-400" />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
 
-              <form
-                className="mt-5 grid gap-4 sm:grid-cols-2"
-                onSubmit={handleAddEmployee}
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <nav
+                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
+                aria-label="Crew list pagination"
               >
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Last Name
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    name="lastName"
-                    value={formData.lastName}
-                    onChange={handleInputChange}
-                    placeholder="e.g. Santos"
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    First Name
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    name="firstName"
-                    value={formData.firstName}
-                    onChange={handleInputChange}
-                    placeholder="e.g. Juan"
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Middle Name (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    name="middleName"
-                    value={formData.middleName}
-                    onChange={handleInputChange}
-                    placeholder="e.g. D."
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Birthdate
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    name="birthdate"
-                    value={formData.birthdate}
-                    onChange={handleInputChange}
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                  />
-                </div>
-
-                <div className="space-y-2 sm:col-span-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Email
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    name="email"
-                    value={formData.email}
-                    onChange={handleInputChange}
-                    placeholder="e.g. juan.santos@drivewise.com"
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                  />
-                </div>
-
-                <div className="space-y-2 sm:col-span-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    ID Picture (Max 10MB)
-                  </label>
-                  <input
-                    type="file"
-                    required
-                    accept="image/*"
-                    onChange={handleFileChange}
-                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none file:mr-4 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                  />
-                  <p className="text-xs text-slate-400">
-                    Supported: JPG, PNG. Max file size 10MB.
-                  </p>
-                </div>
-
-                <div className="space-y-2 sm:col-span-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Position
-                  </label>
-                  <select
-                    required
-                    name="position"
-                    value={formData.position}
-                    onChange={handleInputChange}
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                  >
-                    <option value="Driver">Driver</option>
-                    <option value="Helper">Helper</option>
-                  </select>
-                </div>
-                {formError && (
-                  <div className="sm:col-span-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    {formError}
-                  </div>
-                )}
-
-                <div className="mt-6 flex items-center justify-end gap-3 sm:col-span-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      resetForm();
-                      setIsAddModalOpen(false);
-                    }}
-                    className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-400"
-                  >
-                    {isSubmitting ? "Saving..." : "Save Employee"}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {isPasswordModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-4 py-8 backdrop-blur-sm">
-            <div className="mt-20 w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-semibold text-slate-900">
-                    Temporary Password
-                  </h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Share this with the employee so they can log in.
-                  </p>
-                </div>
                 <button
                   type="button"
-                  onClick={() => setIsPasswordModalOpen(false)}
-                  className="rounded-full px-3 py-1 text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                  disabled={safePage === 1}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Close
+                  Previous
                 </button>
-              </div>
 
-              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-center">
-                <p className="text-sm font-semibold text-slate-500">Password</p>
-                <p className="mt-2 text-lg font-semibold text-slate-900">
-                  {tempPassword}
-                </p>
-              </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                    <button
+                      key={page}
+                      type="button"
+                      onClick={() => setCurrentPage(page)}
+                      className={`h-8 w-8 rounded-lg text-sm font-semibold transition ${
+                        page === safePage
+                          ? "bg-blue-600 text-white"
+                          : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                </div>
 
-              <div className="mt-6 flex items-center justify-end">
                 <button
                   type="button"
-                  onClick={() => setIsPasswordModalOpen(false)}
-                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
+                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                  disabled={safePage === totalPages}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Done
+                  Next
                 </button>
-              </div>
-            </div>
-          </div>
+              </nav>
+            )}
+          </>
         )}
       </div>
     </SupLayout>
