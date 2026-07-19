@@ -29,11 +29,6 @@ export const supervisorModules = [
     description: "Fleet availability",
   },
   {
-    label: "Alert Analysis",
-    path: "/supervisor/analysis",
-    description: "Alert patterns and insights",
-  },
-  {
     label: "Profile",
     path: "/supervisor/profile",
     description: "Team settings",
@@ -133,21 +128,6 @@ const supIcons = {
       <path d="M5 15v-7h8l2 7" />
       <circle cx="7" cy="18" r="1.5" />
       <circle cx="15" cy="18" r="1.5" />
-    </svg>
-  ),
-  "Alert Analysis": (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      strokeWidth="1.6"
-      className={supIconClassName}
-      aria-hidden="true"
-    >
-      <path d="M3 3v18h18" />
-      <path d="M7 14l3-4 3 2 5-6" />
-      <circle cx="7" cy="14" r="1" />
-      <circle cx="13" cy="12" r="1" />
-      <circle cx="18" cy="8" r="1" />
     </svg>
   ),
   Profile: (

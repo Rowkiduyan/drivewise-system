@@ -16,9 +16,7 @@ import SupDeliveryCrew from './pages/SupDeliveryCrew.jsx'
 import SupCrewProfile from './pages/SupCrewProfile.jsx'
 import SupDeliveries from './pages/SupDeliveries.jsx'
 import SupDashboard from './pages/SupDashboard.jsx'
-import SupAlertAnalysis from './pages/SupAlertAnalysis.jsx'
 import SupAnalysisIndiv from './pages/SupAnalysisIndiv.jsx'
-import SupAnalysisSpecific from './pages/SupAnalysisSpecific.jsx'
 import SupProfile from './pages/SupProfile.jsx'
 import SupTrucks from './pages/SupTrucks.jsx'
 
@@ -43,9 +41,7 @@ function App() {
         element={<Navigate to="/supervisor/dashboard" replace />}
       />
       <Route path="/supervisor/dashboard" element={<SupDashboard />} />
-      <Route path="/supervisor/analysis" element={<SupAlertAnalysis />} />
       <Route path="/supervisor/analysis/indiv" element={<SupAnalysisIndiv />} />
-      <Route path="/supervisor/analysis/specific" element={<SupAnalysisSpecific />} />
       <Route path="/supervisor/bookings" element={<SupBookings />} />
       <Route path="/supervisor/delivery-crew" element={<SupDeliveryCrew />} />
       <Route path="/supervisor/delivery-crew/profile" element={<SupCrewProfile />} />

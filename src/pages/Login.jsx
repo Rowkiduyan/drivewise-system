@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail } from 'lucide-react'
-import { supabase } from '../lib/supabaseClient.js'
+import { REMEMBER_ME_KEY, supabase } from '../lib/supabaseClient.js'
 import logoMark from '../layout/images/Logoo.png'
 import marvelEmployees from '../layout/images/MarvelEmployees.png'
 import marvelTrucks1 from '../layout/images/MarvelTrucks1.png'
@@ -19,12 +19,69 @@ const ROLE_HOME_ROUTES = {
   Customer: '/customer/home'
 }
 
+// Looks up the signed-in user's role and resolves the portal route it maps
+// to. Shared by the fresh sign-in flow and the on-mount persisted-session
+// check so both redirect the same way.
+async function resolveHomeRoute(userId) {
+  const { data: userRow, error: userError } = await supabase
+    .from('users')
+    .select('role')
+    .eq('id', userId)
+    .single()
+
+  if (userError || !userRow) {
+    return { error: 'Unable to load your account. Please try again.' }
+  }
+
+  const homeRoute = ROLE_HOME_ROUTES[userRow.role]
+
+  if (!homeRoute) {
+    return { error: `The ${userRow.role} portal isn't available yet.` }
+  }
+
+  return { homeRoute }
+}
+
 function Login() {
   const navigate = useNavigate()
   const [formValues, setFormValues] = useState(initialForm)
   const [status, setStatus] = useState('empty')
   const [errorMessage, setErrorMessage] = useState('')
   const [showPassword, setShowPassword] = useState(false)
+  const [rememberMe, setRememberMe] = useState(false)
+  const [checkingSession, setCheckingSession] = useState(true)
+
+  useEffect(() => {
+    let isCurrent = true
+
+    const restoreSession = async () => {
+      const { data } = await supabase.auth.getSession()
+      const userId = data.session?.user?.id
+
+      if (!userId) {
+        if (isCurrent) setCheckingSession(false)
+        return
+      }
+
+      const { homeRoute } = await resolveHomeRoute(userId)
+
+      if (!isCurrent) return
+
+      if (homeRoute) {
+        navigate(homeRoute, { replace: true })
+        return
+      }
+
+      await supabase.auth.signOut()
+      setCheckingSession(false)
+    }
+
+    restoreSession()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [navigate])
 
   const formHint = useMemo(() => {
     if (status === 'error') {
@@ -56,6 +113,8 @@ function Login() {
 
     setStatus('loading')
 
+    localStorage.setItem(REMEMBER_ME_KEY, rememberMe ? 'true' : 'false')
+
     const { data: authData, error: authError } =
       await supabase.auth.signInWithPassword({ email, password })
 
@@ -65,26 +124,11 @@ function Login() {
       return
     }
 
-    const userId = authData.user?.id
+    const { homeRoute, error: roleError } = await resolveHomeRoute(authData.user?.id)
 
-    const { data: userRow, error: userError } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', userId)
-      .single()
-
-    if (userError || !userRow) {
+    if (roleError) {
       await supabase.auth.signOut()
-      setErrorMessage('Unable to load your account. Please try again.')
-      setStatus('error')
-      return
-    }
-
-    const homeRoute = ROLE_HOME_ROUTES[userRow.role]
-
-    if (!homeRoute) {
-      await supabase.auth.signOut()
-      setErrorMessage(`The ${userRow.role} portal isn't available yet.`)
+      setErrorMessage(roleError)
       setStatus('error')
       return
     }
@@ -104,6 +148,14 @@ function Login() {
     { src: marvelEmployees, alt: 'Marvel Trucking employees' },
     { src: marvelTrucks2, alt: 'Marvel Trucking fleet truck 2' }
   ]
+
+  if (checkingSession) {
+    return (
+      <main className="flex min-h-screen w-full items-center justify-center bg-slate-50">
+        <Loader2 className="h-6 w-6 animate-spin text-ember-600" aria-hidden="true" />
+      </main>
+    )
+  }
 
   return (
     <main
@@ -218,6 +270,16 @@ function Login() {
                 </button>
               </div>
             </div>
+
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(event) => setRememberMe(event.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-ember-600 focus:outline-none focus:ring-2 focus:ring-ember-500 focus:ring-offset-2 focus:ring-offset-slate-50"
+              />
+              Remember me
+            </label>
 
             {showError ? (
               <p className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
