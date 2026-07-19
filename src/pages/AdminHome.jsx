@@ -16,10 +16,18 @@ function AdminHome() {
   const [tempPassword, setTempPassword] = useState('')
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
   const [isAddConfirmOpen, setIsAddConfirmOpen] = useState(false)
+  const [statusModal, setStatusModal] = useState({
+    open: false,
+    tone: 'success',
+    title: '',
+    message: '',
+    onClose: null
+  })
   const [users, setUsers] = useState([])
   const [usersError, setUsersError] = useState('')
   const [selectedUserId, setSelectedUserId] = useState('')
   const [manageError, setManageError] = useState('')
+  const [isSavingAccount, setIsSavingAccount] = useState(false)
   const [manageForm, setManageForm] = useState({
     name: '',
     role: '',
@@ -72,6 +80,18 @@ function AdminHome() {
   const closeManageDialog = () => {
     setSelectedUserId('')
     setManageError('')
+    setIsSavingAccount(false)
+  }
+
+  const showStatusModal = (tone, title, message, onClose = null) => {
+    setStatusModal({ open: true, tone, title, message, onClose })
+  }
+
+  const closeStatusModal = () => {
+    setStatusModal((current) => {
+      current.onClose?.()
+      return { ...current, open: false }
+    })
   }
 
   const handleAddInputChange = (event) => {
@@ -125,8 +145,8 @@ function AdminHome() {
     })
 
     if (error) {
-      setFormError(error.message || 'Unable to add user.')
       setIsSubmitting(false)
+      showStatusModal('error', 'Unable to Add User', error.message || 'Something went wrong while adding the user.')
       return
     }
 
@@ -141,13 +161,19 @@ function AdminHome() {
     setUsers((current) => [newUser, ...current])
     resetForm()
     setTempPassword(data.tempPassword)
-    setIsPasswordModalOpen(true)
     setIsSubmitting(false)
+    showStatusModal(
+      'success',
+      'User Added',
+      `${newUser.name} has been added as ${newUser.role}.`,
+      () => setIsPasswordModalOpen(true)
+    )
   }
 
   const openManageDialog = (user) => {
     setSelectedUserId(user.id)
     setManageError('')
+    setIsSavingAccount(false)
     setManageForm({
       name: user.name,
       role: user.role,
@@ -163,7 +189,13 @@ function AdminHome() {
 
   const handleSaveManagedAccount = async (event) => {
     event.preventDefault()
+
+    if (isSavingAccount) {
+      return
+    }
+
     setManageError('')
+    setIsSavingAccount(true)
 
     const name = manageForm.name.trim()
     const role = manageForm.role.trim()
@@ -175,7 +207,8 @@ function AdminHome() {
       .eq('id', selectedUserId)
 
     if (error) {
-      setManageError(error.message || 'Unable to save changes.')
+      setIsSavingAccount(false)
+      showStatusModal('error', 'Unable to Save Changes', error.message || 'Unable to save changes.')
       return
     }
 
@@ -185,7 +218,12 @@ function AdminHome() {
       })
 
       if (driverSyncError) {
-        setManageError(driverSyncError.message || 'Saved, but unable to sync driver record.')
+        setIsSavingAccount(false)
+        showStatusModal(
+          'error',
+          'Partially Saved',
+          driverSyncError.message || 'Saved, but unable to sync driver record.'
+        )
         return
       }
     }
@@ -197,7 +235,9 @@ function AdminHome() {
           : user
       )
     )
+    setIsSavingAccount(false)
     closeManageDialog()
+    showStatusModal('success', 'Account Updated', `${name} is now set to the ${role} role.`)
   }
 
   const handleDeactivateAccount = async () => {
@@ -433,9 +473,10 @@ function AdminHome() {
 
                 <button
                   type="submit"
-                  className="rounded-2xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-500"
+                  disabled={isSavingAccount}
+                  className="rounded-2xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60"
                 >
-                  Save Changes
+                  {isSavingAccount ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </form>
@@ -510,6 +551,33 @@ function AdminHome() {
                 setIsPasswordModalOpen(false)
                 setTempPassword('')
               }}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {statusModal.open ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-md rounded-3xl border border-violet-200/70 bg-white p-6 shadow-xl sm:p-8">
+            <p
+              className={`text-xs uppercase tracking-[0.24em] ${
+                statusModal.tone === 'success' ? 'text-emerald-600' : 'text-red-600'
+              }`}
+            >
+              {statusModal.tone === 'success' ? 'Success' : 'Error'}
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-slate-900">{statusModal.title}</h2>
+            <p className="mt-3 text-sm text-slate-600">{statusModal.message}</p>
+            <button
+              type="button"
+              className={`mt-6 w-full rounded-2xl px-5 py-3 text-sm font-semibold text-white transition ${
+                statusModal.tone === 'success'
+                  ? 'bg-violet-600 hover:bg-violet-500'
+                  : 'bg-red-600 hover:bg-red-500'
+              }`}
+              onClick={closeStatusModal}
             >
               Done
             </button>
