@@ -8,6 +8,7 @@ const ROLE_OPTIONS = ['Supervisor', 'Admin', 'Driver', 'Helper', 'Customer']
 
 function AdminHome() {
   const [newUserForm, setNewUserForm] = useState({
+    fullName: '',
     role: '',
     email: ''
   })
@@ -32,6 +33,7 @@ function AdminHome() {
     name: '',
     role: '',
     email: '',
+    loginEmail: '',
     status: 'active'
   })
 
@@ -41,7 +43,7 @@ function AdminHome() {
     async function loadUsers() {
       const { data, error } = await supabase
         .from('users')
-        .select('id, full_name, role, email')
+        .select('id, full_name, role, email, login_email')
         .order('full_name', { ascending: true })
 
       if (!isMounted) {
@@ -60,6 +62,7 @@ function AdminHome() {
           name: user.full_name,
           role: user.role,
           email: user.email,
+          loginEmail: user.login_email,
           status: 'active'
         }))
       )
@@ -103,18 +106,19 @@ function AdminHome() {
   }
 
   const resetForm = () => {
-    setNewUserForm({ role: '', email: '' })
+    setNewUserForm({ fullName: '', role: '', email: '' })
   }
 
   const handleAddUser = (event) => {
     event.preventDefault()
     setFormError('')
 
+    const fullName = newUserForm.fullName.trim()
     const role = newUserForm.role.trim()
     const email = newUserForm.email.trim().toLowerCase()
 
-    if (!role || !email) {
-      setFormError('Role and email are required.')
+    if (!fullName || !role || !email) {
+      setFormError('Name, role, and email are required.')
       return
     }
 
@@ -134,6 +138,7 @@ function AdminHome() {
   const confirmAddUser = async () => {
     setFormError('')
 
+    const fullName = newUserForm.fullName.trim()
     const role = newUserForm.role.trim()
     const email = newUserForm.email.trim().toLowerCase()
 
@@ -141,7 +146,7 @@ function AdminHome() {
     setIsSubmitting(true)
 
     const { data, error } = await supabase.functions.invoke('admin-users', {
-      body: { action: 'create-user', email, role }
+      body: { action: 'create-user', fullName, email, role }
     })
 
     if (error) {
@@ -155,19 +160,29 @@ function AdminHome() {
       name: data.user.full_name,
       role: data.user.role,
       email: data.user.email,
+      loginEmail: data.user.login_email,
       status: 'active'
     }
 
     setUsers((current) => [newUser, ...current])
     resetForm()
-    setTempPassword(data.tempPassword)
     setIsSubmitting(false)
-    showStatusModal(
-      'success',
-      'User Added',
-      `${newUser.name} has been added as ${newUser.role}.`,
-      () => setIsPasswordModalOpen(true)
-    )
+
+    if (data.emailSent) {
+      showStatusModal(
+        'success',
+        'User Added',
+        `${newUser.name} has been added as ${newUser.role}. Login credentials were emailed to ${newUser.email}.`
+      )
+    } else {
+      setTempPassword(data.tempPassword || '')
+      showStatusModal(
+        'error',
+        'User Added — Email Not Sent',
+        `${newUser.name} was added, but the credentials email failed to send (${data.emailError || 'unknown error'}). Share the temporary password with them securely.`,
+        () => setIsPasswordModalOpen(true)
+      )
+    }
   }
 
   const openManageDialog = (user) => {
@@ -178,6 +193,7 @@ function AdminHome() {
       name: user.name,
       role: user.role,
       email: user.email,
+      loginEmail: user.loginEmail,
       status: user.status
     })
   }
@@ -265,8 +281,21 @@ function AdminHome() {
       return
     }
 
-    setTempPassword(data.tempPassword)
-    setIsPasswordModalOpen(true)
+    if (data.emailSent) {
+      showStatusModal(
+        'success',
+        'Password Reset',
+        `A new temporary password was emailed to ${manageForm.email}.`
+      )
+    } else {
+      setTempPassword(data.tempPassword || '')
+      showStatusModal(
+        'error',
+        'Password Reset — Email Not Sent',
+        `The password was reset, but the email failed to send (${data.emailError || 'unknown error'}). Share the temporary password with them securely.`,
+        () => setIsPasswordModalOpen(true)
+      )
+    }
   }
 
   return (
@@ -288,7 +317,20 @@ function AdminHome() {
           <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
             Add User (Individual)
           </p>
-          <form className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_auto]" onSubmit={handleAddUser}>
+          <form className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_auto]" onSubmit={handleAddUser}>
+            <label className="space-y-2">
+              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                Full Name
+              </span>
+              <input
+                type="text"
+                name="fullName"
+                placeholder="Jane Doe"
+                value={newUserForm.fullName}
+                onChange={handleAddInputChange}
+                className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
+              />
+            </label>
             <label className="space-y-2">
               <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
                 Role
@@ -323,7 +365,7 @@ function AdminHome() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="h-[46px] rounded-2xl bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60 md:self-end"
+              className="h-[46px] rounded-2xl bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60 lg:self-end"
             >
               {isSubmitting ? 'Adding...' : 'Add User'}
             </button>
@@ -349,6 +391,7 @@ function AdminHome() {
                   <th className="px-4 py-3 font-medium">Name</th>
                   <th className="px-4 py-3 font-medium">Role</th>
                   <th className="px-4 py-3 font-medium">Email</th>
+                  <th className="px-4 py-3 font-medium">Login Email</th>
                   <th className="px-4 py-3 font-medium">Manage Account</th>
                 </tr>
               </thead>
@@ -358,6 +401,7 @@ function AdminHome() {
                     <td className="px-4 py-3 font-medium text-slate-900">{user.name}</td>
                     <td className="px-4 py-3 text-slate-700">{user.role}</td>
                     <td className="px-4 py-3 text-slate-700">{user.email}</td>
+                    <td className="px-4 py-3 text-slate-500">{user.loginEmail}</td>
                     <td className="px-4 py-3">
                       <button
                         type="button"
@@ -439,6 +483,17 @@ function AdminHome() {
                     className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
                   />
                 </label>
+                <label className="space-y-2 sm:col-span-2">
+                  <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                    Login Email
+                  </span>
+                  <input
+                    type="email"
+                    value={manageForm.loginEmail}
+                    disabled
+                    className="w-full rounded-2xl border border-violet-100 bg-slate-50 px-4 py-3 text-sm text-slate-500"
+                  />
+                </label>
               </div>
 
               {manageError ? (
@@ -495,6 +550,10 @@ function AdminHome() {
             </h2>
             <div className="mt-4 space-y-2 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-slate-700">
               <p>
+                <span className="font-semibold">Name:</span>{' '}
+                {newUserForm.fullName.trim()}
+              </p>
+              <p>
                 <span className="font-semibold">Role:</span>{' '}
                 {newUserForm.role.trim()}
               </p>
@@ -504,8 +563,9 @@ function AdminHome() {
               </p>
             </div>
             <p className="mt-3 text-sm text-slate-600">
-              A temporary password will be generated and the account created
-              immediately.
+              A login email and temporary password will be generated
+              automatically, and the credentials will be emailed to the
+              address above.
             </p>
             <div className="mt-6 flex justify-end gap-3">
               <button
@@ -533,7 +593,7 @@ function AdminHome() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
           <div className="w-full max-w-md rounded-3xl border border-violet-200/70 bg-white p-6 shadow-xl sm:p-8">
             <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
-              Account Created
+              Email Not Sent
             </p>
             <h2 className="mt-2 text-xl font-semibold text-slate-900">
               Share this temporary password

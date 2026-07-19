@@ -35,7 +35,8 @@ Stores user accounts for authentication and role management.
 
 - id (UUID, Primary Key) — matches the corresponding Supabase Auth user id.
 - full_name
-- email
+- email — contact/notification address entered by the admin when the account is created. Account credentials are sent here; this is **not** the Supabase Auth login.
+- login_email — the actual Supabase Auth login email. Generated server-side by the `admin-users` Edge Function from `full_name` (first-name initial + middle-name initial(s), if any + surname + a 2-digit sequence, e.g. `jmdoe01@marveltrucking.local`). Unique, not editable from the UI. For accounts created before this column existed, it was backfilled to equal `email`, since that was already their real Auth login at the time.
 - role
 - created_at
 
