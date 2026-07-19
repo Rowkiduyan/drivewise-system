@@ -50,6 +50,33 @@ function getAgeFromBirthday(birthday, referenceDate = new Date()) {
     : age - 1;
 }
 
+// Small seeded generator so a given driver's simulated weekly performance
+// stays stable across re-renders instead of reshuffling on every render.
+function createSeededRng(seed) {
+  let state = seed % 2147483647;
+  if (state <= 0) state += 2147483646;
+  return function next() {
+    state = (state * 16807) % 2147483647;
+    return (state - 1) / 2147483646;
+  };
+}
+
+// Simulates 7 days of drowsiness/eye-closure alertness scores for a driver
+// and returns the weekly average — this is what the Weekly Performance
+// column shows. Drivers get a "baseline" tendency plus daily noise, rather
+// than pure random noise per day, so the mock data reads like a real
+// driver's pattern instead of static jitter.
+function buildWeeklyPerformance(seed) {
+  const rng = createSeededRng(seed);
+  const baseline = 55 + rng() * 40; // a driver's typical week, 55-95
+  const dailyScores = Array.from({ length: 7 }, () => {
+    const noise = (rng() - 0.5) * 20; // +/-10 day-to-day variation
+    return Math.min(100, Math.max(30, Math.round(baseline + noise)));
+  });
+  const average = dailyScores.reduce((sum, score) => sum + score, 0) / dailyScores.length;
+  return Math.round(average);
+}
+
 function buildMockCrew(count) {
   return Array.from({ length: count }, (_, i) => {
     const firstName = FIRST_NAMES[i % FIRST_NAMES.length];
@@ -81,6 +108,10 @@ function buildMockCrew(count) {
     const personalDomain = PERSONAL_EMAIL_DOMAINS[i % PERSONAL_EMAIL_DOMAINS.length];
     const personalEmail = `${emailHandle}${1000 + i}@${personalDomain}`;
 
+    // Only drivers are monitored for drowsiness/eye-closure — helpers aren't
+    // behind the wheel, so they simply don't have a weekly score.
+    const weeklyPerformance = position === "Driver" ? buildWeeklyPerformance(i + 1) : null;
+
     return {
       id: `crew-${i + 1}`,
       fullName: `${lastName}, ${firstName} ${middleInitial}.`,
@@ -99,6 +130,7 @@ function buildMockCrew(count) {
       dateJoined,
       personalEmail,
       workEmail,
+      weeklyPerformance,
     };
   });
 }
@@ -138,6 +170,36 @@ function PositionTag({ position }) {
       }`}
     >
       {position}
+    </span>
+  );
+}
+
+// Weekly Performance — the driver's simulated 7-day average alertness score.
+// Color-coded so supervisors can spot frequent eye-closure/drowsiness
+// patterns at a glance without reading every number. Helpers don't drive,
+// so they show a plain dash instead of a badge.
+function getPerformanceTier(score) {
+  if (score >= 85) {
+    return { label: "Good", classes: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200" };
+  }
+  if (score >= 70) {
+    return { label: "Watch", classes: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200" };
+  }
+  return { label: "At Risk", classes: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200" };
+}
+
+function PerformanceBadge({ score }) {
+  if (score == null) {
+    return <span className="text-xs text-slate-300">—</span>;
+  }
+
+  const tier = getPerformanceTier(score);
+  return (
+    <span
+      title={`${tier.label} — 7-day average alertness score`}
+      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${tier.classes}`}
+    >
+      {score}/100
     </span>
   );
 }
@@ -393,7 +455,7 @@ function SupDeliveryCrew() {
                   No crew records match your search. Try adjusting your filters.
                 </div>
               ) : (
-                <table className="w-full min-w-[760px] text-left text-sm">
+                <table className="w-full min-w-[900px] text-left text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
@@ -401,6 +463,9 @@ function SupDeliveryCrew() {
                       </th>
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Position
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Weekly Performance
                       </th>
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Client Specialty
@@ -437,6 +502,9 @@ function SupDeliveryCrew() {
                         </td>
                         <td className="px-5 py-2.5">
                           <PositionTag position={crew.position} />
+                        </td>
+                        <td className="px-5 py-2.5">
+                          <PerformanceBadge score={crew.weeklyPerformance} />
                         </td>
                         <td className="px-5 py-2.5 text-slate-700">
                           {crew.clientSpecialties.join(", ")}
