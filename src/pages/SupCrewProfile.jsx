@@ -1,18 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
-import {
-  ArrowLeft,
-  Phone,
-  CalendarDays,
-  Clock3,
-  Building2,
-  Plus,
-  X,
-  Route,
-  ExternalLink,
-  IdCard,
-} from "lucide-react";
+import { ArrowLeft, Route, ExternalLink, MoreVertical, Trash2, X } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Dummy trip history — frontend only, no backend/API/database.
@@ -139,9 +128,9 @@ function InfoRow({ icon: Icon, label, value }) {
   );
 }
 
-function SectionCard({ title, icon: Icon, children }) {
+function SectionCard({ title, icon: Icon, children, className = "" }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+    <section className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 ${className}`}>
       <div className="flex items-center gap-2">
         {Icon && <Icon className="h-4 w-4 text-blue-600" />}
         <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -150,6 +139,72 @@ function SectionCard({ title, icon: Icon, children }) {
       </div>
       <div className="mt-4">{children}</div>
     </section>
+  );
+}
+
+// Three-dot menu with just two actions: Add opens the add-clients modal,
+// Delete switches the list below into delete mode (each row grows a trash
+// icon). Kept as plain menu items rather than the list itself, since Add
+// and Delete lead to two different interactions (a modal vs. inline
+// per-row confirmation).
+function SpecialtyMenu({ isOpen, onToggle, onClose, onSelectAdd, onSelectDelete, canDelete }) {
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label="Manage client specialties"
+        aria-haspopup="true"
+        aria-expanded={isOpen}
+        className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+      >
+        <MoreVertical className="h-4 w-4" />
+      </button>
+
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={onClose} />
+          <div className="absolute right-0 z-20 mt-2 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+            <button
+              type="button"
+              onClick={onSelectAdd}
+              className="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              onClick={onSelectDelete}
+              disabled={!canDelete}
+              className="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
+            >
+              Delete
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// One row in the Client Specialties stacked list. In delete mode it shows a
+// trash icon; clicking it opens a confirmation modal (rendered by the page)
+// rather than deleting immediately.
+function SpecialtyListItem({ client, isDeleteMode, onRequestDelete }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-2.5">
+      <span className="text-sm text-slate-900">{client}</span>
+      {isDeleteMode && (
+        <button
+          type="button"
+          onClick={onRequestDelete}
+          aria-label={`Delete ${client}`}
+          className="rounded-lg p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -167,7 +222,11 @@ function SupCrewProfile() {
 
   const [activeTab, setActiveTab] = useState("overview");
   const [clientSpecialties, setClientSpecialties] = useState(crew?.clientSpecialties || []);
-  const [clientToAdd, setClientToAdd] = useState("");
+  const [isSpecialtyMenuOpen, setIsSpecialtyMenuOpen] = useState(false);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [clientsToAdd, setClientsToAdd] = useState([]);
+  const [isDeleteMode, setIsDeleteMode] = useState(false);
+  const [clientPendingDelete, setClientPendingDelete] = useState(null);
   const [tripStatusFilter, setTripStatusFilter] = useState("All");
 
   const trips = useMemo(() => (crew ? buildMockTrips(crew) : []), [crew]);
@@ -176,14 +235,43 @@ function SupCrewProfile() {
     (client) => !clientSpecialties.includes(client),
   );
 
-  const addClient = () => {
-    if (!clientToAdd) return;
-    setClientSpecialties((prev) => [...prev, clientToAdd]);
-    setClientToAdd("");
+  const openAddModal = () => {
+    setClientsToAdd([]);
+    setIsAddModalOpen(true);
   };
 
-  const removeClient = (client) => {
+  const closeAddModal = () => {
+    setIsAddModalOpen(false);
+    setClientsToAdd([]);
+  };
+
+  const selectClientToAdd = (client) => {
+    if (!client) return;
+    setClientsToAdd((prev) => (prev.includes(client) ? prev : [...prev, client]));
+  };
+
+  const unselectClientToAdd = (client) => {
+    setClientsToAdd((prev) => prev.filter((entry) => entry !== client));
+  };
+
+  const saveAddModal = () => {
+    setClientSpecialties((prev) => [...prev, ...clientsToAdd]);
+    closeAddModal();
+  };
+
+  const startDeleteMode = () => {
+    setClientPendingDelete(null);
+    setIsDeleteMode(true);
+  };
+
+  const exitDeleteMode = () => {
+    setIsDeleteMode(false);
+    setClientPendingDelete(null);
+  };
+
+  const confirmDeleteClient = (client) => {
     setClientSpecialties((prev) => prev.filter((entry) => entry !== client));
+    setClientPendingDelete(null);
   };
 
   const filteredTrips =
@@ -284,72 +372,200 @@ function SupCrewProfile() {
 
         {/* Overview tab */}
         {activeTab === "overview" && (
-          <div className="grid gap-6 lg:grid-cols-2">
-            <SectionCard title="Personal Information" icon={IdCard}>
+          <SectionCard title="Personal Information">
+            <div className="grid gap-8 lg:grid-cols-2">
               <div>
                 <InfoRow label="Full Name" value={crew.fullName} />
-                <InfoRow label="Employee ID" value={crew.employeeId} />
                 <InfoRow label="Position" value={crew.position} />
-                <InfoRow icon={Phone} label="Contact Number" value={crew.contactNumber} />
-                <InfoRow icon={Clock3} label="Shift" value={crew.shift} />
-                <InfoRow icon={CalendarDays} label="Date Joined" value={crew.dateJoined} />
+                <InfoRow label="Contact Number" value={crew.contactNumber} />
+                <InfoRow label="Personal Email" value={crew.personalEmail || "N/A"} />
+                <InfoRow label="Work Email" value={crew.workEmail || "N/A"} />
+                <InfoRow label="Birthday" value={crew.birthday || "N/A"} />
+                <InfoRow label="Age" value={crew.age ?? "N/A"} />
+                <InfoRow label="Employment Start Date" value={crew.dateJoined} />
               </div>
-            </SectionCard>
 
-            <SectionCard title="Client Specialties" icon={Building2}>
-              <div className="flex flex-wrap gap-2">
-                {clientSpecialties.length === 0 ? (
-                  <p className="text-sm text-slate-500">No clients assigned yet.</p>
-                ) : (
-                  clientSpecialties.map((client) => (
-                    <span
-                      key={client}
-                      className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 py-1 pl-3 pr-1.5 text-xs font-semibold text-blue-700"
+              <div className="lg:border-l lg:border-slate-100 lg:pl-8">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Client Specialties
+                  </h3>
+                  {isDeleteMode ? (
+                    <button
+                      type="button"
+                      onClick={exitDeleteMode}
+                      className="text-xs font-semibold text-blue-600 transition hover:text-blue-700"
                     >
-                      {client}
-                      <button
-                        type="button"
-                        aria-label={`Remove ${client}`}
-                        onClick={() => removeClient(client)}
-                        className="rounded-full p-0.5 transition hover:bg-blue-100"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))
-                )}
-              </div>
+                      Done
+                    </button>
+                  ) : (
+                    <SpecialtyMenu
+                      isOpen={isSpecialtyMenuOpen}
+                      onToggle={() => setIsSpecialtyMenuOpen((prev) => !prev)}
+                      onClose={() => setIsSpecialtyMenuOpen(false)}
+                      onSelectAdd={() => {
+                        setIsSpecialtyMenuOpen(false);
+                        openAddModal();
+                      }}
+                      onSelectDelete={() => {
+                        setIsSpecialtyMenuOpen(false);
+                        startDeleteMode();
+                      }}
+                      canDelete={clientSpecialties.length > 0}
+                    />
+                  )}
+                </div>
 
-              {availableClientsToAdd.length > 0 && (
-                <div className="mt-4 flex items-center gap-2">
-                  <select
-                    value={clientToAdd}
-                    onChange={(event) => setClientToAdd(event.target.value)}
-                    className="flex-1 rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
-                  >
-                    <option value="">Select a client to add…</option>
-                    {availableClientsToAdd.map((client) => (
+                <div className="mt-1 divide-y divide-slate-100">
+                  {clientSpecialties.length === 0 ? (
+                    <p className="py-2.5 text-sm text-slate-500">No clients assigned yet.</p>
+                  ) : (
+                    clientSpecialties.map((client) => (
+                      <SpecialtyListItem
+                        key={client}
+                        client={client}
+                        isDeleteMode={isDeleteMode}
+                        onRequestDelete={() => setClientPendingDelete(client)}
+                      />
+                    ))
+                  )}
+                </div>
+
+                <p className="mt-3 text-xs text-slate-400">
+                  Demo only — changes here are not saved.
+                </p>
+              </div>
+            </div>
+          </SectionCard>
+        )}
+
+        {isAddModalOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-specialty-title"
+            onClick={closeAddModal}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 id="add-specialty-title" className="text-base font-semibold text-slate-900">
+                Add Client Specialties
+              </h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Pick clients one at a time to assign to this crew member.
+              </p>
+
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-slate-700" htmlFor="client-to-add">
+                  Client
+                </label>
+                <select
+                  id="client-to-add"
+                  value=""
+                  onChange={(event) => selectClientToAdd(event.target.value)}
+                  className="mt-1.5 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                >
+                  <option value="">Select a client…</option>
+                  {availableClientsToAdd
+                    .filter((client) => !clientsToAdd.includes(client))
+                    .map((client) => (
                       <option key={client} value={client}>
                         {client}
                       </option>
                     ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={addClient}
-                    disabled={!clientToAdd}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add
-                  </button>
-                </div>
-              )}
+                </select>
 
-              <p className="mt-3 text-xs text-slate-400">
-                Demo only — changes here are not saved.
+                <p className="mt-4 text-sm font-medium text-slate-700">
+                  Selected{clientsToAdd.length > 0 ? ` (${clientsToAdd.length})` : ""}:
+                </p>
+                {/* Fixed height (~5 rows) so the modal doesn't grow with every
+                    pick — beyond 5 selections the list scrolls in place. */}
+                <div className="mt-1.5 h-[190px] overflow-y-auto rounded-xl border border-slate-200">
+                  {clientsToAdd.length === 0 ? (
+                    <div className="flex h-full items-center justify-center px-3">
+                      <p className="text-sm text-slate-400">No clients picked yet.</p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {clientsToAdd.map((client) => (
+                        <div key={client} className="flex items-center justify-between gap-3 px-3 py-2">
+                          <span className="text-sm text-slate-900">{client}</span>
+                          <button
+                            type="button"
+                            onClick={() => unselectClientToAdd(client)}
+                            aria-label={`Remove ${client} from selection`}
+                            className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeAddModal}
+                  className="rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveAddModal}
+                  disabled={clientsToAdd.length === 0}
+                  className="rounded-xl bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {clientPendingDelete && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-specialty-title"
+            onClick={() => setClientPendingDelete(null)}
+          >
+            <div
+              className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 id="delete-specialty-title" className="text-base font-semibold text-slate-900">
+                Delete client specialty
+              </h3>
+              <p className="mt-1.5 text-sm text-slate-500">
+                Are you sure you want to delete <span className="font-medium text-slate-700">{clientPendingDelete}</span> from
+                this crew member?
               </p>
-            </SectionCard>
+
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setClientPendingDelete(null)}
+                  className="rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => confirmDeleteClient(clientPendingDelete)}
+                  className="rounded-xl bg-red-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

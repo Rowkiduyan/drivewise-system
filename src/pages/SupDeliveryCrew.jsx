@@ -33,11 +33,22 @@ const CLIENT_SPECIALTIES = [
 ];
 
 const SHIFTS = ["Morning Shift", "Afternoon Shift", "Night Shift"];
+const PERSONAL_EMAIL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com"];
 const STATUS_SEQUENCE = ["Available", "Available", "On Delivery", "On Delivery", "Off Duty"];
 const JOIN_MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
+
+function getAgeFromBirthday(birthday, referenceDate = new Date()) {
+  const age = referenceDate.getFullYear() - birthday.getFullYear();
+  const monthDifference = referenceDate.getMonth() - birthday.getMonth();
+  const dayDifference = referenceDate.getDate() - birthday.getDate();
+
+  return monthDifference > 0 || (monthDifference === 0 && dayDifference >= 0)
+    ? age
+    : age - 1;
+}
 
 function buildMockCrew(count) {
   return Array.from({ length: count }, (_, i) => {
@@ -58,7 +69,17 @@ function buildMockCrew(count) {
       1000 + ((i * 137) % 9000),
     ).padStart(4, "0")}`;
     const employeeId = `DWC-${String(1001 + i)}`;
+    const birthYear = 1978 + (i % 22);
+    const birthMonth = i % 12;
+    const birthDay = ((i * 3) % 28) + 1;
+    const birthday = new Date(birthYear, birthMonth, birthDay);
+    const age = getAgeFromBirthday(birthday, new Date("2026-07-19T00:00:00"));
     const dateJoined = `${JOIN_MONTHS[(i * 5) % JOIN_MONTHS.length]} ${2026 - (i % 5)}`;
+
+    const emailHandle = `${firstName}.${lastName}`.toLowerCase().replace(/\s+/g, "");
+    const workEmail = `${emailHandle}@drivewise.com`;
+    const personalDomain = PERSONAL_EMAIL_DOMAINS[i % PERSONAL_EMAIL_DOMAINS.length];
+    const personalEmail = `${emailHandle}${1000 + i}@${personalDomain}`;
 
     return {
       id: `crew-${i + 1}`,
@@ -69,7 +90,15 @@ function buildMockCrew(count) {
       shift,
       contactNumber,
       employeeId,
+      birthday: birthday.toLocaleDateString(undefined, {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+      }),
+      age,
       dateJoined,
+      personalEmail,
+      workEmail,
     };
   });
 }
@@ -130,19 +159,19 @@ function FilterSelect({ id, label, value, onChange, options, counts, allLabel, c
       <label className="sr-only" htmlFor={id}>
         {label}
       </label>
-      <div className="relative">
+      <div className={`relative inline-block ${className}`}>
         <select
           id={id}
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className={`h-10 w-full appearance-none rounded-xl border px-4 pr-9 text-center text-sm outline-none transition focus:ring-2 focus:ring-blue-100 ${
+          className={`h-10 appearance-none rounded-xl border px-4 pr-9 text-center text-sm outline-none transition focus:ring-2 focus:ring-blue-100 ${
             isActive
               ? "border-blue-300 bg-blue-50 font-semibold text-blue-700 focus:border-blue-400"
-              : "border-slate-300 bg-slate-50 text-slate-700 focus:border-blue-400 focus:bg-white"
+              : "border-slate-300 bg-slate-50 text-slate-500 focus:border-blue-400 focus:bg-white"
           }`}
         >
           <option value="All">
-            {allLabel} ({counts.All})
+            {allLabel}
           </option>
           {options.map((option) => (
             <option key={option} value={option}>
@@ -235,7 +264,7 @@ function SupDeliveryCrew() {
         selectedClient === "All" || crew.clientSpecialties.includes(selectedClient);
 
       return matchesSearch && matchesStatus && matchesPosition && matchesClient;
-    });
+    }).sort((leftCrew, rightCrew) => leftCrew.fullName.localeCompare(rightCrew.fullName));
   }, [searchTerm, selectedStatus, selectedPosition, selectedClient]);
 
   const totalPages = Math.max(1, Math.ceil(filteredCrew.length / PAGE_SIZE));
@@ -314,33 +343,33 @@ function SupDeliveryCrew() {
             <div className="flex flex-wrap items-center gap-1.5 lg:flex-none lg:justify-end">
               <FilterSelect
                 id="status-filter"
-                label="Filter by status"
+                label="Status"
                 value={selectedStatus}
                 onChange={updateStatus}
                 options={STATUS_OPTIONS}
                 counts={statusCounts}
-                allLabel="All Statuses"
-                className="min-w-[8.5rem]"
+                allLabel="Status"
+                className="w-fit"
               />
               <FilterSelect
                 id="position-filter"
-                label="Filter by position"
+                label="Position"
                 value={selectedPosition}
                 onChange={updatePosition}
                 options={POSITION_OPTIONS}
                 counts={positionCounts}
-                allLabel="All Positions"
-                className="min-w-[7.75rem]"
+                allLabel="Position"
+                className="w-fit"
               />
               <FilterSelect
                 id="client-filter"
-                label="Filter by client"
+                label="Client"
                 value={selectedClient}
                 onChange={updateClient}
                 options={CLIENT_SPECIALTIES}
                 counts={clientCounts}
-                allLabel="All Clients"
-                className="min-w-[9rem]"
+                allLabel="Client"
+                className="w-fit"
               />
             </div>
           </div>
