@@ -45,26 +45,6 @@ Stores user accounts for authentication and role management.
 
 - Referenced by `driver_records.auth_id`.
 
-### Auth
-
-- **Admin-created accounts** (`AdminHome.jsx`, any role — Supervisor/Admin/Driver/Helper/Customer): created via the `admin-users` Edge Function's `create-user` action, which uses `supabase.auth.admin.createUser` (server-side, `service_role`) and then inserts the matching `users` row itself. This runs entirely outside the admin's own browser session — the admin's session is never touched during creation.
-- **Driver crew accounts** (`SupDeliveryCrew.jsx`, Supervisor adding a Driver/Helper): still created client-side via `supabase.auth.signUp` followed by a `users`/`driver_records` insert. Note `supabase.auth.signUp` swaps the *caller's own browser session* to the newly created user as a side effect — the Supervisor's session is briefly replaced by the new driver's session during this flow.
-- Login (`src/pages/Login.jsx`) calls `supabase.auth.signInWithPassword`, then looks up the caller's own `users.role` to redirect to the matching portal home (`Admin` → `/admin/user-management`, `Supervisor` → `/supervisor/dashboard`, `Driver` → `/driver/performance`, `Customer` → `/customer/home`). If the role has no portal yet (`Helper`) or the `users` row can't be read, the session is signed back out and an error is shown.
-- A `LogoutButton` (`src/layout/LogoutButton.jsx`) is wired into all four portal sidebars (Admin, Supervisor, Driver, Customer) — it confirms via a modal (rendered through a `createPortal` into `document.body` so it isn't affected by the sidebar's own stacking context), disables itself once clicked to prevent double-submission, then calls `supabase.auth.signOut()` and redirects to `/`.
-- Deactivating an account, resetting another user's password, and creating a new account (any role) all require the Supabase Admin API (`service_role` key) and cannot run in client code. These are handled by the `admin-users` Edge Function (`supabase/functions/admin-users`, actions: `create-user`, `deactivate`, `reset-password`), which the client calls via `supabase.functions.invoke`. The function verifies the caller's own `users.role` is `Admin` before acting on any of the three.
-
-### RLS & Grants (`users` table)
-
-Row Level Security is on. Current state:
-
-- Policies: `Allow read for authenticated users` (SELECT, `authenticated`, `qual: true`), `Admins can read all users` (SELECT, `authenticated`, via `is_admin()`), `Self-registration is limited to low-privilege roles` (INSERT, `public`, `with_check: role in ('Driver', 'Helper')`), `Admins can update any user, others can update themselves` (UPDATE, `authenticated`, `qual`/`with_check`: `current_user_role() = 'Admin' OR auth.uid() = id`).
-- `current_user_role()` is a `SECURITY DEFINER` helper (`select role from public.users where id = auth.uid()`) used by the UPDATE policy to check the caller's own role without recursively re-triggering RLS on `users`.
-- Grants: `authenticated` has `SELECT`, `INSERT`, `UPDATE` (no `DELETE`). `service_role` has `SELECT`, `INSERT`, `UPDATE`, `DELETE`.
-- Trigger `enforce_role_change_admin_only` (BEFORE UPDATE) rejects the update if `role` is being changed and the caller's own `current_user_role()` isn't `Admin` — applies even when a user is updating their own row, so a non-Admin cannot self-escalate. Only fires on UPDATE, not INSERT — the self-registration policy above is what restricts `role` on the INSERT path.
-
-See `SUPABASE_GOTCHAS.md` for the debugging history behind these policies/grants/trigger (missing grants, `service_role` permissions, the role-escalation fix, etc.) — none of this is captured as a tracked migration file (see gotcha #7).
-
----
 
 ## driver_records
 
@@ -144,6 +124,15 @@ At this stage:
 - Multi-driver and multi-truck support has not yet been implemented.
 
 ---
+# Naming Conventions
+
+- Primary keys use `id` unless a domain-specific identifier is required.
+- Foreign keys reference the parent table's primary key.
+- Timestamps use UTC.
 
 
-These tables will allow the system to associate GPS tracking and drowsiness events with specific drivers, trucks, and delivery trips.
+This document describes the current logical database design.
+
+Authentication, RLS policies, Edge Functions, and Supabase-specific security are documented separately.
+
+The schema will be expanded to support trips, trucks, GPS tracking, and fleet management features as development continues.

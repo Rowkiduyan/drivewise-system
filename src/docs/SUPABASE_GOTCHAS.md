@@ -47,9 +47,6 @@ grant select, insert, update, delete on public.users to service_role;
 
 **Fix:** Admin-panel account creation was moved into the `admin-users` Edge Function, which uses `supabase.auth.admin.createUser()` server-side with the `service_role` key — this never touches the caller's browser session.
 
-**Still open:** `SupDeliveryCrew.jsx`'s driver-crew creation flow still creates accounts client-side via `signUp`, so a Supervisor's session still gets swapped to the new driver's session during that flow. Not yet migrated to the Edge Function (see `DATABASE.md`).
-
-**Related confusion during debugging:** stopping/restarting the local dev server does **not** clear or refresh the browser's session — the Supabase session lives in `localStorage`, independent of the dev server process entirely. Before a logout button existed, the only way to force re-authentication as a different account was to navigate directly to `/login` and sign in again, which overwrites the stored session.
 
 ---
 
@@ -109,16 +106,5 @@ for insert
 to public
 with check (role in ('Driver', 'Helper'));
 ```
-Admin/Supervisor/Customer accounts can now only be created through the `admin-users` Edge Function, which is gated on the caller already being an Admin.
 
----
 
-## 7. Schema/policy/grant/trigger changes here are not version-controlled
-
-There is currently no `supabase/migrations/` directory in this repo. Every SQL statement in this file (policies, grants, the trigger) was run by hand in the Supabase Dashboard's SQL Editor against the live project — none of it is captured as a migration file. If this project's Supabase instance were ever rebuilt from scratch, none of the above would be replayed automatically; it would all need to be re-applied from this document. Worth turning into tracked migrations at some point.
-
----
-
-## Unrelated noise (not a bug)
-
-Running Supabase CLI commands (e.g. `npx supabase functions deploy`) prints a Node.js deprecation warning (`Node.js 20 and below are deprecated...`). This is harmless and unrelated to any of the above — it does not indicate a failed deploy.
