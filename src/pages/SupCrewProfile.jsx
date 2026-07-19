@@ -118,7 +118,7 @@ function TripStatusBadge({ status }) {
 
 function InfoRow({ icon: Icon, label, value }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3 last:border-0">
+    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-2.5 last:border-0">
       <span className="inline-flex items-center gap-2 text-sm text-slate-500">
         {Icon && <Icon className="h-4 w-4 text-slate-400" />}
         {label}
@@ -130,14 +130,14 @@ function InfoRow({ icon: Icon, label, value }) {
 
 function SectionCard({ title, icon: Icon, children, className = "" }) {
   return (
-    <section className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 ${className}`}>
+    <section className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 ${className}`}>
       <div className="flex items-center gap-2">
         {Icon && <Icon className="h-4 w-4 text-blue-600" />}
         <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
           {title}
         </h2>
       </div>
-      <div className="mt-4">{children}</div>
+      <div className="mt-3">{children}</div>
     </section>
   );
 }
@@ -192,7 +192,7 @@ function SpecialtyMenu({ isOpen, onToggle, onClose, onSelectAdd, onSelectDelete,
 // rather than deleting immediately.
 function SpecialtyListItem({ client, isDeleteMode, onRequestDelete }) {
   return (
-    <div className="flex items-center justify-between gap-3 py-2.5">
+    <div className="flex items-center justify-between gap-3 py-2">
       <span className="text-sm text-slate-900">{client}</span>
       {isDeleteMode && (
         <button
@@ -309,30 +309,36 @@ function SupCrewProfile() {
 
   return (
     <SupLayout title="Crew Profile" background={null} bg="bg-white">
-      <div className="flex flex-col gap-6 pb-10">
-        <Link
-          to="/supervisor/delivery-crew"
-          className="inline-flex w-fit items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Delivery Crew
-        </Link>
+      <div className="flex flex-col gap-4 pb-6">
+        {/* Sticky within the scroll area, pulled up to sit close to the page
+            edge rather than trailing SupLayout's generous top padding. */}
+        <div className="sticky top-0 z-30 -mt-2 w-full border-b border-slate-200 bg-white py-1.5 shadow-sm sm:-mt-4">
+          <Link
+            to="/supervisor/delivery-crew"
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </Link>
+        </div>
 
-        {/* Profile header */}
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-blue-50 text-lg font-semibold text-blue-700">
+        {/* Profile header — compact identity strip: avatar, name/status on
+            the primary line, employee ID/shift as a secondary line, and
+            position as the trailing detail. */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-blue-50 text-sm font-semibold text-blue-700">
                 {getInitials(crew.fullName)}
               </div>
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-xl font-semibold text-slate-900 sm:text-2xl">
+                  <h1 className="text-base font-semibold text-slate-900 sm:text-lg">
                     {crew.fullName}
                   </h1>
                   <StatusBadge status={crew.status} />
                 </div>
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-0.5 text-xs text-slate-500">
                   {crew.employeeId} · {crew.shift}
                 </p>
               </div>
@@ -348,7 +354,7 @@ function SupCrewProfile() {
               <Link
                 key={tab.id}
                 to="/supervisor/analysis/specific"
-                className="inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-4 py-2.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
+                className="inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-3.5 py-2 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
               >
                 {tab.label}
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -358,7 +364,7 @@ function SupCrewProfile() {
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-semibold transition ${
+                className={`whitespace-nowrap border-b-2 px-3.5 py-2 text-sm font-semibold transition ${
                   activeTab === tab.id
                     ? "border-blue-600 text-blue-600"
                     : "border-transparent text-slate-500 hover:text-slate-700"
@@ -373,7 +379,7 @@ function SupCrewProfile() {
         {/* Overview tab */}
         {activeTab === "overview" && (
           <SectionCard title="Personal Information">
-            <div className="grid gap-8 lg:grid-cols-2">
+            <div className="grid gap-6 lg:grid-cols-2">
               <div>
                 <InfoRow label="Full Name" value={crew.fullName} />
                 <InfoRow label="Position" value={crew.position} />
@@ -385,7 +391,7 @@ function SupCrewProfile() {
                 <InfoRow label="Employment Start Date" value={crew.dateJoined} />
               </div>
 
-              <div className="lg:border-l lg:border-slate-100 lg:pl-8">
+              <div className="lg:border-l lg:border-slate-100 lg:pl-6">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                     Client Specialties
