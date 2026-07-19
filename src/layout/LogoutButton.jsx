@@ -37,7 +37,9 @@ function LogoutButton({ isExpanded, iconClassName = 'h-5 w-5 stroke-current' }) 
         type="button"
         aria-label="Log out"
         onClick={openConfirm}
-        className="flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm text-red-300 transition-all duration-200 hover:border-red-700 hover:bg-red-900/30"
+        className={`flex items-center justify-start rounded-lg border border-transparent px-3 py-2.5 text-sm text-red-300 transition-all duration-200 hover:border-red-700 hover:bg-red-900/30 ${
+          isExpanded ? 'gap-3' : 'gap-0'
+        }`}
       >
         <svg
           viewBox="0 0 24 24"
