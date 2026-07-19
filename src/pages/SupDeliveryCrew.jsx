@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
-import { Search, Truck, Users, CircleCheck, ChevronRight, X } from "lucide-react";
+import { Search, Truck, Users, CircleCheck, ChevronRight, ChevronDown } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Dummy crew roster — frontend only, no backend/API/database.
@@ -113,6 +113,49 @@ function PositionTag({ position }) {
   );
 }
 
+// Filter dropdown — used for Status, Position, and Client. A native <select>
+// scales to any number of options without wrapping or crowding the toolbar
+// (unlike the pill/tab groups it replaces), and gets keyboard navigation and
+// a native mobile picker for free, so no custom popover/menu is needed.
+//
+// When a non-default value is picked, the control itself switches to a
+// tinted "active" style. That's the signal that a filter is applied — no
+// separate active-filters summary needed, since the selects already show
+// their own current value at rest.
+function FilterSelect({ id, label, value, onChange, options, counts, allLabel, className = "" }) {
+  const isActive = value !== "All";
+
+  return (
+    <div className={className}>
+      <label className="sr-only" htmlFor={id}>
+        {label}
+      </label>
+      <div className="relative">
+        <select
+          id={id}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className={`h-10 w-full appearance-none rounded-xl border px-4 pr-9 text-center text-sm outline-none transition focus:ring-2 focus:ring-blue-100 ${
+            isActive
+              ? "border-blue-300 bg-blue-50 font-semibold text-blue-700 focus:border-blue-400"
+              : "border-slate-300 bg-slate-50 text-slate-700 focus:border-blue-400 focus:bg-white"
+          }`}
+        >
+          <option value="All">
+            {allLabel} ({counts.All})
+          </option>
+          {options.map((option) => (
+            <option key={option} value={option}>
+              {option} ({counts[option] ?? 0})
+            </option>
+          ))}
+        </select>
+        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+      </div>
+    </div>
+  );
+}
+
 function StatTile({ icon: Icon, label, value, accent = "blue" }) {
   const accentClasses = {
     blue: "bg-blue-50 text-blue-600",
@@ -122,22 +165,22 @@ function StatTile({ icon: Icon, label, value, accent = "blue" }) {
   }[accent];
 
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${accentClasses}`}>
-        <Icon className="h-5 w-5" />
+    <div className="flex items-center gap-2.5 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${accentClasses}`}>
+        <Icon className="h-4 w-4" />
       </div>
       <div>
-        <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
+        <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-slate-500">
           {label}
         </p>
-        <p className="text-xl font-semibold text-slate-900">{value}</p>
+        <p className="text-lg font-semibold text-slate-900">{value}</p>
       </div>
     </div>
   );
 }
 
-const STATUS_FILTERS = ["All", "Available", "On Delivery", "Off Duty"];
-const POSITION_FILTERS = ["All", "Driver", "Helper"];
+const STATUS_OPTIONS = ["Available", "On Delivery", "Off Duty"];
+const POSITION_OPTIONS = ["Driver", "Helper"];
 const PAGE_SIZE = 10;
 
 function SupDeliveryCrew() {
@@ -147,8 +190,6 @@ function SupDeliveryCrew() {
   const [selectedPosition, setSelectedPosition] = useState("All");
   const [selectedClient, setSelectedClient] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
-
-  const clientOptions = useMemo(() => ["All", ...CLIENT_SPECIALTIES], []);
 
   const statusCounts = useMemo(
     () => ({
@@ -168,6 +209,14 @@ function SupDeliveryCrew() {
     }),
     [],
   );
+
+  const clientCounts = useMemo(() => {
+    const counts = { All: MOCK_CREW.length };
+    CLIENT_SPECIALTIES.forEach((client) => {
+      counts[client] = MOCK_CREW.filter((crew) => crew.clientSpecialties.includes(client)).length;
+    });
+    return counts;
+  }, []);
 
   const filteredCrew = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
@@ -234,250 +283,191 @@ function SupDeliveryCrew() {
 
   return (
     <SupLayout title="Delivery Crew" background={null} bg="bg-white">
-      <div className="flex flex-col gap-6 pb-10">
-        {/* Header */}
-        <header className="space-y-2 md:space-y-3">
-          <p className="text-xs uppercase tracking-[0.3em] text-blue-600 font-medium">
-            Supervisor Interface
-          </p>
-          <h1 className="text-2xl sm:text-3xl md:text-4xl font-semibold leading-tight text-slate-900">
-            Delivery Crew
-          </h1>
-          <p className="max-w-3xl text-sm md:text-base text-slate-600 leading-relaxed">
-            Browse your drivers and helpers. Select a crew member to view
-            their full profile, performance, and trip history.
-          </p>
-        </header>
-
-        {/* Summary Stat Tiles */}
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatTile icon={Users} label="Total Crew" value={MOCK_CREW.length} accent="blue" />
-          <StatTile icon={Truck} label="Drivers" value={positionCounts.Driver} accent="violet" />
-          <StatTile icon={Users} label="Helpers" value={positionCounts.Helper} accent="slate" />
-          <StatTile
-            icon={CircleCheck}
-            label="Available Now"
-            value={statusCounts.Available}
-            accent="emerald"
-          />
-        </section>
-
-        {/* Search and Filter Toolbar */}
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <div className="relative flex-1">
-                <label className="sr-only" htmlFor="crew-search">
-                  Search crew records
-                </label>
-                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  id="crew-search"
-                  type="text"
-                  value={searchTerm}
-                  onChange={(event) => updateSearch(event.target.value)}
-                  placeholder="Search by name, client, employee ID, or status..."
-                  className="w-full rounded-xl border border-slate-300 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
-                />
-              </div>
-
-              <div className="sm:w-56">
-                <label className="sr-only" htmlFor="client-filter">
-                  Filter by client
-                </label>
-                <div className="relative">
-                  <select
-                    id="client-filter"
-                    value={selectedClient}
-                    onChange={(event) => updateClient(event.target.value)}
-                    className="w-full appearance-none rounded-xl border border-slate-300 bg-slate-50 py-3 pl-4 pr-4 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
-                  >
-                    {clientOptions.map((client) => (
-                      <option key={client} value={client}>
-                        {client === "All" ? "All Clients" : client}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+      <div className="flex h-full min-h-0 flex-col gap-3">
+        {/* Search and Filter Toolbar — search and filters share one row, with
+            filters right-aligned. This is the common modern dashboard layout
+            (e.g. Linear, Notion tables): the search stays the primary, most
+            prominent control while filters sit as a secondary cluster the
+            eye reaches after. Wraps to a stacked layout on small screens. */}
+        <section className="sticky top-0 z-20 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur sm:p-3.5">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+            {/* Search */}
+            <div className="relative w-full lg:flex-1">
+              <label className="sr-only" htmlFor="crew-search">
+                Search crew records
+              </label>
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                id="crew-search"
+                type="text"
+                value={searchTerm}
+                onChange={(event) => updateSearch(event.target.value)}
+                placeholder="Search by name, client, employee ID, or status..."
+                className="h-10 w-full rounded-xl border border-slate-300 bg-slate-50 py-2 pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+              />
             </div>
 
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex flex-wrap gap-2">
-                {STATUS_FILTERS.map((status) => (
-                  <button
-                    key={status}
-                    type="button"
-                    onClick={() => updateStatus(status)}
-                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
-                      selectedStatus === status
-                        ? "border-blue-600 bg-blue-600 text-white"
-                        : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
-                    }`}
-                  >
-                    <span>{status}</span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs ${
-                        selectedStatus === status
-                          ? "bg-white/20 text-white"
-                          : "bg-slate-200 text-slate-700"
-                      }`}
-                    >
-                      {statusCounts[status]}
-                    </span>
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {POSITION_FILTERS.map((position) => (
-                  <button
-                    key={position}
-                    type="button"
-                    onClick={() => updatePosition(position)}
-                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
-                      selectedPosition === position
-                        ? "border-slate-900 bg-slate-900 text-white"
-                        : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
-                    }`}
-                  >
-                    <span>{position}</span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs ${
-                        selectedPosition === position
-                          ? "bg-white/20 text-white"
-                          : "bg-slate-200 text-slate-700"
-                      }`}
-                    >
-                      {positionCounts[position]}
-                    </span>
-                  </button>
-                ))}
-
-                {hasActiveFilters && (
-                  <button
-                    type="button"
-                    onClick={clearFilters}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-transparent px-3 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                    Clear
-                  </button>
-                )}
-              </div>
+            {/* Filters — one dropdown per dimension, all styled identically so
+                the set reads as one system and scales cleanly if more filters
+                (e.g. Shift) are added later. Reset only renders once a filter
+                is applied, so the toolbar stays uncluttered at rest. */}
+            <div className="flex flex-wrap items-center gap-1.5 lg:flex-none lg:justify-end">
+              <FilterSelect
+                id="status-filter"
+                label="Filter by status"
+                value={selectedStatus}
+                onChange={updateStatus}
+                options={STATUS_OPTIONS}
+                counts={statusCounts}
+                allLabel="All Statuses"
+                className="min-w-[8.5rem]"
+              />
+              <FilterSelect
+                id="position-filter"
+                label="Filter by position"
+                value={selectedPosition}
+                onChange={updatePosition}
+                options={POSITION_OPTIONS}
+                counts={positionCounts}
+                allLabel="All Positions"
+                className="min-w-[7.75rem]"
+              />
+              <FilterSelect
+                id="client-filter"
+                label="Filter by client"
+                value={selectedClient}
+                onChange={updateClient}
+                options={CLIENT_SPECIALTIES}
+                counts={clientCounts}
+                allLabel="All Clients"
+                className="min-w-[9rem]"
+              />
             </div>
           </div>
-        </section>
 
-        {/* Results summary */}
-        <p className="text-sm text-slate-500">
-          {filteredCrew.length === 0
-            ? "No crew members match your filters."
-            : `Showing ${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, filteredCrew.length)} of ${filteredCrew.length} crew members`}
-        </p>
+          <div className="mt-2 flex items-center justify-between gap-3 text-[11px] font-medium text-slate-500 sm:text-xs">
+            <span>
+              {filteredCrew.length === 0
+                ? "No crew members match your filters."
+                : `Showing ${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, filteredCrew.length)} of ${filteredCrew.length}`}
+            </span>
+            <span className="hidden sm:inline">Scroll the list below for more crew members</span>
+          </div>
+        </section>
 
         {/* Crew List */}
-        {filteredCrew.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-500 shadow-sm">
-            No crew records match your search. Try adjusting your filters.
-          </div>
-        ) : (
-          <>
-            {/* Crew table — same layout at every screen size; scrolls horizontally on narrow viewports */}
-            <section className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <table className="w-full min-w-[760px] text-left text-sm">
-                <thead>
-                  <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    <th className="px-5 py-3 font-semibold">Crew Member</th>
-                    <th className="px-5 py-3 font-semibold">Position</th>
-                    <th className="px-5 py-3 font-semibold">Client Specialty</th>
-                    <th className="px-5 py-3 font-semibold">Contact</th>
-                    <th className="px-5 py-3 font-semibold">Status</th>
-                    <th className="py-3 pl-2 pr-5 font-semibold">&nbsp;</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {pagedCrew.map((crew) => (
-                    <tr
-                      key={crew.id}
-                      onClick={() => openProfile(crew)}
-                      className="cursor-pointer transition hover:bg-slate-50"
-                    >
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-50 text-xs font-semibold text-blue-700">
-                            {getInitials(crew.fullName)}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate font-semibold text-slate-900">
-                              {crew.fullName}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-5 py-4">
-                        <PositionTag position={crew.position} />
-                      </td>
-                      <td className="px-5 py-4 text-slate-700">
-                        {crew.clientSpecialties.join(", ")}
-                      </td>
-                      <td className="px-5 py-4 text-slate-700">{crew.contactNumber}</td>
-                      <td className="px-5 py-4">
-                        <StatusBadge status={crew.status} />
-                      </td>
-                      <td className="py-4 pl-2 pr-5 text-right">
-                        <ChevronRight className="ml-auto h-4 w-4 text-slate-400" />
-                      </td>
+        <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto">
+              {filteredCrew.length === 0 ? (
+                <div className="flex h-full items-center justify-center px-4 py-6 text-center text-sm text-slate-500">
+                  No crew records match your search. Try adjusting your filters.
+                </div>
+              ) : (
+                <table className="w-full min-w-[760px] text-left text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Crew Member
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Position
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Client Specialty
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Contact
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Status
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 py-3 pl-2 pr-5 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        &nbsp;
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {pagedCrew.map((crew) => (
+                      <tr
+                        key={crew.id}
+                        onClick={() => openProfile(crew)}
+                        className="cursor-pointer transition hover:bg-slate-50"
+                      >
+                        <td className="px-5 py-2.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 text-[11px] font-semibold text-blue-700">
+                              {getInitials(crew.fullName)}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-slate-900">
+                                {crew.fullName}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-2.5">
+                          <PositionTag position={crew.position} />
+                        </td>
+                        <td className="px-5 py-2.5 text-slate-700">
+                          {crew.clientSpecialties.join(", ")}
+                        </td>
+                        <td className="px-5 py-2.5 text-slate-700">{crew.contactNumber}</td>
+                        <td className="px-5 py-2.5">
+                          <StatusBadge status={crew.status} />
+                        </td>
+                        <td className="py-2.5 pl-2 pr-5 text-right">
+                          <ChevronRight className="ml-auto h-4 w-4 text-slate-400" />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
 
             {/* Pagination */}
-            {totalPages > 1 && (
-              <nav
-                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
-                aria-label="Crew list pagination"
+            <nav
+              className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-white px-4 py-2"
+              aria-label="Crew list pagination"
+            >
+              <button
+                type="button"
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                disabled={safePage === 1}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                  disabled={safePage === 1}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Previous
-                </button>
+                Previous
+              </button>
 
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                    <button
-                      key={page}
-                      type="button"
-                      onClick={() => setCurrentPage(page)}
-                      className={`h-8 w-8 rounded-lg text-sm font-semibold transition ${
-                        page === safePage
-                          ? "bg-blue-600 text-white"
-                          : "text-slate-600 hover:bg-slate-100"
-                      }`}
-                    >
-                      {page}
-                    </button>
-                  ))}
-                </div>
+              <div className="flex flex-wrap items-center gap-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                  <button
+                    key={page}
+                    type="button"
+                    onClick={() => setCurrentPage(page)}
+                    className={`h-8 w-8 rounded-lg text-sm font-semibold transition ${
+                      page === safePage
+                        ? "bg-blue-600 text-white"
+                        : "text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    {page}
+                  </button>
+                ))}
+              </div>
 
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-                  disabled={safePage === totalPages}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Next
-                </button>
-              </nav>
-            )}
-          </>
-        )}
+              <button
+                type="button"
+                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                disabled={safePage === totalPages}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </nav>
+          </div>
+        </div>
       </div>
     </SupLayout>
   );
