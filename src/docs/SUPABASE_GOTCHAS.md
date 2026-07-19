@@ -107,4 +107,19 @@ to public
 with check (role in ('Driver', 'Helper'));
 ```
 
+---
+
+## 7. Gotcha #2 repeats per table — `driver_records` needed its own `service_role` grant
+
+**Symptom:** The `admin-users` Edge Function's new `ensure-driver-record` action (and the `driver_records` insert added to `create-user`) returned a `400` with no useful message in the browser console — just `Failed to load resource: ... 400`.
+
+**Cause:** Same root cause as #2, on a different table. `service_role` bypasses RLS but was never granted table-level access to `public.driver_records`, so the insert failed with `permission denied for table driver_records` (visible only in the Edge Function's own logs, not the client response).
+
+**Fix:**
+```sql
+grant select, insert, update, delete on public.driver_records to service_role;
+```
+
+**Takeaway:** the `service_role` grant is per-table, not global — every new table an Edge Function writes to needs this same grant applied explicitly.
+
 

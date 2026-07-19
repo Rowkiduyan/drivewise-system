@@ -68,6 +68,8 @@ Stores driver profile information separate from authentication data.
 
 - `auth_id` references `users.id` (foreign key). `id` is an independently generated text value and is no longer the same as the linked user's auth id.
 
+`id` follows a sequential `D001`, `D002`, ... convention. The `admin-users` Edge Function derives the next id by reading the highest existing `D`-prefixed id and incrementing it. See `AUTHENTICATION.md` for how `driver_records` rows get created.
+
 ---
 
 ## sessions

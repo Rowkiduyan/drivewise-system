@@ -51,6 +51,76 @@ function deriveNameFromEmail(email: string) {
     .join(" ");
 }
 
+function splitFullName(fullName: string) {
+  const [firstName, ...rest] = fullName.trim().split(/\s+/);
+  return {
+    firstName: firstName || fullName,
+    lastName: rest.join(" "),
+  };
+}
+
+async function nextDriverRecordId(adminClient: ReturnType<typeof createClient>) {
+  const { data, error } = await adminClient
+    .from("driver_records")
+    .select("id")
+    .like("id", "D%")
+    .order("id", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const lastId = data?.[0]?.id as string | undefined;
+  const lastNumber = lastId ? Number.parseInt(lastId.slice(1), 10) || 0 : 0;
+
+  return `D${String(lastNumber + 1).padStart(3, "0")}`;
+}
+
+// Creates a driver_records row for authId if one doesn't already exist.
+// Reused by create-user (new Driver accounts) and ensure-driver-record
+// (an existing account promoted to Driver later) so repeatedly toggling a
+// user's role to Driver never produces more than one row per auth_id.
+async function ensureDriverRecord(
+  adminClient: ReturnType<typeof createClient>,
+  authId: string,
+  fullName: string,
+  email: string,
+) {
+  const { data: existing, error: existingError } = await adminClient
+    .from("driver_records")
+    .select("id")
+    .eq("auth_id", authId)
+    .maybeSingle();
+
+  if (existingError) {
+    throw new Error(existingError.message);
+  }
+
+  if (existing) {
+    return { id: existing.id as string, created: false };
+  }
+
+  const driverId = await nextDriverRecordId(adminClient);
+  const { firstName, lastName } = splitFullName(fullName);
+
+  const { error: insertError } = await adminClient.from("driver_records").insert({
+    id: driverId,
+    auth_id: authId,
+    first_name: firstName,
+    middle_name: null,
+    last_name: lastName,
+    email,
+    position: "Driver",
+  });
+
+  if (insertError) {
+    throw new Error(insertError.message);
+  }
+
+  return { id: driverId, created: true };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
@@ -129,6 +199,19 @@ Deno.serve(async (req) => {
       return json({ error: insertError.message }, 400);
     }
 
+    if (role === "Driver") {
+      try {
+        await ensureDriverRecord(adminClient, created.user.id, fullName, email);
+      } catch (driverError) {
+        // Roll back the users row and auth user so we don't leave a Driver
+        // account with no matching driver_records row.
+        await adminClient.from("users").delete().eq("id", created.user.id);
+        await adminClient.auth.admin.deleteUser(created.user.id);
+        const message = driverError instanceof Error ? driverError.message : "Unable to create driver record";
+        return json({ error: message }, 400);
+      }
+    }
+
     return json({
       ok: true,
       user: { id: created.user.id, full_name: fullName, role, email },
@@ -166,6 +249,26 @@ Deno.serve(async (req) => {
     }
 
     return json({ ok: true, tempPassword });
+  }
+
+  if (action === "ensure-driver-record") {
+    const { data: userRow, error: userRowError } = await adminClient
+      .from("users")
+      .select("full_name, email")
+      .eq("id", userId)
+      .single();
+
+    if (userRowError || !userRow) {
+      return json({ error: userRowError?.message || "User not found" }, 400);
+    }
+
+    try {
+      const result = await ensureDriverRecord(adminClient, userId, userRow.full_name, userRow.email);
+      return json({ ok: true, ...result });
+    } catch (driverError) {
+      const message = driverError instanceof Error ? driverError.message : "Unable to create driver record";
+      return json({ error: message }, 400);
+    }
   }
 
   return json({ error: "Unknown action" }, 400);

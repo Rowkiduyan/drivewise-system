@@ -179,6 +179,17 @@ function AdminHome() {
       return
     }
 
+    if (role === 'Driver') {
+      const { error: driverSyncError } = await supabase.functions.invoke('admin-users', {
+        body: { action: 'ensure-driver-record', userId: selectedUserId }
+      })
+
+      if (driverSyncError) {
+        setManageError(driverSyncError.message || 'Saved, but unable to sync driver record.')
+        return
+      }
+    }
+
     setUsers((current) =>
       current.map((user) =>
         user.id === selectedUserId
