@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail } from 'lucide-react'
 import { REMEMBER_ME_KEY, supabase } from '../lib/supabaseClient.js'
+import { getDeactivationStatus } from '../lib/deactivation.js'
 import logoMark from '../layout/images/Logoo.png'
 import marvelEmployees from '../layout/images/MarvelEmployees.png'
 import marvelTrucks1 from '../layout/images/MarvelTrucks1.png'
@@ -25,12 +26,16 @@ const ROLE_HOME_ROUTES = {
 async function resolveHomeRoute(userId) {
   const { data: userRow, error: userError } = await supabase
     .from('users')
-    .select('role')
+    .select('role, deactivated_at')
     .eq('id', userId)
     .single()
 
   if (userError || !userRow) {
     return { error: 'Unable to load your account. Please try again.' }
+  }
+
+  if (getDeactivationStatus(userRow.deactivated_at).isPastGrace) {
+    return { error: 'Your account has been deactivated. Contact your administrator for help.' }
   }
 
   const homeRoute = ROLE_HOME_ROUTES[userRow.role]

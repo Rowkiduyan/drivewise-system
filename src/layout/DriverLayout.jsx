@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import LogoutButton from './LogoutButton.jsx'
 import { useUserProfile } from '../lib/useUserInitials.js'
+import { useDeactivationGuard } from '../lib/useDeactivationGuard.js'
+import { formatCutoff } from '../lib/deactivation.js'
 
 export const driverModules = [
   {
@@ -78,6 +80,7 @@ function DriverLayout({ title, background, children }) {
   const navigate = useNavigate()
   const { initials: userInitials, profilePicture } = useUserProfile()
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false)
+  const deactivationWarning = useDeactivationGuard()
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false)
   const closeMobileMenuAfterDelay = (path) => {
@@ -250,6 +253,12 @@ function DriverLayout({ title, background, children }) {
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden pt-16 md:pt-0">
           <div className="flex-1 overflow-y-auto">
             <div className="h-full px-4 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8 lg:px-12 lg:py-10">
+              {deactivationWarning ? (
+                <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  Your account has been deactivated. You will lose access on{' '}
+                  {formatCutoff(deactivationWarning.cutoffAt)} unless this is reversed.
+                </div>
+              ) : null}
               {children}
             </div>
           </div>

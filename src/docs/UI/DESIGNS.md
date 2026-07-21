@@ -114,9 +114,6 @@ These overlays should feel consistent even when the content changes, so the back
 
 ---
 
-
-
-
 ## Icons
 
 Do not use icons unless explicitly requested.

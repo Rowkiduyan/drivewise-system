@@ -3,6 +3,7 @@ import { Search } from 'lucide-react'
 import AdminLayout from '../layout/AdminLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 import { getCityNamesForProvince, getProvinceNames } from '../lib/philippineLocations.js'
+import { getDeactivationStatus, formatCutoff } from '../lib/deactivation.js'
 
 const background = null
 
@@ -239,7 +240,8 @@ function mapListedUser(row) {
     id: row.id,
     role: row.role,
     loginEmail: row.login_email,
-    status: 'active',
+    status: row.deactivated_at ? 'inactive' : 'active',
+    deactivatedAt: row.deactivated_at || null,
     name: buildFullName(person),
     firstName: person.firstName,
     middleName: person.middleName,
@@ -366,6 +368,10 @@ function AdminHome() {
   const [selectedUserId, setSelectedUserId] = useState('')
   const [manageError, setManageError] = useState('')
   const [isSavingAccount, setIsSavingAccount] = useState(false)
+  const [isDeactivateConfirmOpen, setIsDeactivateConfirmOpen] = useState(false)
+  const [isDeactivating, setIsDeactivating] = useState(false)
+  const [isReactivateConfirmOpen, setIsReactivateConfirmOpen] = useState(false)
+  const [isReactivating, setIsReactivating] = useState(false)
   const [manageForm, setManageForm] = useState({
     lastName: '',
     firstName: '',
@@ -380,7 +386,8 @@ function AdminHome() {
     city: '',
     province: '',
     loginEmail: '',
-    status: 'active'
+    status: 'active',
+    deactivatedAt: null
   })
   const [searchTerm, setSearchTerm] = useState('')
   const [roleFilter, setRoleFilter] = useState('all')
@@ -392,7 +399,14 @@ function AdminHome() {
   // backdrop-blur overlay is what makes it feel laggy (blur has to
   // resample the moving background every frame).
   const isAnyModalOpen =
-    isAddUserOpen || isBulkUploadOpen || Boolean(selectedUserId) || isAddConfirmOpen || isPasswordModalOpen || statusModal.open
+    isAddUserOpen ||
+    isBulkUploadOpen ||
+    Boolean(selectedUserId) ||
+    isAddConfirmOpen ||
+    isDeactivateConfirmOpen ||
+    isReactivateConfirmOpen ||
+    isPasswordModalOpen ||
+    statusModal.open
 
   useEffect(() => {
     if (!isAnyModalOpen) {
@@ -505,6 +519,8 @@ function AdminHome() {
     setSelectedUserId('')
     setManageError('')
     setIsSavingAccount(false)
+    setIsDeactivateConfirmOpen(false)
+    setIsReactivateConfirmOpen(false)
   }
 
   const showStatusModal = (tone, title, message, onClose = null) => {
@@ -807,7 +823,8 @@ function AdminHome() {
       city: user.city,
       province: user.province,
       loginEmail: user.loginEmail,
-      status: user.status
+      status: user.status,
+      deactivatedAt: user.deactivatedAt
     })
   }
 
@@ -869,18 +886,85 @@ function AdminHome() {
     showStatusModal('success', 'Account Updated', `${name} is now set to the ${role} role.`)
   }
 
-  const handleDeactivateAccount = async () => {
+  const openDeactivateConfirm = () => {
     setManageError('')
+    setIsDeactivateConfirmOpen(true)
+  }
+
+  const cancelDeactivateConfirm = () => {
+    if (isDeactivating) {
+      return
+    }
+    setIsDeactivateConfirmOpen(false)
+  }
+
+  const confirmDeactivateAccount = async () => {
+    if (isDeactivating) {
+      return
+    }
+
+    setManageError('')
+    setIsDeactivating(true)
+
     const { error } = await supabase.functions.invoke('admin-users', {
       body: { action: 'deactivate', userId: selectedUserId }
     })
+
+    setIsDeactivating(false)
+    setIsDeactivateConfirmOpen(false)
 
     if (error) {
       setManageError(error.message || 'Unable to deactivate account.')
       return
     }
 
-    setManageForm((current) => ({ ...current, status: 'inactive' }))
+    const deactivatedAt = new Date().toISOString()
+    const name = selectedUser?.name || 'This account'
+    setManageForm((current) => ({ ...current, status: 'inactive', deactivatedAt }))
+    await loadUsers()
+    showStatusModal(
+      'success',
+      'Account Deactivated',
+      `${name} has been deactivated. Access will be revoked in 24 hours unless it's reactivated first.`
+    )
+  }
+
+  const openReactivateConfirm = () => {
+    setManageError('')
+    setIsReactivateConfirmOpen(true)
+  }
+
+  const cancelReactivateConfirm = () => {
+    if (isReactivating) {
+      return
+    }
+    setIsReactivateConfirmOpen(false)
+  }
+
+  const confirmReactivateAccount = async () => {
+    if (isReactivating) {
+      return
+    }
+
+    setManageError('')
+    setIsReactivating(true)
+
+    const { error } = await supabase.functions.invoke('admin-users', {
+      body: { action: 'reactivate', userId: selectedUserId }
+    })
+
+    setIsReactivating(false)
+    setIsReactivateConfirmOpen(false)
+
+    if (error) {
+      setManageError(error.message || 'Unable to reactivate account.')
+      return
+    }
+
+    const name = selectedUser?.name || 'This account'
+    setManageForm((current) => ({ ...current, status: 'active', deactivatedAt: null }))
+    await loadUsers()
+    showStatusModal('success', 'Account Reactivated', `${name} has full access again.`)
   }
 
   const handleResetPassword = async () => {
@@ -1603,6 +1687,15 @@ function AdminHome() {
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                 Account status:{' '}
                 <span className="font-semibold capitalize text-slate-900">{manageForm.status}</span>
+                {manageForm.status === 'inactive' ? (
+                  <p className="mt-1 text-xs text-amber-700">
+                    {getDeactivationStatus(manageForm.deactivatedAt).isPastGrace
+                      ? 'Access has been fully revoked.'
+                      : `Access will be revoked on ${formatCutoff(
+                          getDeactivationStatus(manageForm.deactivatedAt).cutoffAt
+                        )}.`}
+                  </p>
+                ) : null}
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1614,14 +1707,23 @@ function AdminHome() {
                   >
                     Reset Password
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleDeactivateAccount}
-                    disabled={manageForm.status === 'inactive'}
-                    className="rounded-xl border border-red-200 px-3.5 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
-                  >
-                    Deactivate Account
-                  </button>
+                  {manageForm.status === 'inactive' ? (
+                    <button
+                      type="button"
+                      onClick={openReactivateConfirm}
+                      className="rounded-xl border border-emerald-200 px-3.5 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-60"
+                    >
+                      Reactivate Account
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={openDeactivateConfirm}
+                      className="rounded-xl border border-red-200 px-3.5 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
+                    >
+                      Deactivate Account
+                    </button>
+                  )}
                 </div>
 
                 <button
@@ -1633,6 +1735,83 @@ function AdminHome() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {isDeactivateConfirmOpen ? (
+        <div
+          className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-deactivate-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+            <h3 id="confirm-deactivate-title" className="text-base font-semibold text-slate-900">
+              Deactivate {selectedUser?.name}?
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              This account will keep working for the next 24 hours, then lose access. They'll see
+              a warning as soon as they log in or open the app during that window. You can
+              reactivate the account at any time before or after access is revoked.
+            </p>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={cancelDeactivateConfirm}
+                disabled={isDeactivating}
+                className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeactivateAccount}
+                disabled={isDeactivating}
+                className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-60"
+              >
+                {isDeactivating ? 'Deactivating...' : 'Deactivate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isReactivateConfirmOpen ? (
+        <div
+          className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-reactivate-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+            <h3 id="confirm-reactivate-title" className="text-base font-semibold text-slate-900">
+              Reactivate {selectedUser?.name}?
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              This restores full access immediately and cancels the 24-hour countdown, if one was
+              running.
+            </p>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={cancelReactivateConfirm}
+                disabled={isReactivating}
+                className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmReactivateAccount}
+                disabled={isReactivating}
+                className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+              >
+                {isReactivating ? 'Reactivating...' : 'Reactivate'}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

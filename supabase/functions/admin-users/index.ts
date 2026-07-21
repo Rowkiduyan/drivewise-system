@@ -303,7 +303,7 @@ async function findContactEmail(adminClient: ReturnType<typeof createClient>, ro
 // their matching *_records row by auth_id, since the client can't read
 // the *_records tables directly (service_role only, see DATABASE.md).
 async function listUsersWithProfiles(adminClient: ReturnType<typeof createClient>, roles?: string[]) {
-  let usersQuery = adminClient.from("users").select("id, role, login_email, created_at");
+  let usersQuery = adminClient.from("users").select("id, role, login_email, created_at, deactivated_at");
   if (roles) {
     usersQuery = usersQuery.in("role", roles);
   }
@@ -333,6 +333,7 @@ async function listUsersWithProfiles(adminClient: ReturnType<typeof createClient
       role: user.role,
       login_email: user.login_email,
       created_at: user.created_at,
+      deactivated_at: user.deactivated_at ?? null,
       record_id: profile.id ?? null,
       first_name: profile.first_name ?? null,
       middle_name: profile.middle_name ?? null,
@@ -862,10 +863,30 @@ Deno.serve(async (req) => {
     return json({ error: "userId is required" }, 400);
   }
 
+  // Deactivating doesn't ban via the Supabase Admin API — Supabase has no
+  // way to schedule a ban to start in the future, and the intent here is a
+  // grace period (see DATABASE.md "users" — deactivated_at), not an
+  // instant lockout. This just timestamps the row; Login.jsx and every
+  // portal layout's useDeactivationGuard compare that timestamp against
+  // now to decide whether the account still has access.
   if (action === "deactivate") {
-    const { error } = await adminClient.auth.admin.updateUserById(userId, {
-      ban_duration: "876000h", // effectively indefinite (~100 years)
-    });
+    const { error } = await adminClient
+      .from("users")
+      .update({ deactivated_at: new Date().toISOString() })
+      .eq("id", userId);
+
+    if (error) {
+      return json({ error: error.message }, 400);
+    }
+
+    return json({ ok: true });
+  }
+
+  if (action === "reactivate") {
+    const { error } = await adminClient
+      .from("users")
+      .update({ deactivated_at: null })
+      .eq("id", userId);
 
     if (error) {
       return json({ error: error.message }, 400);
