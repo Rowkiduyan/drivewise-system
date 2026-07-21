@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import LogoutButton from "./LogoutButton.jsx";
+import { useUserInitials } from "../lib/useUserInitials.js";
 
 export const supervisorModules = [
   {
@@ -152,6 +153,7 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
 
     return window.localStorage.getItem(supervisorSidebarStorageKey) === "true";
   });
+  const userInitials = useUserInitials();
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -181,7 +183,7 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
             <div
               className={`flex h-12 w-12 items-center justify-center rounded-2xl ${supervisorSidebarTheme.badge} text-lg font-semibold flex-shrink-0`}
             >
-              SP
+              {userInitials || '...'}
             </div>
           </div>
 

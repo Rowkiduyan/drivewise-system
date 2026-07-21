@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import LogoutButton from './LogoutButton.jsx'
+import { useUserInitials } from '../lib/useUserInitials.js'
 
 export const driverModules = [
   {
@@ -75,6 +76,7 @@ function DriverLayout({ title, background, children }) {
   })
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const navigate = useNavigate()
+  const userInitials = useUserInitials()
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false)
   const closeMobileMenuAfterDelay = (path) => {
@@ -152,7 +154,7 @@ function DriverLayout({ title, background, children }) {
 
         <div className="ml-auto flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-900 text-sm font-semibold text-white flex-shrink-0">
-            DR
+            {userInitials || '...'}
           </div>
         </div>
       </div>
@@ -175,7 +177,7 @@ function DriverLayout({ title, background, children }) {
       >
         <div className="flex flex-col items-center gap-3 px-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-900 text-lg font-semibold text-white flex-shrink-0">
-            DR
+            {userInitials || '...'}
           </div>
         </div>
 

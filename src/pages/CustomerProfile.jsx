@@ -1,25 +1,77 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import CustomerLayout from "../layout/CustomerLayout.jsx";
-
-// ---------------------------------------------------------------------------
-// Dummy customer profile — frontend only, no backend/API/database.
-// ---------------------------------------------------------------------------
-
-const MOCK_CUSTOMER = {
-  fullName: "Jordan Smith",
-  role: "Customer",
-  age: 29,
-  birthdate: "August 4, 1996",
-  address: "45 Magnolia Ave., Makati City, Metro Manila",
-  personalEmail: "jordan.smith@gmail.com",
-  workEmail: "jordan.smith@clientco.com",
-};
+import { supabase } from "../lib/supabaseClient.js";
 
 function getInitials(fullName) {
   const parts = fullName.trim().split(" ");
   const first = parts[0]?.charAt(0) || "";
   const last = parts.length > 1 ? parts[parts.length - 1].charAt(0) : "";
   return (first + last).toUpperCase() || "?";
+}
+
+function calculateAge(birthdate) {
+  if (!birthdate) {
+    return null;
+  }
+
+  const dob = new Date(`${birthdate}T00:00:00Z`);
+  if (Number.isNaN(dob.getTime())) {
+    return null;
+  }
+
+  const today = new Date();
+  let age = today.getUTCFullYear() - dob.getUTCFullYear();
+  const hasHadBirthdayThisYear =
+    today.getUTCMonth() > dob.getUTCMonth() ||
+    (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() >= dob.getUTCDate());
+
+  if (!hasHadBirthdayThisYear) {
+    age -= 1;
+  }
+
+  return age >= 0 ? age : null;
+}
+
+function formatBirthdate(birthdate) {
+  if (!birthdate) {
+    return "—";
+  }
+
+  const date = new Date(`${birthdate}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+function formatAddress(address) {
+  if (!address) {
+    return "—";
+  }
+
+  return [address.street, address.city, address.province].filter(Boolean).join(", ") || "—";
+}
+
+// Mirrors AdminHome.jsx's mapListedUser shape — both read the same
+// customer_records columns via the admin-users Edge Function.
+function mapProfile(row) {
+  const fullName = [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ");
+
+  return {
+    fullName: fullName || "—",
+    role: row.role,
+    age: calculateAge(row.birthdate),
+    birthdate: formatBirthdate(row.birthdate),
+    address: formatAddress(row.address),
+    personalEmail: row.email || "—",
+    workEmail: row.login_email || "—",
+  };
 }
 
 function SectionCard({ title, description, children }) {
@@ -73,6 +125,38 @@ function CustomerProfile() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
+  const [customer, setCustomer] = useState(null);
+  const [profileError, setProfileError] = useState("");
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadProfile = async () => {
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "get-own-profile" },
+      });
+
+      if (!isCurrent) {
+        return;
+      }
+
+      if (error) {
+        setProfileError(error.message || "Unable to load your profile.");
+        setIsLoadingProfile(false);
+        return;
+      }
+
+      setCustomer(mapProfile(data.profile));
+      setIsLoadingProfile(false);
+    };
+
+    loadProfile();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
 
   const openPasswordModal = () => {
     setCurrentPassword("");
@@ -115,36 +199,50 @@ function CustomerProfile() {
   return (
     <CustomerLayout title="Customer Profile" background={null}>
       <div className="flex flex-col gap-6 pb-10">
-        {/* Profile header — horizontal strip matching the width and card
-            style of the sections below, instead of a separate sidebar. */}
-        <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="flex items-center gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-base font-semibold text-emerald-700">
-              {getInitials(MOCK_CUSTOMER.fullName)}
-            </div>
-            <div>
-              <p className="text-lg font-semibold text-slate-900">
-                {MOCK_CUSTOMER.fullName}
-              </p>
-              <p className="text-sm text-slate-500">{MOCK_CUSTOMER.workEmail}</p>
-            </div>
-          </div>
-          <span className="inline-flex items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-            {MOCK_CUSTOMER.role}
-          </span>
-        </section>
+        {profileError ? (
+          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {profileError}
+          </p>
+        ) : null}
 
-        <SectionCard title="Basic Information">
-          <dl className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
-            <InfoField label="Full Name" value={MOCK_CUSTOMER.fullName} />
-            <InfoField label="Role" value={MOCK_CUSTOMER.role} />
-            <InfoField label="Personal Email" value={MOCK_CUSTOMER.personalEmail} />
-            <InfoField label="Work Email" value={MOCK_CUSTOMER.workEmail} />
-            <InfoField label="Age" value={MOCK_CUSTOMER.age} />
-            <InfoField label="Birthdate" value={MOCK_CUSTOMER.birthdate} />
-            <InfoField label="Address" value={MOCK_CUSTOMER.address} wide />
-          </dl>
-        </SectionCard>
+        {isLoadingProfile ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <p className="text-sm text-slate-500">Loading profile…</p>
+          </div>
+        ) : customer ? (
+          <>
+            {/* Profile header — horizontal strip matching the width and card
+                style of the sections below, instead of a separate sidebar. */}
+            <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+              <div className="flex items-center gap-4">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-base font-semibold text-emerald-700">
+                  {getInitials(customer.fullName)}
+                </div>
+                <div>
+                  <p className="text-lg font-semibold text-slate-900">
+                    {customer.fullName}
+                  </p>
+                  <p className="text-sm text-slate-500">{customer.workEmail}</p>
+                </div>
+              </div>
+              <span className="inline-flex items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                {customer.role}
+              </span>
+            </section>
+
+            <SectionCard title="Basic Information">
+              <dl className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+                <InfoField label="Full Name" value={customer.fullName} />
+                <InfoField label="Role" value={customer.role} />
+                <InfoField label="Personal Email" value={customer.personalEmail} />
+                <InfoField label="Work Email" value={customer.workEmail} />
+                <InfoField label="Age" value={customer.age ?? "—"} />
+                <InfoField label="Birthdate" value={customer.birthdate} />
+                <InfoField label="Address" value={customer.address} wide />
+              </dl>
+            </SectionCard>
+          </>
+        ) : null}
 
         <SectionCard title="Change Password">
           <div className="max-w-md">

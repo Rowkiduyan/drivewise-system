@@ -1,25 +1,78 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AdminLayout from "../layout/AdminLayout.jsx";
-
-// ---------------------------------------------------------------------------
-// Dummy admin profile — frontend only, no backend/API/database.
-// ---------------------------------------------------------------------------
-
-const MOCK_ADMIN = {
-  fullName: "System Administrator",
-  role: "Platform Admin",
-  age: 38,
-  birthdate: "November 21, 1987",
-  address: "78 Ipil-Ipil St., Taguig City, Metro Manila",
-  personalEmail: "admin.personal@gmail.com",
-  workEmail: "admin@marveltrucking.com",
-};
+import { supabase } from "../lib/supabaseClient.js";
 
 function getInitials(fullName) {
   const parts = fullName.trim().split(" ");
   const first = parts[0]?.charAt(0) || "";
   const last = parts.length > 1 ? parts[parts.length - 1].charAt(0) : "";
   return (first + last).toUpperCase() || "?";
+}
+
+function calculateAge(birthdate) {
+  if (!birthdate) {
+    return null;
+  }
+
+  const dob = new Date(`${birthdate}T00:00:00Z`);
+  if (Number.isNaN(dob.getTime())) {
+    return null;
+  }
+
+  const today = new Date();
+  let age = today.getUTCFullYear() - dob.getUTCFullYear();
+  const hasHadBirthdayThisYear =
+    today.getUTCMonth() > dob.getUTCMonth() ||
+    (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() >= dob.getUTCDate());
+
+  if (!hasHadBirthdayThisYear) {
+    age -= 1;
+  }
+
+  return age >= 0 ? age : null;
+}
+
+function formatBirthdate(birthdate) {
+  if (!birthdate) {
+    return "—";
+  }
+
+  const date = new Date(`${birthdate}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+function formatAddress(address) {
+  if (!address) {
+    return "—";
+  }
+
+  return [address.street, address.city, address.province].filter(Boolean).join(", ") || "—";
+}
+
+// list-users flattens each *_records row this same way (see AdminHome.jsx's
+// mapListedUser) — kept in sync with that shape since both read the same
+// admin_records columns via the admin-users Edge Function.
+function mapProfile(row) {
+  const fullName = [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ");
+
+  return {
+    fullName: fullName || "—",
+    role: row.role,
+    age: calculateAge(row.birthdate),
+    birthdate: formatBirthdate(row.birthdate),
+    address: formatAddress(row.address),
+    personalEmail: row.email || "—",
+    workEmail: row.login_email || "—",
+  };
 }
 
 function SectionCard({ title, description, children }) {
@@ -73,6 +126,38 @@ function AdminProfile() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
+  const [admin, setAdmin] = useState(null);
+  const [profileError, setProfileError] = useState("");
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadProfile = async () => {
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "get-own-profile" },
+      });
+
+      if (!isCurrent) {
+        return;
+      }
+
+      if (error) {
+        setProfileError(error.message || "Unable to load your profile.");
+        setIsLoadingProfile(false);
+        return;
+      }
+
+      setAdmin(mapProfile(data.profile));
+      setIsLoadingProfile(false);
+    };
+
+    loadProfile();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
 
   const openPasswordModal = () => {
     setCurrentPassword("");
@@ -115,36 +200,50 @@ function AdminProfile() {
   return (
     <AdminLayout title="Admin Profile" background={null}>
       <div className="flex flex-col gap-6 pb-10">
-        {/* Profile header — horizontal strip matching the width and card
-            style of the sections below, instead of a separate sidebar. */}
-        <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="flex items-center gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-violet-50 text-base font-semibold text-violet-700">
-              {getInitials(MOCK_ADMIN.fullName)}
-            </div>
-            <div>
-              <p className="text-lg font-semibold text-slate-900">
-                {MOCK_ADMIN.fullName}
-              </p>
-              <p className="text-sm text-slate-500">{MOCK_ADMIN.workEmail}</p>
-            </div>
-          </div>
-          <span className="inline-flex items-center rounded-full bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">
-            {MOCK_ADMIN.role}
-          </span>
-        </section>
+        {profileError ? (
+          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {profileError}
+          </p>
+        ) : null}
 
-        <SectionCard title="Basic Information">
-          <dl className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
-            <InfoField label="Full Name" value={MOCK_ADMIN.fullName} />
-            <InfoField label="Role" value={MOCK_ADMIN.role} />
-            <InfoField label="Personal Email" value={MOCK_ADMIN.personalEmail} />
-            <InfoField label="Work Email" value={MOCK_ADMIN.workEmail} />
-            <InfoField label="Age" value={MOCK_ADMIN.age} />
-            <InfoField label="Birthdate" value={MOCK_ADMIN.birthdate} />
-            <InfoField label="Address" value={MOCK_ADMIN.address} wide />
-          </dl>
-        </SectionCard>
+        {isLoadingProfile ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <p className="text-sm text-slate-500">Loading profile…</p>
+          </div>
+        ) : admin ? (
+          <>
+            {/* Profile header — horizontal strip matching the width and card
+                style of the sections below, instead of a separate sidebar. */}
+            <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+              <div className="flex items-center gap-4">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-violet-50 text-base font-semibold text-violet-700">
+                  {getInitials(admin.fullName)}
+                </div>
+                <div>
+                  <p className="text-lg font-semibold text-slate-900">
+                    {admin.fullName}
+                  </p>
+                  <p className="text-sm text-slate-500">{admin.workEmail}</p>
+                </div>
+              </div>
+              <span className="inline-flex items-center rounded-full bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">
+                {admin.role}
+              </span>
+            </section>
+
+            <SectionCard title="Basic Information">
+              <dl className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+                <InfoField label="Full Name" value={admin.fullName} />
+                <InfoField label="Role" value={admin.role} />
+                <InfoField label="Personal Email" value={admin.personalEmail} />
+                <InfoField label="Work Email" value={admin.workEmail} />
+                <InfoField label="Age" value={admin.age ?? "—"} />
+                <InfoField label="Birthdate" value={admin.birthdate} />
+                <InfoField label="Address" value={admin.address} wide />
+              </dl>
+            </SectionCard>
+          </>
+        ) : null}
 
         <SectionCard title="Change Password">
           <div className="max-w-md">

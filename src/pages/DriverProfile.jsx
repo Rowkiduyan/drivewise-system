@@ -1,25 +1,77 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DriverLayout from "../layout/DriverLayout.jsx";
-
-// ---------------------------------------------------------------------------
-// Dummy driver profile — frontend only, no backend/API/database.
-// ---------------------------------------------------------------------------
-
-const MOCK_DRIVER = {
-  fullName: "Miguel Torres",
-  role: "Driver",
-  age: 31,
-  birthdate: "May 18, 1995",
-  address: "56 Narra St., Pasig City, Metro Manila",
-  personalEmail: "miguel.torres@gmail.com",
-  workEmail: "miguel.torres@marveltrucking.com",
-};
+import { supabase } from "../lib/supabaseClient.js";
 
 function getInitials(fullName) {
   const parts = fullName.trim().split(" ");
   const first = parts[0]?.charAt(0) || "";
   const last = parts.length > 1 ? parts[parts.length - 1].charAt(0) : "";
   return (first + last).toUpperCase() || "?";
+}
+
+function calculateAge(birthdate) {
+  if (!birthdate) {
+    return null;
+  }
+
+  const dob = new Date(`${birthdate}T00:00:00Z`);
+  if (Number.isNaN(dob.getTime())) {
+    return null;
+  }
+
+  const today = new Date();
+  let age = today.getUTCFullYear() - dob.getUTCFullYear();
+  const hasHadBirthdayThisYear =
+    today.getUTCMonth() > dob.getUTCMonth() ||
+    (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() >= dob.getUTCDate());
+
+  if (!hasHadBirthdayThisYear) {
+    age -= 1;
+  }
+
+  return age >= 0 ? age : null;
+}
+
+function formatBirthdate(birthdate) {
+  if (!birthdate) {
+    return "—";
+  }
+
+  const date = new Date(`${birthdate}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+function formatAddress(address) {
+  if (!address) {
+    return "—";
+  }
+
+  return [address.street, address.city, address.province].filter(Boolean).join(", ") || "—";
+}
+
+// Mirrors AdminHome.jsx's mapListedUser shape — both read the same
+// driver_records columns via the admin-users Edge Function.
+function mapProfile(row) {
+  const fullName = [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ");
+
+  return {
+    fullName: fullName || "—",
+    role: row.role,
+    age: calculateAge(row.birthdate),
+    birthdate: formatBirthdate(row.birthdate),
+    address: formatAddress(row.address),
+    personalEmail: row.email || "—",
+    workEmail: row.login_email || "—",
+  };
 }
 
 function SectionCard({ title, description, children }) {
@@ -73,6 +125,38 @@ function DriverProfile() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
+  const [driver, setDriver] = useState(null);
+  const [profileError, setProfileError] = useState("");
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadProfile = async () => {
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "get-own-profile" },
+      });
+
+      if (!isCurrent) {
+        return;
+      }
+
+      if (error) {
+        setProfileError(error.message || "Unable to load your profile.");
+        setIsLoadingProfile(false);
+        return;
+      }
+
+      setDriver(mapProfile(data.profile));
+      setIsLoadingProfile(false);
+    };
+
+    loadProfile();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
 
   const openPasswordModal = () => {
     setCurrentPassword("");
@@ -115,36 +199,50 @@ function DriverProfile() {
   return (
     <DriverLayout title="Driver Profile" background={null}>
       <div className="flex flex-col gap-6 pb-10">
-        {/* Profile header — horizontal strip matching the width and card
-            style of the sections below, instead of a separate sidebar. */}
-        <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="flex items-center gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-amber-50 text-base font-semibold text-amber-700">
-              {getInitials(MOCK_DRIVER.fullName)}
-            </div>
-            <div>
-              <p className="text-lg font-semibold text-slate-900">
-                {MOCK_DRIVER.fullName}
-              </p>
-              <p className="text-sm text-slate-500">{MOCK_DRIVER.workEmail}</p>
-            </div>
-          </div>
-          <span className="inline-flex items-center rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-            {MOCK_DRIVER.role}
-          </span>
-        </section>
+        {profileError ? (
+          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {profileError}
+          </p>
+        ) : null}
 
-        <SectionCard title="Basic Information">
-          <dl className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
-            <InfoField label="Full Name" value={MOCK_DRIVER.fullName} />
-            <InfoField label="Role" value={MOCK_DRIVER.role} />
-            <InfoField label="Personal Email" value={MOCK_DRIVER.personalEmail} />
-            <InfoField label="Work Email" value={MOCK_DRIVER.workEmail} />
-            <InfoField label="Age" value={MOCK_DRIVER.age} />
-            <InfoField label="Birthdate" value={MOCK_DRIVER.birthdate} />
-            <InfoField label="Address" value={MOCK_DRIVER.address} wide />
-          </dl>
-        </SectionCard>
+        {isLoadingProfile ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <p className="text-sm text-slate-500">Loading profile…</p>
+          </div>
+        ) : driver ? (
+          <>
+            {/* Profile header — horizontal strip matching the width and card
+                style of the sections below, instead of a separate sidebar. */}
+            <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+              <div className="flex items-center gap-4">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-amber-50 text-base font-semibold text-amber-700">
+                  {getInitials(driver.fullName)}
+                </div>
+                <div>
+                  <p className="text-lg font-semibold text-slate-900">
+                    {driver.fullName}
+                  </p>
+                  <p className="text-sm text-slate-500">{driver.workEmail}</p>
+                </div>
+              </div>
+              <span className="inline-flex items-center rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                {driver.role}
+              </span>
+            </section>
+
+            <SectionCard title="Basic Information">
+              <dl className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+                <InfoField label="Full Name" value={driver.fullName} />
+                <InfoField label="Role" value={driver.role} />
+                <InfoField label="Personal Email" value={driver.personalEmail} />
+                <InfoField label="Work Email" value={driver.workEmail} />
+                <InfoField label="Age" value={driver.age ?? "—"} />
+                <InfoField label="Birthdate" value={driver.birthdate} />
+                <InfoField label="Address" value={driver.address} wide />
+              </dl>
+            </SectionCard>
+          </>
+        ) : null}
 
         <SectionCard title="Change Password">
           <div className="max-w-md">

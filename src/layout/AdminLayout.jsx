@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { supabase } from '../lib/supabaseClient.js'
 import LogoutButton from './LogoutButton.jsx'
+import { useUserInitials } from '../lib/useUserInitials.js'
 
 const adminModules = [
   {
@@ -93,20 +93,6 @@ const adminSidebarTheme = {
 
 const adminSidebarStorageKey = 'admin-sidebar-expanded'
 
-function deriveInitials(name, email) {
-  const source = name?.trim() || email?.split('@')[0]?.trim() || ''
-  if (!source) {
-    return '?'
-  }
-
-  const parts = source.split(/[\s._-]+/).filter(Boolean)
-  const initials = parts.length > 1
-    ? parts[0][0] + parts[parts.length - 1][0]
-    : source.slice(0, 2)
-
-  return initials.toUpperCase()
-}
-
 function AdminLayout({ title, background, children, bg = 'bg-white' }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     if (typeof window === 'undefined') {
@@ -115,36 +101,11 @@ function AdminLayout({ title, background, children, bg = 'bg-white' }) {
 
     return window.localStorage.getItem(adminSidebarStorageKey) === 'true'
   })
-  const [userInitials, setUserInitials] = useState('')
+  const userInitials = useUserInitials()
 
   useEffect(() => {
     window.localStorage.setItem(adminSidebarStorageKey, String(isExpanded))
   }, [isExpanded])
-
-  useEffect(() => {
-    let isMounted = true
-
-    async function loadCurrentUser() {
-      const {
-        data: { user }
-      } = await supabase.auth.getUser()
-
-      if (!user || !isMounted) {
-        return
-      }
-
-      // Name lives in a per-role *_records table now, which the client
-      // can't read directly (service_role only, see DATABASE.md). Fall
-      // back to the Auth email until there's a self-profile endpoint.
-      setUserInitials(deriveInitials(null, user.email))
-    }
-
-    loadCurrentUser()
-
-    return () => {
-      isMounted = false
-    }
-  }, [])
 
   return (
     <main

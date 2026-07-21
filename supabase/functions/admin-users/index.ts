@@ -422,6 +422,50 @@ Deno.serve(async (req) => {
   const body = await req.json();
   const { action } = body;
 
+  // get-own-profile lets any signed-in user read their own row — merges
+  // `users` with the caller's own `*_records` row by auth_id, the same way
+  // listUsersWithProfiles does for the admin listing pages. Not gated on
+  // role since everyone is allowed to see their own profile.
+  if (action === "get-own-profile") {
+    const authId = callerData.user.id;
+    const role = callerRow.role;
+    const table = ROLE_TABLE[role];
+
+    const { data: userRow, error: userRowError } = await adminClient
+      .from("users")
+      .select("login_email, created_at")
+      .eq("id", authId)
+      .single();
+
+    if (userRowError || !userRow) {
+      return json({ error: userRowError?.message || "User not found" }, 400);
+    }
+
+    const { data: recordRow, error: recordError } = table
+      ? await adminClient.from(table).select("*").eq("auth_id", authId).maybeSingle()
+      : { data: null, error: null };
+
+    if (recordError) {
+      return json({ error: recordError.message }, 400);
+    }
+
+    return json({
+      ok: true,
+      profile: {
+        role,
+        login_email: userRow.login_email,
+        first_name: recordRow?.first_name ?? null,
+        middle_name: recordRow?.middle_name ?? null,
+        last_name: recordRow?.last_name ?? null,
+        position: recordRow?.position ?? null,
+        email: recordRow?.email ?? null,
+        contact_number: recordRow?.contact_number ?? null,
+        birthdate: recordRow?.birthdate ?? null,
+        address: recordRow?.address ?? null,
+      },
+    });
+  }
+
   // list-crew is the one action Supervisors (not just Admin) can call —
   // gated separately so it doesn't fall under the blanket Admin-only
   // check below.
