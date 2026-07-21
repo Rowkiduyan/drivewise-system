@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import CustomerLayout from "../layout/CustomerLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
+import { cropImageToSquareBase64 } from "../lib/profilePicture.js";
 
 function getInitials(fullName) {
   const parts = fullName.trim().split(" ");
@@ -64,6 +65,7 @@ function mapProfile(row) {
   const fullName = [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ");
 
   return {
+    id: row.id,
     fullName: fullName || "—",
     role: row.role,
     age: calculateAge(row.birthdate),
@@ -71,6 +73,7 @@ function mapProfile(row) {
     address: formatAddress(row.address),
     personalEmail: row.email || "—",
     workEmail: row.login_email || "—",
+    profilePicture: row.profile_picture || "",
   };
 }
 
@@ -128,6 +131,8 @@ function CustomerProfile() {
   const [customer, setCustomer] = useState(null);
   const [profileError, setProfileError] = useState("");
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  const [pictureError, setPictureError] = useState("");
+  const [isUpdatingPicture, setIsUpdatingPicture] = useState(false);
 
   useEffect(() => {
     let isCurrent = true;
@@ -157,6 +162,66 @@ function CustomerProfile() {
       isCurrent = false;
     };
   }, []);
+
+  const handleProfilePictureChange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !customer?.id || isUpdatingPicture) {
+      return;
+    }
+
+    setPictureError("");
+    setIsUpdatingPicture(true);
+
+    try {
+      const fileBase64 = await cropImageToSquareBase64(file);
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: {
+          action: "upload-profile-picture",
+          userId: customer.id,
+          fileBase64,
+          contentType: "image/jpeg",
+        },
+      });
+
+      if (error) {
+        setPictureError(error.message || "Unable to upload profile picture.");
+        return;
+      }
+
+      setCustomer((current) => (current ? { ...current, profilePicture: data.profile_picture } : current));
+    } catch (uploadException) {
+      setPictureError(
+        uploadException instanceof Error ? uploadException.message : "Unable to process the selected image."
+      );
+    } finally {
+      setIsUpdatingPicture(false);
+    }
+  };
+
+  const handleRemoveProfilePicture = async () => {
+    if (!customer?.id || isUpdatingPicture) {
+      return;
+    }
+
+    setPictureError("");
+    setIsUpdatingPicture(true);
+
+    try {
+      const { error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "remove-profile-picture", userId: customer.id },
+      });
+
+      if (error) {
+        setPictureError(error.message || "Unable to remove profile picture.");
+        return;
+      }
+
+      setCustomer((current) => (current ? { ...current, profilePicture: "" } : current));
+    } finally {
+      setIsUpdatingPicture(false);
+    }
+  };
 
   const openPasswordModal = () => {
     setCurrentPassword("");
@@ -215,14 +280,47 @@ function CustomerProfile() {
                 style of the sections below, instead of a separate sidebar. */}
             <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
               <div className="flex items-center gap-4">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-base font-semibold text-emerald-700">
-                  {getInitials(customer.fullName)}
+                <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-50 text-xl font-semibold text-emerald-700">
+                  {customer.profilePicture ? (
+                    <img src={customer.profilePicture} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    getInitials(customer.fullName)
+                  )}
                 </div>
                 <div>
                   <p className="text-lg font-semibold text-slate-900">
                     {customer.fullName}
                   </p>
                   <p className="text-sm text-slate-500">{customer.workEmail}</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <label
+                      htmlFor="customer-profile-picture"
+                      className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 ${
+                        isUpdatingPicture ? "pointer-events-none opacity-60" : ""
+                      }`}
+                    >
+                      {isUpdatingPicture ? "Working..." : "Change Photo"}
+                    </label>
+                    {customer.profilePicture ? (
+                      <button
+                        type="button"
+                        onClick={handleRemoveProfilePicture}
+                        disabled={isUpdatingPicture}
+                        className="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+                  <input
+                    id="customer-profile-picture"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleProfilePictureChange}
+                    disabled={isUpdatingPicture}
+                    className="sr-only"
+                  />
+                  {pictureError ? <p className="mt-1.5 text-xs text-red-600">{pictureError}</p> : null}
                 </div>
               </div>
               <span className="inline-flex items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">

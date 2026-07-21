@@ -54,6 +54,176 @@ function buildFullName({ firstName, middleName, lastName }) {
     .join(' ')
 }
 
+// Bulk Upload (CSV) — column order matches the template download and the
+// placeholder text in the modal. Client Name has its own column since it's
+// only meaningful (and required) for Customer rows.
+const BULK_COLUMNS = [
+  { label: 'Last Name', key: 'lastName' },
+  { label: 'First Name', key: 'firstName' },
+  { label: 'Middle Name', key: 'middleName' },
+  { label: 'Role', key: 'role' },
+  { label: 'Position', key: 'position' },
+  { label: 'Client Name', key: 'clientName' },
+  { label: 'Personal Email', key: 'personalEmail' },
+  { label: 'Contact Number', key: 'contactNumber' },
+  { label: 'Birthdate', key: 'birthdate' },
+  { label: 'Street', key: 'street' },
+  { label: 'City', key: 'city' },
+  { label: 'Province', key: 'province' }
+]
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+// Minimal RFC4180-style CSV parser (quoted fields, escaped "" quotes,
+// \r\n or \n line endings) — small enough to hand-roll rather than pull in
+// a dependency for a handful of well-behaved admin-authored files.
+function parseCsv(text) {
+  const rows = []
+  let row = []
+  let field = ''
+  let inQuotes = false
+  let i = 0
+
+  while (i < text.length) {
+    const char = text[i]
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (text[i + 1] === '"') {
+          field += '"'
+          i += 2
+          continue
+        }
+        inQuotes = false
+        i += 1
+        continue
+      }
+      field += char
+      i += 1
+      continue
+    }
+
+    if (char === '"') {
+      inQuotes = true
+      i += 1
+      continue
+    }
+
+    if (char === ',') {
+      row.push(field)
+      field = ''
+      i += 1
+      continue
+    }
+
+    if (char === '\r') {
+      i += 1
+      continue
+    }
+
+    if (char === '\n') {
+      row.push(field)
+      rows.push(row)
+      row = []
+      field = ''
+      i += 1
+      continue
+    }
+
+    field += char
+    i += 1
+  }
+
+  if (field.length > 0 || row.length > 0) {
+    row.push(field)
+    rows.push(row)
+  }
+
+  return rows.filter((cells) => cells.some((cell) => cell.trim() !== ''))
+}
+
+// Field-level checks only — duplicate-email checks (against existing users
+// and other rows in the same file) are done by the caller, which has that
+// context.
+function validateBulkRow(record) {
+  const payload = {
+    lastName: (record.lastName || '').trim(),
+    firstName: (record.firstName || '').trim(),
+    middleName: (record.middleName || '').trim(),
+    role: (record.role || '').trim(),
+    position: (record.position || '').trim(),
+    clientName: (record.clientName || '').trim(),
+    personalEmail: (record.personalEmail || '').trim().toLowerCase(),
+    contactNumber: (record.contactNumber || '').trim(),
+    birthdate: (record.birthdate || '').trim(),
+    street: (record.street || '').trim(),
+    city: (record.city || '').trim(),
+    province: (record.province || '').trim()
+  }
+
+  if (
+    !payload.lastName ||
+    !payload.firstName ||
+    !payload.role ||
+    !payload.position ||
+    !payload.personalEmail ||
+    !payload.contactNumber ||
+    !payload.birthdate ||
+    !payload.street ||
+    !payload.city ||
+    !payload.province
+  ) {
+    return { payload, error: 'Missing a required field.' }
+  }
+
+  if (!ROLE_OPTIONS.includes(payload.role)) {
+    return { payload, error: `Role must be one of ${ROLE_OPTIONS.join(', ')}.` }
+  }
+
+  if (payload.role === 'Customer' && !payload.clientName) {
+    return { payload, error: 'Client Name is required for the Customer role.' }
+  }
+
+  if (!ISO_DATE_PATTERN.test(payload.birthdate)) {
+    return { payload, error: 'Birthdate must be in YYYY-MM-DD format.' }
+  }
+
+  if (!EMAIL_PATTERN.test(payload.personalEmail)) {
+    return { payload, error: 'Personal Email is not a valid email address.' }
+  }
+
+  return { payload, error: null }
+}
+
+function downloadBulkUploadTemplate() {
+  const header = BULK_COLUMNS.map((column) => column.label).join(',')
+  const sampleRow = [
+    'Dela Cruz',
+    'Juan',
+    'Santos',
+    'Driver',
+    'Delivery Driver',
+    '',
+    'juan.delacruz@gmail.com',
+    '09171234567',
+    '1995-05-18',
+    '123 Main St',
+    'Quezon City',
+    'Metro Manila'
+  ].join(',')
+
+  const blob = new Blob([`${header}\n${sampleRow}\n`], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'drivewise-bulk-upload-template.csv'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
 // list-users returns each user merged with their role-specific *_records
 // row (see DATABASE.md "Per-role profile tables") — flatten it into the
 // shape this page's form fields/search/sort already expect.
@@ -173,6 +343,11 @@ function AdminHome() {
   const [newUserForm, setNewUserForm] = useState(EMPTY_NEW_USER_FORM)
   const [isAddUserOpen, setIsAddUserOpen] = useState(false)
   const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false)
+  const [bulkFileName, setBulkFileName] = useState('')
+  const [bulkParseError, setBulkParseError] = useState('')
+  const [bulkRows, setBulkRows] = useState([])
+  const [isBulkUploading, setIsBulkUploading] = useState(false)
+  const [bulkUploadResults, setBulkUploadResults] = useState([])
   const [formError, setFormError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [tempPassword, setTempPassword] = useState('')
@@ -266,6 +441,9 @@ function AdminHome() {
     () => getCityNamesForProvince(manageForm.province),
     [manageForm.province]
   )
+
+  const validBulkRows = useMemo(() => bulkRows.filter((row) => !row.error), [bulkRows])
+  const invalidBulkRows = useMemo(() => bulkRows.filter((row) => row.error), [bulkRows])
 
   const filteredUsers = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
@@ -369,7 +547,141 @@ function AdminHome() {
   }
 
   const openBulkUploadModal = () => setIsBulkUploadOpen(true)
-  const closeBulkUploadModal = () => setIsBulkUploadOpen(false)
+  const closeBulkUploadModal = () => {
+    setIsBulkUploadOpen(false)
+    setBulkFileName('')
+    setBulkParseError('')
+    setBulkRows([])
+    setBulkUploadResults([])
+  }
+
+  const handleBulkFileChange = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) {
+      return
+    }
+
+    setBulkFileName(file.name)
+    setBulkUploadResults([])
+
+    const text = await file.text()
+    const table = parseCsv(text)
+
+    if (table.length === 0) {
+      setBulkParseError('The CSV file is empty.')
+      setBulkRows([])
+      return
+    }
+
+    const headerRow = table[0].map((cell) => cell.trim().toLowerCase())
+    const missingColumns = BULK_COLUMNS.filter(
+      (column) => !headerRow.includes(column.label.toLowerCase())
+    )
+
+    if (missingColumns.length > 0) {
+      setBulkParseError(`Missing column(s): ${missingColumns.map((column) => column.label).join(', ')}.`)
+      setBulkRows([])
+      return
+    }
+
+    if (table.length === 1) {
+      setBulkParseError('The CSV file has no data rows.')
+      setBulkRows([])
+      return
+    }
+
+    setBulkParseError('')
+
+    const columnIndexByKey = Object.fromEntries(
+      BULK_COLUMNS.map((column) => [column.key, headerRow.indexOf(column.label.toLowerCase())])
+    )
+
+    const existingEmails = new Set(
+      users.map((user) => user.email?.toLowerCase()).filter(Boolean)
+    )
+    const seenEmails = new Set()
+
+    const rows = table.slice(1).map((cells, index) => {
+      const record = Object.fromEntries(
+        Object.entries(columnIndexByKey).map(([key, columnIndex]) => [key, cells[columnIndex] || ''])
+      )
+
+      const rowNumber = index + 2 // +1 for zero-index, +1 for the header row
+      const result = validateBulkRow(record)
+
+      if (!result.error && existingEmails.has(result.payload.personalEmail)) {
+        return { rowNumber, ...result, error: 'A user with this email already exists.' }
+      }
+
+      if (!result.error && seenEmails.has(result.payload.personalEmail)) {
+        return { rowNumber, ...result, error: 'Duplicate personal email within this file.' }
+      }
+
+      if (!result.error) {
+        seenEmails.add(result.payload.personalEmail)
+      }
+
+      return { rowNumber, ...result }
+    })
+
+    setBulkRows(rows)
+  }
+
+  const handleBulkUpload = async () => {
+    if (validBulkRows.length === 0 || isBulkUploading) {
+      return
+    }
+
+    setIsBulkUploading(true)
+    setBulkUploadResults([])
+
+    const results = []
+
+    for (const row of validBulkRows) {
+      const { payload } = row
+      const name = buildFullName(payload)
+
+      const { data, error } = await supabase.functions.invoke('admin-users', {
+        body: {
+          action: 'create-user',
+          lastName: payload.lastName,
+          firstName: payload.firstName,
+          middleName: payload.middleName,
+          role: payload.role,
+          position: payload.position,
+          clientName: payload.role === 'Customer' ? payload.clientName : null,
+          email: payload.personalEmail,
+          contactNumber: payload.contactNumber,
+          birthdate: payload.birthdate,
+          address: { street: payload.street, city: payload.city, province: payload.province }
+        }
+      })
+
+      if (error) {
+        results.push({
+          rowNumber: row.rowNumber,
+          name,
+          status: 'error',
+          message: error.message || 'Failed to create user.'
+        })
+      } else {
+        results.push({
+          rowNumber: row.rowNumber,
+          name,
+          status: 'success',
+          message: data.emailSent
+            ? `Credentials emailed to ${data.user.email}.`
+            : `Email not sent — temp password: ${data.tempPassword}`
+        })
+      }
+
+      setBulkUploadResults([...results])
+    }
+
+    setIsBulkUploading(false)
+    await loadUsers()
+  }
 
   const handleAddUser = (event) => {
     event.preventDefault()
@@ -992,7 +1304,7 @@ function AdminHome() {
           onClick={closeBulkUploadModal}
         >
           <div
-            className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6"
+            className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4">
@@ -1014,34 +1326,104 @@ function AdminHome() {
               </button>
             </div>
 
-            <div className="mt-5 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
-              <UploadIcon className="h-6 w-6 text-slate-400" />
-              <p className="text-sm font-medium text-slate-600">
-                Drag a CSV file here, or click to browse
-              </p>
-              <p className="text-xs text-slate-400">
-                Columns: Last Name, First Name, Middle Name, Role, Position, Personal Email,
-                Contact Number, Birthdate, Street, City, Province
-              </p>
-              <input
-                type="file"
-                accept=".csv"
-                disabled
-                className="mt-2 w-full cursor-not-allowed text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-500"
-              />
+            <div className="mt-4 flex-1 overflow-y-auto">
+              <div className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+                <UploadIcon className="h-6 w-6 text-slate-400" />
+                <p className="text-sm font-medium text-slate-600">
+                  {bulkFileName || 'Click to browse for a CSV file'}
+                </p>
+                <p className="text-xs text-slate-400">
+                  Columns: Last Name, First Name, Middle Name, Role, Position, Client Name,
+                  Personal Email, Contact Number, Birthdate, Street, City, Province
+                </p>
+                <p className="text-xs text-slate-400">
+                  Client Name is only required for the Customer role. Birthdate must be
+                  YYYY-MM-DD.
+                </p>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleBulkFileChange}
+                  disabled={isBulkUploading}
+                  className="mt-2 w-full text-xs text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                />
+                <button
+                  type="button"
+                  onClick={downloadBulkUploadTemplate}
+                  className="text-xs font-semibold text-violet-700 underline-offset-2 hover:underline"
+                >
+                  Download CSV template
+                </button>
+              </div>
+
+              {bulkParseError ? (
+                <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {bulkParseError}
+                </p>
+              ) : null}
+
+              {bulkRows.length > 0 ? (
+                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                  <p>
+                    <span className="font-semibold text-slate-900">{validBulkRows.length}</span>{' '}
+                    valid row{validBulkRows.length === 1 ? '' : 's'}
+                    {invalidBulkRows.length > 0 ? (
+                      <>
+                        , <span className="font-semibold text-red-700">{invalidBulkRows.length}</span>{' '}
+                        with errors
+                      </>
+                    ) : null}
+                  </p>
+                  {invalidBulkRows.length > 0 ? (
+                    <ul className="mt-2 max-h-32 list-disc space-y-1 overflow-y-auto pl-5 text-xs text-red-700">
+                      {invalidBulkRows.map((row) => (
+                        <li key={row.rowNumber}>
+                          Row {row.rowNumber}: {row.error}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {bulkUploadResults.length > 0 ? (
+                <div className="mt-4 rounded-xl border border-slate-200 px-4 py-3 text-sm">
+                  <p className="font-semibold text-slate-900">
+                    {bulkUploadResults.filter((result) => result.status === 'success').length} of{' '}
+                    {validBulkRows.length} users created
+                  </p>
+                  <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs">
+                    {bulkUploadResults.map((result) => (
+                      <li
+                        key={result.rowNumber}
+                        className={result.status === 'success' ? 'text-emerald-700' : 'text-red-700'}
+                      >
+                        Row {result.rowNumber} ({result.name || 'unnamed'}): {result.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
 
-            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              Bulk upload is coming soon. Use Add User for individual accounts in the meantime.
-            </div>
-
-            <div className="mt-5 flex justify-end">
+            <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={closeBulkUploadModal}
-                className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                disabled={isBulkUploading}
+                className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
               >
                 Close
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkUpload}
+                disabled={validBulkRows.length === 0 || isBulkUploading}
+                className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
+              >
+                {isBulkUploading
+                  ? `Uploading ${bulkUploadResults.length}/${validBulkRows.length}...`
+                  : `Upload ${validBulkRows.length || ''} User${validBulkRows.length === 1 ? '' : 's'}`}
               </button>
             </div>
           </div>

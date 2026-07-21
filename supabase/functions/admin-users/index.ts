@@ -26,6 +26,34 @@ const CREW_VIEW_ROLES = ["Admin", "Supervisor"];
 const ASSIGNABLE_ROLES = ["Supervisor", "Admin", "Driver", "Helper", "Customer"];
 const LOGIN_EMAIL_DOMAIN = "marveltrucking.local";
 
+// Profile pictures are stored in this Storage bucket, keyed by the user's
+// auth id + a fixed extension (client always sends JPEG — see
+// src/lib/profilePicture.js) so re-uploads overwrite the same object
+// instead of accumulating orphaned files. Bucket must exist and be public
+// (see DATABASE.md "Storage buckets") — service_role bypasses object RLS
+// the same way it bypasses table RLS, but the bucket itself has to be
+// created first.
+const PROFILE_PICTURE_BUCKET = "driver-profile-pics";
+// A cropped 256x256 JPEG is normally well under 100KB — this cap is a
+// server-side backstop against a caller bypassing the client-side crop
+// (e.g. calling the Edge Function directly) and uploading something much
+// larger, not a limit anyone should hit through the normal upload flow.
+const MAX_PROFILE_PICTURE_BYTES = 512 * 1024;
+const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+function decodeBase64(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 // Every role has its own profile table (see DATABASE.md "Per-role profile
 // tables"). ROLE_TABLE/ROLE_PREFIX are the single source of truth other
 // code in this file uses to find the right table and id convention.
@@ -315,6 +343,7 @@ async function listUsersWithProfiles(adminClient: ReturnType<typeof createClient
       contact_number: profile.contact_number ?? null,
       birthdate: profile.birthdate ?? null,
       address: profile.address ?? null,
+      profile_picture: profile.profile_picture ?? null,
     };
   });
 }
@@ -452,6 +481,7 @@ Deno.serve(async (req) => {
     return json({
       ok: true,
       profile: {
+        id: authId,
         role,
         login_email: userRow.login_email,
         first_name: recordRow?.first_name ?? null,
@@ -462,6 +492,7 @@ Deno.serve(async (req) => {
         contact_number: recordRow?.contact_number ?? null,
         birthdate: recordRow?.birthdate ?? null,
         address: recordRow?.address ?? null,
+        profile_picture: recordRow?.profile_picture ?? null,
       },
     });
   }
@@ -712,6 +743,117 @@ Deno.serve(async (req) => {
       const message = profileError instanceof Error ? profileError.message : "Unable to save profile record";
       return json({ error: message }, 400);
     }
+  }
+
+  // Admin-only, same as update-profile — an Admin can set their own picture
+  // (calling with their own userId) or any managed user's. The client
+  // always crops/re-encodes to JPEG first (src/lib/profilePicture.js), so
+  // this only ever writes one object per user, keyed by userId + ".jpg".
+  if (action === "upload-profile-picture") {
+    const userId = typeof body.userId === "string" ? body.userId : "";
+    const fileBase64 = typeof body.fileBase64 === "string" ? body.fileBase64 : "";
+    const contentType = typeof body.contentType === "string" ? body.contentType : "";
+
+    if (!userId || !fileBase64) {
+      return json({ error: "userId and fileBase64 are required" }, 400);
+    }
+
+    const extension = EXTENSION_BY_CONTENT_TYPE[contentType];
+    if (!extension) {
+      return json({ error: "contentType must be image/jpeg, image/png, or image/webp" }, 400);
+    }
+
+    const { data: targetUserRow, error: targetUserError } = await adminClient
+      .from("users")
+      .select("role")
+      .eq("id", userId)
+      .single();
+
+    if (targetUserError || !targetUserRow) {
+      return json({ error: targetUserError?.message || "User not found" }, 400);
+    }
+
+    const table = ROLE_TABLE[targetUserRow.role];
+    const bytes = decodeBase64(fileBase64);
+
+    if (bytes.byteLength > MAX_PROFILE_PICTURE_BYTES) {
+      return json({ error: "Image is too large (max 512KB after processing)" }, 400);
+    }
+
+    const path = `${userId}.${extension}`;
+    const { error: uploadError } = await adminClient.storage
+      .from(PROFILE_PICTURE_BUCKET)
+      .upload(path, bytes, { contentType, upsert: true });
+
+    if (uploadError) {
+      return json({ error: uploadError.message }, 400);
+    }
+
+    const { data: publicUrlData } = adminClient.storage
+      .from(PROFILE_PICTURE_BUCKET)
+      .getPublicUrl(path);
+
+    // Cache-bust: the storage path never changes across re-uploads (same
+    // userId + extension, upsert: true), so without this every consumer
+    // (sidebar, manage dialog) would keep showing a browser-cached copy of
+    // the old picture after a new one is uploaded.
+    const profilePictureUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`;
+
+    const { error: updateError } = await adminClient
+      .from(table)
+      .update({ profile_picture: profilePictureUrl })
+      .eq("auth_id", userId);
+
+    if (updateError) {
+      return json({ error: updateError.message }, 400);
+    }
+
+    return json({ ok: true, profile_picture: profilePictureUrl });
+  }
+
+  // Admin-only, same gate as upload-profile-picture. Deletes the stored
+  // object (tried under every extension we ever accept, since we don't
+  // otherwise know which one this user's picture was uploaded as) rather
+  // than just nulling the column, so removing a picture actually frees the
+  // storage instead of leaving an orphaned object behind.
+  if (action === "remove-profile-picture") {
+    const userId = typeof body.userId === "string" ? body.userId : "";
+
+    if (!userId) {
+      return json({ error: "userId is required" }, 400);
+    }
+
+    const { data: targetUserRow, error: targetUserError } = await adminClient
+      .from("users")
+      .select("role")
+      .eq("id", userId)
+      .single();
+
+    if (targetUserError || !targetUserRow) {
+      return json({ error: targetUserError?.message || "User not found" }, 400);
+    }
+
+    const table = ROLE_TABLE[targetUserRow.role];
+    const paths = Object.values(EXTENSION_BY_CONTENT_TYPE).map((ext) => `${userId}.${ext}`);
+
+    const { error: removeError } = await adminClient.storage
+      .from(PROFILE_PICTURE_BUCKET)
+      .remove(paths);
+
+    if (removeError) {
+      return json({ error: removeError.message }, 400);
+    }
+
+    const { error: updateError } = await adminClient
+      .from(table)
+      .update({ profile_picture: null })
+      .eq("auth_id", userId);
+
+    if (updateError) {
+      return json({ error: updateError.message }, 400);
+    }
+
+    return json({ ok: true });
   }
 
   const userId = typeof body.userId === "string" ? body.userId : "";

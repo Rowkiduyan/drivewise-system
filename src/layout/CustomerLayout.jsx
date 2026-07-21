@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import LogoutButton from './LogoutButton.jsx'
-import { useUserInitials } from '../lib/useUserInitials.js'
+import { useUserProfile } from '../lib/useUserInitials.js'
 
 export const clientModules = [
   { label: 'Home', path: '/customer/home', description: 'Customer overview' },
@@ -66,7 +66,8 @@ function CustomerLayout({ title, background, children }) {
   })
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const navigate = useNavigate()
-  const userInitials = useUserInitials()
+  const { initials: userInitials, profilePicture } = useUserProfile()
+  const [isImageViewerOpen, setIsImageViewerOpen] = useState(false)
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false)
   const closeMobileMenuAfterDelay = (path) => {
@@ -143,8 +144,17 @@ function CustomerLayout({ title, background, children }) {
         </button>
 
         <div className="ml-auto flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-900 text-sm font-semibold text-white flex-shrink-0">
-            {userInitials || '...'}
+          <div
+            className={`flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-emerald-900 text-sm font-semibold text-white flex-shrink-0 ${
+              profilePicture ? 'cursor-pointer' : ''
+            }`}
+            onClick={() => profilePicture && setIsImageViewerOpen(true)}
+          >
+            {profilePicture ? (
+              <img src={profilePicture} alt="" className="h-full w-full object-cover" />
+            ) : (
+              userInitials || '...'
+            )}
           </div>
         </div>
       </div>
@@ -166,8 +176,17 @@ function CustomerLayout({ title, background, children }) {
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex flex-col items-center gap-3 px-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-900 text-lg font-semibold text-white flex-shrink-0">
-            {userInitials || '...'}
+          <div
+            className={`flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-emerald-900 text-2xl font-semibold text-white flex-shrink-0 ${
+              profilePicture ? 'cursor-pointer' : ''
+            }`}
+            onClick={() => profilePicture && setIsImageViewerOpen(true)}
+          >
+            {profilePicture ? (
+              <img src={profilePicture} alt="" className="h-full w-full object-cover" />
+            ) : (
+              userInitials || '...'
+            )}
           </div>
         </div>
 
@@ -189,8 +208,23 @@ function CustomerLayout({ title, background, children }) {
         >
           {/* Header */}
           <div className="flex flex-col items-center gap-3 px-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-900 text-lg font-semibold text-white flex-shrink-0">
-              CL
+            <div
+              className={`flex items-center justify-center overflow-hidden rounded-full transition-all duration-300 bg-emerald-900 font-semibold text-white flex-shrink-0 ${
+                isExpanded ? 'h-24 w-24 text-2xl' : 'h-10 w-10 text-sm'
+              } ${profilePicture ? 'cursor-pointer' : ''}`}
+              onClick={(event) => {
+                if (!profilePicture) {
+                  return
+                }
+                event.stopPropagation()
+                setIsImageViewerOpen(true)
+              }}
+            >
+              {profilePicture ? (
+                <img src={profilePicture} alt="" className="h-full w-full object-cover" />
+              ) : (
+                userInitials || '...'
+              )}
             </div>
           </div>
 
@@ -211,6 +245,23 @@ function CustomerLayout({ title, background, children }) {
           </div>
         </div>
       </section>
+
+      {isImageViewerOpen && profilePicture ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Profile picture"
+          onClick={() => setIsImageViewerOpen(false)}
+        >
+          <img
+            src={profilePicture}
+            alt="Profile"
+            className="aspect-square h-auto max-h-[80vh] w-auto max-w-full rounded-full object-cover shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      ) : null}
     </main>
   )
 }

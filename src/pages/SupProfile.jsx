@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
+import { cropImageToSquareBase64 } from "../lib/profilePicture.js";
 
 function getInitials(fullName) {
   const parts = fullName.trim().split(" ");
@@ -64,6 +65,7 @@ function mapProfile(row) {
   const fullName = [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ");
 
   return {
+    id: row.id,
     fullName: fullName || "—",
     role: row.role,
     age: calculateAge(row.birthdate),
@@ -71,6 +73,7 @@ function mapProfile(row) {
     address: formatAddress(row.address),
     personalEmail: row.email || "—",
     workEmail: row.login_email || "—",
+    profilePicture: row.profile_picture || "",
   };
 }
 
@@ -128,6 +131,8 @@ function SupProfile() {
   const [supervisor, setSupervisor] = useState(null);
   const [profileError, setProfileError] = useState("");
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  const [pictureError, setPictureError] = useState("");
+  const [isUpdatingPicture, setIsUpdatingPicture] = useState(false);
 
   useEffect(() => {
     let isCurrent = true;
@@ -157,6 +162,66 @@ function SupProfile() {
       isCurrent = false;
     };
   }, []);
+
+  const handleProfilePictureChange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !supervisor?.id || isUpdatingPicture) {
+      return;
+    }
+
+    setPictureError("");
+    setIsUpdatingPicture(true);
+
+    try {
+      const fileBase64 = await cropImageToSquareBase64(file);
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: {
+          action: "upload-profile-picture",
+          userId: supervisor.id,
+          fileBase64,
+          contentType: "image/jpeg",
+        },
+      });
+
+      if (error) {
+        setPictureError(error.message || "Unable to upload profile picture.");
+        return;
+      }
+
+      setSupervisor((current) => (current ? { ...current, profilePicture: data.profile_picture } : current));
+    } catch (uploadException) {
+      setPictureError(
+        uploadException instanceof Error ? uploadException.message : "Unable to process the selected image."
+      );
+    } finally {
+      setIsUpdatingPicture(false);
+    }
+  };
+
+  const handleRemoveProfilePicture = async () => {
+    if (!supervisor?.id || isUpdatingPicture) {
+      return;
+    }
+
+    setPictureError("");
+    setIsUpdatingPicture(true);
+
+    try {
+      const { error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "remove-profile-picture", userId: supervisor.id },
+      });
+
+      if (error) {
+        setPictureError(error.message || "Unable to remove profile picture.");
+        return;
+      }
+
+      setSupervisor((current) => (current ? { ...current, profilePicture: "" } : current));
+    } finally {
+      setIsUpdatingPicture(false);
+    }
+  };
 
   const openPasswordModal = () => {
     setCurrentPassword("");
@@ -215,14 +280,47 @@ function SupProfile() {
                 style of the sections below, instead of a separate sidebar. */}
             <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
               <div className="flex items-center gap-4">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-blue-50 text-base font-semibold text-blue-700">
-                  {getInitials(supervisor.fullName)}
+                <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-full bg-blue-50 text-xl font-semibold text-blue-700">
+                  {supervisor.profilePicture ? (
+                    <img src={supervisor.profilePicture} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    getInitials(supervisor.fullName)
+                  )}
                 </div>
                 <div>
                   <p className="text-lg font-semibold text-slate-900">
                     {supervisor.fullName}
                   </p>
                   <p className="text-sm text-slate-500">{supervisor.workEmail}</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <label
+                      htmlFor="supervisor-profile-picture"
+                      className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 ${
+                        isUpdatingPicture ? "pointer-events-none opacity-60" : ""
+                      }`}
+                    >
+                      {isUpdatingPicture ? "Working..." : "Change Photo"}
+                    </label>
+                    {supervisor.profilePicture ? (
+                      <button
+                        type="button"
+                        onClick={handleRemoveProfilePicture}
+                        disabled={isUpdatingPicture}
+                        className="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+                  <input
+                    id="supervisor-profile-picture"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleProfilePictureChange}
+                    disabled={isUpdatingPicture}
+                    className="sr-only"
+                  />
+                  {pictureError ? <p className="mt-1.5 text-xs text-red-600">{pictureError}</p> : null}
                 </div>
               </div>
               <span className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">

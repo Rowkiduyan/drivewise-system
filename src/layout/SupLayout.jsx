@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import LogoutButton from "./LogoutButton.jsx";
-import { useUserInitials } from "../lib/useUserInitials.js";
+import { useUserProfile } from "../lib/useUserInitials.js";
 
 export const supervisorModules = [
   {
@@ -153,7 +153,8 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
 
     return window.localStorage.getItem(supervisorSidebarStorageKey) === "true";
   });
-  const userInitials = useUserInitials();
+  const { initials: userInitials, profilePicture } = useUserProfile();
+  const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -181,9 +182,22 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
           {/* Header */}
           <div className="flex flex-col items-center gap-3 px-3">
             <div
-              className={`flex h-12 w-12 items-center justify-center rounded-2xl ${supervisorSidebarTheme.badge} text-lg font-semibold flex-shrink-0`}
+              className={`flex items-center justify-center overflow-hidden rounded-full transition-all duration-300 ${supervisorSidebarTheme.badge} font-semibold flex-shrink-0 ${
+                isExpanded ? "h-24 w-24 text-2xl" : "h-10 w-10 text-sm"
+              } ${profilePicture ? "cursor-pointer" : ""}`}
+              onClick={(event) => {
+                if (!profilePicture) {
+                  return;
+                }
+                event.stopPropagation();
+                setIsImageViewerOpen(true);
+              }}
             >
-              {userInitials || '...'}
+              {profilePicture ? (
+                <img src={profilePicture} alt="" className="h-full w-full object-cover" />
+              ) : (
+                userInitials || '...'
+              )}
             </div>
           </div>
 
@@ -233,6 +247,23 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
           </div>
         </div>
       </section>
+
+      {isImageViewerOpen && profilePicture ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Profile picture"
+          onClick={() => setIsImageViewerOpen(false)}
+        >
+          <img
+            src={profilePicture}
+            alt="Profile"
+            className="aspect-square h-auto max-h-[80vh] w-auto max-w-full rounded-full object-cover shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      ) : null}
     </main>
   );
 }

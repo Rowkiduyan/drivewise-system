@@ -75,7 +75,7 @@ Tables: `driver_records` (pre-existing), `supervisor_records`, `admin_records`, 
 - email — personal/contact email entered by the admin. Account credential emails are sent here; this is **not** the Supabase Auth login (`users.login_email`).
 - contact_number (new field; also being added to the existing `driver_records`, which did not have it before)
 - address (JSONB; `{ "street": ..., "city": ..., "province": ... }`. New field; also being added to the existing `driver_records`, which did not have it before. Structured as JSONB rather than flat text so the three parts round-trip cleanly into a 3-field edit form and remain individually queryable — Philippines-only, no country field. `city`/`province` are chosen from a static bundled PSGC-based dataset in the frontend, not a live API — `street` stays free text.)
-- profile_picture (nullable)
+- profile_picture (nullable) — public Storage URL (with a `?v=` cache-busting query param) into the `driver-profile-pics` bucket, keyed by `auth_id + ".jpg"` (client always crops/re-encodes to a 256x256 JPEG before upload, so re-uploads overwrite the same object — see `src/lib/profilePicture.js`). Written only by the `admin-users` Edge Function's `upload-profile-picture` action.
 
 `customer_records` has one additional field not present in the other four tables:
 
@@ -86,6 +86,16 @@ Tables: `driver_records` (pre-existing), `supervisor_records`, `admin_records`, 
 - `auth_id` references `users.id`. `id` is an independently generated text value, not the linked user's auth id.
 
 See `AUTHENTICATION.md` for how these rows get created/synced relative to `users`, and `SUPABASE_GOTCHAS.md` #2/#7 — every new table here needs its own `service_role` grant before the `admin-users` Edge Function can write to it.
+
+---
+
+## Storage buckets
+
+### driver-profile-pics
+
+Holds one object per user with a profile picture: `{auth_id}.jpg` (always JPEG — the client crops/re-encodes to a fixed 256x256 square before upload, see `src/lib/profilePicture.js`). Written only by the `admin-users` Edge Function's `upload-profile-picture` action, using `upsert: true` so a re-upload overwrites the same object rather than accumulating orphans.
+
+**Manual setup required** (not created by any migration in this repo): create the bucket in the Supabase Dashboard (Storage → New bucket → name `driver-profile-pics` → Public). It must be Public since the frontend renders `profile_picture`'s stored URL directly as an `<img src>` with no signing step. `service_role` bypasses object-level RLS the same way it bypasses table RLS (unlike gotcha #2/#7, `storage.objects` is a Supabase-managed table that already grants `service_role` full access — only the bucket itself needs to be created manually).
 
 ---
 
