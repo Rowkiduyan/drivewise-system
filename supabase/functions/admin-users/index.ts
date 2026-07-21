@@ -1,6 +1,7 @@
 // Supabase Edge Function: admin-users
 // Handles operations that require the service_role key (creating an
-// account, deactivating an account, resetting another user's password).
+// account, deactivating an account, resetting another user's password,
+// reading/writing per-role profile tables).
 // This key must only ever live in this function's environment secrets —
 // never in client code.
 //
@@ -21,8 +22,28 @@ const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 const RESEND_FROM_EMAIL = Deno.env.get("RESEND_FROM_EMAIL");
 
 const ADMIN_ROLES = ["Admin"];
+const CREW_VIEW_ROLES = ["Admin", "Supervisor"];
 const ASSIGNABLE_ROLES = ["Supervisor", "Admin", "Driver", "Helper", "Customer"];
 const LOGIN_EMAIL_DOMAIN = "marveltrucking.local";
+
+// Every role has its own profile table (see DATABASE.md "Per-role profile
+// tables"). ROLE_TABLE/ROLE_PREFIX are the single source of truth other
+// code in this file uses to find the right table and id convention.
+const ROLE_TABLE: Record<string, string> = {
+  Driver: "driver_records",
+  Supervisor: "supervisor_records",
+  Admin: "admin_records",
+  Helper: "helper_records",
+  Customer: "customer_records",
+};
+
+const ROLE_PREFIX: Record<string, string> = {
+  Driver: "D",
+  Supervisor: "S",
+  Admin: "A",
+  Helper: "H",
+  Customer: "C",
+};
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -45,32 +66,22 @@ function generateTempPassword() {
     .join("")}!`;
 }
 
-// Builds the local part of a generated login email from a full name:
-// first-name initial + middle-name initial(s), if any + surname, e.g.
-// "John Michael Doe" -> "jmdoe", "John Doe" -> "jdoe". A single-word name
-// (no surname) is used as-is.
-function loginEmailLocalPart(fullName: string) {
-  const tokens = fullName.trim().split(/\s+/).filter(Boolean);
+// Builds the local part of a generated login email from structured name
+// parts: first-name initial + middle-name initial(s), if any + surname,
+// e.g. firstName "John", middleName "Michael", lastName "Doe" -> "jmdoe".
+function loginEmailLocalPart(firstName: string, middleName: string | null | undefined, lastName: string) {
+  const middleInitials = (middleName || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => token[0]);
 
-  if (tokens.length === 0) {
-    return "user";
-  }
-
-  if (tokens.length === 1) {
-    return tokens[0].toLowerCase().replace(/[^a-z0-9]/g, "");
-  }
-
-  const first = tokens[0];
-  const surname = tokens[tokens.length - 1];
-  const middles = tokens.slice(1, -1);
-  const initials = [first[0], ...middles.map((middle) => middle[0])].join("");
-
-  return `${initials}${surname}`.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const raw = `${firstName[0] || ""}${middleInitials.join("")}${lastName}`;
+  const cleaned = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return cleaned || "user";
 }
 
-async function nextLoginEmail(adminClient: ReturnType<typeof createClient>, fullName: string) {
-  const localPrefix = loginEmailLocalPart(fullName);
-
+async function nextLoginEmail(adminClient: ReturnType<typeof createClient>, localPrefix: string) {
   const { data, error } = await adminClient
     .from("users")
     .select("login_email")
@@ -126,19 +137,58 @@ async function sendCredentialsEmail(to: string, loginEmail: string, tempPassword
   return { sent: true as const };
 }
 
-function splitFullName(fullName: string) {
-  const [firstName, ...rest] = fullName.trim().split(/\s+/);
+type ProfileInput = {
+  firstName: string;
+  middleName?: string | null;
+  lastName: string;
+  position?: string | null;
+  clientName?: string | null;
+  email: string;
+  contactNumber?: string | null;
+  birthdate?: string | null;
+  address?: { street?: string; city?: string; province?: string } | null;
+};
+
+function normalizeProfile(body: Record<string, unknown>): ProfileInput {
+  const address = body.address && typeof body.address === "object"
+    ? body.address as { street?: string; city?: string; province?: string }
+    : null;
+
   return {
-    firstName: firstName || fullName,
-    lastName: rest.join(" "),
+    firstName: typeof body.firstName === "string" ? body.firstName.trim() : "",
+    middleName: typeof body.middleName === "string" ? body.middleName.trim() || null : null,
+    lastName: typeof body.lastName === "string" ? body.lastName.trim() : "",
+    position: typeof body.position === "string" ? body.position.trim() || null : null,
+    clientName: typeof body.clientName === "string" ? body.clientName.trim() || null : null,
+    email: typeof body.email === "string" ? body.email.trim().toLowerCase() : "",
+    contactNumber: typeof body.contactNumber === "string" ? body.contactNumber.trim() || null : null,
+    birthdate: typeof body.birthdate === "string" ? body.birthdate || null : null,
+    address,
   };
 }
 
-async function nextDriverRecordId(adminClient: ReturnType<typeof createClient>) {
+// client_name only exists on customer_records — only include it for that
+// role so inserts/updates against the other four tables don't reference a
+// nonexistent column.
+function profileRow(role: string, profile: ProfileInput) {
+  return {
+    first_name: profile.firstName,
+    middle_name: profile.middleName,
+    last_name: profile.lastName,
+    position: profile.position,
+    email: profile.email,
+    contact_number: profile.contactNumber,
+    birthdate: profile.birthdate,
+    address: profile.address,
+    ...(role === "Customer" ? { client_name: profile.clientName } : {}),
+  };
+}
+
+async function nextRecordId(adminClient: ReturnType<typeof createClient>, table: string, prefix: string) {
   const { data, error } = await adminClient
-    .from("driver_records")
+    .from(table)
     .select("id")
-    .like("id", "D%")
+    .like("id", `${prefix}%`)
     .order("id", { ascending: false })
     .limit(1);
 
@@ -147,23 +197,28 @@ async function nextDriverRecordId(adminClient: ReturnType<typeof createClient>) 
   }
 
   const lastId = data?.[0]?.id as string | undefined;
-  const lastNumber = lastId ? Number.parseInt(lastId.slice(1), 10) || 0 : 0;
+  const lastNumber = lastId ? Number.parseInt(lastId.slice(prefix.length), 10) || 0 : 0;
 
-  return `D${String(lastNumber + 1).padStart(3, "0")}`;
+  return `${prefix}${String(lastNumber + 1).padStart(3, "0")}`;
 }
 
-// Creates a driver_records row for authId if one doesn't already exist.
-// Reused by create-user (new Driver accounts) and ensure-driver-record
-// (an existing account promoted to Driver later) so repeatedly toggling a
-// user's role to Driver never produces more than one row per auth_id.
-async function ensureDriverRecord(
+// Creates or updates the auth_id's row in the *_records table matching
+// `role`. Reused by create-user (initial creation) and update-profile
+// (edits, including a role change moving someone into a table they've
+// never had a row in before). Never touches a *different* role's table —
+// demoting/promoting a user leaves their old role's row as-is, same as
+// the original driver-only behavior this generalizes.
+async function upsertRoleRecord(
   adminClient: ReturnType<typeof createClient>,
+  role: string,
   authId: string,
-  fullName: string,
-  email: string,
+  profile: ProfileInput,
 ) {
+  const table = ROLE_TABLE[role];
+  const prefix = ROLE_PREFIX[role];
+
   const { data: existing, error: existingError } = await adminClient
-    .from("driver_records")
+    .from(table)
     .select("id")
     .eq("auth_id", authId)
     .maybeSingle();
@@ -173,27 +228,155 @@ async function ensureDriverRecord(
   }
 
   if (existing) {
+    const { error: updateError } = await adminClient
+      .from(table)
+      .update(profileRow(role, profile))
+      .eq("auth_id", authId);
+
+    if (updateError) {
+      throw new Error(updateError.message);
+    }
+
     return { id: existing.id as string, created: false };
   }
 
-  const driverId = await nextDriverRecordId(adminClient);
-  const { firstName, lastName } = splitFullName(fullName);
-
-  const { error: insertError } = await adminClient.from("driver_records").insert({
-    id: driverId,
+  const id = await nextRecordId(adminClient, table, prefix);
+  const { error: insertError } = await adminClient.from(table).insert({
+    id,
     auth_id: authId,
-    first_name: firstName,
-    middle_name: null,
-    last_name: lastName,
-    email,
-    position: "Driver",
+    ...profileRow(role, profile),
+    profile_picture: null,
   });
 
   if (insertError) {
     throw new Error(insertError.message);
   }
 
-  return { id: driverId, created: true };
+  return { id, created: true };
+}
+
+async function findContactEmail(adminClient: ReturnType<typeof createClient>, role: string, authId: string) {
+  const table = ROLE_TABLE[role];
+  const { data, error } = await adminClient
+    .from(table)
+    .select("email")
+    .eq("auth_id", authId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data?.email as string | undefined;
+}
+
+// Shared by list-users (all five roles, Admin-only) and list-crew
+// (Driver/Helper only, Admin or Supervisor) — merges `users` rows with
+// their matching *_records row by auth_id, since the client can't read
+// the *_records tables directly (service_role only, see DATABASE.md).
+async function listUsersWithProfiles(adminClient: ReturnType<typeof createClient>, roles?: string[]) {
+  let usersQuery = adminClient.from("users").select("id, role, login_email, created_at");
+  if (roles) {
+    usersQuery = usersQuery.in("role", roles);
+  }
+
+  const { data: usersRows, error: usersError } = await usersQuery;
+  if (usersError) {
+    throw new Error(usersError.message);
+  }
+
+  const tables = roles ? roles.map((role) => ROLE_TABLE[role]) : Object.values(ROLE_TABLE);
+  const profilesByAuthId = new Map<string, Record<string, unknown>>();
+
+  for (const table of tables) {
+    const { data: rows, error: rowsError } = await adminClient.from(table).select("*");
+    if (rowsError) {
+      throw new Error(rowsError.message);
+    }
+    for (const row of rows || []) {
+      profilesByAuthId.set(row.auth_id as string, row);
+    }
+  }
+
+  return (usersRows || []).map((user) => {
+    const profile = profilesByAuthId.get(user.id as string) || {};
+    return {
+      id: user.id,
+      role: user.role,
+      login_email: user.login_email,
+      created_at: user.created_at,
+      record_id: profile.id ?? null,
+      first_name: profile.first_name ?? null,
+      middle_name: profile.middle_name ?? null,
+      last_name: profile.last_name ?? null,
+      position: profile.position ?? null,
+      client_name: profile.client_name ?? null,
+      email: profile.email ?? null,
+      contact_number: profile.contact_number ?? null,
+      birthdate: profile.birthdate ?? null,
+      address: profile.address ?? null,
+    };
+  });
+}
+
+// Attaches each crew member's assigned client names (crew_client_specialties
+// joined to customer_records.client_name) as `client_specialties` — fetched
+// once for the whole roster rather than per-row, since list-crew renders a
+// full table (see SupDeliveryCrew.jsx).
+async function attachClientSpecialties(
+  adminClient: ReturnType<typeof createClient>,
+  crew: Array<Record<string, unknown>>,
+) {
+  const crewIds = crew.map((member) => member.id as string);
+  if (crewIds.length === 0) {
+    return crew.map((member) => ({ ...member, client_specialties: [] as string[] }));
+  }
+
+  const { data: links, error: linksError } = await adminClient
+    .from("crew_client_specialties")
+    .select("crew_auth_id, client_auth_id")
+    .in("crew_auth_id", crewIds);
+
+  if (linksError) {
+    throw new Error(linksError.message);
+  }
+
+  const clientIds = Array.from(new Set((links || []).map((link) => link.client_auth_id as string)));
+  const clientNameById = new Map<string, string>();
+
+  if (clientIds.length > 0) {
+    const { data: records, error: recordsError } = await adminClient
+      .from("customer_records")
+      .select("auth_id, client_name")
+      .in("auth_id", clientIds);
+
+    if (recordsError) {
+      throw new Error(recordsError.message);
+    }
+
+    for (const record of records || []) {
+      if (record.client_name) {
+        clientNameById.set(record.auth_id as string, record.client_name as string);
+      }
+    }
+  }
+
+  const namesByCrewId = new Map<string, string[]>();
+  for (const link of links || []) {
+    const name = clientNameById.get(link.client_auth_id as string);
+    if (!name) {
+      continue;
+    }
+    const crewId = link.crew_auth_id as string;
+    const existing = namesByCrewId.get(crewId) || [];
+    existing.push(name);
+    namesByCrewId.set(crewId, existing);
+  }
+
+  return crew.map((member) => ({
+    ...member,
+    client_specialties: namesByCrewId.get(member.id as string) || [],
+  }));
 }
 
 Deno.serve(async (req) => {
@@ -232,24 +415,147 @@ Deno.serve(async (req) => {
     .eq("id", callerData.user.id)
     .single();
 
-  if (callerRowError || !callerRow || !ADMIN_ROLES.includes(callerRow.role)) {
+  if (callerRowError || !callerRow) {
     return json({ error: "Forbidden" }, 403);
   }
 
   const body = await req.json();
   const { action } = body;
 
+  // list-crew is the one action Supervisors (not just Admin) can call —
+  // gated separately so it doesn't fall under the blanket Admin-only
+  // check below.
+  if (action === "list-crew") {
+    if (!CREW_VIEW_ROLES.includes(callerRow.role)) {
+      return json({ error: "Forbidden" }, 403);
+    }
+
+    try {
+      const crew = await listUsersWithProfiles(adminClient, ["Driver", "Helper"]);
+      const crewWithSpecialties = await attachClientSpecialties(adminClient, crew);
+      return json({ ok: true, crew: crewWithSpecialties });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to list crew";
+      return json({ error: message }, 400);
+    }
+  }
+
+  // Client-specialty actions (list-clients, list-crew-clients,
+  // add-crew-client, remove-crew-client) back SupCrewProfile.jsx's "Client
+  // Specialties" section. "Clients" here are Customer-role users, named by
+  // customer_records.client_name — see DATABASE.md "crew_client_specialties".
+  // Same Admin-or-Supervisor gate as list-crew, since Supervisors manage
+  // this from the crew profile page.
+  const CLIENT_SPECIALTY_ACTIONS = ["list-clients", "list-crew-clients", "add-crew-client", "remove-crew-client"];
+  if (CLIENT_SPECIALTY_ACTIONS.includes(action)) {
+    if (!CREW_VIEW_ROLES.includes(callerRow.role)) {
+      return json({ error: "Forbidden" }, 403);
+    }
+
+    if (action === "list-clients") {
+      const { data, error } = await adminClient
+        .from("customer_records")
+        .select("auth_id, client_name")
+        .not("client_name", "is", null)
+        .order("client_name", { ascending: true });
+
+      if (error) {
+        return json({ error: error.message }, 400);
+      }
+
+      const clients = (data || []).map((row) => ({ id: row.auth_id, name: row.client_name }));
+      return json({ ok: true, clients });
+    }
+
+    if (action === "list-crew-clients") {
+      const authId = typeof body.authId === "string" ? body.authId : "";
+      if (!authId) {
+        return json({ error: "authId is required" }, 400);
+      }
+
+      const { data: links, error: linksError } = await adminClient
+        .from("crew_client_specialties")
+        .select("client_auth_id")
+        .eq("crew_auth_id", authId);
+
+      if (linksError) {
+        return json({ error: linksError.message }, 400);
+      }
+
+      const clientIds = (links || []).map((row) => row.client_auth_id as string);
+      if (clientIds.length === 0) {
+        return json({ ok: true, clients: [] });
+      }
+
+      const { data: records, error: recordsError } = await adminClient
+        .from("customer_records")
+        .select("auth_id, client_name")
+        .in("auth_id", clientIds);
+
+      if (recordsError) {
+        return json({ error: recordsError.message }, 400);
+      }
+
+      const clients = (records || []).map((row) => ({ id: row.auth_id, name: row.client_name }));
+      return json({ ok: true, clients });
+    }
+
+    const authId = typeof body.authId === "string" ? body.authId : "";
+    const clientId = typeof body.clientId === "string" ? body.clientId : "";
+
+    if (!authId || !clientId) {
+      return json({ error: "authId and clientId are required" }, 400);
+    }
+
+    if (action === "add-crew-client") {
+      const { error } = await adminClient
+        .from("crew_client_specialties")
+        .upsert(
+          { crew_auth_id: authId, client_auth_id: clientId },
+          { onConflict: "crew_auth_id,client_auth_id" },
+        );
+
+      if (error) {
+        return json({ error: error.message }, 400);
+      }
+
+      return json({ ok: true });
+    }
+
+    if (action === "remove-crew-client") {
+      const { error } = await adminClient
+        .from("crew_client_specialties")
+        .delete()
+        .eq("crew_auth_id", authId)
+        .eq("client_auth_id", clientId);
+
+      if (error) {
+        return json({ error: error.message }, 400);
+      }
+
+      return json({ ok: true });
+    }
+  }
+
+  if (!ADMIN_ROLES.includes(callerRow.role)) {
+    return json({ error: "Forbidden" }, 403);
+  }
+
   if (action === "create-user") {
-    const fullName = typeof body.fullName === "string" ? body.fullName.trim() : "";
-    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const profile = normalizeProfile(body);
     const role = typeof body.role === "string" ? body.role.trim() : "";
 
-    if (!fullName || !email || !ASSIGNABLE_ROLES.includes(role)) {
-      return json({ error: "A valid name, email, and role are required" }, 400);
+    if (!profile.firstName || !profile.lastName || !profile.email || !ASSIGNABLE_ROLES.includes(role)) {
+      return json({ error: "First name, last name, personal email, and role are required" }, 400);
+    }
+
+    if (role === "Customer" && !profile.clientName) {
+      return json({ error: "Client name is required for the Customer role" }, 400);
     }
 
     const tempPassword = generateTempPassword();
-    const loginEmail = await nextLoginEmail(adminClient, fullName);
+    const localPrefix = loginEmailLocalPart(profile.firstName, profile.middleName, profile.lastName);
+    const loginEmail = await nextLoginEmail(adminClient, localPrefix);
 
     const { data: created, error: createError } = await adminClient.auth.admin.createUser({
       email: loginEmail,
@@ -263,9 +569,7 @@ Deno.serve(async (req) => {
 
     const { error: insertError } = await adminClient.from("users").insert({
       id: created.user.id,
-      full_name: fullName,
       role,
-      email,
       login_email: loginEmail,
     });
 
@@ -275,21 +579,18 @@ Deno.serve(async (req) => {
       return json({ error: insertError.message }, 400);
     }
 
-    if (role === "Driver") {
-      try {
-        await ensureDriverRecord(adminClient, created.user.id, fullName, email);
-      } catch (driverError) {
-        // Roll back the users row and auth user so we don't leave a Driver
-        // account with no matching driver_records row.
-        await adminClient.from("users").delete().eq("id", created.user.id);
-        await adminClient.auth.admin.deleteUser(created.user.id);
-        const message = driverError instanceof Error ? driverError.message : "Unable to create driver record";
-        return json({ error: message }, 400);
-      }
+    try {
+      await upsertRoleRecord(adminClient, role, created.user.id, profile);
+    } catch (profileError) {
+      // Roll back the users row and auth user so we don't leave an account with no profile row.
+      await adminClient.from("users").delete().eq("id", created.user.id);
+      await adminClient.auth.admin.deleteUser(created.user.id);
+      const message = profileError instanceof Error ? profileError.message : "Unable to create profile record";
+      return json({ error: message }, 400);
     }
 
     const emailResult = await sendCredentialsEmail(
-      email,
+      profile.email,
       loginEmail,
       tempPassword,
       `A DriveWise account was created for you as ${role}.`,
@@ -297,11 +598,76 @@ Deno.serve(async (req) => {
 
     return json({
       ok: true,
-      user: { id: created.user.id, full_name: fullName, role, email, login_email: loginEmail },
+      user: {
+        id: created.user.id,
+        role,
+        login_email: loginEmail,
+        first_name: profile.firstName,
+        middle_name: profile.middleName,
+        last_name: profile.lastName,
+        email: profile.email,
+      },
       emailSent: emailResult.sent,
       emailError: emailResult.sent ? undefined : emailResult.error,
       tempPassword: emailResult.sent ? undefined : tempPassword,
     });
+  }
+
+  if (action === "list-users") {
+    try {
+      const users = await listUsersWithProfiles(adminClient);
+      return json({ ok: true, users });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to list users";
+      return json({ error: message }, 400);
+    }
+  }
+
+  if (action === "update-profile") {
+    const userId = typeof body.userId === "string" ? body.userId : "";
+    const role = typeof body.role === "string" ? body.role.trim() : "";
+    const profile = normalizeProfile(body);
+
+    if (!userId || !ASSIGNABLE_ROLES.includes(role)) {
+      return json({ error: "userId and a valid role are required" }, 400);
+    }
+
+    if (!profile.firstName || !profile.lastName || !profile.email) {
+      return json({ error: "First name, last name, and personal email are required" }, 400);
+    }
+
+    if (role === "Customer" && !profile.clientName) {
+      return json({ error: "Client name is required for the Customer role" }, 400);
+    }
+
+    const { data: currentRow, error: currentRowError } = await adminClient
+      .from("users")
+      .select("role")
+      .eq("id", userId)
+      .single();
+
+    if (currentRowError || !currentRow) {
+      return json({ error: currentRowError?.message || "User not found" }, 400);
+    }
+
+    if (currentRow.role !== role) {
+      const { error: roleUpdateError } = await adminClient
+        .from("users")
+        .update({ role })
+        .eq("id", userId);
+
+      if (roleUpdateError) {
+        return json({ error: roleUpdateError.message }, 400);
+      }
+    }
+
+    try {
+      const result = await upsertRoleRecord(adminClient, role, userId, profile);
+      return json({ ok: true, role, ...result });
+    } catch (profileError) {
+      const message = profileError instanceof Error ? profileError.message : "Unable to save profile record";
+      return json({ error: message }, 400);
+    }
   }
 
   const userId = typeof body.userId === "string" ? body.userId : "";
@@ -325,12 +691,18 @@ Deno.serve(async (req) => {
   if (action === "reset-password") {
     const { data: userRow, error: userRowError } = await adminClient
       .from("users")
-      .select("email, login_email")
+      .select("role, login_email")
       .eq("id", userId)
       .single();
 
     if (userRowError || !userRow) {
       return json({ error: userRowError?.message || "User not found" }, 400);
+    }
+
+    const contactEmail = await findContactEmail(adminClient, userRow.role, userId);
+
+    if (!contactEmail) {
+      return json({ error: "No contact email on file for this user" }, 400);
     }
 
     const tempPassword = generateTempPassword();
@@ -344,7 +716,7 @@ Deno.serve(async (req) => {
     }
 
     const emailResult = await sendCredentialsEmail(
-      userRow.email,
+      contactEmail,
       userRow.login_email,
       tempPassword,
       "Your DriveWise password has been reset.",
@@ -356,26 +728,6 @@ Deno.serve(async (req) => {
       emailError: emailResult.sent ? undefined : emailResult.error,
       tempPassword: emailResult.sent ? undefined : tempPassword,
     });
-  }
-
-  if (action === "ensure-driver-record") {
-    const { data: userRow, error: userRowError } = await adminClient
-      .from("users")
-      .select("full_name, email")
-      .eq("id", userId)
-      .single();
-
-    if (userRowError || !userRow) {
-      return json({ error: userRowError?.message || "User not found" }, 400);
-    }
-
-    try {
-      const result = await ensureDriverRecord(adminClient, userId, userRow.full_name, userRow.email);
-      return json({ ok: true, ...result });
-    } catch (driverError) {
-      const message = driverError instanceof Error ? driverError.message : "Unable to create driver record";
-      return json({ error: message }, 400);
-    }
   }
 
   return json({ error: "Unknown action" }, 400);

@@ -122,4 +122,29 @@ grant select, insert, update, delete on public.driver_records to service_role;
 
 **Takeaway:** the `service_role` grant is per-table, not global — every new table an Edge Function writes to needs this same grant applied explicitly.
 
+---
+
+## 8. New tables aren't private by default — Supabase auto-grants `anon`/`authenticated` baseline access
+
+**Symptom:** Running `select grantee, privilege_type from information_schema.role_table_grants where table_name = 'driver_records';` showed `anon` with `SELECT` and `authenticated` with `SELECT`/`INSERT` on `driver_records` — despite nobody ever writing a `GRANT` statement for those roles on that table. The five `*_records` tables (`driver_records`, `supervisor_records`, `admin_records`, `helper_records`, `customer_records`) were designed to be reachable only through the `admin-users` Edge Function's `service_role` connection (see `DATABASE.md`, `AUTHENTICATION.md`) — `anon` having `SELECT` on a table holding names, birthdates, addresses, and contact numbers defeats that entirely.
+
+**Cause:** Supabase configures `ALTER DEFAULT PRIVILEGES` on the `public` schema so that *every new table* automatically inherits baseline grants to `anon`/`authenticated`, independent of whatever explicit `GRANT`s are added afterward. The `grant ... to service_role` statements from gotcha #2/#7 are additive — they hand `service_role` access, they don't revoke what Supabase auto-granted to `anon`/`authenticated` at table-creation time. Creating a table and only granting `service_role` is not the same as making it `service_role`-only.
+
+**Fix:**
+```sql
+revoke all on public.driver_records from anon, authenticated;
+revoke all on public.supervisor_records from anon, authenticated;
+revoke all on public.admin_records from anon, authenticated;
+revoke all on public.helper_records from anon, authenticated;
+revoke all on public.customer_records from anon, authenticated;
+```
+
+**How it was diagnosed:**
+```sql
+select relrowsecurity from pg_class where relname = 'driver_records';
+select grantee, privilege_type from information_schema.role_table_grants where table_name = 'driver_records';
+```
+
+**Takeaway:** a table meant to be `service_role`-only needs an explicit `REVOKE ALL ... FROM anon, authenticated`, not just the absence of a `GRANT` statement for those roles — Supabase's schema-level default privileges fill that gap in silently. Check every new table this way, not just the ones an Edge Function writes to.
+
 

@@ -133,17 +133,10 @@ function AdminLayout({ title, background, children, bg = 'bg-white' }) {
         return
       }
 
-      const { data: userRow } = await supabase
-        .from('users')
-        .select('full_name')
-        .eq('id', user.id)
-        .single()
-
-      if (!isMounted) {
-        return
-      }
-
-      setUserInitials(deriveInitials(userRow?.full_name, user.email))
+      // Name lives in a per-role *_records table now, which the client
+      // can't read directly (service_role only, see DATABASE.md). Fall
+      // back to the Auth email until there's a self-profile endpoint.
+      setUserInitials(deriveInitials(null, user.email))
     }
 
     loadCurrentUser()

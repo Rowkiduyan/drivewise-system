@@ -321,11 +321,14 @@ function SupCrewProfile() {
 
   const [activeTab, setActiveTab] = useState("overview");
   const [clientSpecialties, setClientSpecialties] = useState(crew?.clientSpecialties || []);
+  const [availableClients, setAvailableClients] = useState([]);
   const [isSpecialtyMenuOpen, setIsSpecialtyMenuOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [clientsToAdd, setClientsToAdd] = useState([]);
   const [isDeleteMode, setIsDeleteMode] = useState(false);
   const [clientPendingDelete, setClientPendingDelete] = useState(null);
+  const [isSpecialtyBusy, setIsSpecialtyBusy] = useState(false);
+  const [specialtyError, setSpecialtyError] = useState("");
   const [tripStatusFilter, setTripStatusFilter] = useState("All");
   const [alerts, setAlerts] = useState([]);
   const [sessions, setSessions] = useState([]);
@@ -334,7 +337,62 @@ function SupCrewProfile() {
   const [alertPage, setAlertPage] = useState(0);
   const [timePage, setTimePage] = useState(0);
 
-  const trips = useMemo(() => (crew ? buildMockTrips(crew) : []), [crew]);
+  // clients + crew_client_specialties (see DATABASE.md) — fetched via the
+  // admin-users Edge Function since the client can't read those tables
+  // directly (same access model as list-crew).
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadClients() {
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "list-clients" },
+      });
+
+      if (isMounted && !error) {
+        setAvailableClients(data.clients || []);
+      }
+    }
+
+    loadClients();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // This crew member's already-assigned clients — fetched fresh rather than
+  // trusting crew.clientSpecialties from navigation state, which SupDeliveryCrew.jsx
+  // always passes as [] (see its mapCrewRow comment).
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCrewClients() {
+      if (!crew) {
+        return;
+      }
+
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "list-crew-clients", authId: crew.id },
+      });
+
+      if (isMounted && !error) {
+        setClientSpecialties((data.clients || []).map((client) => client.name));
+      }
+    }
+
+    loadCrewClients();
+    return () => {
+      isMounted = false;
+    };
+  }, [crew]);
+
+  const clientFallbackNames = useMemo(
+    () => availableClients.map((client) => client.name),
+    [availableClients],
+  );
+  const trips = useMemo(
+    () => (crew ? buildMockTrips(crew, clientFallbackNames) : []),
+    [crew, clientFallbackNames],
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -543,12 +601,13 @@ function SupCrewProfile() {
     currentAlertPage * ALERTS_PER_PAGE + ALERTS_PER_PAGE,
   );
 
-  const availableClientsToAdd = CLIENT_SPECIALTIES.filter(
-    (client) => !clientSpecialties.includes(client),
-  );
+  const availableClientsToAdd = availableClients
+    .map((client) => client.name)
+    .filter((name) => !clientSpecialties.includes(name));
 
   const openAddModal = () => {
     setClientsToAdd([]);
+    setSpecialtyError("");
     setIsAddModalOpen(true);
   };
 
@@ -566,7 +625,34 @@ function SupCrewProfile() {
     setClientsToAdd((prev) => prev.filter((entry) => entry !== client));
   };
 
-  const saveAddModal = () => {
+  const saveAddModal = async () => {
+    if (!crew || clientsToAdd.length === 0 || isSpecialtyBusy) {
+      return;
+    }
+
+    setIsSpecialtyBusy(true);
+    setSpecialtyError("");
+
+    const results = await Promise.all(
+      clientsToAdd.map((name) => {
+        const client = availableClients.find((entry) => entry.name === name);
+        if (!client) {
+          return { error: { message: `Unknown client: ${name}` } };
+        }
+        return supabase.functions.invoke("admin-users", {
+          body: { action: "add-crew-client", authId: crew.id, clientId: client.id },
+        });
+      }),
+    );
+
+    setIsSpecialtyBusy(false);
+
+    const failed = results.find((result) => result.error);
+    if (failed) {
+      setSpecialtyError(failed.error.message || "Unable to save client specialties.");
+      return;
+    }
+
     setClientSpecialties((prev) => [...prev, ...clientsToAdd]);
     closeAddModal();
   };
@@ -581,9 +667,29 @@ function SupCrewProfile() {
     setClientPendingDelete(null);
   };
 
-  const confirmDeleteClient = (client) => {
-    setClientSpecialties((prev) => prev.filter((entry) => entry !== client));
+  const confirmDeleteClient = async (client) => {
+    const clientRow = availableClients.find((entry) => entry.name === client);
+    if (!crew || !clientRow) {
+      setClientPendingDelete(null);
+      return;
+    }
+
+    setIsSpecialtyBusy(true);
+    setSpecialtyError("");
+
+    const { error } = await supabase.functions.invoke("admin-users", {
+      body: { action: "remove-crew-client", authId: crew.id, clientId: clientRow.id },
+    });
+
+    setIsSpecialtyBusy(false);
     setClientPendingDelete(null);
+
+    if (error) {
+      setSpecialtyError(error.message || "Unable to remove client specialty.");
+      return;
+    }
+
+    setClientSpecialties((prev) => prev.filter((entry) => entry !== client));
   };
 
   const filteredTrips =
@@ -738,9 +844,9 @@ function SupCrewProfile() {
                   )}
                 </div>
 
-                <p className="mt-3 text-xs text-slate-400">
-                  Demo only — changes here are not saved.
-                </p>
+                {specialtyError ? (
+                  <p className="mt-3 text-xs text-red-600">{specialtyError}</p>
+                ) : null}
               </div>
             </div>
           </SectionCard>
@@ -1023,10 +1129,10 @@ function SupCrewProfile() {
                 <button
                   type="button"
                   onClick={saveAddModal}
-                  disabled={clientsToAdd.length === 0}
+                  disabled={clientsToAdd.length === 0 || isSpecialtyBusy}
                   className="rounded-xl bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
                 >
-                  Save
+                  {isSpecialtyBusy ? "Saving..." : "Save"}
                 </button>
               </div>
             </div>
@@ -1064,9 +1170,10 @@ function SupCrewProfile() {
                 <button
                   type="button"
                   onClick={() => confirmDeleteClient(clientPendingDelete)}
-                  className="rounded-xl bg-red-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+                  disabled={isSpecialtyBusy}
+                  className="rounded-xl bg-red-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-300"
                 >
-                  Delete
+                  {isSpecialtyBusy ? "Deleting..." : "Delete"}
                 </button>
               </div>
             </div>

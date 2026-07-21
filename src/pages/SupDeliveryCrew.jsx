@@ -1,44 +1,21 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
+import { supabase } from "../lib/supabaseClient.js";
 import { Search, Truck, Users, CircleCheck, ChevronRight } from "lucide-react";
 
 // ---------------------------------------------------------------------------
-// Dummy crew roster — frontend only, no backend/API/database.
+// Crew roster — loaded from the admin-users Edge Function's `list-crew`
+// action (Driver/Helper users merged with their driver_records/
+// helper_records row). See DATABASE.md "Per-role profile tables" and
+// AUTHENTICATION.md for why this can't be a direct client-side query.
 // ---------------------------------------------------------------------------
 
-const FIRST_NAMES = [
-  "Juan", "Maria", "Jose", "Ana", "Pedro", "Rosa", "Carlos", "Elena",
-  "Miguel", "Carmen", "Antonio", "Teresa", "Francisco", "Luz", "Manuel",
-  "Corazon", "Ricardo", "Josefina", "Eduardo", "Remedios", "Fernando",
-  "Concepcion", "Roberto", "Milagros", "Alfredo", "Estrella", "Rodrigo",
-  "Perla", "Andres", "Divina", "Emilio", "Flordeliza", "Gregorio",
-  "Herminia", "Ignacio", "Julieta", "Leonardo", "Marilou", "Nestor", "Ofelia",
-];
-
-const LAST_NAMES = [
-  "Santos", "Reyes", "Cruz", "Bautista", "Ocampo", "Garcia", "Torres",
-  "Flores", "Ramos", "Mendoza", "Castillo", "Villanueva", "Aquino",
-  "Del Rosario", "Gonzales", "Fernandez", "Domingo", "Pascual", "Salazar",
-  "Navarro", "Aguilar", "Marquez", "Rivera", "Dizon", "Tolentino", "Manalo",
-  "Valdez", "Lazaro", "Serrano", "Roque", "Aranda", "Belmonte", "Cabrera",
-  "Diaz", "Espino", "Franco", "Guevarra", "Herrera",
-];
-
-const MIDDLE_INITIALS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-
-const CLIENT_SPECIALTIES = [
-  "Jollibee", "McDonald's", "Chowking", "KFC", "Mang Inasal", "Greenwich",
-  "Shakey's", "Red Ribbon", "Goldilocks", "Max's Restaurant",
-];
-
-const SHIFTS = ["Morning Shift", "Afternoon Shift", "Night Shift"];
-const PERSONAL_EMAIL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com"];
-const STATUS_SEQUENCE = ["Available", "Available", "On Delivery", "On Delivery", "Off Duty"];
-const JOIN_MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+// Shift/status have no backing table yet (see DATABASE.md "Current Notes")
+// and stay fixed placeholders. Client Specialty is real — sourced from
+// crew_client_specialties/customer_records via the admin-users Edge
+// Function's list-crew (per-crew assignments) and list-clients (the full
+// client roster, for the filter dropdown).
 
 function getAgeFromBirthday(birthday, referenceDate = new Date()) {
   const age = referenceDate.getFullYear() - birthday.getFullYear();
@@ -50,92 +27,43 @@ function getAgeFromBirthday(birthday, referenceDate = new Date()) {
     : age - 1;
 }
 
-// Small seeded generator so a given driver's simulated weekly performance
-// stays stable across re-renders instead of reshuffling on every render.
-function createSeededRng(seed) {
-  let state = seed % 2147483647;
-  if (state <= 0) state += 2147483646;
-  return function next() {
-    state = (state * 16807) % 2147483647;
-    return (state - 1) / 2147483646;
+function buildDisplayName(firstName, middleName, lastName) {
+  const nameParts = [firstName];
+  if (middleName) {
+    nameParts.push(`${middleName.trim().charAt(0).toUpperCase()}.`);
+  }
+  return `${lastName || ""}, ${nameParts.filter(Boolean).join(" ")}`.trim();
+}
+
+// Maps one row from the `list-crew` Edge Function response (users merged
+// with their driver_records/helper_records row) into the shape this page
+// and SupCrewProfile.jsx expect. Status/Shift/Client Specialty/Weekly
+// Performance have no real data source yet (see module comment above) and
+// are left as neutral placeholders rather than fabricated values.
+function mapCrewRow(row) {
+  const birthDate = row.birthdate ? new Date(row.birthdate) : null;
+
+  return {
+    id: row.id,
+    fullName: buildDisplayName(row.first_name, row.middle_name, row.last_name),
+    position: row.role,
+    status: "Off Duty",
+    clientSpecialties: row.client_specialties || [],
+    shift: "—",
+    contactNumber: row.contact_number || "—",
+    employeeId: row.record_id || "—",
+    birthday: birthDate
+      ? birthDate.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })
+      : null,
+    age: birthDate ? getAgeFromBirthday(birthDate) : null,
+    dateJoined: row.created_at
+      ? new Date(row.created_at).toLocaleDateString(undefined, { month: "long", year: "numeric" })
+      : "—",
+    personalEmail: row.email || "",
+    workEmail: row.login_email || "",
+    weeklyPerformance: null,
   };
 }
-
-// Simulates 7 days of drowsiness/eye-closure alertness scores for a driver
-// and returns the weekly average — this is what the Weekly Performance
-// column shows. Drivers get a "baseline" tendency plus daily noise, rather
-// than pure random noise per day, so the mock data reads like a real
-// driver's pattern instead of static jitter.
-function buildWeeklyPerformance(seed) {
-  const rng = createSeededRng(seed);
-  const baseline = 55 + rng() * 40; // a driver's typical week, 55-95
-  const dailyScores = Array.from({ length: 7 }, () => {
-    const noise = (rng() - 0.5) * 20; // +/-10 day-to-day variation
-    return Math.min(100, Math.max(30, Math.round(baseline + noise)));
-  });
-  const average = dailyScores.reduce((sum, score) => sum + score, 0) / dailyScores.length;
-  return Math.round(average);
-}
-
-function buildMockCrew(count) {
-  return Array.from({ length: count }, (_, i) => {
-    const firstName = FIRST_NAMES[i % FIRST_NAMES.length];
-    const lastName = LAST_NAMES[(i * 7 + 3) % LAST_NAMES.length];
-    const middleInitial = MIDDLE_INITIALS[(i * 3) % MIDDLE_INITIALS.length];
-    const position = i % 5 < 3 ? "Driver" : "Helper";
-    const status = STATUS_SEQUENCE[(i * 11) % STATUS_SEQUENCE.length];
-
-    const primaryClient = CLIENT_SPECIALTIES[(i * 3 + 1) % CLIENT_SPECIALTIES.length];
-    const secondaryClient = CLIENT_SPECIALTIES[(i * 5 + 2) % CLIENT_SPECIALTIES.length];
-    const clientSpecialties =
-      secondaryClient !== primaryClient ? [primaryClient, secondaryClient] : [primaryClient];
-
-    const shift = SHIFTS[i % SHIFTS.length];
-    const areaCode = 917 + (i % 3);
-    const contactNumber = `09${areaCode}-${String(100 + i).padStart(3, "0")}-${String(
-      1000 + ((i * 137) % 9000),
-    ).padStart(4, "0")}`;
-    const employeeId = `DWC-${String(1001 + i)}`;
-    const birthYear = 1978 + (i % 22);
-    const birthMonth = i % 12;
-    const birthDay = ((i * 3) % 28) + 1;
-    const birthday = new Date(birthYear, birthMonth, birthDay);
-    const age = getAgeFromBirthday(birthday, new Date("2026-07-19T00:00:00"));
-    const dateJoined = `${JOIN_MONTHS[(i * 5) % JOIN_MONTHS.length]} ${2026 - (i % 5)}`;
-
-    const emailHandle = `${firstName}.${lastName}`.toLowerCase().replace(/\s+/g, "");
-    const workEmail = `${emailHandle}@drivewise.com`;
-    const personalDomain = PERSONAL_EMAIL_DOMAINS[i % PERSONAL_EMAIL_DOMAINS.length];
-    const personalEmail = `${emailHandle}${1000 + i}@${personalDomain}`;
-
-    // Only drivers are monitored for drowsiness/eye-closure — helpers aren't
-    // behind the wheel, so they simply don't have a weekly score.
-    const weeklyPerformance = position === "Driver" ? buildWeeklyPerformance(i + 1) : null;
-
-    return {
-      id: `crew-${i + 1}`,
-      fullName: `${lastName}, ${firstName} ${middleInitial}.`,
-      position,
-      status,
-      clientSpecialties,
-      shift,
-      contactNumber,
-      employeeId,
-      birthday: birthday.toLocaleDateString(undefined, {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      }),
-      age,
-      dateJoined,
-      personalEmail,
-      workEmail,
-      weeklyPerformance,
-    };
-  });
-}
-
-const MOCK_CREW = buildMockCrew(68);
 
 function getInitials(fullName) {
   const [last = "", rest = ""] = fullName.split(",").map((part) => part.trim());
@@ -174,10 +102,11 @@ function PositionTag({ position }) {
   );
 }
 
-// Weekly Performance — the driver's simulated 7-day average alertness score.
-// Color-coded so supervisors can spot frequent eye-closure/drowsiness
-// patterns at a glance without reading every number. Helpers don't drive,
-// so they show a plain dash instead of a badge.
+// Weekly Performance — color-coded so supervisors can spot frequent
+// eye-closure/drowsiness patterns at a glance without reading every number.
+// Helpers don't drive, so they show a plain dash instead of a badge; so
+// does every crew member right now, since there's no per-driver session/
+// alert linkage yet (see module comment above).
 function getPerformanceTier(score) {
   if (score >= 85) {
     return { label: "Good", classes: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200" };
@@ -262,43 +191,97 @@ const PAGE_SIZE = 10;
 
 function SupDeliveryCrew() {
   const navigate = useNavigate();
+  const [roster, setRoster] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("All");
   const [selectedPosition, setSelectedPosition] = useState("All");
   const [selectedClient, setSelectedClient] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
+  const [clientOptions, setClientOptions] = useState([]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadClients() {
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "list-clients" },
+      });
+
+      if (isMounted && !error) {
+        setClientOptions((data.clients || []).map((client) => client.name));
+      }
+    }
+
+    loadClients();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCrew() {
+      setIsLoading(true);
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "list-crew" },
+      });
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (error) {
+        setLoadError(error.message || "Unable to load delivery crew.");
+        setIsLoading(false);
+        return;
+      }
+
+      setLoadError("");
+      setRoster((data.crew || []).map(mapCrewRow));
+      setIsLoading(false);
+    }
+
+    loadCrew();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const statusCounts = useMemo(
     () => ({
-      All: MOCK_CREW.length,
-      Available: MOCK_CREW.filter((crew) => crew.status === "Available").length,
-      "On Delivery": MOCK_CREW.filter((crew) => crew.status === "On Delivery").length,
-      "Off Duty": MOCK_CREW.filter((crew) => crew.status === "Off Duty").length,
+      All: roster.length,
+      Available: roster.filter((crew) => crew.status === "Available").length,
+      "On Delivery": roster.filter((crew) => crew.status === "On Delivery").length,
+      "Off Duty": roster.filter((crew) => crew.status === "Off Duty").length,
     }),
-    [],
+    [roster],
   );
 
   const positionCounts = useMemo(
     () => ({
-      All: MOCK_CREW.length,
-      Driver: MOCK_CREW.filter((crew) => crew.position === "Driver").length,
-      Helper: MOCK_CREW.filter((crew) => crew.position === "Helper").length,
+      All: roster.length,
+      Driver: roster.filter((crew) => crew.position === "Driver").length,
+      Helper: roster.filter((crew) => crew.position === "Helper").length,
     }),
-    [],
+    [roster],
   );
 
   const clientCounts = useMemo(() => {
-    const counts = { All: MOCK_CREW.length };
-    CLIENT_SPECIALTIES.forEach((client) => {
-      counts[client] = MOCK_CREW.filter((crew) => crew.clientSpecialties.includes(client)).length;
+    const counts = { All: roster.length };
+    clientOptions.forEach((client) => {
+      counts[client] = roster.filter((crew) => crew.clientSpecialties.includes(client)).length;
     });
     return counts;
-  }, []);
+  }, [roster, clientOptions]);
 
   const filteredCrew = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
 
-    return MOCK_CREW.filter((crew) => {
+    return roster.filter((crew) => {
       const matchesSearch = !query
         ? true
         : [crew.fullName, crew.position, crew.status, ...crew.clientSpecialties, crew.employeeId]
@@ -313,7 +296,7 @@ function SupDeliveryCrew() {
 
       return matchesSearch && matchesStatus && matchesPosition && matchesClient;
     }).sort((leftCrew, rightCrew) => leftCrew.fullName.localeCompare(rightCrew.fullName));
-  }, [searchTerm, selectedStatus, selectedPosition, selectedClient]);
+  }, [roster, searchTerm, selectedStatus, selectedPosition, selectedClient]);
 
   const totalPages = Math.max(1, Math.ceil(filteredCrew.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
@@ -412,7 +395,7 @@ function SupDeliveryCrew() {
                 label="Client"
                 value={selectedClient}
                 onChange={updateClient}
-                options={CLIENT_SPECIALTIES}
+                options={clientOptions}
                 counts={clientCounts}
                 allLabel="Client"
               />
@@ -424,7 +407,15 @@ function SupDeliveryCrew() {
         <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex h-full min-h-0 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto">
-              {filteredCrew.length === 0 ? (
+              {isLoading ? (
+                <div className="flex h-full items-center justify-center px-4 py-6 text-center text-sm text-slate-500">
+                  Loading delivery crew…
+                </div>
+              ) : loadError ? (
+                <div className="flex h-full items-center justify-center px-4 py-6 text-center text-sm text-red-600">
+                  {loadError}
+                </div>
+              ) : filteredCrew.length === 0 ? (
                 <div className="flex h-full items-center justify-center px-4 py-6 text-center text-sm text-slate-500">
                   No crew records match your search. Try adjusting your filters.
                 </div>

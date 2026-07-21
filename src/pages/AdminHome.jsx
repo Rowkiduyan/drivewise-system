@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import AdminLayout from '../layout/AdminLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
+import { getCityNamesForProvince, getProvinceNames } from '../lib/philippineLocations.js'
 
 const background = null
 
 const ROLE_OPTIONS = ['Supervisor', 'Admin', 'Driver', 'Helper', 'Customer']
+const PROVINCE_OPTIONS = getProvinceNames()
 
 const EMPTY_NEW_USER_FORM = {
   lastName: '',
@@ -13,11 +15,13 @@ const EMPTY_NEW_USER_FORM = {
   middleName: '',
   role: '',
   position: '',
+  clientName: '',
   personalEmail: '',
-  workEmail: '',
   contactNumber: '',
   birthdate: '',
-  address: ''
+  street: '',
+  city: '',
+  province: ''
 }
 
 function calculateAge(birthdate) {
@@ -45,9 +49,40 @@ function calculateAge(birthdate) {
 
 function buildFullName({ firstName, middleName, lastName }) {
   return [firstName, middleName, lastName]
-    .map((part) => part.trim())
+    .map((part) => (part || '').trim())
     .filter(Boolean)
     .join(' ')
+}
+
+// list-users returns each user merged with their role-specific *_records
+// row (see DATABASE.md "Per-role profile tables") — flatten it into the
+// shape this page's form fields/search/sort already expect.
+function mapListedUser(row) {
+  const address = row.address || {}
+  const person = {
+    firstName: row.first_name || '',
+    middleName: row.middle_name || '',
+    lastName: row.last_name || ''
+  }
+
+  return {
+    id: row.id,
+    role: row.role,
+    loginEmail: row.login_email,
+    status: 'active',
+    name: buildFullName(person),
+    firstName: person.firstName,
+    middleName: person.middleName,
+    lastName: person.lastName,
+    position: row.position || '',
+    clientName: row.client_name || '',
+    email: row.email || '',
+    contactNumber: row.contact_number || '',
+    birthdate: row.birthdate || '',
+    street: address.street || '',
+    city: address.city || '',
+    province: address.province || ''
+  }
 }
 
 const fieldInputClassName =
@@ -157,9 +192,18 @@ function AdminHome() {
   const [manageError, setManageError] = useState('')
   const [isSavingAccount, setIsSavingAccount] = useState(false)
   const [manageForm, setManageForm] = useState({
-    name: '',
+    lastName: '',
+    firstName: '',
+    middleName: '',
     role: '',
+    position: '',
+    clientName: '',
     email: '',
+    contactNumber: '',
+    birthdate: '',
+    street: '',
+    city: '',
+    province: '',
     loginEmail: '',
     status: 'active'
   })
@@ -168,45 +212,43 @@ function AdminHome() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [currentPage, setCurrentPage] = useState(1)
 
+  // Without this, scrolling over an open modal scrolls the page behind it
+  // instead — nothing else here traps that, and doing it under the
+  // backdrop-blur overlay is what makes it feel laggy (blur has to
+  // resample the moving background every frame).
+  const isAnyModalOpen =
+    isAddUserOpen || isBulkUploadOpen || Boolean(selectedUserId) || isAddConfirmOpen || isPasswordModalOpen || statusModal.open
+
   useEffect(() => {
-    let isMounted = true
-
-    async function loadUsers() {
-      setIsLoadingUsers(true)
-      const { data, error } = await supabase
-        .from('users')
-        .select('id, full_name, role, email, login_email')
-        .order('full_name', { ascending: true })
-
-      if (!isMounted) {
-        return
-      }
-
-      if (error) {
-        setUsersError(error.message || 'Unable to load users.')
-        setIsLoadingUsers(false)
-        return
-      }
-
-      setUsersError('')
-      setUsers(
-        (data || []).map((user) => ({
-          id: user.id,
-          name: user.full_name,
-          role: user.role,
-          email: user.email,
-          loginEmail: user.login_email,
-          status: 'active'
-        }))
-      )
-      setIsLoadingUsers(false)
+    if (!isAnyModalOpen) {
+      return
     }
-
-    loadUsers()
-
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
     return () => {
-      isMounted = false
+      document.body.style.overflow = previousOverflow
     }
+  }, [isAnyModalOpen])
+
+  const loadUsers = async () => {
+    setIsLoadingUsers(true)
+    const { data, error } = await supabase.functions.invoke('admin-users', {
+      body: { action: 'list-users' }
+    })
+
+    if (error) {
+      setUsersError(error.message || 'Unable to load users.')
+      setIsLoadingUsers(false)
+      return
+    }
+
+    setUsersError('')
+    setUsers((data.users || []).map(mapListedUser))
+    setIsLoadingUsers(false)
+  }
+
+  useEffect(() => {
+    loadUsers()
   }, [])
 
   const selectedUser = useMemo(
@@ -216,6 +258,14 @@ function AdminHome() {
 
   const newUserAge = useMemo(() => calculateAge(newUserForm.birthdate), [newUserForm.birthdate])
   const newUserFullName = useMemo(() => buildFullName(newUserForm), [newUserForm])
+  const newUserCityOptions = useMemo(
+    () => getCityNamesForProvince(newUserForm.province),
+    [newUserForm.province]
+  )
+  const manageCityOptions = useMemo(
+    () => getCityNamesForProvince(manageForm.province),
+    [manageForm.province]
+  )
 
   const filteredUsers = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
@@ -292,7 +342,13 @@ function AdminHome() {
 
   const handleAddInputChange = (event) => {
     const { name, value } = event.target
-    setNewUserForm((current) => ({ ...current, [name]: value }))
+    setNewUserForm((current) => {
+      const next = { ...current, [name]: value }
+      if (name === 'province' && value !== current.province) {
+        next.city = ''
+      }
+      return next
+    })
     if (formError) {
       setFormError('')
     }
@@ -323,11 +379,13 @@ function AdminHome() {
     const firstName = newUserForm.firstName.trim()
     const role = newUserForm.role.trim()
     const position = newUserForm.position.trim()
+    const clientName = newUserForm.clientName.trim()
     const personalEmail = newUserForm.personalEmail.trim().toLowerCase()
-    const workEmail = newUserForm.workEmail.trim().toLowerCase()
     const contactNumber = newUserForm.contactNumber.trim()
     const birthdate = newUserForm.birthdate
-    const address = newUserForm.address.trim()
+    const street = newUserForm.street.trim()
+    const city = newUserForm.city.trim()
+    const province = newUserForm.province.trim()
 
     if (
       !lastName ||
@@ -335,18 +393,20 @@ function AdminHome() {
       !role ||
       !position ||
       !personalEmail ||
-      !workEmail ||
       !contactNumber ||
       !birthdate ||
-      !address
+      !street ||
+      !city ||
+      !province ||
+      (role === 'Customer' && !clientName)
     ) {
       setFormError('All fields except Middle Name are required.')
       return
     }
 
-    const hasDuplicateEmail = users.some((user) => user.email === workEmail)
+    const hasDuplicateEmail = users.some((user) => user.email === personalEmail)
     if (hasDuplicateEmail) {
-      setFormError('A user with this work email already exists.')
+      setFormError('A user with this email already exists.')
       return
     }
 
@@ -360,15 +420,29 @@ function AdminHome() {
   const confirmAddUser = async () => {
     setFormError('')
 
-    const fullName = buildFullName(newUserForm)
     const role = newUserForm.role.trim()
-    const email = newUserForm.workEmail.trim().toLowerCase()
+    const payload = {
+      lastName: newUserForm.lastName.trim(),
+      firstName: newUserForm.firstName.trim(),
+      middleName: newUserForm.middleName.trim(),
+      position: newUserForm.position.trim(),
+      clientName: role === 'Customer' ? newUserForm.clientName.trim() : null,
+      email: newUserForm.personalEmail.trim().toLowerCase(),
+      contactNumber: newUserForm.contactNumber.trim(),
+      birthdate: newUserForm.birthdate,
+      address: {
+        street: newUserForm.street.trim(),
+        city: newUserForm.city.trim(),
+        province: newUserForm.province.trim()
+      },
+      role
+    }
 
     setIsAddConfirmOpen(false)
     setIsSubmitting(true)
 
     const { data, error } = await supabase.functions.invoke('admin-users', {
-      body: { action: 'create-user', fullName, email, role }
+      body: { action: 'create-user', ...payload }
     })
 
     if (error) {
@@ -377,16 +451,11 @@ function AdminHome() {
       return
     }
 
-    const newUser = {
-      id: data.user.id,
-      name: data.user.full_name,
-      role: data.user.role,
-      email: data.user.email,
-      loginEmail: data.user.login_email,
-      status: 'active'
-    }
+    const newUserName = [data.user.first_name, data.user.middle_name, data.user.last_name]
+      .filter(Boolean)
+      .join(' ')
 
-    setUsers((current) => [newUser, ...current])
+    await loadUsers()
     resetForm()
     setIsSubmitting(false)
     setIsAddUserOpen(false)
@@ -395,14 +464,14 @@ function AdminHome() {
       showStatusModal(
         'success',
         'User Added',
-        `${newUser.name} has been added as ${newUser.role}. Login credentials were emailed to ${newUser.email}.`
+        `${newUserName} has been added as ${data.user.role}. Login credentials were emailed to ${data.user.email}.`
       )
     } else {
       setTempPassword(data.tempPassword || '')
       showStatusModal(
         'error',
         'User Added — Email Not Sent',
-        `${newUser.name} was added, but the credentials email failed to send (${data.emailError || 'unknown error'}). Share the temporary password with them securely.`,
+        `${newUserName} was added, but the credentials email failed to send (${data.emailError || 'unknown error'}). Share the temporary password with them securely.`,
         () => setIsPasswordModalOpen(true)
       )
     }
@@ -413,9 +482,18 @@ function AdminHome() {
     setManageError('')
     setIsSavingAccount(false)
     setManageForm({
-      name: user.name,
+      lastName: user.lastName,
+      firstName: user.firstName,
+      middleName: user.middleName,
       role: user.role,
+      position: user.position,
+      clientName: user.clientName,
       email: user.email,
+      contactNumber: user.contactNumber,
+      birthdate: user.birthdate,
+      street: user.street,
+      city: user.city,
+      province: user.province,
       loginEmail: user.loginEmail,
       status: user.status
     })
@@ -423,7 +501,13 @@ function AdminHome() {
 
   const handleManageInputChange = (event) => {
     const { name, value } = event.target
-    setManageForm((current) => ({ ...current, [name]: value }))
+    setManageForm((current) => {
+      const next = { ...current, [name]: value }
+      if (name === 'province' && value !== current.province) {
+        next.city = ''
+      }
+      return next
+    })
   }
 
   const handleSaveManagedAccount = async (event) => {
@@ -436,14 +520,28 @@ function AdminHome() {
     setManageError('')
     setIsSavingAccount(true)
 
-    const name = manageForm.name.trim()
     const role = manageForm.role.trim()
-    const email = manageForm.email.trim().toLowerCase()
+    const payload = {
+      userId: selectedUserId,
+      role,
+      lastName: manageForm.lastName.trim(),
+      firstName: manageForm.firstName.trim(),
+      middleName: manageForm.middleName.trim(),
+      position: manageForm.position.trim(),
+      clientName: role === 'Customer' ? manageForm.clientName.trim() : null,
+      email: manageForm.email.trim().toLowerCase(),
+      contactNumber: manageForm.contactNumber.trim(),
+      birthdate: manageForm.birthdate,
+      address: {
+        street: manageForm.street.trim(),
+        city: manageForm.city.trim(),
+        province: manageForm.province.trim()
+      }
+    }
 
-    const { error } = await supabase
-      .from('users')
-      .update({ full_name: name, role, email })
-      .eq('id', selectedUserId)
+    const { error } = await supabase.functions.invoke('admin-users', {
+      body: { action: 'update-profile', ...payload }
+    })
 
     if (error) {
       setIsSavingAccount(false)
@@ -451,29 +549,9 @@ function AdminHome() {
       return
     }
 
-    if (role === 'Driver') {
-      const { error: driverSyncError } = await supabase.functions.invoke('admin-users', {
-        body: { action: 'ensure-driver-record', userId: selectedUserId }
-      })
+    const name = [payload.firstName, payload.middleName, payload.lastName].filter(Boolean).join(' ')
 
-      if (driverSyncError) {
-        setIsSavingAccount(false)
-        showStatusModal(
-          'error',
-          'Partially Saved',
-          driverSyncError.message || 'Saved, but unable to sync driver record.'
-        )
-        return
-      }
-    }
-
-    setUsers((current) =>
-      current.map((user) =>
-        user.id === selectedUserId
-          ? { ...user, name, role, email, status: manageForm.status }
-          : user
-      )
-    )
+    await loadUsers()
     setIsSavingAccount(false)
     closeManageDialog()
     showStatusModal('success', 'Account Updated', `${name} is now set to the ${role} role.`)
@@ -801,23 +879,25 @@ function AdminHome() {
                 />
               </div>
 
+              {newUserForm.role === 'Customer' ? (
+                <FormField
+                  label="Client Name"
+                  name="clientName"
+                  placeholder="e.g. Acme Logistics Corp."
+                  value={newUserForm.clientName}
+                  onChange={handleAddInputChange}
+                  required
+                />
+              ) : null}
+
               {/* Contact */}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <FormField
                   type="email"
                   label="Personal Email"
                   name="personalEmail"
                   placeholder="jane@gmail.com"
                   value={newUserForm.personalEmail}
-                  onChange={handleAddInputChange}
-                  required
-                />
-                <FormField
-                  type="email"
-                  label="Work Email"
-                  name="workEmail"
-                  placeholder="Used for login credentials"
-                  value={newUserForm.workEmail}
                   onChange={handleAddInputChange}
                   required
                 />
@@ -832,14 +912,50 @@ function AdminHome() {
                 />
               </div>
 
-              <FormField
-                label="Address"
-                name="address"
-                placeholder="Street, City, Province"
-                value={newUserForm.address}
-                onChange={handleAddInputChange}
-                required
-              />
+              <div>
+                <span className="text-sm font-medium text-slate-700">
+                  Address <span className="text-red-600">*</span>
+                </span>
+                <div className="mt-1.5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <input
+                    type="text"
+                    name="street"
+                    placeholder="Street"
+                    value={newUserForm.street}
+                    onChange={handleAddInputChange}
+                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                  />
+                  <select
+                    name="province"
+                    value={newUserForm.province}
+                    onChange={handleAddInputChange}
+                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                  >
+                    <option value="">Select province</option>
+                    {PROVINCE_OPTIONS.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    name="city"
+                    value={newUserForm.city}
+                    onChange={handleAddInputChange}
+                    disabled={!newUserForm.province}
+                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <option value="">
+                      {newUserForm.province ? 'Select city/municipality' : 'Select province first'}
+                    </option>
+                    {newUserCityOptions.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
 
               {formError ? (
                 <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -905,7 +1021,7 @@ function AdminHome() {
               </p>
               <p className="text-xs text-slate-400">
                 Columns: Last Name, First Name, Middle Name, Role, Position, Personal Email,
-                Work Email, Birthdate, Address
+                Contact Number, Birthdate, Street, City, Province
               </p>
               <input
                 type="file"
@@ -941,7 +1057,7 @@ function AdminHome() {
           onClick={closeManageDialog}
         >
           <div
-            className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6"
+            className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4">
@@ -964,14 +1080,41 @@ function AdminHome() {
             </div>
 
             <form onSubmit={handleSaveManagedAccount} className="mt-5 flex flex-col gap-4">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <FormField
-                  label="Name"
-                  name="name"
-                  value={manageForm.name}
+                  label="Last Name"
+                  name="lastName"
+                  value={manageForm.lastName}
                   onChange={handleManageInputChange}
                   required
                 />
+                <FormField
+                  label="First Name"
+                  name="firstName"
+                  value={manageForm.firstName}
+                  onChange={handleManageInputChange}
+                  required
+                />
+                <FormField
+                  label="Middle Name"
+                  name="middleName"
+                  value={manageForm.middleName}
+                  onChange={handleManageInputChange}
+                />
+                <FormField
+                  type="date"
+                  label="Birthdate"
+                  name="birthdate"
+                  value={manageForm.birthdate || ''}
+                  onChange={handleManageInputChange}
+                  required
+                />
+              </div>
+              <div
+                className={`grid grid-cols-1 gap-4 ${
+                  manageForm.role === 'Customer' ? 'sm:grid-cols-3' : 'sm:grid-cols-2'
+                }`}
+              >
                 <FormField
                   as="select"
                   label="Role"
@@ -981,15 +1124,87 @@ function AdminHome() {
                   options={ROLE_OPTIONS}
                   required
                 />
+                <FormField
+                  label="Position"
+                  name="position"
+                  value={manageForm.position}
+                  onChange={handleManageInputChange}
+                  required
+                />
+                {manageForm.role === 'Customer' ? (
+                  <FormField
+                    label="Client Name"
+                    name="clientName"
+                    placeholder="e.g. Acme Logistics Corp."
+                    value={manageForm.clientName}
+                    onChange={handleManageInputChange}
+                    required
+                  />
+                ) : null}
               </div>
-              <FormField
-                type="email"
-                label="Email"
-                name="email"
-                value={manageForm.email}
-                onChange={handleManageInputChange}
-                required
-              />
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField
+                  type="email"
+                  label="Personal Email"
+                  name="email"
+                  value={manageForm.email}
+                  onChange={handleManageInputChange}
+                  required
+                />
+                <FormField
+                  type="tel"
+                  label="Contact Number"
+                  name="contactNumber"
+                  value={manageForm.contactNumber}
+                  onChange={handleManageInputChange}
+                  required
+                />
+              </div>
+              <div>
+                <span className="text-sm font-medium text-slate-700">
+                  Address <span className="text-red-600">*</span>
+                </span>
+                <div className="mt-1.5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <input
+                    type="text"
+                    name="street"
+                    placeholder="Street"
+                    value={manageForm.street}
+                    onChange={handleManageInputChange}
+                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                  />
+                  <select
+                    name="province"
+                    value={manageForm.province}
+                    onChange={handleManageInputChange}
+                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                  >
+                    <option value="">Select province</option>
+                    {PROVINCE_OPTIONS.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    name="city"
+                    value={manageForm.city}
+                    onChange={handleManageInputChange}
+                    disabled={!manageForm.province}
+                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <option value="">
+                      {manageForm.province ? 'Select city/municipality' : 'Select province first'}
+                    </option>
+                    {manageCityOptions.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
               <div>
                 <span className="text-sm font-medium text-slate-700">Login Email</span>
                 <div className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
@@ -1068,16 +1283,16 @@ function AdminHome() {
                 <dt className="text-slate-500">Position</dt>
                 <dd className="font-medium text-slate-900">{newUserForm.position}</dd>
               </div>
+              {newUserForm.role === 'Customer' ? (
+                <div className="flex justify-between gap-4">
+                  <dt className="text-slate-500">Client Name</dt>
+                  <dd className="font-medium text-slate-900">{newUserForm.clientName}</dd>
+                </div>
+              ) : null}
               <div className="flex justify-between gap-4">
                 <dt className="text-slate-500">Personal Email</dt>
                 <dd className="font-medium text-slate-900">
                   {newUserForm.personalEmail.trim().toLowerCase()}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-slate-500">Work Email</dt>
-                <dd className="font-medium text-slate-900">
-                  {newUserForm.workEmail.trim().toLowerCase()}
                 </dd>
               </div>
               <div className="flex justify-between gap-4">
@@ -1094,13 +1309,15 @@ function AdminHome() {
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-slate-500">Address</dt>
-                <dd className="font-medium text-slate-900 text-right">{newUserForm.address}</dd>
+                <dd className="font-medium text-slate-900 text-right">
+                  {[newUserForm.street, newUserForm.city, newUserForm.province].filter(Boolean).join(', ')}
+                </dd>
               </div>
             </dl>
 
             <p className="mt-3 text-sm text-slate-500">
               A login email and temporary password will be generated automatically, and the
-              credentials will be emailed to the work email above.
+              credentials will be emailed to the personal email above.
             </p>
 
             <div className="mt-5 flex justify-end gap-2">
