@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Search } from 'lucide-react'
 import AdminLayout from '../layout/AdminLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 
@@ -6,12 +7,137 @@ const background = null
 
 const ROLE_OPTIONS = ['Supervisor', 'Admin', 'Driver', 'Helper', 'Customer']
 
+const EMPTY_NEW_USER_FORM = {
+  lastName: '',
+  firstName: '',
+  middleName: '',
+  role: '',
+  position: '',
+  personalEmail: '',
+  workEmail: '',
+  contactNumber: '',
+  birthdate: '',
+  address: ''
+}
+
+function calculateAge(birthdate) {
+  if (!birthdate) {
+    return null
+  }
+
+  const dob = new Date(birthdate)
+  if (Number.isNaN(dob.getTime())) {
+    return null
+  }
+
+  const today = new Date()
+  let age = today.getFullYear() - dob.getFullYear()
+  const hasHadBirthdayThisYear =
+    today.getMonth() > dob.getMonth() ||
+    (today.getMonth() === dob.getMonth() && today.getDate() >= dob.getDate())
+
+  if (!hasHadBirthdayThisYear) {
+    age -= 1
+  }
+
+  return age >= 0 ? age : null
+}
+
+function buildFullName({ firstName, middleName, lastName }) {
+  return [firstName, middleName, lastName]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(' ')
+}
+
+const fieldInputClassName =
+  'mt-1.5 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100'
+
+function FormField({
+  label,
+  name,
+  value,
+  onChange,
+  type = 'text',
+  placeholder,
+  required = false,
+  as = 'input',
+  options = [],
+  className = ''
+}) {
+  const fieldId = `field-${name}`
+
+  return (
+    <div className={className}>
+      <label htmlFor={fieldId} className="text-sm font-medium text-slate-700">
+        {label}{' '}
+        {required ? (
+          <span className="text-red-600">*</span>
+        ) : (
+          <span className="text-slate-400">(optional)</span>
+        )}
+      </label>
+      {as === 'select' ? (
+        <select
+          id={fieldId}
+          name={name}
+          value={value}
+          onChange={onChange}
+          className={fieldInputClassName}
+        >
+          <option value="">Select {label.toLowerCase()}</option>
+          {options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          id={fieldId}
+          type={type}
+          name={name}
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder}
+          className={fieldInputClassName}
+        />
+      )}
+    </div>
+  )
+}
+
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" className="h-4 w-4 stroke-current" aria-hidden="true">
+      <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function UploadIcon({ className = 'h-4 w-4 stroke-current' }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" className={className} aria-hidden="true">
+      <path d="M12 16V4M12 4l-4 4M12 4l4 4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" className="h-4 w-4 stroke-current" aria-hidden="true">
+      <path d="M6 6l12 12M6 18L18 6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+const USERS_PER_PAGE = 15
+
 function AdminHome() {
-  const [newUserForm, setNewUserForm] = useState({
-    fullName: '',
-    role: '',
-    email: ''
-  })
+  const [newUserForm, setNewUserForm] = useState(EMPTY_NEW_USER_FORM)
+  const [isAddUserOpen, setIsAddUserOpen] = useState(false)
+  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false)
   const [formError, setFormError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [tempPassword, setTempPassword] = useState('')
@@ -26,6 +152,7 @@ function AdminHome() {
   })
   const [users, setUsers] = useState([])
   const [usersError, setUsersError] = useState('')
+  const [isLoadingUsers, setIsLoadingUsers] = useState(true)
   const [selectedUserId, setSelectedUserId] = useState('')
   const [manageError, setManageError] = useState('')
   const [isSavingAccount, setIsSavingAccount] = useState(false)
@@ -36,11 +163,16 @@ function AdminHome() {
     loginEmail: '',
     status: 'active'
   })
+  const [searchTerm, setSearchTerm] = useState('')
+  const [roleFilter, setRoleFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [currentPage, setCurrentPage] = useState(1)
 
   useEffect(() => {
     let isMounted = true
 
     async function loadUsers() {
+      setIsLoadingUsers(true)
       const { data, error } = await supabase
         .from('users')
         .select('id, full_name, role, email, login_email')
@@ -52,6 +184,7 @@ function AdminHome() {
 
       if (error) {
         setUsersError(error.message || 'Unable to load users.')
+        setIsLoadingUsers(false)
         return
       }
 
@@ -66,6 +199,7 @@ function AdminHome() {
           status: 'active'
         }))
       )
+      setIsLoadingUsers(false)
     }
 
     loadUsers()
@@ -79,6 +213,65 @@ function AdminHome() {
     () => users.find((user) => user.id === selectedUserId) || null,
     [users, selectedUserId]
   )
+
+  const newUserAge = useMemo(() => calculateAge(newUserForm.birthdate), [newUserForm.birthdate])
+  const newUserFullName = useMemo(() => buildFullName(newUserForm), [newUserForm])
+
+  const filteredUsers = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase()
+
+    return users.filter((user) => {
+      const matchesSearch =
+        !term ||
+        user.name?.toLowerCase().includes(term) ||
+        user.email?.toLowerCase().includes(term) ||
+        user.loginEmail?.toLowerCase().includes(term)
+      const matchesRole = roleFilter === 'all' || user.role === roleFilter
+      const matchesStatus = statusFilter === 'all' || user.status === statusFilter
+
+      return matchesSearch && matchesRole && matchesStatus
+    })
+  }, [users, searchTerm, roleFilter, statusFilter])
+
+  const sortedUsers = useMemo(() => {
+    return [...filteredUsers].sort((a, b) => {
+      if (a.status !== b.status) {
+        return a.status === 'active' ? -1 : 1
+      }
+      return (a.name || '').localeCompare(b.name || '')
+    })
+  }, [filteredUsers])
+
+  const totalPages = Math.max(1, Math.ceil(sortedUsers.length / USERS_PER_PAGE))
+  const currentPageSafe = Math.min(currentPage, totalPages)
+  const paginatedUsers = useMemo(() => {
+    const start = (currentPageSafe - 1) * USERS_PER_PAGE
+    return sortedUsers.slice(start, start + USERS_PER_PAGE)
+  }, [sortedUsers, currentPageSafe])
+
+  const hasActiveFilters = Boolean(searchTerm.trim()) || roleFilter !== 'all' || statusFilter !== 'all'
+
+  const handleSearchChange = (event) => {
+    setSearchTerm(event.target.value)
+    setCurrentPage(1)
+  }
+
+  const handleRoleFilterChange = (event) => {
+    setRoleFilter(event.target.value)
+    setCurrentPage(1)
+  }
+
+  const handleStatusFilterChange = (event) => {
+    setStatusFilter(event.target.value)
+    setCurrentPage(1)
+  }
+
+  const clearFilters = () => {
+    setSearchTerm('')
+    setRoleFilter('all')
+    setStatusFilter('all')
+    setCurrentPage(1)
+  }
 
   const closeManageDialog = () => {
     setSelectedUserId('')
@@ -106,25 +299,54 @@ function AdminHome() {
   }
 
   const resetForm = () => {
-    setNewUserForm({ fullName: '', role: '', email: '' })
+    setNewUserForm(EMPTY_NEW_USER_FORM)
   }
+
+  const openAddUserModal = () => {
+    setFormError('')
+    setIsAddUserOpen(true)
+  }
+
+  const closeAddUserModal = () => {
+    setIsAddUserOpen(false)
+    setFormError('')
+  }
+
+  const openBulkUploadModal = () => setIsBulkUploadOpen(true)
+  const closeBulkUploadModal = () => setIsBulkUploadOpen(false)
 
   const handleAddUser = (event) => {
     event.preventDefault()
     setFormError('')
 
-    const fullName = newUserForm.fullName.trim()
+    const lastName = newUserForm.lastName.trim()
+    const firstName = newUserForm.firstName.trim()
     const role = newUserForm.role.trim()
-    const email = newUserForm.email.trim().toLowerCase()
+    const position = newUserForm.position.trim()
+    const personalEmail = newUserForm.personalEmail.trim().toLowerCase()
+    const workEmail = newUserForm.workEmail.trim().toLowerCase()
+    const contactNumber = newUserForm.contactNumber.trim()
+    const birthdate = newUserForm.birthdate
+    const address = newUserForm.address.trim()
 
-    if (!fullName || !role || !email) {
-      setFormError('Name, role, and email are required.')
+    if (
+      !lastName ||
+      !firstName ||
+      !role ||
+      !position ||
+      !personalEmail ||
+      !workEmail ||
+      !contactNumber ||
+      !birthdate ||
+      !address
+    ) {
+      setFormError('All fields except Middle Name are required.')
       return
     }
 
-    const hasDuplicateEmail = users.some((user) => user.email === email)
+    const hasDuplicateEmail = users.some((user) => user.email === workEmail)
     if (hasDuplicateEmail) {
-      setFormError('A user with this email already exists.')
+      setFormError('A user with this work email already exists.')
       return
     }
 
@@ -138,9 +360,9 @@ function AdminHome() {
   const confirmAddUser = async () => {
     setFormError('')
 
-    const fullName = newUserForm.fullName.trim()
+    const fullName = buildFullName(newUserForm)
     const role = newUserForm.role.trim()
-    const email = newUserForm.email.trim().toLowerCase()
+    const email = newUserForm.workEmail.trim().toLowerCase()
 
     setIsAddConfirmOpen(false)
     setIsSubmitting(true)
@@ -167,6 +389,7 @@ function AdminHome() {
     setUsers((current) => [newUser, ...current])
     resetForm()
     setIsSubmitting(false)
+    setIsAddUserOpen(false)
 
     if (data.emailSent) {
       showStatusModal(
@@ -300,227 +523,505 @@ function AdminHome() {
 
   return (
     <AdminLayout title="User Management" background={background}>
-      <div className="flex flex-col gap-6">
-        <header className="space-y-2 md:space-y-3">
-          <p className="text-xs uppercase tracking-[0.3em] text-violet-600 font-medium">
-            Admin Interface
+      <div className="flex flex-col gap-6 pb-10">
+        {usersError ? (
+          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {usersError}
           </p>
-          <h1 className="text-2xl sm:text-3xl md:text-4xl font-semibold leading-tight text-slate-900">
-            User Management
-          </h1>
-          <p className="max-w-3xl text-sm md:text-base text-slate-600 leading-relaxed">
-            Add and manage accounts, assign roles, and maintain user access.
-          </p>
-        </header>
+        ) : null}
 
-        <section className="rounded-3xl border border-violet-200/70 bg-white p-6 sm:p-8">
-          <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
-            Add User (Individual)
-          </p>
-          <form className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_auto]" onSubmit={handleAddUser}>
-            <label className="space-y-2">
-              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Full Name
-              </span>
-              <input
-                type="text"
-                name="fullName"
-                placeholder="Jane Doe"
-                value={newUserForm.fullName}
-                onChange={handleAddInputChange}
-                className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
-              />
-            </label>
-            <label className="space-y-2">
-              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Role
-              </span>
-              <select
-                name="role"
-                value={newUserForm.role}
-                onChange={handleAddInputChange}
-                className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
-              >
-                <option value="">Select role</option>
-                {ROLE_OPTIONS.map((role) => (
-                  <option key={role} value={role}>
-                    {role}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-2">
-              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Email
-              </span>
-              <input
-                type="email"
-                name="email"
-                placeholder="user@drivewise.com"
-                value={newUserForm.email}
-                onChange={handleAddInputChange}
-                className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="h-[46px] rounded-2xl bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60 lg:self-end"
-            >
-              {isSubmitting ? 'Adding...' : 'Add User'}
-            </button>
-          </form>
-          {formError ? (
-            <p className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {formError}
-            </p>
-          ) : null}
-        </section>
-
-        <section className="rounded-3xl border border-violet-200/70 bg-white p-6 sm:p-8">
-          <p className="text-xs uppercase tracking-[0.24em] text-violet-600">Users</p>
-          {usersError ? (
-            <p className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {usersError}
-            </p>
-          ) : null}
-          <div className="mt-4 overflow-hidden rounded-2xl border border-violet-100">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase tracking-[0.2em] text-slate-600">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Name</th>
-                  <th className="px-4 py-3 font-medium">Role</th>
-                  <th className="px-4 py-3 font-medium">Email</th>
-                  <th className="px-4 py-3 font-medium">Login Email</th>
-                  <th className="px-4 py-3 font-medium">Manage Account</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-violet-100">
-                {users.map((user) => (
-                  <tr key={user.id} className="bg-white">
-                    <td className="px-4 py-3 font-medium text-slate-900">{user.name}</td>
-                    <td className="px-4 py-3 text-slate-700">{user.role}</td>
-                    <td className="px-4 py-3 text-slate-700">{user.email}</td>
-                    <td className="px-4 py-3 text-slate-500">{user.loginEmail}</td>
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        className="rounded-full border border-violet-200 px-3 py-1 text-xs font-semibold text-violet-700 transition hover:border-violet-300 hover:bg-violet-50"
-                        onClick={() => openManageDialog(user)}
-                      >
-                        Manage Account
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </div>
-
-      {selectedUser ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
-          <div className="w-full max-w-2xl rounded-3xl border border-violet-200/70 bg-white p-6 shadow-xl sm:p-8">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
-                  Manage Account
-                </p>
-                <h2 className="mt-2 text-xl font-semibold text-slate-900">
-                  {selectedUser.name}
-                </h2>
-              </div>
-              <button
-                type="button"
-                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-600 transition hover:border-slate-300"
-                onClick={closeManageDialog}
-              >
-                Close
-              </button>
-            </div>
-
-            <form className="mt-6 space-y-4" onSubmit={handleSaveManagedAccount}>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="space-y-2">
-                  <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                    Name
-                  </span>
+        {/* Two-card layout, matching SupCrewProfile's stacked rounded cards:
+            controls (search, filters, actions) in their own card, and the
+            table with its pagination in a separate card below. */}
+        <div className="flex flex-col gap-4">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center lg:flex-1">
+                <div className="relative sm:max-w-xs lg:flex-1">
+                  <label className="sr-only" htmlFor="admin-user-search">
+                    Search users
+                  </label>
+                  <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <input
+                    id="admin-user-search"
                     type="text"
-                    name="name"
-                    value={manageForm.name}
-                    onChange={handleManageInputChange}
-                    className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
+                    value={searchTerm}
+                    onChange={handleSearchChange}
+                    placeholder="Search by name or email"
+                    className="h-10 w-full rounded-xl border border-slate-300 bg-slate-50 py-2 pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
                   />
-                </label>
-                <label className="space-y-2">
-                  <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                    Role
-                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
                   <select
-                    name="role"
-                    value={manageForm.role}
-                    onChange={handleManageInputChange}
-                    className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
+                    value={roleFilter}
+                    onChange={handleRoleFilterChange}
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100 sm:w-44"
                   >
+                    <option value="all">All Roles</option>
                     {ROLE_OPTIONS.map((role) => (
                       <option key={role} value={role}>
                         {role}
                       </option>
                     ))}
                   </select>
-                </label>
-                <label className="space-y-2 sm:col-span-2">
-                  <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                    Email
+                  <select
+                    value={statusFilter}
+                    onChange={handleStatusFilterChange}
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100 sm:w-44"
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={openBulkUploadModal}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <UploadIcon />
+                  Bulk Upload (CSV)
+                </button>
+                <button
+                  type="button"
+                  onClick={openAddUserModal}
+                  className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700"
+                >
+                  <PlusIcon />
+                  Add User
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            {isLoadingUsers ? (
+              <div className="p-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+                  Loading users…
+                </div>
+              </div>
+            ) : users.length === 0 && !usersError ? (
+              <div className="p-4">
+                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
+                  <p className="text-sm font-medium text-slate-600">No users yet</p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Add your first user to get started.
+                  </p>
+                </div>
+              </div>
+            ) : sortedUsers.length === 0 ? (
+              <div className="p-4">
+                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
+                  <p className="text-sm font-medium text-slate-600">No users match your filters</p>
+                  <p className="mt-1 text-sm text-slate-400">Try adjusting your search or filters.</p>
+                  {hasActiveFilters ? (
+                    <button
+                      type="button"
+                      onClick={clearFilters}
+                      className="mt-3 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Clear filters
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px] table-fixed text-left text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                      <th className="w-1/6 px-5 py-3 font-semibold">Name</th>
+                      <th className="w-1/6 px-5 py-3 font-semibold">Role</th>
+                      <th className="w-1/6 px-5 py-3 font-semibold">Status</th>
+                      <th className="w-1/6 px-5 py-3 font-semibold">PERSONAL EMAIL</th>
+                      <th className="w-1/6 px-5 py-3 font-semibold">WORK Email</th>
+                      <th className="w-1/6 px-5 py-3 font-semibold">Manage</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {paginatedUsers.map((user) => (
+                      <tr key={user.id} className="transition hover:bg-slate-50/80">
+                        <td className="truncate px-5 py-2.5 font-semibold text-slate-900">{user.name}</td>
+                        <td className="px-5 py-2.5">
+                          <span className="inline-flex items-center rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">
+                            {user.role}
+                          </span>
+                        </td>
+                        <td className="px-5 py-2.5">
+                          <span
+                            className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${
+                              user.status === 'active'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}
+                          >
+                            {user.status}
+                          </span>
+                        </td>
+                        <td className="truncate px-5 py-2.5 text-slate-600">{user.email}</td>
+                        <td className="truncate px-5 py-2.5 text-slate-400">{user.loginEmail}</td>
+                        <td className="px-5 py-2.5">
+                          <button
+                            type="button"
+                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                            onClick={() => openManageDialog(user)}
+                          >
+                            Manage
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {!isLoadingUsers && sortedUsers.length > 0 ? (
+              <div className="flex flex-col items-center justify-between gap-3 border-t border-slate-100 px-4 py-4 sm:flex-row sm:px-5">
+                <p className="text-[11px] font-medium text-slate-500 sm:text-xs">
+                  Showing {(currentPageSafe - 1) * USERS_PER_PAGE + 1}–
+                  {Math.min(currentPageSafe * USERS_PER_PAGE, sortedUsers.length)} of{' '}
+                  {sortedUsers.length}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={currentPageSafe <= 1}
+                    onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-[11px] font-medium text-slate-500 sm:text-xs">
+                    Page {currentPageSafe} of {totalPages}
                   </span>
-                  <input
-                    type="email"
-                    name="email"
-                    value={manageForm.email}
-                    onChange={handleManageInputChange}
-                    className="w-full rounded-2xl border border-violet-200/70 bg-white px-4 py-3 text-sm text-slate-900 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-300/50"
-                  />
-                </label>
-                <label className="space-y-2 sm:col-span-2">
-                  <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                    Login Email
-                  </span>
-                  <input
-                    type="email"
-                    value={manageForm.loginEmail}
-                    disabled
-                    className="w-full rounded-2xl border border-violet-100 bg-slate-50 px-4 py-3 text-sm text-slate-500"
-                  />
-                </label>
+                  <button
+                    type="button"
+                    disabled={currentPageSafe >= totalPages}
+                    onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      {isAddUserOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-user-title"
+          onClick={closeAddUserModal}
+        >
+          <div
+            className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 id="add-user-title" className="text-base font-semibold text-slate-900">
+                  Add User
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Create an individual account. A login email and temporary password are
+                  generated automatically.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeAddUserModal}
+                aria-label="Close"
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddUser} className="mt-4 flex flex-col gap-4">
+              {/* Identity */}
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <FormField
+                  label="Last Name"
+                  name="lastName"
+                  value={newUserForm.lastName}
+                  onChange={handleAddInputChange}
+                  required
+                />
+                <FormField
+                  label="First Name"
+                  name="firstName"
+                  value={newUserForm.firstName}
+                  onChange={handleAddInputChange}
+                  required
+                />
+                <FormField
+                  label="Middle Name"
+                  name="middleName"
+                  value={newUserForm.middleName}
+                  onChange={handleAddInputChange}
+                />
+                <FormField
+                  type="date"
+                  label="Birthdate"
+                  name="birthdate"
+                  value={newUserForm.birthdate}
+                  onChange={handleAddInputChange}
+                  required
+                />
+              </div>
+
+              {/* Role & Position */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+                <FormField
+                  as="select"
+                  label="Role"
+                  name="role"
+                  value={newUserForm.role}
+                  onChange={handleAddInputChange}
+                  options={ROLE_OPTIONS}
+                  required
+                />
+                <FormField
+                  label="Position"
+                  name="position"
+                  placeholder="e.g. Delivery Driver"
+                  value={newUserForm.position}
+                  onChange={handleAddInputChange}
+                  required
+                  className="sm:col-span-3"
+                />
+              </div>
+
+              {/* Contact */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <FormField
+                  type="email"
+                  label="Personal Email"
+                  name="personalEmail"
+                  placeholder="jane@gmail.com"
+                  value={newUserForm.personalEmail}
+                  onChange={handleAddInputChange}
+                  required
+                />
+                <FormField
+                  type="email"
+                  label="Work Email"
+                  name="workEmail"
+                  placeholder="Used for login credentials"
+                  value={newUserForm.workEmail}
+                  onChange={handleAddInputChange}
+                  required
+                />
+                <FormField
+                  type="tel"
+                  label="Contact Number"
+                  name="contactNumber"
+                  placeholder="09987676766"
+                  value={newUserForm.contactNumber}
+                  onChange={handleAddInputChange}
+                  required
+                />
+              </div>
+
+              <FormField
+                label="Address"
+                name="address"
+                placeholder="Street, City, Province"
+                value={newUserForm.address}
+                onChange={handleAddInputChange}
+                required
+              />
+
+              {formError ? (
+                <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {formError}
+                </p>
+              ) : null}
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeAddUserModal}
+                  className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700"
+                >
+                  Add
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {isBulkUploadOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-upload-title"
+          onClick={closeBulkUploadModal}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 id="bulk-upload-title" className="text-base font-semibold text-slate-900">
+                  Bulk Upload (CSV)
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Add multiple users at once from a CSV file.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeBulkUploadModal}
+                aria-label="Close"
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+
+            <div className="mt-5 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+              <UploadIcon className="h-6 w-6 text-slate-400" />
+              <p className="text-sm font-medium text-slate-600">
+                Drag a CSV file here, or click to browse
+              </p>
+              <p className="text-xs text-slate-400">
+                Columns: Last Name, First Name, Middle Name, Role, Position, Personal Email,
+                Work Email, Birthdate, Address
+              </p>
+              <input
+                type="file"
+                accept=".csv"
+                disabled
+                className="mt-2 w-full cursor-not-allowed text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-500"
+              />
+            </div>
+
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Bulk upload is coming soon. Use Add User for individual accounts in the meantime.
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={closeBulkUploadModal}
+                className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {selectedUser ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="manage-account-title"
+          onClick={closeManageDialog}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Manage Account
+                </p>
+                <h3 id="manage-account-title" className="mt-1 text-base font-semibold text-slate-900">
+                  {selectedUser.name}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={closeManageDialog}
+                aria-label="Close"
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveManagedAccount} className="mt-5 flex flex-col gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField
+                  label="Name"
+                  name="name"
+                  value={manageForm.name}
+                  onChange={handleManageInputChange}
+                  required
+                />
+                <FormField
+                  as="select"
+                  label="Role"
+                  name="role"
+                  value={manageForm.role}
+                  onChange={handleManageInputChange}
+                  options={ROLE_OPTIONS}
+                  required
+                />
+              </div>
+              <FormField
+                type="email"
+                label="Email"
+                name="email"
+                value={manageForm.email}
+                onChange={handleManageInputChange}
+                required
+              />
+              <div>
+                <span className="text-sm font-medium text-slate-700">Login Email</span>
+                <div className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
+                  {manageForm.loginEmail}
+                </div>
               </div>
 
               {manageError ? (
-                <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                   {manageError}
                 </p>
               ) : null}
 
-              <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-slate-700">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                 Account status:{' '}
-                <span className="font-semibold capitalize">{manageForm.status}</span>
+                <span className="font-semibold capitalize text-slate-900">{manageForm.status}</span>
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:border-amber-300 hover:bg-amber-50"
                     onClick={handleResetPassword}
+                    className="rounded-xl border border-amber-200 px-3.5 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
                   >
                     Reset Password
                   </button>
                   <button
                     type="button"
-                    className="rounded-full border border-red-200 px-3 py-1 text-xs font-semibold text-red-700 transition hover:border-red-300 hover:bg-red-50 disabled:opacity-60"
                     onClick={handleDeactivateAccount}
                     disabled={manageForm.status === 'inactive'}
+                    className="rounded-xl border border-red-200 px-3.5 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
                   >
                     Deactivate Account
                   </button>
@@ -529,7 +1030,7 @@ function AdminHome() {
                 <button
                   type="submit"
                   disabled={isSavingAccount}
-                  className="rounded-2xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60"
+                  className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
                 >
                   {isSavingAccount ? 'Saving...' : 'Save Changes'}
                 </button>
@@ -540,47 +1041,82 @@ function AdminHome() {
       ) : null}
 
       {isAddConfirmOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
-          <div className="w-full max-w-md rounded-3xl border border-violet-200/70 bg-white p-6 shadow-xl sm:p-8">
-            <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
-              Confirm New User
+        <div
+          className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-user-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+            <h3 id="confirm-user-title" className="text-base font-semibold text-slate-900">
+              Review New User
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Double-check the details below before creating this account.
             </p>
-            <h2 className="mt-2 text-xl font-semibold text-slate-900">
-              Add this user?
-            </h2>
-            <div className="mt-4 space-y-2 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-slate-700">
-              <p>
-                <span className="font-semibold">Name:</span>{' '}
-                {newUserForm.fullName.trim()}
-              </p>
-              <p>
-                <span className="font-semibold">Role:</span>{' '}
-                {newUserForm.role.trim()}
-              </p>
-              <p>
-                <span className="font-semibold">Email:</span>{' '}
-                {newUserForm.email.trim().toLowerCase()}
-              </p>
-            </div>
-            <p className="mt-3 text-sm text-slate-600">
-              A login email and temporary password will be generated
-              automatically, and the credentials will be emailed to the
-              address above.
+
+            <dl className="mt-4 space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">Name</dt>
+                <dd className="font-medium text-slate-900">{newUserFullName}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">Role</dt>
+                <dd className="font-medium text-slate-900">{newUserForm.role}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">Position</dt>
+                <dd className="font-medium text-slate-900">{newUserForm.position}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">Personal Email</dt>
+                <dd className="font-medium text-slate-900">
+                  {newUserForm.personalEmail.trim().toLowerCase()}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">Work Email</dt>
+                <dd className="font-medium text-slate-900">
+                  {newUserForm.workEmail.trim().toLowerCase()}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">Contact Number</dt>
+                <dd className="font-medium text-slate-900">{newUserForm.contactNumber}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">Birthdate</dt>
+                <dd className="font-medium text-slate-900">{newUserForm.birthdate}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">Age</dt>
+                <dd className="font-medium text-slate-900">{newUserAge ?? '—'}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">Address</dt>
+                <dd className="font-medium text-slate-900 text-right">{newUserForm.address}</dd>
+              </div>
+            </dl>
+
+            <p className="mt-3 text-sm text-slate-500">
+              A login email and temporary password will be generated automatically, and the
+              credentials will be emailed to the work email above.
             </p>
-            <div className="mt-6 flex justify-end gap-3">
+
+            <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
-                className="rounded-2xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300"
                 onClick={cancelAddUser}
                 disabled={isSubmitting}
+                className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
               >
-                Cancel
+                Back
               </button>
               <button
                 type="button"
-                className="rounded-2xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60"
                 onClick={confirmAddUser}
                 disabled={isSubmitting}
+                className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
               >
                 {isSubmitting ? 'Adding...' : 'Confirm'}
               </button>
@@ -590,23 +1126,28 @@ function AdminHome() {
       ) : null}
 
       {isPasswordModalOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
-          <div className="w-full max-w-md rounded-3xl border border-violet-200/70 bg-white p-6 shadow-xl sm:p-8">
-            <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="temp-password-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-600">
               Email Not Sent
             </p>
-            <h2 className="mt-2 text-xl font-semibold text-slate-900">
+            <h3 id="temp-password-title" className="mt-2 text-base font-semibold text-slate-900">
               Share this temporary password
-            </h2>
-            <p className="mt-3 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 font-mono text-sm text-slate-900">
+            </h3>
+            <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm text-slate-900">
               {tempPassword}
             </p>
-            <p className="mt-3 text-sm text-slate-600">
+            <p className="mt-3 text-sm text-slate-500">
               This password will not be shown again. Send it to the new user securely.
             </p>
             <button
               type="button"
-              className="mt-6 w-full rounded-2xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-500"
+              className="mt-5 w-full rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-700"
               onClick={() => {
                 setIsPasswordModalOpen(false)
                 setTempPassword('')
@@ -619,23 +1160,30 @@ function AdminHome() {
       ) : null}
 
       {statusModal.open ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 px-4">
-          <div className="w-full max-w-md rounded-3xl border border-violet-200/70 bg-white p-6 shadow-xl sm:p-8">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="status-modal-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
             <p
-              className={`text-xs uppercase tracking-[0.24em] ${
+              className={`text-xs font-semibold uppercase tracking-[0.16em] ${
                 statusModal.tone === 'success' ? 'text-emerald-600' : 'text-red-600'
               }`}
             >
               {statusModal.tone === 'success' ? 'Success' : 'Error'}
             </p>
-            <h2 className="mt-2 text-xl font-semibold text-slate-900">{statusModal.title}</h2>
-            <p className="mt-3 text-sm text-slate-600">{statusModal.message}</p>
+            <h3 id="status-modal-title" className="mt-2 text-base font-semibold text-slate-900">
+              {statusModal.title}
+            </h3>
+            <p className="mt-3 text-sm text-slate-500">{statusModal.message}</p>
             <button
               type="button"
-              className={`mt-6 w-full rounded-2xl px-5 py-3 text-sm font-semibold text-white transition ${
+              className={`mt-5 w-full rounded-xl px-5 py-3 text-sm font-semibold text-white transition ${
                 statusModal.tone === 'success'
-                  ? 'bg-violet-600 hover:bg-violet-500'
-                  : 'bg-red-600 hover:bg-red-500'
+                  ? 'bg-violet-600 hover:bg-violet-700'
+                  : 'bg-red-600 hover:bg-red-700'
               }`}
               onClick={closeStatusModal}
             >

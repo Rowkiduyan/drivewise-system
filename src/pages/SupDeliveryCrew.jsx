@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
-import { Search, Truck, Users, CircleCheck, ChevronRight, ChevronDown } from "lucide-react";
+import { Search, Truck, Users, CircleCheck, ChevronRight } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Dummy crew roster — frontend only, no backend/API/database.
@@ -208,42 +208,28 @@ function PerformanceBadge({ score }) {
 // scales to any number of options without wrapping or crowding the toolbar
 // (unlike the pill/tab groups it replaces), and gets keyboard navigation and
 // a native mobile picker for free, so no custom popover/menu is needed.
-//
-// When a non-default value is picked, the control itself switches to a
-// tinted "active" style. That's the signal that a filter is applied — no
-// separate active-filters summary needed, since the selects already show
-// their own current value at rest.
-function FilterSelect({ id, label, value, onChange, options, counts, allLabel, className = "" }) {
-  const isActive = value !== "All";
-
+function FilterSelect({ id, label, value, onChange, options, counts, allLabel }) {
   return (
-    <div className={className}>
+    <>
       <label className="sr-only" htmlFor={id}>
         {label}
       </label>
-      <div className={`relative inline-block ${className}`}>
-        <select
-          id={id}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className={`h-10 appearance-none rounded-xl border px-4 pr-9 text-center text-sm outline-none transition focus:ring-2 focus:ring-blue-100 ${
-            isActive
-              ? "border-blue-300 bg-blue-50 font-semibold text-blue-700 focus:border-blue-400"
-              : "border-slate-300 bg-slate-50 text-slate-500 focus:border-blue-400 focus:bg-white"
-          }`}
-        >
-          <option value="All">
-            {allLabel}
+      <select
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:w-44"
+      >
+        <option value="All">
+          {allLabel}
+        </option>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option} ({counts[option] ?? 0})
           </option>
-          {options.map((option) => (
-            <option key={option} value={option}>
-              {option} ({counts[option] ?? 0})
-            </option>
-          ))}
-        </select>
-        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-      </div>
-    </div>
+        ))}
+      </select>
+    </>
   );
 }
 
@@ -393,7 +379,7 @@ function SupDeliveryCrew() {
                 type="text"
                 value={searchTerm}
                 onChange={(event) => updateSearch(event.target.value)}
-                placeholder="Search by name, client, employee ID, or status..."
+                placeholder="Search by name, client, or status..."
                 className="h-10 w-full rounded-xl border border-slate-300 bg-slate-50 py-2 pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
               />
             </div>
@@ -411,7 +397,6 @@ function SupDeliveryCrew() {
                 options={STATUS_OPTIONS}
                 counts={statusCounts}
                 allLabel="Status"
-                className="w-fit"
               />
               <FilterSelect
                 id="position-filter"
@@ -421,7 +406,6 @@ function SupDeliveryCrew() {
                 options={POSITION_OPTIONS}
                 counts={positionCounts}
                 allLabel="Position"
-                className="w-fit"
               />
               <FilterSelect
                 id="client-filter"
@@ -431,18 +415,8 @@ function SupDeliveryCrew() {
                 options={CLIENT_SPECIALTIES}
                 counts={clientCounts}
                 allLabel="Client"
-                className="w-fit"
               />
             </div>
-          </div>
-
-          <div className="mt-2 flex items-center justify-between gap-3 text-[11px] font-medium text-slate-500 sm:text-xs">
-            <span>
-              {filteredCrew.length === 0
-                ? "No crew members match your filters."
-                : `Showing ${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, filteredCrew.length)} of ${filteredCrew.length}`}
-            </span>
-            <span className="hidden sm:inline">Scroll the list below for more crew members</span>
           </div>
         </section>
 
@@ -525,43 +499,34 @@ function SupDeliveryCrew() {
 
             {/* Pagination */}
             <nav
-              className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-white px-4 py-2"
+              className="sticky bottom-0 flex flex-col items-center justify-between gap-3 border-t border-slate-100 bg-white px-4 py-4 sm:flex-row sm:px-5"
               aria-label="Crew list pagination"
             >
-              <button
-                type="button"
-                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                disabled={safePage === 1}
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Previous
-              </button>
-
-              <div className="flex flex-wrap items-center gap-1">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                  <button
-                    key={page}
-                    type="button"
-                    onClick={() => setCurrentPage(page)}
-                    className={`h-8 w-8 rounded-lg text-sm font-semibold transition ${
-                      page === safePage
-                        ? "bg-blue-600 text-white"
-                        : "text-slate-600 hover:bg-slate-100"
-                    }`}
-                  >
-                    {page}
-                  </button>
-                ))}
+              <p className="text-[11px] font-medium text-slate-500 sm:text-xs">
+                Showing {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, filteredCrew.length)} of{' '}
+                {filteredCrew.length}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={safePage === 1}
+                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Previous
+                </button>
+                <span className="text-[11px] font-medium text-slate-500 sm:text-xs">
+                  Page {safePage} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={safePage === totalPages}
+                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Next
+                </button>
               </div>
-
-              <button
-                type="button"
-                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-                disabled={safePage === totalPages}
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Next
-              </button>
             </nav>
           </div>
         </div>

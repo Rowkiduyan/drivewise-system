@@ -82,6 +82,15 @@ const adminIcons = {
   )
 }
 
+const adminSidebarTheme = {
+  sidebar: 'border-violet-900/80 bg-violet-950',
+  badge: 'bg-violet-900 text-white',
+  divider: 'border-violet-900/80',
+  activeLink: 'border-violet-400 bg-violet-900 text-white',
+  inactiveLink: 'text-violet-200 hover:border-violet-700',
+  labelText: 'text-violet-100'
+}
+
 const adminSidebarStorageKey = 'admin-sidebar-expanded'
 
 function deriveInitials(name, email) {
@@ -98,7 +107,7 @@ function deriveInitials(name, email) {
   return initials.toUpperCase()
 }
 
-function AdminLayout({ title, background, children }) {
+function AdminLayout({ title, background, children, bg = 'bg-white' }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     if (typeof window === 'undefined') {
       return false
@@ -146,26 +155,30 @@ function AdminLayout({ title, background, children }) {
 
   return (
     <main
-      className="relative flex h-screen w-screen overflow-hidden bg-white text-slate-900"
+      className={`admin-layout relative flex h-screen w-screen overflow-hidden ${bg} text-slate-900`}
       style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
     >
       {background}
 
       <section className="relative flex h-full w-full">
         <aside
-          className={`sticky top-0 flex h-screen shrink-0 flex-col gap-4 border-r border-violet-900/80 py-4 backdrop-blur transition-all duration-300 bg-violet-950 ${
+          className={`sticky top-0 flex h-screen shrink-0 flex-col gap-4 border-r py-4 backdrop-blur transition-all duration-300 ${adminSidebarTheme.sidebar} ${
             isExpanded ? 'w-64' : 'w-16'
           }`}
           role="navigation"
           aria-label="Main navigation"
           onClick={() => setIsExpanded((currentValue) => !currentValue)}
         >
+          {/* Header */}
           <div className="flex flex-col items-center gap-3 px-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-900 text-lg font-semibold text-white flex-shrink-0">
+            <div
+              className={`flex h-12 w-12 items-center justify-center rounded-2xl ${adminSidebarTheme.badge} text-lg font-semibold flex-shrink-0`}
+            >
               {userInitials || '...'}
             </div>
           </div>
 
+          {/* Navigation */}
           <nav className="flex w-full flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-2">
             {adminModules.map((module) => (
               <NavLink
@@ -174,10 +187,10 @@ function AdminLayout({ title, background, children }) {
                 aria-label={module.label}
                 onClick={(event) => event.stopPropagation()}
                 className={({ isActive }) =>
-                  `flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 $
+                  `flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
                     isActive
-                      ? 'border-violet-400 bg-violet-900 text-white rounded-lg'
-                      : 'text-violet-200 hover:border-violet-700'
+                      ? `${adminSidebarTheme.activeLink} rounded-lg`
+                      : `${adminSidebarTheme.inactiveLink} hover:rounded-lg hover:bg-violet-900/40`
                   }`
                 }
               >
@@ -185,7 +198,7 @@ function AdminLayout({ title, background, children }) {
                   {adminIcons[module.label]}
                 </span>
                 <span
-                  className={`inline-flex overflow-hidden whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] text-violet-100 transition-all duration-200 ease-out ${
+                  className={`inline-flex overflow-hidden whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] transition-all duration-200 ease-out ${
                     isExpanded
                       ? 'max-w-40 opacity-100 translate-x-0'
                       : 'max-w-0 opacity-0 -translate-x-2'
@@ -197,11 +210,12 @@ function AdminLayout({ title, background, children }) {
             ))}
           </nav>
 
-          <div className="border-t border-violet-900/80 px-2 pt-2">
+          <div className={`border-t ${adminSidebarTheme.divider} px-2 pt-2`}>
             <LogoutButton isExpanded={isExpanded} />
           </div>
         </aside>
 
+        {/* Main Content */}
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-y-auto">
             <div className="h-full px-4 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8 lg:px-12 lg:py-10">
