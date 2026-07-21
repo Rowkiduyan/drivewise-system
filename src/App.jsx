@@ -19,6 +19,7 @@ import SupDashboard from './pages/SupDashboard.jsx'
 import SupAnalysisIndiv from './pages/SupAnalysisIndiv.jsx'
 import SupProfile from './pages/SupProfile.jsx'
 import SupTrucks from './pages/SupTrucks.jsx'
+import SupTruckProfile from './pages/SupTruckProfile.jsx'
 
 function App() {
   return (
@@ -48,6 +49,7 @@ function App() {
       <Route path="/supervisor/deliveries" element={<SupDeliveries />} />
       <Route path="/supervisor/profile" element={<SupProfile />} />
       <Route path="/supervisor/trucks" element={<SupTrucks />} />
+      <Route path="/supervisor/trucks/profile" element={<SupTruckProfile />} />
       <Route
         path="/admin"
         element={<Navigate to="/admin/user-management" replace />}
