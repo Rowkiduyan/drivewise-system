@@ -2,7 +2,23 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
-import { ArrowLeft, Route, MoreVertical, Trash2, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Route,
+  MoreVertical,
+  Trash2,
+  X,
+  Search,
+  ShieldCheck,
+  ShieldAlert,
+  AlertTriangle,
+  EyeOff,
+  Repeat,
+  Activity,
+  Clock,
+  ListChecks,
+  ClipboardList,
+} from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Dummy trip history — frontend only, no backend/API/database.
@@ -128,6 +144,55 @@ const ALERT_TYPE_LABELS = {
   pattern_repeated_eye_closure: "Repeated Eye Closure",
 };
 
+const ALERT_TYPE_ICONS = {
+  prolonged_eye_closure: EyeOff,
+  pattern_eye_closure_yawn: AlertTriangle,
+  pattern_repeated_eye_closure: Repeat,
+};
+
+// Alert rows carry the human-readable label (see ALERT_TYPE_LABELS), not the
+// raw event_type key, so icons are looked up by label rather than key.
+const ALERT_TYPE_ICON_BY_LABEL = Object.fromEntries(
+  Object.entries(ALERT_TYPE_LABELS).map(([key, label]) => [label, ALERT_TYPE_ICONS[key]]),
+);
+
+const HERO_TONE_CLASSES = {
+  red: "border-red-200 bg-red-50/50",
+  amber: "border-amber-200 bg-amber-50/50",
+  emerald: "border-emerald-200 bg-emerald-50/50",
+};
+
+// Same High Risk / Moderate / Safe thresholds already used inline for the
+// current-trip status card, exposed as a helper so the Trip Log table can
+// flag risky trips the same way without duplicating the rule.
+function getRiskLevel(alertCount) {
+  if (alertCount >= 4) return { tone: "red", label: "High Risk" };
+  if (alertCount >= 2) return { tone: "amber", label: "Moderate" };
+  return { tone: "emerald", label: "Safe" };
+}
+
+const RISK_BADGE_CLASSES = {
+  red: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200",
+  amber: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
+  emerald: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+};
+
+const RISK_ICONS = { red: ShieldAlert, amber: AlertTriangle, emerald: ShieldCheck };
+
+function RiskBadge({ tone, label }) {
+  const Icon = RISK_ICONS[tone] || ShieldCheck;
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold ${
+        RISK_BADGE_CLASSES[tone] || RISK_BADGE_CLASSES.emerald
+      }`}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </span>
+  );
+}
+
 function formatAlertDuration(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return "--";
@@ -168,50 +233,41 @@ function formatAlertTimestamp(value) {
   return `${monthLabel} ${day}, ${hour12}:${minute} ${suffix}`;
 }
 
-function PerformanceStatCard({
-  label,
-  value,
-  hint,
-  tone,
-  className,
-  statusLabel,
-  statusClassName,
-}) {
-  const toneClasses = {
-    emerald: "border-emerald-200/70 bg-emerald-50",
-    amber: "border-amber-200/70 bg-amber-50",
-    red: "border-red-200/70 bg-red-50",
-  };
-  const containerClassName = tone ? toneClasses[tone] || "border-blue-200/70 bg-white" : "border-blue-200/70 bg-white";
+function PerformancePanel({ title, icon: Icon, children, right }) {
   return (
-    <div className={`rounded-3xl border p-6 ${containerClassName} ${className || ""}`}>
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-xs uppercase tracking-[0.24em] text-blue-600">{label}</p>
-        {statusLabel ? (
-          <span className={`text-xs font-semibold uppercase tracking-[0.2em] ${statusClassName || "text-slate-600"}`}>
-            {statusLabel}
-          </span>
-        ) : null}
-      </div>
-      {typeof value === "string" || typeof value === "number" ? (
-        <p className="mt-3 text-2xl font-semibold text-slate-900">{value}</p>
-      ) : (
-        <div className="mt-4">{value}</div>
-      )}
-      {hint ? <p className="mt-2 text-xs text-slate-500">{hint}</p> : null}
-    </div>
-  );
-}
-
-function PerformancePanel({ title, children, right }) {
-  return (
-    <section className="rounded-3xl border border-blue-200/70 bg-white p-6">
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-start justify-between gap-4">
-        <p className="text-xs uppercase tracking-[0.24em] text-blue-600">{title}</p>
+        <div className="flex items-center gap-2">
+          {Icon && <Icon className="h-4 w-4 text-blue-600" />}
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</p>
+        </div>
         {right ? <div className="text-xs text-slate-500">{right}</div> : null}
       </div>
       <div className="mt-4">{children}</div>
     </section>
+  );
+}
+
+const METRIC_TILE_ICON_CLASSES = {
+  slate: "bg-slate-100 text-slate-500",
+  blue: "bg-blue-50 text-blue-600",
+  amber: "bg-amber-50 text-amber-600",
+  emerald: "bg-emerald-50 text-emerald-600",
+  red: "bg-red-50 text-red-600",
+};
+
+function MetricTile({ label, value, hint, icon: Icon, tone = "slate" }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center gap-2">
+        <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${METRIC_TILE_ICON_CLASSES[tone]}`}>
+          {Icon && <Icon className="h-3.5 w-3.5" />}
+        </div>
+        <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</span>
+      </div>
+      <p className="mt-2.5 text-xl font-bold text-slate-900">{value}</p>
+      {hint ? <p className="mt-0.5 text-xs text-slate-500">{hint}</p> : null}
+    </div>
   );
 }
 
@@ -313,7 +369,8 @@ const TABS_BASE = [
   { id: "trips", label: "Trip History" },
 ];
 
-const TRIP_STATUS_FILTERS = ["All", "Completed", "Ongoing", "Cancelled"];
+const TRIP_STATUS_OPTIONS = ["Completed", "Ongoing", "Cancelled"];
+const TRIPS_PAGE_SIZE = 6;
 
 function SupCrewProfile() {
   const location = useLocation();
@@ -330,12 +387,12 @@ function SupCrewProfile() {
   const [isSpecialtyBusy, setIsSpecialtyBusy] = useState(false);
   const [specialtyError, setSpecialtyError] = useState("");
   const [tripStatusFilter, setTripStatusFilter] = useState("All");
+  const [tripSearchTerm, setTripSearchTerm] = useState("");
+  const [tripPage, setTripPage] = useState(1);
   const [alerts, setAlerts] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [isPerformanceLoading, setIsPerformanceLoading] = useState(true);
   const [performanceError, setPerformanceError] = useState("");
-  const [alertPage, setAlertPage] = useState(0);
-  const [timePage, setTimePage] = useState(0);
 
   // clients + crew_client_specialties (see DATABASE.md) — fetched via the
   // admin-users Edge Function since the client can't read those tables
@@ -588,18 +645,38 @@ function SupCrewProfile() {
     };
   }, [alerts, sessions]);
 
-  const HOURS_PER_PAGE = 8;
-  const totalTimePages = Math.max(Math.ceil(hourly.length / HOURS_PER_PAGE), 1);
-  const currentTimePage = Math.min(timePage, totalTimePages - 1);
-  const pagedHours = hourly.slice(currentTimePage * HOURS_PER_PAGE, currentTimePage * HOURS_PER_PAGE + HOURS_PER_PAGE);
+  // Fixed order from the performanceKpis array built above: current/last
+  // trip status first, then the four 7-day summary numbers.
+  const [heroKpi, totalAlertsKpi, avgAlertsKpi, peakHourKpi, totalTripsKpi] = performanceKpis;
 
-  const ALERTS_PER_PAGE = 5;
-  const totalAlertPages = Math.max(Math.ceil(latestAlerts.length / ALERTS_PER_PAGE), 1);
-  const currentAlertPage = Math.min(alertPage, totalAlertPages - 1);
-  const pagedAlerts = latestAlerts.slice(
-    currentAlertPage * ALERTS_PER_PAGE,
-    currentAlertPage * ALERTS_PER_PAGE + ALERTS_PER_PAGE,
+  // Display-only ordering (most frequent alert type first) and peak-hour
+  // lookup for the heatmap strip — derived from data the KPI memo above
+  // already produced, without altering any of its counts or thresholds.
+  const sortedAlertTypes = [...alertTypes].sort((a, b) => b.count - a.count);
+  const peakHour = hourly.reduce(
+    (peak, row) => (row.alerts > peak.alerts ? row : peak),
+    { hour: "--", alerts: 0 },
   );
+
+  // Weekly performance — how many of this driver's last-7-days trips fell
+  // into each risk tier (same getRiskLevel thresholds as the per-trip
+  // badges), so a supervisor can judge the week as a whole, not just the
+  // single latest/ongoing trip. Overall tone is the worst tier present:
+  // one High Risk trip should still flag the week, even if most were Safe.
+  const weeklyRiskCounts = sessions.reduce(
+    (counts, session) => {
+      const tier = getRiskLevel(session.total_alerts || 0).label;
+      counts[tier] += 1;
+      return counts;
+    },
+    { Safe: 0, Moderate: 0, "High Risk": 0 },
+  );
+  const weeklyRisk =
+    weeklyRiskCounts["High Risk"] > 0
+      ? { tone: "red", label: "High Risk" }
+      : weeklyRiskCounts.Moderate > 0
+      ? { tone: "amber", label: "Moderate" }
+      : { tone: "emerald", label: "Safe" };
 
   const availableClientsToAdd = availableClients
     .map((client) => client.name)
@@ -692,14 +769,36 @@ function SupCrewProfile() {
     setClientSpecialties((prev) => prev.filter((entry) => entry !== client));
   };
 
-  const filteredTrips =
-    tripStatusFilter === "All" ? trips : trips.filter((trip) => trip.status === tripStatusFilter);
+  const filteredTrips = trips.filter((trip) => {
+    const matchesStatus = tripStatusFilter === "All" || trip.status === tripStatusFilter;
+    const query = tripSearchTerm.trim().toLowerCase();
+    const matchesSearch =
+      !query || [trip.id, trip.client, trip.route, trip.dateLabel].join(" ").toLowerCase().includes(query);
+    return matchesStatus && matchesSearch;
+  });
 
   const tripStatusCounts = {
     All: trips.length,
     Completed: trips.filter((trip) => trip.status === "Completed").length,
     Ongoing: trips.filter((trip) => trip.status === "Ongoing").length,
     Cancelled: trips.filter((trip) => trip.status === "Cancelled").length,
+  };
+
+  // Same list-pagination pattern used on the Trucks and Delivery Crew lists
+  // (fixed page size, clamp current page, slice for the visible rows).
+  const totalTripPages = Math.max(1, Math.ceil(filteredTrips.length / TRIPS_PAGE_SIZE));
+  const safeTripPage = Math.min(tripPage, totalTripPages);
+  const tripPageStart = (safeTripPage - 1) * TRIPS_PAGE_SIZE;
+  const pagedTrips = filteredTrips.slice(tripPageStart, tripPageStart + TRIPS_PAGE_SIZE);
+
+  const updateTripSearch = (value) => {
+    setTripSearchTerm(value);
+    setTripPage(1);
+  };
+
+  const updateTripStatusFilter = (value) => {
+    setTripStatusFilter(value);
+    setTripPage(1);
   };
 
   if (!crew) {
@@ -861,183 +960,279 @@ function SupCrewProfile() {
               </div>
             ) : null}
 
-            <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-              <div className="rounded-3xl border border-blue-200/70 bg-white p-6">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {performanceKpis.map((kpi) => (
-                    <PerformanceStatCard
-                      key={kpi.label}
-                      label={kpi.label}
-                      value={isPerformanceLoading ? "..." : kpi.value}
-                      hint={kpi.hint}
-                      tone={kpi.tone}
-                      className={kpi.className}
-                      statusLabel={kpi.statusLabel}
-                      statusClassName={kpi.statusClassName}
-                    />
-                  ))}
-                </div>
-                <div className="mt-4 flex justify-end">
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                    No. of trips: {isPerformanceLoading ? "..." : sessions.length}
+            {/* Hero row — the two facts a supervisor needs first: is the
+                current/most recent trip safe, and how has this driver
+                trended across the whole week. Side by side so "right now"
+                and "this week" can be scanned in one glance rather than
+                the week's context being buried below. */}
+            <div className="grid gap-4 lg:grid-cols-2">
+              <section
+                className={`rounded-2xl border p-5 shadow-sm sm:p-6 ${
+                  HERO_TONE_CLASSES[heroKpi.tone] || "border-slate-200 bg-white"
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    {heroKpi.label}
                   </span>
+                  {!isPerformanceLoading && heroKpi.statusLabel ? (
+                    <RiskBadge tone={heroKpi.tone} label={heroKpi.statusLabel} />
+                  ) : null}
                 </div>
-              </div>
+                <div className="mt-4">
+                  {isPerformanceLoading ? (
+                    <p className="text-sm text-slate-500">Loading trip status…</p>
+                  ) : typeof heroKpi.value === "string" ? (
+                    <p className="text-sm text-slate-500">No trip data in the last 7 days.</p>
+                  ) : (
+                    heroKpi.value
+                  )}
+                </div>
+              </section>
 
-              <div className="rounded-3xl border border-blue-200/70 bg-white p-6">
-                <p className="text-xs uppercase tracking-[0.24em] text-blue-600">Focus metrics</p>
-                <div className="mt-4 space-y-4">
-                  <div>
-                    <p className="text-sm font-medium text-slate-700">Most frequent alert</p>
-                    <p className="mt-1 text-lg font-semibold text-slate-900">
-                      {isPerformanceLoading ? "..." : alertTypes[0]?.type || "No alerts"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-slate-700">Alert mix</p>
-                    <div className="mt-2 space-y-3">
-                      {alertTypes.map((row) => (
-                        <div key={row.type} className="space-y-1">
-                          <div className="flex items-center justify-between text-xs text-slate-600">
-                            <span>{row.type}</span>
-                            <span>{isPerformanceLoading ? "..." : row.share}</span>
-                          </div>
-                          <div className="h-2 w-full rounded-full bg-slate-100">
-                            <div
-                              className="h-2 rounded-full bg-blue-500"
-                              style={{ width: `${row.percent}%` }}
-                              aria-label={`${row.type} ${row.share}`}
-                            />
-                          </div>
+              <section
+                className={`rounded-2xl border p-5 shadow-sm sm:p-6 ${
+                  HERO_TONE_CLASSES[weeklyRisk.tone] || "border-slate-200 bg-white"
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    This Week (7 Days)
+                  </span>
+                  {!isPerformanceLoading && sessions.length > 0 ? (
+                    <RiskBadge tone={weeklyRisk.tone} label={weeklyRisk.label} />
+                  ) : null}
+                </div>
+                <div className="mt-4">
+                  {isPerformanceLoading ? (
+                    <p className="text-sm text-slate-500">Loading weekly summary…</p>
+                  ) : sessions.length === 0 ? (
+                    <p className="text-sm text-slate-500">No trips recorded in the last 7 days.</p>
+                  ) : (
+                    <>
+                      <div
+                        className="flex h-2.5 w-full gap-[2px] overflow-hidden rounded-full bg-slate-100"
+                        role="img"
+                        aria-label={`${weeklyRiskCounts.Safe} safe, ${weeklyRiskCounts.Moderate} moderate, and ${weeklyRiskCounts["High Risk"]} high risk trips this week`}
+                      >
+                        {weeklyRiskCounts.Safe > 0 && (
+                          <div
+                            className="h-full rounded-full bg-emerald-400"
+                            style={{ width: `${(weeklyRiskCounts.Safe / sessions.length) * 100}%` }}
+                          />
+                        )}
+                        {weeklyRiskCounts.Moderate > 0 && (
+                          <div
+                            className="h-full rounded-full bg-amber-400"
+                            style={{ width: `${(weeklyRiskCounts.Moderate / sessions.length) * 100}%` }}
+                          />
+                        )}
+                        {weeklyRiskCounts["High Risk"] > 0 && (
+                          <div
+                            className="h-full rounded-full bg-red-400"
+                            style={{ width: `${(weeklyRiskCounts["High Risk"] / sessions.length) * 100}%` }}
+                          />
+                        )}
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                        <div>
+                          <p className="text-base font-bold text-emerald-700">{weeklyRiskCounts.Safe}</p>
+                          <p className="text-xs text-slate-500">Safe</p>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-slate-700">Alerts by time</p>
-                    <div className="mt-2 space-y-3">
-                      {pagedHours.map((row) => {
-                        const pct = maxAlerts ? Math.round((row.alerts / maxAlerts) * 100) : 0;
+                        <div>
+                          <p className="text-base font-bold text-amber-700">{weeklyRiskCounts.Moderate}</p>
+                          <p className="text-xs text-slate-500">Moderate</p>
+                        </div>
+                        <div>
+                          <p className="text-base font-bold text-red-700">{weeklyRiskCounts["High Risk"]}</p>
+                          <p className="text-xs text-slate-500">High Risk</p>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            {/* 7-day summary */}
+            <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <MetricTile
+                label={totalAlertsKpi.label}
+                icon={AlertTriangle}
+                tone="amber"
+                value={isPerformanceLoading ? "…" : totalAlertsKpi.value}
+                hint={totalAlertsKpi.hint}
+              />
+              <MetricTile
+                label={avgAlertsKpi.label}
+                icon={Activity}
+                tone="blue"
+                value={isPerformanceLoading ? "…" : avgAlertsKpi.value}
+                hint={avgAlertsKpi.hint}
+              />
+              <MetricTile
+                label={peakHourKpi.label}
+                icon={Clock}
+                tone="blue"
+                value={isPerformanceLoading ? "…" : peakHourKpi.value}
+                hint={peakHourKpi.hint}
+              />
+              <MetricTile
+                label={totalTripsKpi.label}
+                icon={Route}
+                tone="slate"
+                value={isPerformanceLoading ? "…" : totalTripsKpi.value}
+                hint={totalTripsKpi.hint}
+              />
+            </section>
+
+            {/* Alert pattern analysis */}
+            <div className="grid gap-4 lg:grid-cols-2">
+              <PerformancePanel title="Alert Type Breakdown" icon={ListChecks}>
+                <p className="text-xs text-slate-500">
+                  Most frequent —{" "}
+                  <span className="font-semibold text-slate-700">
+                    {isPerformanceLoading
+                      ? "…"
+                      : sortedAlertTypes[0]?.count
+                      ? sortedAlertTypes[0].type
+                      : "No alerts"}
+                  </span>
+                </p>
+                <div className="mt-3 space-y-3">
+                  {sortedAlertTypes.map((row) => {
+                    const TypeIcon = ALERT_TYPE_ICON_BY_LABEL[row.type] || Activity;
+                    return (
+                      <div key={row.type} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs text-slate-600">
+                          <span className="inline-flex items-center gap-1.5 font-medium text-slate-700">
+                            <TypeIcon className="h-3.5 w-3.5 text-slate-400" />
+                            {row.type}
+                          </span>
+                          <span>{isPerformanceLoading ? "…" : `${row.count} · ${row.share}`}</span>
+                        </div>
+                        <div className="h-2 w-full rounded-full bg-slate-100">
+                          <div
+                            className="h-2 rounded-full bg-blue-500"
+                            style={{ width: `${row.percent}%` }}
+                            aria-label={`${row.type} ${row.share}`}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </PerformancePanel>
+
+              <PerformancePanel
+                title="24-Hour Alert Pattern"
+                icon={Clock}
+                right={!isPerformanceLoading && peakHour.alerts > 0 ? `Peak: ${peakHour.hour}` : null}
+              >
+                {isPerformanceLoading ? (
+                  <p className="text-sm text-slate-500">Loading…</p>
+                ) : maxAlerts === 0 ? (
+                  <p className="text-sm text-slate-500">No alerts recorded in the last 7 days.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <div className="flex min-w-[480px] items-end gap-1.5">
+                      {hourly.map((row, idx) => {
+                        const isPeak = row.hour === peakHour.hour && row.alerts > 0;
+                        const heightPct = row.alerts > 0 ? Math.max((row.alerts / maxAlerts) * 100, 12) : 0;
+                        const showLabel = isPeak || idx % 3 === 0;
                         return (
-                          <div key={row.hour} className="flex items-center gap-3">
-                            <div className="w-14 text-xs font-medium text-slate-700">{row.hour}</div>
-                            <div className="flex-1">
-                              <div className="h-2 w-full rounded-full bg-slate-100">
-                                <div
-                                  className="h-2 rounded-full bg-blue-500"
-                                  style={{ width: `${pct}%` }}
-                                  aria-label={`${row.hour} ${row.alerts} alerts`}
-                                />
-                              </div>
+                          <div
+                            key={row.hour}
+                            className="flex flex-1 flex-col items-center gap-1"
+                            title={`${row.hour} — ${row.alerts} alert${row.alerts === 1 ? "" : "s"}`}
+                          >
+                            <div className="flex h-16 w-full items-end rounded-md bg-slate-100">
+                              <div
+                                className={`w-full rounded-md transition ${isPeak ? "bg-blue-600" : "bg-blue-400"}`}
+                                style={{ height: `${heightPct}%` }}
+                                aria-label={`${row.hour} ${row.alerts} alerts`}
+                              />
                             </div>
-                            <div className="w-10 text-right text-xs font-semibold text-slate-700">
-                              {isPerformanceLoading ? "..." : row.alerts}
-                            </div>
+                            <span
+                              className={`text-[10px] ${
+                                isPeak ? "font-semibold text-blue-700" : "text-slate-400"
+                              }`}
+                            >
+                              {showLabel ? row.hour.slice(0, 2) : ""}
+                            </span>
                           </div>
                         );
                       })}
-                      <div className="flex items-center justify-between pt-2 text-xs text-slate-500">
-                        <span>
-                          Page {currentTimePage + 1} of {totalTimePages}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-                            onClick={() => setTimePage((prev) => Math.max(prev - 1, 0))}
-                            disabled={currentTimePage === 0 || isPerformanceLoading}
-                          >
-                            Prev
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-                            onClick={() => setTimePage((prev) => Math.min(prev + 1, totalTimePages - 1))}
-                            disabled={currentTimePage >= totalTimePages - 1 || isPerformanceLoading}
-                          >
-                            Next
-                          </button>
-                        </div>
-                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
-            </section>
+                )}
+              </PerformancePanel>
+            </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
-              <PerformancePanel title="Recent Alerts" right="Latest events">
-                <div className="space-y-3">
-                  {(isPerformanceLoading ? [] : pagedAlerts).map((alert) => (
-                    <div key={alert.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-semibold text-slate-900">{alert.type}</p>
-                        {(() => {
-                          const displayDuration = formatAlertDuration(alert.duration);
-                          if (displayDuration === "--" || displayDuration === "0m") {
-                            return null;
-                          }
-                          return (
-                            <span className="text-xs font-semibold text-amber-600">{displayDuration}</span>
-                          );
-                        })()}
+              <PerformancePanel
+                title="Recent Alerts"
+                icon={AlertTriangle}
+                right={!isPerformanceLoading ? `${latestAlerts.length} in 7 days` : null}
+              >
+                <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
+                  {(isPerformanceLoading ? [] : latestAlerts).map((alert) => {
+                    const TypeIcon = ALERT_TYPE_ICON_BY_LABEL[alert.type] || Activity;
+                    const displayDuration = formatAlertDuration(alert.duration);
+                    const hasDuration = displayDuration !== "--" && displayDuration !== "0m";
+                    return (
+                      <div
+                        key={alert.id}
+                        className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3.5 py-2.5"
+                      >
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-slate-500 ring-1 ring-inset ring-slate-200">
+                          <TypeIcon className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-slate-900">{alert.type}</p>
+                          <p className="truncate text-xs text-slate-500">{formatAlertTimestamp(alert.createdAt)}</p>
+                        </div>
+                        {hasDuration ? (
+                          <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                            {displayDuration}
+                          </span>
+                        ) : null}
                       </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-600">
-                        <span>{formatAlertTimestamp(alert.createdAt)}</span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {!isPerformanceLoading && latestAlerts.length === 0 ? (
                     <p className="text-sm text-slate-500">No alerts found in the last 7 days.</p>
-                  ) : null}
-                  {!isPerformanceLoading && latestAlerts.length > ALERTS_PER_PAGE ? (
-                    <div className="flex items-center justify-between pt-2 text-xs text-slate-500">
-                      <span>
-                        Page {currentAlertPage + 1} of {totalAlertPages}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-                          onClick={() => setAlertPage((prev) => Math.max(prev - 1, 0))}
-                          disabled={currentAlertPage === 0}
-                        >
-                          Prev
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-                          onClick={() => setAlertPage((prev) => Math.min(prev + 1, totalAlertPages - 1))}
-                          disabled={currentAlertPage >= totalAlertPages - 1}
-                        >
-                          Next
-                        </button>
-                      </div>
-                    </div>
                   ) : null}
                 </div>
               </PerformancePanel>
 
-              <PerformancePanel title="Trip Log" right="Last 7 days">
+              <PerformancePanel title="Trip Log" icon={ClipboardList} right="Last 7 days">
                 <div className="overflow-hidden rounded-2xl border border-slate-200">
                   <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-xs uppercase tracking-[0.2em] text-slate-600">
+                    <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                       <tr>
-                        <th className="px-4 py-3 font-medium">Start</th>
-                        <th className="px-4 py-3 font-medium">End</th>
-                        <th className="px-4 py-3 font-medium">Duration</th>
-                        <th className="px-4 py-3 font-medium">Alerts</th>
+                        <th className="px-4 py-3 font-semibold">Start</th>
+                        <th className="px-4 py-3 font-semibold">End</th>
+                        <th className="px-4 py-3 font-semibold">Duration</th>
+                        <th className="px-4 py-3 font-semibold">Alerts</th>
+                        <th className="px-4 py-3 font-semibold">Risk</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-200">
-                      {(isPerformanceLoading ? [] : recentSessions).map((session) => (
-                        <tr key={session.sessionId} className="bg-white">
-                          <td className="px-4 py-3 text-slate-700">{formatAlertTimestamp(session.start)}</td>
-                          <td className="px-4 py-3 text-slate-700">{formatAlertTimestamp(session.end)}</td>
-                          <td className="px-4 py-3 text-slate-700">{formatAlertDuration(session.duration)}</td>
-                          <td className="px-4 py-3 text-slate-700">{session.alerts}</td>
-                        </tr>
-                      ))}
+                    <tbody className="divide-y divide-slate-100">
+                      {(isPerformanceLoading ? [] : recentSessions).map((session) => {
+                        const risk = getRiskLevel(session.alerts);
+                        return (
+                          <tr key={session.sessionId} className="bg-white transition hover:bg-slate-50">
+                            <td className="px-4 py-3 text-slate-700">{formatAlertTimestamp(session.start)}</td>
+                            <td className="px-4 py-3 text-slate-700">{formatAlertTimestamp(session.end)}</td>
+                            <td className="px-4 py-3 text-slate-700">{formatAlertDuration(session.duration)}</td>
+                            <td className="px-4 py-3 text-slate-700">{session.alerts}</td>
+                            <td className="px-4 py-3">
+                              <RiskBadge tone={risk.tone} label={risk.label} />
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1180,73 +1375,123 @@ function SupCrewProfile() {
           </div>
         )}
 
-        {/* Trip History tab */}
+        {/* Trip History tab — a search + status dropdown toolbar (same
+            pattern as the fleet Trucks list) replaces the old row of
+            per-status filter pills, so reviewing history doesn't feel like
+            switching between separate tabs — everything narrows in place
+            within one always-visible table. */}
         {activeTab === "trips" && (
           <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap gap-2">
-              {TRIP_STATUS_FILTERS.map((status) => (
-                <button
-                  key={status}
-                  type="button"
-                  onClick={() => setTripStatusFilter(status)}
-                  className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
-                    tripStatusFilter === status
-                      ? "border-blue-600 bg-blue-600 text-white"
-                      : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
-                  }`}
+            <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-3.5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="relative flex-1">
+                  <label className="sr-only" htmlFor="trip-search">
+                    Search trip history
+                  </label>
+                  <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    id="trip-search"
+                    type="text"
+                    value={tripSearchTerm}
+                    onChange={(event) => updateTripSearch(event.target.value)}
+                    placeholder="Search by client, route, or trip ID..."
+                    className="h-10 w-full rounded-xl border border-slate-300 bg-slate-50 py-2 pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                  />
+                </div>
+
+                <label className="sr-only" htmlFor="trip-status-filter">
+                  Status
+                </label>
+                <select
+                  id="trip-status-filter"
+                  value={tripStatusFilter}
+                  onChange={(event) => updateTripStatusFilter(event.target.value)}
+                  className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:w-52"
                 >
-                  <span>{status}</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs ${
-                      tripStatusFilter === status
-                        ? "bg-white/20 text-white"
-                        : "bg-slate-200 text-slate-700"
-                    }`}
-                  >
-                    {tripStatusCounts[status]}
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            <section className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <table className="w-full min-w-[640px] text-left text-sm">
-                <thead>
-                  <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    <th className="px-5 py-3 font-semibold">Trip ID</th>
-                    <th className="px-5 py-3 font-semibold">Date</th>
-                    <th className="px-5 py-3 font-semibold">Client</th>
-                    <th className="px-5 py-3 font-semibold">Route</th>
-                    <th className="px-5 py-3 font-semibold">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredTrips.map((trip) => (
-                    <tr key={trip.id} className="transition hover:bg-slate-50">
-                      <td className="px-5 py-4 font-medium text-slate-900">{trip.id}</td>
-                      <td className="px-5 py-4 text-slate-700">{trip.dateLabel}</td>
-                      <td className="px-5 py-4 text-slate-700">{trip.client}</td>
-                      <td className="px-5 py-4 text-slate-700">
-                        <span className="inline-flex items-center gap-1.5">
-                          <Route className="h-3.5 w-3.5 text-slate-400" />
-                          {trip.route}
-                        </span>
-                      </td>
-                      <td className="px-5 py-4">
-                        <TripStatusBadge status={trip.status} />
-                      </td>
-                    </tr>
+                  <option value="All">All Statuses ({tripStatusCounts.All})</option>
+                  {TRIP_STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {status} ({tripStatusCounts[status]})
+                    </option>
                   ))}
+                </select>
+              </div>
+            </section>
 
-                  {filteredTrips.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="px-5 py-8 text-center text-sm text-slate-500">
-                        No trips match this filter.
-                      </td>
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[560px] text-left text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                      <th className="px-5 py-3 font-semibold">Trip</th>
+                      <th className="px-5 py-3 font-semibold">Client</th>
+                      <th className="px-5 py-3 font-semibold">Route</th>
+                      <th className="px-5 py-3 font-semibold">Status</th>
                     </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {pagedTrips.map((trip) => (
+                      <tr key={trip.id} className="transition hover:bg-slate-50">
+                        <td className="px-5 py-3.5">
+                          <p className="font-medium text-slate-900">{trip.id}</p>
+                          <p className="text-xs text-slate-500">{trip.dateLabel}</p>
+                        </td>
+                        <td className="px-5 py-3.5 text-slate-700">{trip.client}</td>
+                        <td className="px-5 py-3.5 text-slate-700">
+                          <span className="inline-flex items-center gap-1.5">
+                            <Route className="h-3.5 w-3.5 text-slate-400" />
+                            {trip.route}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <TripStatusBadge status={trip.status} />
+                        </td>
+                      </tr>
+                    ))}
+
+                    {filteredTrips.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-5 py-8 text-center text-sm text-slate-500">
+                          No trips match your search or filter.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {filteredTrips.length > 0 && (
+                <nav
+                  className="flex flex-col items-center justify-between gap-3 border-t border-slate-100 px-4 py-4 sm:flex-row sm:px-5"
+                  aria-label="Trip history pagination"
+                >
+                  <p className="text-[11px] font-medium text-slate-500 sm:text-xs">
+                    Showing {tripPageStart + 1}–{Math.min(tripPageStart + TRIPS_PAGE_SIZE, filteredTrips.length)} of{" "}
+                    {filteredTrips.length}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={safeTripPage === 1}
+                      onClick={() => setTripPage((page) => Math.max(1, page - 1))}
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <span className="text-[11px] font-medium text-slate-500 sm:text-xs">
+                      Page {safeTripPage} of {totalTripPages}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={safeTripPage === totalTripPages}
+                      onClick={() => setTripPage((page) => Math.min(totalTripPages, page + 1))}
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </nav>
+              )}
             </section>
           </div>
         )}
