@@ -1,4 +1,4 @@
-# Phase 3 - Raspberry Pi Boot and Heartbeat
+# Phase 4 - Raspberry Pi Boot and Heartbeat
 
 ## Goal
 

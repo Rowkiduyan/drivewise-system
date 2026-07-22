@@ -1,4 +1,4 @@
-# Phase 2 - Start Trip
+# Phase 3 - Start Trip
 
 ## Goal
 

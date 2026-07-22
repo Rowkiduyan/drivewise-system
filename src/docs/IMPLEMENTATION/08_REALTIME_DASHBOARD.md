@@ -1,4 +1,4 @@
-# Phase 7 - Dashboard
+# Phase 8 - Dashboard
 
 ## Goal
 

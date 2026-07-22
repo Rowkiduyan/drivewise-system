@@ -1,4 +1,4 @@
-# Phase 6 - End Trip
+# Phase 7 - End Trip
 
 ## Goal
 
