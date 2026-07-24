@@ -23,8 +23,34 @@ import {
   ClipboardList,
   ChevronDown,
   ChevronUp,
+  Navigation,
+  Map,
 } from 'lucide-react'
+import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
+import 'leaflet/dist/leaflet.css'
+import L from 'leaflet'
 import SupLayout from '../layout/SupLayout.jsx'
+
+delete L.Icon.Default.prototype._getIconUrl
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+})
+
+const startIcon = L.divIcon({
+  className: '',
+  html: '<div style="background:#2563eb;color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.3)">S</div>',
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+})
+
+const endIcon = L.divIcon({
+  className: '',
+  html: '<div style="background:#059669;color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.3)">E</div>',
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+})
 
 const deliverySteps = [
   'REQUEST_CREATED',
@@ -277,6 +303,7 @@ const REPORT_TABS = [
   { id: 'trip', label: 'Trip Summary', icon: Route },
   { id: 'behavior', label: 'Driver Behavior', icon: Activity },
   { id: 'delivery', label: 'Delivery Report', icon: ClipboardList },
+  { id: 'route', label: 'Route Deviation', icon: Map },
 ]
 
 function getRiskLevel(alertCount) {
@@ -345,8 +372,74 @@ function formatAlertTimestamp(value) {
   return `${monthLabel} ${day}, ${hour12}:${minute} ${suffix}`
 }
 
+function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoords }) {
+  const allPoints = [...plannedRoute, ...actualRoute]
+  const lats = allPoints.map((p) => p[0])
+  const lngs = allPoints.map((p) => p[1])
+  const minLat = Math.min(...lats)
+  const maxLat = Math.max(...lats)
+  const minLng = Math.min(...lngs)
+  const maxLng = Math.max(...lngs)
+  const center = [(minLat + maxLat) / 2, (minLng + maxLng) / 2]
+
+  return (
+    <div className="rounded-lg border border-slate-200 overflow-hidden" style={{ height: 320 }}>
+      <MapContainer
+        center={center}
+        zoom={13}
+        className="h-full w-full"
+        zoomControl={true}
+        scrollWheelZoom={true}
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        <Polyline
+          positions={plannedRoute}
+          pathOptions={{ color: '#059669', weight: 4, dashArray: '8 6' }}
+        />
+        <Polyline
+          positions={actualRoute}
+          pathOptions={{ color: '#2563eb', weight: 4, opacity: 0.7 }}
+        />
+        <Marker position={pickupCoords} icon={startIcon}>
+          <Popup>Pickup Location</Popup>
+        </Marker>
+        <Marker position={dropoffCoords} icon={endIcon}>
+          <Popup>Drop-off Location</Popup>
+        </Marker>
+      </MapContainer>
+    </div>
+  )
+}
+
 const COMPLETED_REPORT_DATA = {
   'DEL-004': {
+    routeDeviation: {
+      planned: [
+        [14.560, 121.070],
+        [14.557, 121.060],
+        [14.555, 121.053],
+        [14.553, 121.048],
+        [14.550, 121.047],
+      ],
+      actual: [
+        [14.560, 121.070],
+        [14.557, 121.060],
+        [14.562, 121.055],
+        [14.555, 121.052],
+        [14.553, 121.048],
+        [14.550, 121.047],
+      ],
+      plannedDistance: '5.8 km',
+      actualDistance: '6.4 km',
+      deviationDistance: '0.6 km',
+      deviationPercent: 10.3,
+      aiSummary: 'Minor route deviation detected. The driver briefly deviated north near the C5-Meralco intersection, adding approximately 0.6 km to the planned route. This appears to be a navigation correction rather than an intentional detour. No significant impact on delivery time or safety.',
+      aiVerdict: 'Minor Deviation',
+      aiVerdictTone: 'amber',
+    },
     trip: {
       route: 'Pasig Hub → BGC Branch',
       distance: '14.2 km',
@@ -397,6 +490,32 @@ const COMPLETED_REPORT_DATA = {
     },
   },
   'DEL-005': {
+    routeDeviation: {
+      planned: [
+        [14.300, 120.960],
+        [14.320, 120.970],
+        [14.350, 120.985],
+        [14.380, 121.000],
+        [14.400, 121.015],
+        [14.420, 121.031],
+      ],
+      actual: [
+        [14.300, 120.960],
+        [14.310, 120.965],
+        [14.330, 120.945],
+        [14.360, 120.965],
+        [14.390, 121.010],
+        [14.410, 121.025],
+        [14.420, 121.031],
+      ],
+      plannedDistance: '18.2 km',
+      actualDistance: '22.8 km',
+      deviationDistance: '4.6 km',
+      deviationPercent: 25.3,
+      aiSummary: 'Significant route deviation detected. The driver took an alternative route through General Trias residential areas instead of staying on Aguinaldo Highway, adding 4.6 km to the planned route. This deviation is notable and may indicate driver unfamiliarity with the area or a deliberate choice to avoid traffic. Recommend reviewing the trip log for this delivery to assess any impact on schedule or fuel efficiency.',
+      aiVerdict: 'Significant Deviation',
+      aiVerdictTone: 'red',
+    },
     trip: {
       route: 'Cavite Depot → Alabang Branch',
       distance: '22.8 km',
@@ -658,6 +777,76 @@ function CompletedDeliveryReport({ delivery, onClose }) {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {reportTab === 'route' && (
+        <div className="space-y-3">
+          <RouteDeviationMap
+            plannedRoute={report.routeDeviation.planned}
+            actualRoute={report.routeDeviation.actual}
+            pickupCoords={report.routeDeviation.planned[0]}
+            dropoffCoords={report.routeDeviation.planned[report.routeDeviation.planned.length - 1]}
+          />
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
+              <p className="text-xs text-slate-500">Planned Distance</p>
+              <p className="text-sm font-bold text-slate-900">{report.routeDeviation.plannedDistance}</p>
+            </div>
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
+              <p className="text-xs text-slate-500">Actual Distance</p>
+              <p className="text-sm font-bold text-slate-900">{report.routeDeviation.actualDistance}</p>
+            </div>
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
+              <p className="text-xs text-slate-500">Deviation</p>
+              <p className="text-sm font-bold text-slate-900">{report.routeDeviation.deviationDistance}</p>
+            </div>
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
+              <p className="text-xs text-slate-500">Deviation %</p>
+              <p className="text-sm font-bold text-slate-900">{report.routeDeviation.deviationPercent}%</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 rounded-lg border p-3 text-xs"
+            style={{
+              borderColor: report.routeDeviation.aiVerdictTone === 'red' ? '#fecaca' : '#fde68a',
+              backgroundColor: report.routeDeviation.aiVerdictTone === 'red' ? '#fef2f2' : '#fffbeb',
+            }}
+          >
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white ${
+              report.routeDeviation.aiVerdictTone === 'red' ? 'bg-red-500' : 'bg-amber-500'
+            }`}>
+              <Navigation className="h-4 w-4" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={`font-semibold ${
+                report.routeDeviation.aiVerdictTone === 'red' ? 'text-red-800' : 'text-amber-800'
+              }`}>
+                AI Route Analysis: {report.routeDeviation.aiVerdict}
+              </p>
+              <p className={`mt-1 leading-relaxed ${
+                report.routeDeviation.aiVerdictTone === 'red' ? 'text-red-700' : 'text-amber-700'
+              }`}>
+                {report.routeDeviation.aiSummary}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4 rounded-lg bg-white border border-slate-200 p-3">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#059669' }} />
+              <span className="text-slate-600">Planned Route</span>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#2563eb' }} />
+              <span className="text-slate-600">Actual Route</span>
+            </div>
+            <span className="ml-auto text-[10px] text-slate-400 flex items-center gap-1">
+              <MapPin className="h-3 w-3" />
+              S = Start, E = End
+            </span>
           </div>
         </div>
       )}
