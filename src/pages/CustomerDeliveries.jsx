@@ -459,9 +459,19 @@ function RequestDetailModal({ request, onClose, onUpdate }) {
           {request.status === 'PROCESSING' && request.quotation && !showQuotationResponse && (
             <div className="space-y-4 p-4 bg-blue-50 rounded-xl border border-blue-200">
               <h4 className="text-sm font-medium text-blue-800">Quotation from Supervisor</h4>
-              <div className="p-3 bg-white rounded-lg">
-                <p className="text-2xl font-bold text-blue-600">₱{request.quotation.toLocaleString()}</p>
-                <p className="text-xs text-slate-500 mt-1">Total quoted price</p>
+              <div className="p-3 bg-white rounded-lg space-y-2">
+                <p className="text-2xl font-bold text-blue-600">₱{(typeof request.quotation === 'object' ? request.quotation.amount : request.quotation).toLocaleString()}</p>
+                {typeof request.quotation === 'object' && request.quotation.breakdown?.length > 0 && (
+                  <div className="border-t border-blue-200 pt-2 space-y-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-blue-600">Breakdown</p>
+                    {request.quotation.breakdown.map((item, idx) => (
+                      <div key={idx} className="flex justify-between text-xs">
+                        <span className="text-blue-700">{item.label}</span>
+                        <span className="font-medium text-blue-800">₱{Number(item.amount).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex gap-3">
                 <button
@@ -489,7 +499,7 @@ function RequestDetailModal({ request, onClose, onUpdate }) {
               
               {quotationAction === 'approve' ? (
                 <div className="space-y-3">
-                  <p className="text-sm text-slate-600">You are about to approve the quotation of <span className="font-bold">₱{request.quotation?.toLocaleString()}</span>. The delivery will proceed to the next step.</p>
+                  <p className="text-sm text-slate-600">You are about to approve the quotation of <span className="font-bold">₱{(typeof request.quotation === 'object' ? request.quotation.amount : request.quotation)?.toLocaleString()}</span>. The delivery will proceed to the next step.</p>
                   <div className="flex gap-3">
                     <button
                       onClick={handleQuotationSubmit}
@@ -670,14 +680,14 @@ function RequestCard({ request, onViewDetails }) {
             <p className="text-xs font-semibold text-red-700">Action Required</p>
           </div>
           <p className="text-xs text-red-600">
-            Quotation received: <span className="font-bold">₱{request.quotation.toLocaleString()}</span> - Please approve or reject
+            Quotation received: <span className="font-bold">₱{(typeof request.quotation === 'object' ? request.quotation.amount : request.quotation).toLocaleString()}</span> - Please approve or reject
           </p>
         </div>
       )}
       {!needsAction && request.quotation && request.status === 'PROCESSING' && (
         <div className="mt-4 p-3 bg-blue-50 rounded-xl">
           <p className="text-xs text-blue-700">
-            Quotation received: <span className="font-bold">₱{request.quotation.toLocaleString()}</span>
+            Quotation received: <span className="font-bold">₱{(typeof request.quotation === 'object' ? request.quotation.amount : request.quotation).toLocaleString()}</span>
           </p>
         </div>
       )}
@@ -738,7 +748,7 @@ function CustomerDeliveries() {
       otherItemType: '',
       notes: '',
       status: 'PROCESSING',
-      quotation: 15000,
+      quotation: { amount: 15000, breakdown: [{ label: 'Base Delivery Fee', amount: 5000 }, { label: 'Distance Fee', amount: 3500 }, { label: 'Truck Type Surcharge', amount: 2500 }, { label: 'Fuel Surcharge', amount: 2000 }, { label: 'Loading/Unloading Fee', amount: 2000 }], notes: '', validUntil: '' },
       createdAt: '2024-12-14T09:00:00'
     },
     {

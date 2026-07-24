@@ -96,7 +96,7 @@ const mockRequests = [
     createdAt: '2026-07-21 08:00',
     destinationCoords: { lat: 14.3834, lng: 121.0419 },
     currentLocation: { lat: 14.5172, lng: 121.0198 },
-    quotation: { amount: 3500, notes: 'Includes cold chain handling', validUntil: '2026-07-24' },
+    quotation: { amount: 3500, breakdown: [{ label: 'Base Delivery Fee', amount: 1200 }, { label: 'Distance Fee', amount: 710 }, { label: 'Truck Type Surcharge', amount: 500 }, { label: 'Fuel Surcharge', amount: 400 }, { label: 'Loading/Unloading Fee', amount: 690 }], notes: 'Includes cold chain handling', validUntil: '2026-07-24' },
     crew: null,
   },
   {
@@ -112,7 +112,7 @@ const mockRequests = [
     createdAt: '2026-07-20 14:00',
     destinationCoords: { lat: 14.4934, lng: 121.0405 },
     currentLocation: { lat: 14.5264, lng: 121.0108 },
-    quotation: { amount: 5500, notes: 'Standard delivery rate', validUntil: '2026-07-23' },
+    quotation: { amount: 5500, breakdown: [{ label: 'Base Delivery Fee', amount: 2000 }, { label: 'Distance Fee', amount: 1200 }, { label: 'Truck Type Surcharge', amount: 800 }, { label: 'Fuel Surcharge', amount: 600 }, { label: 'Loading/Unloading Fee', amount: 900 }], notes: 'Standard delivery rate', validUntil: '2026-07-23' },
     crew: null,
     customerWants: 4800,
   },
@@ -129,7 +129,7 @@ const mockRequests = [
     createdAt: '2026-07-18 10:00',
     destinationCoords: { lat: 14.5506, lng: 121.0471 },
     currentLocation: { lat: 14.5506, lng: 121.0471 },
-    quotation: { amount: 4200, notes: 'Standard delivery', validUntil: '2026-07-22' },
+    quotation: { amount: 4200, breakdown: [{ label: 'Base Delivery Fee', amount: 1500 }, { label: 'Distance Fee', amount: 800 }, { label: 'Truck Type Surcharge', amount: 600 }, { label: 'Fuel Surcharge', amount: 500 }, { label: 'Loading/Unloading Fee', amount: 800 }], notes: 'Standard delivery', validUntil: '2026-07-22' },
     crew: {
       driver: { id: 'DRV-001', name: 'Carlos Mendoza', phone: '+63 912 311 1222', rating: 4.8, trips: 126, avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80' },
       helpers: [{ id: 'HLP-001', name: 'Pedro Garcia', avatarUrl: 'https://images.unsplash.com/photo-1541535881962-3bb380b08458?auto=format&fit=crop&w=180&q=80' }],
@@ -150,7 +150,7 @@ const mockRequests = [
     createdAt: '2026-07-17 09:00',
     destinationCoords: { lat: 14.4201, lng: 121.0312 },
     currentLocation: { lat: 14.4201, lng: 121.0312 },
-    quotation: { amount: 3800, notes: 'Early morning delivery', validUntil: '2026-07-21' },
+    quotation: { amount: 3800, breakdown: [{ label: 'Base Delivery Fee', amount: 1200 }, { label: 'Distance Fee', amount: 600 }, { label: 'Truck Type Surcharge', amount: 500 }, { label: 'Fuel Surcharge', amount: 400 }, { label: 'Loading/Unloading Fee', amount: 1100 }], notes: 'Early morning delivery', validUntil: '2026-07-21' },
     crew: {
       driver: { id: 'DRV-002', name: 'Miguel Santos', phone: '+63 917 832 4100', rating: 4.7, trips: 104, avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=200&q=80' },
       helpers: [{ id: 'HLP-002', name: 'Luis Torres', avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=180&q=80' }],
@@ -171,7 +171,7 @@ const mockRequests = [
     createdAt: '2026-07-15 13:00',
     destinationCoords: { lat: 14.5864, lng: 121.0605 },
     currentLocation: { lat: 14.5864, lng: 121.0605 },
-    quotation: { amount: 2900, notes: 'Standard rate', validUntil: '2026-07-19' },
+    quotation: { amount: 2900, breakdown: [{ label: 'Base Delivery Fee', amount: 1000 }, { label: 'Distance Fee', amount: 500 }, { label: 'Truck Type Surcharge', amount: 400 }, { label: 'Fuel Surcharge', amount: 300 }, { label: 'Loading/Unloading Fee', amount: 700 }], notes: 'Standard rate', validUntil: '2026-07-19' },
     crew: null,
   },
 ]
@@ -677,13 +677,21 @@ function SupDeliveries() {
   const [ongoingLane, setOngoingLane] = useState('FOR_PICKUP')
   const [search, setSearch] = useState('')
   const [selectedRequest, setSelectedRequest] = useState(null)
-  const [quotationForm, setQuotationForm] = useState({ amount: '', notes: '', validUntil: '' })
+  const defaultBreakdownItems = [
+    { label: 'Base Delivery Fee', amount: '' },
+    { label: 'Distance Fee', amount: '' },
+    { label: 'Truck Type Surcharge', amount: '' },
+    { label: 'Fuel Surcharge', amount: '' },
+    { label: 'Loading/Unloading Fee', amount: '' },
+  ]
+  const [quotationForm, setQuotationForm] = useState({ breakdownItems: defaultBreakdownItems, notes: '', validUntil: '' })
   const [negotiationAmount, setNegotiationAmount] = useState('')
   const [negotiationCallSchedule, setNegotiationCallSchedule] = useState('')
-  const [assignment, setAssignment] = useState({ driverId: '', helperIds: [], plateNumber: '' })
+  const [assignment, setAssignment] = useState({ driverId: '', helperIds: [], plateNumber: '', _showDrivers: false, _showHelpers: false, _showTrucks: false })
   const [hasApproved, setHasApproved] = useState(false)
   const [quotationSubmitted, setQuotationSubmitted] = useState(false)
   const [expandedReport, setExpandedReport] = useState(null)
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false)
 
   const inboxRows = useMemo(
     () => requests.filter((r) => ['PENDING', 'QUOTED', 'APPROVED', 'ASSIGNED'].includes(r.status)),
@@ -743,7 +751,9 @@ function SupDeliveries() {
     // Quotation step is considered done if the request already has a quotation
     setQuotationSubmitted(Boolean(request.quotation))
     setQuotationForm({
-      amount: request.quotation?.amount || '',
+      breakdownItems: request.quotation?.breakdown?.length
+        ? request.quotation.breakdown.map(i => ({ ...i }))
+        : defaultBreakdownItems.map(i => ({ ...i })),
       notes: request.quotation?.notes || '',
       validUntil: request.quotation?.validUntil || '',
     })
@@ -751,6 +761,9 @@ function SupDeliveries() {
       driverId: request.crew?.driver?.id || '',
       helperIds: request.crew?.helpers?.map((h) => h.id) || [],
       plateNumber: request.crew?.truck?.plateNumber || '',
+      _showDrivers: false,
+      _showHelpers: false,
+      _showTrucks: false,
     })
   }
 
@@ -760,10 +773,14 @@ function SupDeliveries() {
   }
 
   const submitQuotation = () => {
-    if (!selectedRequest || !quotationForm.amount) return
+    if (!selectedRequest) return
+    const validItems = quotationForm.breakdownItems.filter(i => i.amount !== '' && Number(i.amount) > 0)
+    if (validItems.length === 0) return
+    const total = validItems.reduce((sum, i) => sum + Number(i.amount), 0)
     updateRequest(selectedRequest.id, {
       quotation: {
-        amount: Number(quotationForm.amount),
+        amount: total,
+        breakdown: validItems.map(i => ({ label: i.label, amount: Number(i.amount) })),
         notes: quotationForm.notes,
         validUntil: quotationForm.validUntil,
       },
@@ -1233,14 +1250,59 @@ function SupDeliveries() {
                   {/* Show form whenever the request has been approved but no quotation exists yet */}
                   {!selectedRequest.quotation && !quotationSubmitted && (
                     <>
+                      <p className="mt-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Cost Breakdown</p>
+                      <div className="mt-2 space-y-2">
+                        {quotationForm.breakdownItems.map((item, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={item.label}
+                              onChange={(e) => {
+                                const updated = [...quotationForm.breakdownItems]
+                                updated[idx] = { ...updated[idx], label: e.target.value }
+                                setQuotationForm(prev => ({ ...prev, breakdownItems: updated }))
+                              }}
+                              className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-sky-300"
+                              placeholder="Item name"
+                            />
+                            <span className="text-xs text-slate-500">₱</span>
+                            <input
+                              type="number"
+                              value={item.amount}
+                              onChange={(e) => {
+                                const updated = [...quotationForm.breakdownItems]
+                                updated[idx] = { ...updated[idx], amount: e.target.value }
+                                setQuotationForm(prev => ({ ...prev, breakdownItems: updated }))
+                              }}
+                              className="w-28 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-sky-300"
+                              placeholder="0"
+                            />
+                            {idx === quotationForm.breakdownItems.length - 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setQuotationForm(prev => ({
+                                    ...prev,
+                                    breakdownItems: [...prev.breakdownItems, { label: '', amount: '' }]
+                                  }))
+                                }}
+                                className="text-sky-600 hover:text-sky-800"
+                              >
+                                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                </svg>
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-3 flex items-center justify-between rounded-lg bg-sky-50 px-4 py-2.5">
+                        <p className="text-sm font-semibold text-sky-800">Total</p>
+                        <p className="text-lg font-bold text-sky-800">
+                          ₱{quotationForm.breakdownItems.filter(i => i.amount !== '' && Number(i.amount) > 0).reduce((sum, i) => sum + Number(i.amount), 0).toLocaleString()}
+                        </p>
+                      </div>
                       <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        <input
-                          type="number"
-                          value={quotationForm.amount}
-                          onChange={(e) => setQuotationForm((prev) => ({ ...prev, amount: e.target.value }))}
-                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-sky-300"
-                          placeholder="Amount (PHP)"
-                        />
                         <input
                           type="date"
                           value={quotationForm.validUntil}
@@ -1250,8 +1312,8 @@ function SupDeliveries() {
                         <textarea
                           value={quotationForm.notes}
                           onChange={(e) => setQuotationForm((prev) => ({ ...prev, notes: e.target.value }))}
-                          className="sm:col-span-2 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-sky-300"
-                          rows={3}
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-sky-300"
+                          rows={2}
                           placeholder="Quotation notes"
                         />
                       </div>
@@ -1296,7 +1358,17 @@ function SupDeliveries() {
                             <p className="text-lg font-bold text-slate-900">
                               PHP {Number(selectedRequest.quotation.amount).toLocaleString()}
                             </p>
-                            <p className="text-xs text-slate-500">{selectedRequest.quotation.notes}</p>
+                            {selectedRequest.quotation.breakdown?.length > 0 && (
+                              <div className="mt-2 border-t border-slate-200 pt-2 space-y-1">
+                                {selectedRequest.quotation.breakdown.map((item, idx) => (
+                                  <div key={idx} className="flex justify-between text-xs">
+                                    <span className="text-slate-600">{item.label}</span>
+                                    <span className="font-medium text-slate-800">₱{Number(item.amount).toLocaleString()}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            <p className="text-xs text-slate-500 mt-1">{selectedRequest.quotation.notes}</p>
                           </div>
 
                           {/* Customer's requested amount */}
@@ -1392,7 +1464,7 @@ function SupDeliveries() {
                         </p>
                       </div>
 
-                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 space-y-2">
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 space-y-3">
                         <div className="flex justify-between items-start">
                           <div>
                             <p className="text-xs font-medium text-emerald-600 uppercase tracking-wide">Approved Amount</p>
@@ -1405,6 +1477,21 @@ function SupDeliveries() {
                             Approved
                           </span>
                         </div>
+                        {selectedRequest.quotation.breakdown?.length > 0 && (
+                          <div className="border-t border-emerald-200 pt-2 space-y-1.5">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600">Breakdown</p>
+                            {selectedRequest.quotation.breakdown.map((item, idx) => (
+                              <div key={idx} className="flex justify-between text-sm">
+                                <span className="text-emerald-700">{item.label}</span>
+                                <span className="font-medium text-emerald-800">₱{Number(item.amount).toLocaleString()}</span>
+                              </div>
+                            ))}
+                            <div className="flex justify-between border-t border-emerald-300 pt-1 text-sm font-bold">
+                              <span className="text-emerald-800">Total</span>
+                              <span className="text-emerald-800">₱{Number(selectedRequest.quotation.amount).toLocaleString()}</span>
+                            </div>
+                          </div>
+                        )}
                         <div className="pt-2 border-t border-emerald-200">
                           <p className="text-sm text-emerald-700">{selectedRequest.quotation.notes}</p>
                           <p className="text-xs text-emerald-600 mt-1">Valid until: {selectedRequest.quotation.validUntil}</p>
@@ -1461,107 +1548,166 @@ function SupDeliveries() {
 
                     <div className="mt-4 space-y-2">
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Available Drivers</p>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {mockDrivers
-                          .filter((d) => d.status === 'available' || d.id === assignment.driverId)
-                          .map((driver) => {
-                            const isSelected = assignment.driverId === driver.id
-                            return (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setAssignment(prev => ({ ...prev, _showDrivers: !prev._showDrivers }))}
+                          className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
+                        >
+                          {selectedDriver ? (
+                            <>
+                              <img src={selectedDriver.avatarUrl} alt={selectedDriver.name} className="h-10 w-10 rounded-lg object-cover" />
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-semibold text-slate-900">{selectedDriver.name}</p>
+                                <p className="text-xs text-slate-500">{selectedDriver.id} • ★ {selectedDriver.rating} • {selectedDriver.trips} trips</p>
+                              </div>
+                            </>
+                          ) : (
+                            <span className="text-sm text-slate-400">Select a driver...</span>
+                          )}
+                          <svg className={`h-5 w-5 text-slate-400 transition ${assignment._showDrivers ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                        {assignment._showDrivers && (
+                          <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                            {mockDrivers.filter(d => d.status === 'available' || d.id === assignment.driverId).map(driver => (
                               <button
-                                type="button"
                                 key={driver.id}
-                                onClick={() => setAssignment((prev) => ({ ...prev, driverId: driver.id }))}
-                                className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${
-                                  isSelected
-                                    ? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-200'
-                                    : 'border-slate-200 bg-white hover:border-indigo-200 hover:bg-indigo-50/40'
+                                type="button"
+                                onClick={() => {
+                                  setAssignment(prev => ({ ...prev, driverId: driver.id, _showDrivers: false }))
+                                }}
+                                className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
+                                  assignment.driverId === driver.id ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
                                 }`}
                               >
-                                <img
-                                  src={driver.avatarUrl}
-                                  alt={driver.name}
-                                  className="h-12 w-12 rounded-lg object-cover"
-                                />
-                                <div className="min-w-0">
+                                <img src={driver.avatarUrl} alt={driver.name} className="h-9 w-9 rounded-lg object-cover" />
+                                <div className="min-w-0 flex-1">
                                   <p className="truncate text-sm font-semibold text-slate-900">{driver.name}</p>
-                                  <p className="text-xs text-slate-500">{driver.id} • {driver.phone}</p>
-                                  <p className="text-xs text-slate-600">{driver.trips} completed trips • ★ {driver.rating}</p>
+                                  <p className="text-xs text-slate-500">{driver.trips} trips • ★ {driver.rating}</p>
                                 </div>
+                                {assignment.driverId === driver.id && (
+                                  <svg className="h-5 w-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                )}
                               </button>
-                            )
-                          })}
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
 
                     <div className="mt-4 space-y-2">
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Available Trucks</p>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {mockTrucks
-                          .filter((t) => t.status === 'available' || t.plateNumber === assignment.plateNumber)
-                          .map((truck) => {
-                            const isSelected = assignment.plateNumber === truck.plateNumber
-                            return (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setAssignment(prev => ({ ...prev, _showTrucks: !prev._showTrucks }))}
+                          className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
+                        >
+                          {selectedTruck ? (
+                            <div className="flex items-center gap-3 flex-1 min-w-0">
+                              <img src={selectedTruck.imageUrl} alt={selectedTruck.plateNumber} className="h-10 w-16 rounded-lg object-cover" />
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-semibold text-slate-900">{selectedTruck.plateNumber}</p>
+                                <p className="text-xs text-slate-500">{selectedTruck.truckType} • {selectedTruck.capacity}</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="flex-1 text-sm text-slate-400">Select a truck...</span>
+                          )}
+                          <svg className={`h-5 w-5 shrink-0 text-slate-400 transition ${assignment._showTrucks ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                        {assignment._showTrucks && (
+                          <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                            {mockTrucks.filter(t => t.status === 'available' || t.plateNumber === assignment.plateNumber).map(truck => (
                               <button
-                                type="button"
                                 key={truck.plateNumber}
-                                onClick={() => setAssignment((prev) => ({ ...prev, plateNumber: truck.plateNumber }))}
-                                className={`overflow-hidden rounded-xl border text-left transition ${
-                                  isSelected
-                                    ? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-200'
-                                    : 'border-slate-200 bg-white hover:border-indigo-200 hover:bg-indigo-50/40'
+                                type="button"
+                                onClick={() => setAssignment(prev => ({ ...prev, plateNumber: truck.plateNumber, _showTrucks: false }))}
+                                className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
+                                  assignment.plateNumber === truck.plateNumber ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
                                 }`}
                               >
-                                <img
-                                  src={truck.imageUrl}
-                                  alt={`${truck.plateNumber} ${truck.truckType}`}
-                                  className="h-16 w-full object-cover"
-                                />
-                                <div className="p-3">
-                                  <p className="text-sm font-semibold text-slate-900">{truck.plateNumber}</p>
-                                  <p className="text-xs text-slate-500">{truck.truckType} • Capacity {truck.capacity}</p>
+                                <img src={truck.imageUrl} alt={truck.plateNumber} className="h-10 w-16 rounded-lg object-cover shrink-0" />
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-semibold text-slate-900">{truck.plateNumber}</p>
+                                  <p className="text-xs text-slate-500">{truck.truckType} • {truck.capacity}</p>
                                 </div>
+                                {assignment.plateNumber === truck.plateNumber && (
+                                  <svg className="h-5 w-5 shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                )}
                               </button>
-                            )
-                          })}
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
 
                     <div className="mt-4 space-y-2">
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Available Helpers (max 2)</p>
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        {mockHelpers
-                          .filter((h) => h.status === 'available' || assignment.helperIds.includes(h.id))
-                          .map((helper) => {
-                            const isChecked = assignment.helperIds.includes(helper.id)
-                            return (
-                              <button
-                                type="button"
-                                key={helper.id}
-                                onClick={() => toggleHelper(helper.id)}
-                                disabled={!isChecked && assignment.helperIds.length >= 2}
-                                className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${
-                                  isChecked
-                                    ? 'border-indigo-400 bg-indigo-50 text-indigo-900 ring-2 ring-indigo-200'
-                                    : 'border-slate-200 bg-white hover:border-indigo-200 hover:bg-indigo-50/40'
-                                }`}
-                              >
-                                <span className="flex min-w-0 items-center gap-3">
-                                  <img
-                                    src={helper.avatarUrl}
-                                    alt={helper.name}
-                                    className="h-12 w-12 rounded-lg object-cover"
-                                  />
-                                  <span className="min-w-0">
-                                    <span className="block truncate text-sm font-semibold">{helper.name}</span>
-                                    <span className="block text-xs text-slate-500">{helper.id} • Loading Team</span>
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setAssignment(prev => ({ ...prev, _showHelpers: !prev._showHelpers }))}
+                          className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
+                        >
+                          {selectedHelpers.length > 0 ? (
+                            <div className="flex flex-1 flex-wrap items-center gap-2">
+                              {selectedHelpers.map(h => (
+                                <span key={h.id} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
+                                  <img src={h.avatarUrl} alt={h.name} className="h-5 w-5 rounded object-cover" />
+                                  {h.name}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="flex-1 text-sm text-slate-400">Select helpers...</span>
+                          )}
+                          <svg className={`h-5 w-5 text-slate-400 transition ${assignment._showHelpers ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                        {assignment._showHelpers && (
+                          <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                            {mockHelpers.filter(h => h.status === 'available' || assignment.helperIds.includes(h.id)).map(helper => {
+                              const isSelected = assignment.helperIds.includes(helper.id)
+                              const disabled = !isSelected && assignment.helperIds.length >= 2
+                              return (
+                                <button
+                                  key={helper.id}
+                                  type="button"
+                                  disabled={disabled}
+                                  onClick={() => toggleHelper(helper.id)}
+                                  className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition ${
+                                    isSelected ? 'bg-indigo-50' : disabled ? 'opacity-40 cursor-not-allowed' : 'hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <img src={helper.avatarUrl} alt={helper.name} className="h-9 w-9 rounded-lg object-cover" />
+                                  <div className="min-w-0 flex-1">
+                                    <p className={`truncate text-sm font-semibold ${isSelected ? 'text-indigo-900' : 'text-slate-900'}`}>{helper.name}</p>
+                                    <p className="text-xs text-slate-500">{helper.id} • Loading Team</p>
+                                  </div>
+                                  <span className={`flex h-5 w-5 items-center justify-center rounded border-2 ${
+                                    isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
+                                  }`}>
+                                    {isSelected && (
+                                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                      </svg>
+                                    )}
                                   </span>
-                                </span>
-                                <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${isChecked ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                                  {isChecked ? 'Selected' : 'Select'}
-                                </span>
-                              </button>
-                            )
-                          })}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -1578,14 +1724,85 @@ function SupDeliveries() {
                     </div>
 
                     <button
-                      onClick={assignCrew}
+                      onClick={() => setShowConfirmDialog(true)}
                       disabled={!canConfirmAssignment}
-                      title={!canConfirmAssignment ? 'Select a valid driver, truck, and at least one helper to confirm assignment.' : undefined}
-                      className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      title={!canConfirmAssignment ? 'Select a driver, truck, and at least one helper.' : undefined}
+                      className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <Users className="h-4 w-4" />
-                      {selectedRequest.crew?.driver ? 'Update Assignment' : 'Confirm Assignment'}
+                      {selectedRequest.crew?.driver ? 'Update Drivers and Helpers' : 'Confirm Drivers and Helpers'}
                     </button>
+                  </div>
+                )}
+
+                {showConfirmDialog && selectedDriver && selectedTruck && (
+                  <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+                    <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden">
+                      <div className="p-6 space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100">
+                            <Users className="h-5 w-5 text-indigo-600" />
+                          </div>
+                          <div>
+                            <h3 className="text-lg font-semibold text-slate-900">Confirm Assignment</h3>
+                            <p className="text-sm text-slate-500">Please review before confirming</p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                          <div className="flex items-center gap-3">
+                            <img src={selectedDriver.avatarUrl} alt={selectedDriver.name} className="h-10 w-10 rounded-lg object-cover" />
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">{selectedDriver.name}</p>
+                              <p className="text-xs text-slate-500">Driver</p>
+                            </div>
+                          </div>
+                          {selectedHelpers.length > 0 && (
+                            <div className="border-t border-slate-200 pt-3 space-y-2">
+                              <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Helpers</p>
+                              {selectedHelpers.map(h => (
+                                <div key={h.id} className="flex items-center gap-3">
+                                  <img src={h.avatarUrl} alt={h.name} className="h-8 w-8 rounded-lg object-cover" />
+                                  <p className="text-sm text-slate-900">{h.name}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <div className="border-t border-slate-200 pt-3 flex items-center gap-3">
+                            <img src={selectedTruck.imageUrl} alt={selectedTruck.plateNumber} className="h-10 w-16 rounded-lg object-cover" />
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">{selectedTruck.plateNumber}</p>
+                              <p className="text-xs text-slate-500">{selectedTruck.truckType} • {selectedTruck.capacity}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <p className="text-sm text-slate-700">
+                          Are you sure you want to set <strong>{selectedDriver.name}</strong>
+                          {selectedHelpers.length > 0 && (
+                            <> and <strong>{selectedHelpers.map(h => h.name).join(', ')}</strong></>
+                          )} to truck <strong>{selectedTruck.plateNumber}</strong>?
+                        </p>
+
+                        <div className="flex gap-3">
+                          <button
+                            onClick={() => setShowConfirmDialog(false)}
+                            className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => {
+                              assignCrew()
+                              setShowConfirmDialog(false)
+                            }}
+                            className="flex-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
+                          >
+                            Confirm
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
