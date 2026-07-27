@@ -12,11 +12,6 @@ export const supervisorModules = [
     description: "Supervisor overview",
   },
   {
-    label: "Bookings",
-    path: "/supervisor/bookings",
-    description: "Approvals and schedules",
-  },
-  {
     label: "Deliveries",
     path: "/supervisor/deliveries",
     description: "Live routes and alerts",
@@ -90,19 +85,6 @@ const supIcons = {
       <path d="M4 6v11" />
       <circle cx="8" cy="18" r="1.5" />
       <circle cx="18" cy="18" r="1.5" />
-    </svg>
-  ),
-  Bookings: (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      strokeWidth="1.6"
-      className={supIconClassName}
-      aria-hidden="true"
-    >
-      <rect x="5" y="4" width="14" height="16" rx="2" />
-      <path d="M8 9h8" />
-      <path d="M8 13h5" />
     </svg>
   ),
   "Delivery Crew": (

@@ -11,7 +11,6 @@ import AdminHome from './pages/AdminHome.jsx'
 import AdminDeviceManagement from './pages/AdminDeviceManagement.jsx'
 import AdminAnalysis from './pages/AdminAnalysis.jsx'
 import AdminProfile from './pages/AdminProfile.jsx'
-import SupBookings from './pages/SupBookings.jsx'
 import SupDeliveryCrew from './pages/SupDeliveryCrew.jsx'
 import SupCrewProfile from './pages/SupCrewProfile.jsx'
 import SupDeliveries from './pages/SupDeliveries.jsx'
@@ -43,7 +42,6 @@ function App() {
       />
       <Route path="/supervisor/dashboard" element={<SupDashboard />} />
       <Route path="/supervisor/analysis/indiv" element={<SupAnalysisIndiv />} />
-      <Route path="/supervisor/bookings" element={<SupBookings />} />
       <Route path="/supervisor/delivery-crew" element={<SupDeliveryCrew />} />
       <Route path="/supervisor/delivery-crew/profile" element={<SupCrewProfile />} />
       <Route path="/supervisor/deliveries" element={<SupDeliveries />} />

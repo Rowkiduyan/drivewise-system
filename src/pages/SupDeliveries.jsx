@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Calendar,
   Check,
@@ -198,6 +198,284 @@ const mockRequests = [
     destinationCoords: { lat: 14.5864, lng: 121.0605 },
     currentLocation: { lat: 14.5864, lng: 121.0605 },
     quotation: { amount: 2900, breakdown: [{ label: 'Base Delivery Fee', amount: 1000 }, { label: 'Distance Fee', amount: 500 }, { label: 'Truck Type Surcharge', amount: 400 }, { label: 'Fuel Surcharge', amount: 300 }, { label: 'Loading/Unloading Fee', amount: 700 }], notes: 'Standard rate', validUntil: '2026-07-19' },
+    crew: null,
+  },
+  {
+    id: 'DEL-007',
+    customerName: 'Pedro Gonzales',
+    companyName: 'Shell Depot',
+    pickupAddress: 'Shell Gas Complex, Brgy. Tabang, Guiguinto, Bulacan',
+    deliveryAddress: 'Balagtas Station, Brgy. Poblacion, Balagtas, Bulacan',
+    itemType: 'Dry Food',
+    pickupDate: '2026-07-28',
+    pickupTime: '08:00',
+    status: 'PENDING',
+    createdAt: '2026-07-25 09:00',
+    destinationCoords: { lat: 14.8145, lng: 120.9056 },
+    currentLocation: { lat: 14.8205, lng: 120.8950 },
+    quotation: null,
+    crew: null,
+  },
+  {
+    id: 'DEL-008',
+    customerName: 'Sofia Reyes',
+    companyName: 'SM Appliance Center',
+    pickupAddress: 'SM Warehouse, Brgy. San Jose, San Fernando, Pampanga',
+    deliveryAddress: 'SM Clark, Brgy. Balibago, Angeles City, Pampanga',
+    itemType: 'Dry Food',
+    pickupDate: '2026-07-28',
+    pickupTime: '10:00',
+    status: 'PENDING',
+    createdAt: '2026-07-25 11:30',
+    destinationCoords: { lat: 15.1628, lng: 120.5897 },
+    currentLocation: { lat: 15.1752, lng: 120.5907 },
+    quotation: null,
+    crew: null,
+  },
+  {
+    id: 'DEL-009',
+    customerName: 'Jose Rizal III',
+    companyName: 'San Miguel Logistics',
+    pickupAddress: 'San Miguel Depot, Brgy. Ugong, Pasig',
+    deliveryAddress: 'Cebu Pacific Cargo, Brgy. 176, Caloocan',
+    itemType: 'Frozen Goods',
+    pickupDate: '2026-07-29',
+    pickupTime: '06:30',
+    status: 'PENDING',
+    createdAt: '2026-07-26 14:00',
+    destinationCoords: { lat: 14.6553, lng: 121.0472 },
+    currentLocation: { lat: 14.6002, lng: 121.0600 },
+    quotation: null,
+    crew: null,
+  },
+  {
+    id: 'DEL-010',
+    customerName: 'Angela Cruz',
+    companyName: 'Mercury Drug',
+    pickupAddress: 'Mercury Main Warehouse, Brgy. Plainview, Mandaluyong',
+    deliveryAddress: 'Mercury Drug Timog, Brgy. South Triangle, Quezon City',
+    itemType: 'Dry Food',
+    pickupDate: '2026-07-29',
+    pickupTime: '13:00',
+    status: 'PENDING',
+    createdAt: '2026-07-26 16:45',
+    destinationCoords: { lat: 14.6348, lng: 121.0424 },
+    currentLocation: { lat: 14.6415, lng: 121.0520 },
+    quotation: null,
+    crew: null,
+  },
+  {
+    id: 'DEL-011',
+    customerName: 'Ramon Bautista',
+    companyName: 'Pizza Hut',
+    pickupAddress: 'Pizza Hut Commissary, Brgy. San Antonio, Makati',
+    deliveryAddress: 'Pizza Hut Katipunan, Brgy. Loyola Heights, Quezon City',
+    itemType: 'Fast Food',
+    pickupDate: '2026-07-27',
+    pickupTime: '09:00',
+    status: 'QUOTED',
+    createdAt: '2026-07-24 08:15',
+    destinationCoords: { lat: 14.6357, lng: 121.0747 },
+    currentLocation: { lat: 14.6398, lng: 121.0668 },
+    quotation: { amount: 3200, breakdown: [{ label: 'Base Delivery Fee', amount: 1000 }, { label: 'Distance Fee', amount: 600 }, { label: 'Truck Type Surcharge', amount: 450 }, { label: 'Fuel Surcharge', amount: 350 }, { label: 'Loading/Unloading Fee', amount: 800 }], notes: 'Standard delivery rate for fast food items', validUntil: '2026-07-28' },
+    crew: null,
+    customerWants: 2800,
+  },
+  {
+    id: 'DEL-012',
+    customerName: 'Diana Flores',
+    companyName: 'National Bookstore',
+    pickupAddress: 'NBS Warehouse, Brgy. Dampalit, Malabon',
+    deliveryAddress: 'NBS Cubao, Brgy. Socorro, Quezon City',
+    itemType: 'Dry Food',
+    pickupDate: '2026-07-30',
+    pickupTime: '07:00',
+    status: 'PENDING',
+    createdAt: '2026-07-27 10:00',
+    destinationCoords: { lat: 14.6210, lng: 121.0550 },
+    currentLocation: { lat: 14.6280, lng: 121.0480 },
+    quotation: null,
+    crew: null,
+  },
+  {
+    id: 'DEL-013',
+    customerName: 'Rafael Tan',
+    companyName: 'Dunkin Donuts',
+    pickupAddress: 'Dunkin Central Kitchen, Brgy. Highway Hills, Mandaluyong',
+    deliveryAddress: 'Dunkin Donuts Fairview, Brgy. Fairview, Quezon City',
+    itemType: 'Fast Food',
+    pickupDate: '2026-07-30',
+    pickupTime: '05:00',
+    status: 'PENDING',
+    createdAt: '2026-07-27 07:30',
+    destinationCoords: { lat: 14.7042, lng: 121.0752 },
+    currentLocation: { lat: 14.6900, lng: 121.0600 },
+    quotation: null,
+    crew: null,
+  },
+  {
+    id: 'DEL-014',
+    customerName: 'Kristine Villanueva',
+    companyName: 'Watson\'s Pharma',
+    pickupAddress: 'Watsons Distribution, Brgy. Maysilo, Mandaluyong',
+    deliveryAddress: 'Watsons SM North, Brgy. Bagong Pag-asa, Quezon City',
+    itemType: 'Dry Food',
+    pickupDate: '2026-07-31',
+    pickupTime: '10:30',
+    status: 'PENDING',
+    createdAt: '2026-07-28 13:00',
+    destinationCoords: { lat: 14.6563, lng: 121.0361 },
+    currentLocation: { lat: 14.6600, lng: 121.0300 },
+    quotation: null,
+    crew: null,
+  },
+  {
+    id: 'DEL-015',
+    customerName: 'Mark Anthony Hernandez',
+    companyName: 'Puregold',
+    pickupAddress: 'Puregold Warehouse, Brgy. Tambo, Parañaque',
+    deliveryAddress: 'Puregold Sucat, Brgy. San Dionisio, Parañaque',
+    itemType: 'Frozen Goods',
+    pickupDate: '2026-07-31',
+    pickupTime: '08:00',
+    status: 'APPROVED',
+    createdAt: '2026-07-28 09:20',
+    destinationCoords: { lat: 14.4716, lng: 121.0178 },
+    currentLocation: { lat: 14.4900, lng: 121.0100 },
+    quotation: { amount: 4100, breakdown: [{ label: 'Base Delivery Fee', amount: 1400 }, { label: 'Distance Fee', amount: 700 }, { label: 'Truck Type Surcharge', amount: 550 }, { label: 'Fuel Surcharge', amount: 450 }, { label: 'Loading/Unloading Fee', amount: 1000 }], notes: 'Includes cold storage handling', validUntil: '2026-07-30' },
+    crew: null,
+  },
+  {
+    id: 'DEL-016',
+    customerName: 'Sarah Lim',
+    companyName: 'Bench',
+    pickupAddress: 'Bench HQ, Brgy. San Lorenzo, Makati',
+    deliveryAddress: 'Bench SM Mall of Asia, Brgy. Tambo, Parañaque',
+    itemType: 'Dry Food',
+    pickupDate: '2026-08-01',
+    pickupTime: '14:00',
+    status: 'PENDING',
+    createdAt: '2026-07-29 11:00',
+    destinationCoords: { lat: 14.5172, lng: 120.9825 },
+    currentLocation: { lat: 14.5350, lng: 120.9900 },
+    quotation: null,
+    crew: null,
+  },
+  {
+    id: 'DEL-017',
+    customerName: 'Emilio Jacinto',
+    companyName: 'Petron Corporation',
+    pickupAddress: 'Petron Depot, Brgy. San Roque, Marikina',
+    deliveryAddress: 'Petron Gas Station EDSA, Brgy. San Lorenzo, Makati',
+    itemType: 'Dry Food',
+    pickupDate: '2026-08-01',
+    pickupTime: '06:00',
+    status: 'APPROVED',
+    createdAt: '2026-07-29 08:30',
+    destinationCoords: { lat: 14.5547, lng: 121.0239 },
+    currentLocation: { lat: 14.5700, lng: 121.0150 },
+    quotation: { amount: 3600, breakdown: [{ label: 'Base Delivery Fee', amount: 1200 }, { label: 'Distance Fee', amount: 650 }, { label: 'Truck Type Surcharge', amount: 500 }, { label: 'Fuel Surcharge', amount: 350 }, { label: 'Loading/Unloading Fee', amount: 900 }], notes: 'Early morning delivery', validUntil: '2026-07-31' },
+    crew: null,
+  },
+  {
+    id: 'DEL-018',
+    customerName: 'Lorna Santiago',
+    companyName: 'Goldilocks',
+    pickupAddress: 'Goldilocks Commissary, Brgy. Pinyahan, Quezon City',
+    deliveryAddress: 'Goldilocks SM Dasma, Brgy. Paliparan III, Dasmariñas, Cavite',
+    itemType: 'Frozen Goods',
+    pickupDate: '2026-07-26',
+    pickupTime: '04:00',
+    status: 'COMPLETED',
+    createdAt: '2026-07-23 14:00',
+    destinationCoords: { lat: 14.3084, lng: 120.9633 },
+    currentLocation: { lat: 14.3084, lng: 120.9633 },
+    quotation: { amount: 4800, breakdown: [{ label: 'Base Delivery Fee', amount: 1600 }, { label: 'Distance Fee', amount: 1000 }, { label: 'Truck Type Surcharge', amount: 700 }, { label: 'Fuel Surcharge', amount: 500 }, { label: 'Loading/Unloading Fee', amount: 1000 }], notes: 'Long distance delivery with refrigeration', validUntil: '2026-07-25' },
+    crew: {
+      driver: { id: 'DRV-003', name: 'Ricardo Lopez', phone: '+63 919 553 1170', rating: 4.9, trips: 168, avatarUrl: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&w=200&q=80' },
+      helpers: [{ id: 'HLP-003', name: 'Rico Aquino', avatarUrl: 'https://images.unsplash.com/photo-1463453091185-61582044d556?auto=format&fit=crop&w=180&q=80' }],
+      truck: { plateNumber: 'DEF 9012', truckType: 'L300', capacity: '1.0 ton' },
+    },
+    assignedAt: 'Jul 24, 2026, 09:00 AM',
+  },
+  {
+    id: 'DEL-019',
+    customerName: 'Nestor Cabrera',
+    companyName: 'Mini Stop',
+    pickupAddress: 'Mini Stop Warehouse, Brgy. San Isidro, Cainta, Rizal',
+    deliveryAddress: 'Mini Stop Angono, Brgy. San Vicente, Angono, Rizal',
+    itemType: 'Dry Food',
+    pickupDate: '2026-07-28',
+    pickupTime: '11:00',
+    status: 'QUOTED',
+    createdAt: '2026-07-26 11:00',
+    destinationCoords: { lat: 14.5261, lng: 121.1536 },
+    currentLocation: { lat: 14.5400, lng: 121.1400 },
+    quotation: { amount: 2800, breakdown: [{ label: 'Base Delivery Fee', amount: 900 }, { label: 'Distance Fee', amount: 500 }, { label: 'Truck Type Surcharge', amount: 400 }, { label: 'Fuel Surcharge', amount: 300 }, { label: 'Loading/Unloading Fee', amount: 700 }], notes: 'Short distance delivery', validUntil: '2026-07-30' },
+    crew: null,
+  },
+  {
+    id: 'DEL-020',
+    customerName: 'Catherine De Leon',
+    companyName: 'Army Navy',
+    pickupAddress: 'Army Navy Commissary, Brgy. Bel-Air, Makati',
+    deliveryAddress: 'Army Navy BGC, Brgy. Fort Bonifacio, Taguig',
+    itemType: 'Fast Food',
+    pickupDate: '2026-07-29',
+    pickupTime: '07:00',
+    status: 'APPROVED',
+    createdAt: '2026-07-26 15:00',
+    destinationCoords: { lat: 14.5521, lng: 121.0528 },
+    currentLocation: { lat: 14.5600, lng: 121.0450 },
+    quotation: { amount: 3000, breakdown: [{ label: 'Base Delivery Fee', amount: 1000 }, { label: 'Distance Fee', amount: 550 }, { label: 'Truck Type Surcharge', amount: 400 }, { label: 'Fuel Surcharge', amount: 350 }, { label: 'Loading/Unloading Fee', amount: 700 }], notes: 'Weekday delivery', validUntil: '2026-07-30' },
+    crew: null,
+  },
+  {
+    id: 'DEL-021',
+    customerName: 'Fernando Castro',
+    companyName: 'Unilever PH',
+    pickupAddress: 'Unilever Plant, Brgy. Mamplasan, Biñan, Laguna',
+    deliveryAddress: 'Unilever Office, Brgy. San Antonio, Makati',
+    itemType: 'Dry Food',
+    pickupDate: '2026-07-30',
+    pickupTime: '09:30',
+    status: 'PENDING',
+    createdAt: '2026-07-28 10:00',
+    destinationCoords: { lat: 14.5547, lng: 121.0239 },
+    currentLocation: { lat: 14.5300, lng: 121.0500 },
+    quotation: null,
+    crew: null,
+  },
+  {
+    id: 'DEL-022',
+    customerName: 'Grace Mendoza',
+    companyName: 'Greenwich Pizza',
+    pickupAddress: 'Greenwich Kitchen, Brgy. San Roque, Marikina',
+    deliveryAddress: 'Greenwich SM Megamall, Brgy. Wack-Wack, Mandaluyong',
+    itemType: 'Fast Food',
+    pickupDate: '2026-07-31',
+    pickupTime: '10:00',
+    status: 'PENDING',
+    createdAt: '2026-07-29 09:00',
+    destinationCoords: { lat: 14.5845, lng: 121.0566 },
+    currentLocation: { lat: 14.5900, lng: 121.0500 },
+    quotation: null,
+    crew: null,
+  },
+  {
+    id: 'DEL-023',
+    customerName: 'Henry Sy Jr.',
+    companyName: 'SM Hypermarket',
+    pickupAddress: 'SM Hypermarket Warehouse, Brgy. La Huerta, Parañaque',
+    deliveryAddress: 'SM Hypermarket Sucat, Brgy. San Dionisio, Parañaque',
+    itemType: 'Frozen Goods',
+    pickupDate: '2026-08-02',
+    pickupTime: '06:00',
+    status: 'PENDING',
+    createdAt: '2026-07-30 08:00',
+    destinationCoords: { lat: 14.4716, lng: 121.0178 },
+    currentLocation: { lat: 14.4800, lng: 121.0100 },
+    quotation: null,
     crew: null,
   },
 ]
@@ -881,6 +1159,10 @@ function SupDeliveries() {
   const [quotationSubmitted, setQuotationSubmitted] = useState(false)
   const [expandedReport, setExpandedReport] = useState(null)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
+  const [page, setPage] = useState(1)
+  const ITEMS_PER_PAGE = 10
+
+  useEffect(() => { setPage(1) }, [search])
 
   const inboxRows = useMemo(
     () => requests.filter((r) => ['PENDING', 'QUOTED', 'APPROVED', 'ASSIGNED'].includes(r.status)),
@@ -899,6 +1181,10 @@ function SupDeliveries() {
         r.deliveryAddress.toLowerCase().includes(q),
     )
   }, [inboxRows, search])
+
+  const totalPages = Math.max(1, Math.ceil(filteredInbox.length / ITEMS_PER_PAGE))
+  const safePage = Math.min(page, totalPages)
+  const paginatedInbox = filteredInbox.slice((safePage - 1) * ITEMS_PER_PAGE, safePage * ITEMS_PER_PAGE)
 
   const ongoingDeliveries = useMemo(
     () => requests.filter((r) => ['FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(r.status)),
@@ -1082,11 +1368,11 @@ function SupDeliveries() {
               </div>
 
               <div className="divide-y divide-slate-100">
-                {filteredInbox.length === 0 && (
+                {paginatedInbox.length === 0 && (
                   <div className="px-5 py-14 text-center text-slate-500">No requests found in the inbox.</div>
                 )}
 
-                {filteredInbox.map((row) => (
+                {paginatedInbox.map((row) => (
                   <article key={row.id} className="grid gap-3 px-5 py-4 lg:grid-cols-[1.2fr_1.5fr_1.5fr_1fr_0.8fr] lg:items-center">
                     <div>
                       <p className="text-sm font-semibold text-slate-900">{row.customerName}</p>
@@ -1107,8 +1393,45 @@ function SupDeliveries() {
                       </button>
                     </div>
                   </article>
-                ))}
+                  ))}
               </div>
+
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between border-t border-slate-200 px-5 py-3">
+                  <p className="text-sm text-slate-500">
+                    Showing {(page - 1) * ITEMS_PER_PAGE + 1}–{Math.min(page * ITEMS_PER_PAGE, filteredInbox.length)} of {filteredInbox.length}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      disabled={page === 1}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((num) => (
+                      <button
+                        key={num}
+                        onClick={() => setPage(num)}
+                        className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
+                          num === page
+                            ? 'bg-slate-900 text-white'
+                            : 'text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        {num}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={page === totalPages}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         )}
