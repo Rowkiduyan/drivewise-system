@@ -1,99 +1,123 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import AdminLayout from '../layout/AdminLayout.jsx'
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import AdminLayout from "../layout/AdminLayout.jsx";
+// Lucide icons for a modern admin UI
+import { Pencil, Plus, ChevronDown, ChevronUp, Eye } from "lucide-react";
 
-const background = null
+const background = null;
 
 function AdminDeviceManagement() {
-  const navigate = useNavigate()
+  const navigate = useNavigate();
   const [formValues, setFormValues] = useState({
-    deviceId: '',
-    plateNumber: ''
-  })
-  const [formError, setFormError] = useState('')
+    deviceId: "",
+    plateNumber: "",
+  });
+  const [formError, setFormError] = useState("");
   const [devices, setDevices] = useState([
     {
-      id: 'DV-2104',
-      plateNumber: 'ABC-1234',
-      status: 'active',
+      id: "DV-2104",
+      plateNumber: "ABC-1234",
+      status: "Active",
       deliveries: [
         {
-          date: '2026-07-15',
-          time: '08:20 AM',
-          referenceNumber: 'DEL-771245',
-          driver: 'Juan D. Santos',
-          helper: 'Mark Rivera'
+          date: "2026-07-15",
+          time: "08:20 AM",
+          referenceNumber: "DEL-771245",
+          driver: "Juan D. Santos",
+          helper: "Mark Rivera",
         },
         {
-          date: '2026-07-14',
-          time: '03:12 PM',
-          referenceNumber: 'DEL-771198',
-          driver: 'Lea Mendoza',
-          helper: 'Kriz Alonte'
-        }
-      ]
+          date: "2026-07-14",
+          time: "03:12 PM",
+          referenceNumber: "DEL-771198",
+          driver: "Lea Mendoza",
+          helper: "Kriz Alonte",
+        },
+      ],
     },
     {
-      id: 'DV-2241',
-      plateNumber: 'XYZ-8821',
-      status: 'inactive',
+      id: "DV-2241",
+      plateNumber: "XYZ-8821",
+      status: "Inactive",
       deliveries: [
         {
-          date: '2026-07-13',
-          time: '09:01 AM',
-          referenceNumber: 'DEL-771052',
-          driver: 'Alex R. Cruz',
-          helper: 'Nate Flores'
-        }
-      ]
-    }
-  ])
-  const [expandedDeviceId, setExpandedDeviceId] = useState('DV-2104')
+          date: "2026-07-13",
+          time: "09:01 AM",
+          referenceNumber: "DEL-771052",
+          driver: "Alex R. Cruz",
+          helper: "Nate Flores",
+        },
+      ],
+    },
+  ]);
+  const [expandedDeviceId, setExpandedDeviceId] = useState("DV-2104");
+  // Track which device's status is being edited (null = none)
+  const [editingDeviceId, setEditingDeviceId] = useState(null);
 
   const handleInputChange = (event) => {
-    const { name, value } = event.target
-    setFormValues((current) => ({ ...current, [name]: value }))
+    const { name, value } = event.target;
+    setFormValues((current) => ({ ...current, [name]: value }));
     if (formError) {
-      setFormError('')
+      setFormError("");
     }
-  }
+  };
 
   const handleRegisterDevice = (event) => {
-    event.preventDefault()
-    const nextDeviceId = formValues.deviceId.trim().toUpperCase()
-    const nextPlateNumber = formValues.plateNumber.trim().toUpperCase()
+    event.preventDefault();
+    const nextDeviceId = formValues.deviceId.trim().toUpperCase();
+    const nextPlateNumber = formValues.plateNumber.trim().toUpperCase();
 
     if (!nextDeviceId || !nextPlateNumber) {
-      setFormError('Device ID Number and Vehicle Plate Number are required.')
-      return
+      setFormError("Device ID Number and Vehicle Plate Number are required.");
+      return;
     }
 
-    const alreadyExists = devices.some((device) => device.id === nextDeviceId)
+    const alreadyExists = devices.some((device) => device.id === nextDeviceId);
     if (alreadyExists) {
-      setFormError('Device ID Number is already registered.')
-      return
+      setFormError("Device ID Number is already registered.");
+      return;
     }
 
     const newDevice = {
       id: nextDeviceId,
       plateNumber: nextPlateNumber,
-      status: 'active',
-      deliveries: []
-    }
+      status: "active",
+      deliveries: [],
+    };
 
-    setDevices((current) => [newDevice, ...current])
-    setExpandedDeviceId(newDevice.id)
-    setFormValues({ deviceId: '', plateNumber: '' })
-    setFormError('')
-  }
+    setDevices((current) => [newDevice, ...current]);
+    setExpandedDeviceId(newDevice.id);
+    setFormValues({ deviceId: "", plateNumber: "" });
+    setFormError("");
+  };
 
   const handleToggleDevice = (deviceId) => {
-    setExpandedDeviceId((current) => (current === deviceId ? '' : deviceId))
-  }
+    setExpandedDeviceId((current) => (current === deviceId ? "" : deviceId));
+  };
+
+  // Update a device's status immutably
+  const handleStatusChange = (deviceId, newStatus) => {
+    setDevices((prev) =>
+      prev.map((d) => (d.id === deviceId ? { ...d, status: newStatus } : d)),
+    );
+  };
+
+  // Close the status popover when clicking outside
+  useEffect(() => {
+    if (!editingDeviceId) return;
+    const handler = (e) => {
+      // popover has class "status-popover"
+      if (!e.target.closest(".status-popover")) {
+        setEditingDeviceId(null);
+      }
+    };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [editingDeviceId]);
 
   return (
     <AdminLayout title="Device Management" background={background}>
-      <div className="flex flex-col gap-6">
+      <div className="max-w-7xl mx-auto p-6 space-y-8">
         <header className="space-y-2 md:space-y-3">
           <p className="text-xs uppercase tracking-[0.3em] text-violet-600 font-medium">
             Admin Interface
@@ -107,12 +131,13 @@ function AdminDeviceManagement() {
           </p>
         </header>
 
-        <section className="rounded-3xl border border-violet-200/70 bg-white p-6 sm:p-8">
+        <section className="rounded-lg border border-gray-200 bg-white shadow-sm p-6">
           <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
             Register Device
           </p>
           <p className="mt-2 text-sm text-slate-600">
-            Add a new DriveWise Device by Device ID Number and its assigned  Vehicle Plate Number.
+            Add a new DriveWise Device by Device ID Number and its assigned
+            Vehicle Plate Number.
           </p>
           <form className="mt-5" onSubmit={handleRegisterDevice}>
             <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
@@ -145,8 +170,9 @@ function AdminDeviceManagement() {
 
               <button
                 type="submit"
-                className="h-[46px] rounded-2xl bg-violet-600 px-6 text-sm font-semibold text-white transition hover:bg-violet-500 md:self-end"
+                className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-300 md:self-end"
               >
+                <Plus className="h-4 w-4" />
                 Register
               </button>
             </div>
@@ -168,17 +194,19 @@ function AdminDeviceManagement() {
 
           <div className="mt-5 space-y-3">
             {devices.map((device) => {
-              const isExpanded = expandedDeviceId === device.id
+              const isExpanded = expandedDeviceId === device.id;
               return (
                 <div
                   key={device.id}
-                  className="overflow-hidden rounded-2xl border border-violet-100 bg-white"
+                  className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm"
                 >
                   <button
                     type="button"
                     onClick={() => handleToggleDevice(device.id)}
-                    className={`grid w-full grid-cols-[1.2fr_1fr_auto_auto] items-center gap-3 px-4 py-4 text-left transition ${
-                      isExpanded ? 'bg-violet-50/60 border-b border-violet-100' : 'hover:bg-violet-50/40'
+                    className={`grid w-full grid-cols-[1.2fr_1.2fr_auto_auto] items-center gap-4 px-4 py-3 text-left transition-colors ${
+                      isExpanded
+                        ? "bg-violet-50 border-b border-violet-100"
+                        : "hover:bg-violet-50"
                     }`}
                   >
                     <div className="min-w-0">
@@ -197,29 +225,68 @@ function AdminDeviceManagement() {
                         {device.plateNumber}
                       </p>
                     </div>
-                    <div>
+                    <div className="relative">
                       <p className="text-xs uppercase tracking-[0.2em] text-violet-600">
                         Status
                       </p>
-                      <span
-                        className={`mt-1 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                          device.status === 'active'
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-slate-200 text-slate-700'
-                        }`}
-                      >
-                        {device.status}
-                      </span>
+                      <div className="mt-1 flex items-center space-x-2">
+                        <span
+                          className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                            device.status === "Active"
+                              ? "bg-emerald-100 text-emerald-700"
+                              : device.status === "Maintenance"
+                                ? "bg-amber-100 text-amber-700"
+                                : "bg-slate-200 text-slate-700"
+                          }`}
+                        >
+                          {device.status}
+                        </span>
+                        {/* Edit button (pencil icon) */}
+                        <button
+                          type="button"
+                          aria-label="Edit device status"
+                          className="flex items-center text-slate-500 hover:text-slate-700"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingDeviceId(device.id);
+                          }}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      </div>
+                      {/* Dropdown selector */}
+                      {editingDeviceId === device.id && (
+                        <div className="absolute left-0 top-full mt-1 w-48 rounded-md border border-gray-200 bg-white shadow-lg ring-1 ring-black ring-opacity-5 z-10">
+                          {["active", "inactive", "maintenance"].map((opt) => (
+                            <button
+                              key={opt}
+                              type="button"
+                              className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStatusChange(device.id, opt);
+                                setEditingDeviceId(null);
+                              }}
+                            >
+                              {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <span
-                      className={`inline-flex h-9 w-9 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-600 shadow-sm transition-all duration-300 ${
-                        isExpanded ? 'rotate-180 border-violet-300 shadow-violet-100/70' : 'hover:border-violet-300 hover:bg-violet-50'
+                      className={`inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-600 shadow-sm transition-transform duration-300 ${
+                        isExpanded
+                          ? "rotate-180 border-gray-300"
+                          : "hover:border-gray-300 hover:bg-gray-50"
                       }`}
                       aria-hidden="true"
                     >
-                      <svg viewBox="0 0 20 20" className="h-4 w-4 fill-current">
-                        <path d="M5.2 7.8a.75.75 0 0 1 1.06 0L10 11.54l3.74-3.74a.75.75 0 1 1 1.06 1.06l-4.27 4.27a.75.75 0 0 1-1.06 0L5.2 8.86a.75.75 0 0 1 0-1.06Z" />
-                      </svg>
+                      {isExpanded ? (
+                        <ChevronUp className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
                     </span>
                   </button>
 
@@ -245,8 +312,12 @@ function AdminDeviceManagement() {
                         <tbody className="divide-y divide-violet-100">
                           {device.deliveries.map((row) => (
                             <tr key={row.referenceNumber} className="bg-white">
-                              <td className="px-4 py-3 text-slate-700">{row.date}</td>
-                              <td className="px-4 py-3 text-slate-700">{row.time}</td>
+                              <td className="px-4 py-3 text-slate-700">
+                                {row.date}
+                              </td>
+                              <td className="px-4 py-3 text-slate-700">
+                                {row.time}
+                              </td>
                               <td className="px-4 py-3 font-medium text-slate-900">
                                 {row.referenceNumber}
                               </td>
@@ -259,10 +330,11 @@ function AdminDeviceManagement() {
                               <td className="px-4 py-3">
                                 <button
                                   type="button"
-                                  className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-blue-200 hover:text-blue-600"
-                                  onClick={() => navigate('/admin/analysis')}
+                                  className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-blue-200 hover:text-blue-600"
+                                  onClick={() => navigate("/admin/analysis")}
                                 >
-                                  View Analysis
+                                  <Eye className="h-4 w-4" />
+                                  View
                                 </button>
                               </td>
                             </tr>
@@ -282,13 +354,13 @@ function AdminDeviceManagement() {
                     </div>
                   ) : null}
                 </div>
-              )
+              );
             })}
           </div>
         </section>
       </div>
     </AdminLayout>
-  )
+  );
 }
 
-export default AdminDeviceManagement
+export default AdminDeviceManagement;

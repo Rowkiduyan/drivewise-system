@@ -1,33 +1,39 @@
-import { useEffect, useState } from 'react'
-import { NavLink } from 'react-router-dom'
-import LogoutButton from './LogoutButton.jsx'
-import { useUserProfile } from '../lib/useUserInitials.js'
-import { useDeactivationGuard } from '../lib/useDeactivationGuard.js'
-import { formatCutoff } from '../lib/deactivation.js'
+import { useEffect, useState } from "react";
+import { ShieldCheck } from "lucide-react";
+import { NavLink } from "react-router-dom";
+import LogoutButton from "./LogoutButton.jsx";
+import { useUserProfile } from "../lib/useUserInitials.js";
+import { useDeactivationGuard } from "../lib/useDeactivationGuard.js";
+import { formatCutoff } from "../lib/deactivation.js";
 
 const adminModules = [
   {
-    label: 'User Management',
-    path: '/admin/user-management',
-    description: 'Users, roles, and accounts'
+    label: "User Management",
+    path: "/admin/user-management",
+    description: "Users, roles, and accounts",
   },
   {
-    label: 'Device Management',
-    path: '/admin/device-management',
-    description: 'Fleet devices and status'
+    label: "Device Management",
+    path: "/admin/device-management",
+    description: "Fleet devices and status",
   },
   {
-    label: 'Admin Analysis',
-    path: '/admin/analysis',
-    description: 'Delivery and alert analysis'
+    label: "Admin Analysis",
+    path: "/admin/analysis",
+    description: "Delivery and alert analysis",
   },
-  { label: 'Profile', path: '/admin/profile', description: 'Admin account' }
-]
+  { label: "Profile", path: "/admin/profile", description: "Admin account" },
+  {
+    label: "System Logs",
+    path: "/admin/system-logs",
+    description: "Audit trail of system actions",
+  },
+];
 
-const adminIconClassName = 'h-5 w-5 stroke-current'
+const adminIconClassName = "h-5 w-5 stroke-current";
 
 const adminIcons = {
-  'User Management': (
+  "User Management": (
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -41,7 +47,7 @@ const adminIcons = {
       <path d="M14.5 19c.8-1.6 2.1-2.6 3.5-3" />
     </svg>
   ),
-  'Device Management': (
+  "Device Management": (
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -56,7 +62,7 @@ const adminIcons = {
       <circle cx="15" cy="16" r="1.4" />
     </svg>
   ),
-  'Admin Analysis': (
+  "Admin Analysis": (
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -81,47 +87,50 @@ const adminIcons = {
       <circle cx="12" cy="8" r="3.5" />
       <path d="M5 20c1.8-3 4.5-4.5 7-4.5s5.2 1.5 7 4.5" />
     </svg>
-  )
-}
+  ),
+  "System Logs": (
+    <ShieldCheck className={adminIconClassName} aria-hidden="true" />
+  ),
+};
 
 const adminSidebarTheme = {
-  sidebar: 'border-violet-900/80 bg-violet-950',
-  badge: 'bg-violet-900 text-white',
-  divider: 'border-violet-900/80',
-  activeLink: 'border-violet-400 bg-violet-900 text-white',
-  inactiveLink: 'text-violet-200 hover:border-violet-700',
-  labelText: 'text-violet-100'
-}
+  sidebar: "border-violet-900/80 bg-violet-950",
+  badge: "bg-violet-900 text-white",
+  divider: "border-violet-900/80",
+  activeLink: "border-violet-400 bg-violet-900 text-white",
+  inactiveLink: "text-violet-200 hover:border-violet-700",
+  labelText: "text-violet-100",
+};
 
-const adminSidebarStorageKey = 'admin-sidebar-expanded'
+const adminSidebarStorageKey = "admin-sidebar-expanded";
 
-function AdminLayout({ title, background, children, bg = 'bg-white' }) {
+function AdminLayout({ title, background, children, bg = "bg-white" }) {
   const [isExpanded, setIsExpanded] = useState(() => {
-    if (typeof window === 'undefined') {
-      return false
+    if (typeof window === "undefined") {
+      return false;
     }
 
-    return window.localStorage.getItem(adminSidebarStorageKey) === 'true'
-  })
-  const { initials: userInitials, profilePicture } = useUserProfile()
-  const [isImageViewerOpen, setIsImageViewerOpen] = useState(false)
-  const deactivationWarning = useDeactivationGuard()
+    return window.localStorage.getItem(adminSidebarStorageKey) === "true";
+  });
+  const { initials: userInitials, profilePicture } = useUserProfile();
+  const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
+  const deactivationWarning = useDeactivationGuard();
 
   useEffect(() => {
-    window.localStorage.setItem(adminSidebarStorageKey, String(isExpanded))
-  }, [isExpanded])
+    window.localStorage.setItem(adminSidebarStorageKey, String(isExpanded));
+  }, [isExpanded]);
 
   return (
     <main
       className={`admin-layout relative flex h-screen w-screen overflow-hidden ${bg} text-slate-900`}
-      style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
+      style={{ fontFamily: "Inter, system-ui, sans-serif" }}
     >
       {background}
 
       <section className="relative flex h-full w-full">
         <aside
           className={`sticky top-0 flex h-screen shrink-0 flex-col gap-4 border-r py-4 backdrop-blur transition-all duration-300 ${adminSidebarTheme.sidebar} ${
-            isExpanded ? 'w-64' : 'w-16'
+            isExpanded ? "w-64" : "w-16"
           }`}
           role="navigation"
           aria-label="Main navigation"
@@ -131,20 +140,24 @@ function AdminLayout({ title, background, children, bg = 'bg-white' }) {
           <div className="flex flex-col items-center gap-3 px-3">
             <div
               className={`flex items-center justify-center overflow-hidden rounded-full transition-all duration-300 ${adminSidebarTheme.badge} font-semibold flex-shrink-0 ${
-                isExpanded ? 'h-24 w-24 text-2xl' : 'h-10 w-10 text-sm'
-              } ${profilePicture ? 'cursor-pointer' : ''}`}
+                isExpanded ? "h-24 w-24 text-2xl" : "h-10 w-10 text-sm"
+              } ${profilePicture ? "cursor-pointer" : ""}`}
               onClick={(event) => {
                 if (!profilePicture) {
-                  return
+                  return;
                 }
-                event.stopPropagation()
-                setIsImageViewerOpen(true)
+                event.stopPropagation();
+                setIsImageViewerOpen(true);
               }}
             >
               {profilePicture ? (
-                <img src={profilePicture} alt="" className="h-full w-full object-cover" />
+                <img
+                  src={profilePicture}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
               ) : (
-                userInitials || '...'
+                userInitials || "..."
               )}
             </div>
           </div>
@@ -171,8 +184,8 @@ function AdminLayout({ title, background, children, bg = 'bg-white' }) {
                 <span
                   className={`inline-flex overflow-hidden whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] transition-all duration-200 ease-out ${
                     isExpanded
-                      ? 'max-w-44 opacity-100 translate-x-0'
-                      : 'max-w-0 opacity-0 -translate-x-2'
+                      ? "max-w-44 opacity-100 translate-x-0"
+                      : "max-w-0 opacity-0 -translate-x-2"
                   }`}
                 >
                   {module.label}
@@ -193,8 +206,9 @@ function AdminLayout({ title, background, children, bg = 'bg-white' }) {
               {title ? <h1 className="sr-only">{title}</h1> : null}
               {deactivationWarning ? (
                 <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  Your account has been deactivated. You will lose access on{' '}
-                  {formatCutoff(deactivationWarning.cutoffAt)} unless this is reversed.
+                  Your account has been deactivated. You will lose access on{" "}
+                  {formatCutoff(deactivationWarning.cutoffAt)} unless this is
+                  reversed.
                 </div>
               ) : null}
               {children}
@@ -220,7 +234,7 @@ function AdminLayout({ title, background, children, bg = 'bg-white' }) {
         </div>
       ) : null}
     </main>
-  )
+  );
 }
 
-export default AdminLayout
+export default AdminLayout;

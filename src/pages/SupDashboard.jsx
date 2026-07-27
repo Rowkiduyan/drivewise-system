@@ -1,5 +1,5 @@
 import SupLayout from "../layout/SupLayout.jsx";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import DateRangeFilter from "../components/DateRangeFilter.jsx";
 // Recharts for data visualisation
 import {
@@ -11,10 +11,19 @@ import {
   ResponsiveContainer,
 } from "recharts";
 // React‑Leaflet for live fleet map
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 const background = null;
+
+// Component to handle map resize events without being recreated on each render.
+function ResizeHandler() {
+  const map = useMap();
+  useEffect(() => {
+    map.invalidateSize();
+  }, [map]);
+  return null;
+}
 
 function KPIHero({ items }) {
   // Compact grid: tighter gaps, uniform card height
@@ -213,13 +222,14 @@ function RosterTable({ data }) {
 
 // 4. Live fleet map widget
 function LiveFleetMap({ locations }) {
-  // Placeholder map – markers use default Leaflet icons; status shown in popup.
+  // ResizeHandler is defined outside to avoid recreation during render.
+
   return (
     <SummaryCard title="Live Fleet Tracking & Routes">
       <div className="h-64 w-full rounded-lg overflow-hidden">
         <MapContainer
-          center={[37.7749, -122.4194]}
-          zoom={4}
+          center={[14.5764, 121.0851]}
+          zoom={13}
           scrollWheelZoom={false}
           style={{ height: "100%", width: "100%" }}
         >
@@ -227,6 +237,7 @@ function LiveFleetMap({ locations }) {
             attribution='&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+          <ResizeHandler />
           {locations.map((loc) => (
             <Marker key={loc.id} position={loc.position}>
               <Popup>
@@ -503,7 +514,8 @@ function SupDashboard() {
       {
         id: 1,
         name: "Truck 12",
-        position: [37.7749, -122.4194],
+        // Ortigas Center, Pasig City
+        position: [14.582, 121.058],
         status: "normal",
       },
     ],
@@ -511,19 +523,22 @@ function SupDashboard() {
       {
         id: 1,
         name: "Truck 12",
-        position: [37.7749, -122.4194],
+        // Ortigas Center
+        position: [14.582, 121.058],
         status: "normal",
       },
       {
         id: 2,
         name: "Truck 27",
-        position: [34.0522, -118.2437],
+        // C‑5 Road near Pasig
+        position: [14.56, 121.08],
         status: "alert",
       },
       {
         id: 3,
         name: "Truck 33",
-        position: [40.7128, -74.006],
+        // Shaw Blvd, Pasig City
+        position: [14.571, 121.0585],
         status: "normal",
       },
     ],
@@ -531,25 +546,29 @@ function SupDashboard() {
       {
         id: 1,
         name: "Truck 12",
-        position: [37.7749, -122.4194],
+        // Ortigas Center
+        position: [14.582, 121.058],
         status: "normal",
       },
       {
         id: 2,
         name: "Truck 27",
-        position: [34.0522, -118.2437],
+        // C‑5 Road
+        position: [14.56, 121.08],
         status: "alert",
       },
       {
         id: 3,
         name: "Truck 33",
-        position: [40.7128, -74.006],
+        // Shaw Blvd
+        position: [14.571, 121.0585],
         status: "normal",
       },
       {
         id: 4,
         name: "Truck 44",
-        position: [41.8781, -87.6298],
+        // Marcos Highway, Pasig City
+        position: [14.595, 121.095],
         status: "maintenance",
       },
     ],

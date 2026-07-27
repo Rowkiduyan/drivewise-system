@@ -1,190 +1,190 @@
-# Database
+    # Database
 
-## Overview
+    ## Overview
 
-DriveWise uses Supabase PostgreSQL as its primary database.
+    DriveWise uses Supabase PostgreSQL as its primary database.
 
-The database currently stores:
+    The database currently stores:
 
-- User accounts
-- Driver profiles
-- Drowsiness monitoring sessions
-- Drowsiness alert records
+    - User accounts
+    - Driver profiles
+    - Drowsiness monitoring sessions
+    - Drowsiness alert records
 
-The schema is currently under active development and will expand as additional fleet management features are implemented.
+    The schema is currently under active development and will expand as additional fleet management features are implemented.
 
----
+    ---
 
-# Entity Relationship
+    # Entity Relationship
 
-users (1) -------- (1) driver_records
-users (1) -------- (1) supervisor_records
-users (1) -------- (1) admin_records
-users (1) -------- (1) helper_records
-users (1) -------- (1) customer_records
+    users (1) -------- (1) driver_records
+    users (1) -------- (1) supervisor_records
+    users (1) -------- (1) admin_records
+    users (1) -------- (1) helper_records
+    users (1) -------- (1) customer_records
 
-sessions (1) ----- (N) alerts
+    sessions (1) ----- (N) alerts
 
-Each user has exactly one profile row, in the `*_records` table matching their `role` — never more than one, and never in more than one table at a time.
+    Each user has exactly one profile row, in the `*_records` table matching their `role` — never more than one, and never in more than one table at a time.
 
----
+    ---
 
-# Tables
+    # Tables
 
-## users
+    ## users
 
-### Purpose
+    ### Purpose
 
-Stores user accounts for authentication and role management only. Personal/profile details (name, birthdate, contact info, etc.) live in the role-specific `*_records` table instead — see "Per-role profile tables" below.
+    Stores user accounts for authentication and role management only. Personal/profile details (name, birthdate, contact info, etc.) live in the role-specific `*_records` table instead — see "Per-role profile tables" below.
 
-### Key Fields
+    ### Key Fields
 
-- id (UUID, Primary Key) — matches the corresponding Supabase Auth user id.
-- login_email — the actual Supabase Auth login email. Generated server-side by the `admin-users` Edge Function from the user's name (first-name initial + middle-name initial(s), if any + surname + a 2-digit sequence, e.g. `jmdoe01@marveltrucking.local`). Unique, not editable from the UI. Shown in the UI as "Work Email".
-- role
-- created_at
-- deactivated_at (nullable, timestamptz) — set by `AdminHome.jsx`'s "Deactivate Account" (via the `admin-users` Edge Function's `deactivate` action) when an Admin deactivates an account; cleared back to `null` by "Reactivate Account" (`reactivate` action). Deactivating does **not** ban the account in Supabase Auth — Supabase has no way to schedule a ban to start in the future, and the intent is a 24-hour grace period, not an instant lockout. Instead, every login (`Login.jsx`) and every portal layout (`useDeactivationGuard`, polled every 5 minutes for already-open sessions) compares this timestamp against now: access is only actually cut off once `DEACTIVATION_GRACE_HOURS` (24, see `src/lib/deactivation.js`) have elapsed, and a warning banner is shown in the meantime.
+    - id (UUID, Primary Key) — matches the corresponding Supabase Auth user id.
+    - login_email — the actual Supabase Auth login email. Generated server-side by the `admin-users` Edge Function from the user's name (first-name initial + middle-name initial(s), if any + surname + a 2-digit sequence, e.g. `jmdoe01@marveltrucking.local`). Unique, not editable from the UI. Shown in the UI as "Work Email".
+    - role
+    - created_at
+    - deactivated_at (nullable, timestamptz) — set by `AdminHome.jsx`'s "Deactivate Account" (via the `admin-users` Edge Function's `deactivate` action) when an Admin deactivates an account; cleared back to `null` by "Reactivate Account" (`reactivate` action). Deactivating does **not** ban the account in Supabase Auth — Supabase has no way to schedule a ban to start in the future, and the intent is a 24-hour grace period, not an instant lockout. Instead, every login (`Login.jsx`) and every portal layout (`useDeactivationGuard`, polled every 5 minutes for already-open sessions) compares this timestamp against now: access is only actually cut off once `DEACTIVATION_GRACE_HOURS` (24, see `src/lib/deactivation.js`) have elapsed, and a warning banner is shown in the meantime.
 
-`role` is one of: `Supervisor`, `Admin`, `Driver`, `Helper`, `Customer`.
+    `role` is one of: `Supervisor`, `Admin`, `Driver`, `Helper`, `Customer`.
 
-### Relationships
+    ### Relationships
 
-- Referenced by `driver_records.auth_id`, `supervisor_records.auth_id`, `admin_records.auth_id`, `helper_records.auth_id`, `customer_records.auth_id` (exactly one of these has a row for a given user, matching their current `role`).
+    - Referenced by `driver_records.auth_id`, `supervisor_records.auth_id`, `admin_records.auth_id`, `helper_records.auth_id`, `customer_records.auth_id` (exactly one of these has a row for a given user, matching their current `role`).
 
-### Migration note
+    ### Migration note
 
-`full_name` and `email` previously lived on this table. They have moved to the matching `*_records` table (`full_name` split into `first_name`/`middle_name`/`last_name`; `email` renamed conceptually to "Personal Email" but keeps the column name `email` for continuity with the pre-existing `driver_records` shape). Existing code/RLS/Edge Function references to `users.full_name` and `users.email` need to be updated to read from the role's records table instead.
+    `full_name` and `email` previously lived on this table. They have moved to the matching `*_records` table (`full_name` split into `first_name`/`middle_name`/`last_name`; `email` renamed conceptually to "Personal Email" but keeps the column name `email` for continuity with the pre-existing `driver_records` shape). Existing code/RLS/Edge Function references to `users.full_name` and `users.email` need to be updated to read from the role's records table instead.
 
 
-## Per-role profile tables
+    ## Per-role profile tables
 
-### Purpose
+    ### Purpose
 
-Each role has its own profile table, holding the fields captured by the "Add User" form: name (split into parts), position, personal email, contact number, birthdate, and address. This generalizes the `driver_records` table (which already existed) to the other four roles instead of collapsing everyone's profile into one wide `users` row.
+    Each role has its own profile table, holding the fields captured by the "Add User" form: name (split into parts), position, personal email, contact number, birthdate, and address. This generalizes the `driver_records` table (which already existed) to the other four roles instead of collapsing everyone's profile into one wide `users` row.
 
-Tables: `driver_records` (pre-existing), `supervisor_records`, `admin_records`, `helper_records`, `customer_records`.
+    Tables: `driver_records` (pre-existing), `supervisor_records`, `admin_records`, `helper_records`, `customer_records`.
 
-### Key Fields (same shape in all five tables)
+    ### Key Fields (same shape in all five tables)
 
-- id (TEXT, Primary Key) — sequential per-table convention, one prefix letter per role: `D001`/`D002`/... (Driver, pre-existing), `S001`/... (Supervisor), `A001`/... (Admin), `H001`/... (Helper), `C001`/... (Customer). The `admin-users` Edge Function derives the next id per table by reading the highest existing prefixed id in that table and incrementing it — the same pattern already used for `driver_records`.
-- auth_id — references `users.id` (foreign key).
-- first_name
-- middle_name (nullable)
-- last_name
-- position (nullable — not meaningful for every role)
-- birthdate
-- email — personal/contact email entered by the admin. Account credential emails are sent here; this is **not** the Supabase Auth login (`users.login_email`).
-- contact_number (new field; also being added to the existing `driver_records`, which did not have it before)
-- address (JSONB; `{ "street": ..., "city": ..., "province": ... }`. New field; also being added to the existing `driver_records`, which did not have it before. Structured as JSONB rather than flat text so the three parts round-trip cleanly into a 3-field edit form and remain individually queryable — Philippines-only, no country field. `city`/`province` are chosen from a static bundled PSGC-based dataset in the frontend, not a live API — `street` stays free text.)
-- profile_picture (nullable) — public Storage URL (with a `?v=` cache-busting query param) into the `driver-profile-pics` bucket, keyed by `auth_id + ".jpg"` (client always crops/re-encodes to a 256x256 JPEG before upload, so re-uploads overwrite the same object — see `src/lib/profilePicture.js`). Written only by the `admin-users` Edge Function's `upload-profile-picture` action.
+    - id (TEXT, Primary Key) — sequential per-table convention, one prefix letter per role: `D001`/`D002`/... (Driver, pre-existing), `S001`/... (Supervisor), `A001`/... (Admin), `H001`/... (Helper), `C001`/... (Customer). The `admin-users` Edge Function derives the next id per table by reading the highest existing prefixed id in that table and incrementing it — the same pattern already used for `driver_records`.
+    - auth_id — references `users.id` (foreign key).
+    - first_name
+    - middle_name (nullable)
+    - last_name
+    - position (nullable — not meaningful for every role)
+    - birthdate
+    - email — personal/contact email entered by the admin. Account credential emails are sent here; this is **not** the Supabase Auth login (`users.login_email`).
+    - contact_number (new field; also being added to the existing `driver_records`, which did not have it before)
+    - address (JSONB; `{ "street": ..., "city": ..., "province": ... }`. New field; also being added to the existing `driver_records`, which did not have it before. Structured as JSONB rather than flat text so the three parts round-trip cleanly into a 3-field edit form and remain individually queryable — Philippines-only, no country field. `city`/`province` are chosen from a static bundled PSGC-based dataset in the frontend, not a live API — `street` stays free text.)
+    - profile_picture (nullable) — public Storage URL (with a `?v=` cache-busting query param) into the `driver-profile-pics` bucket, keyed by `auth_id + ".jpg"` (client always crops/re-encodes to a 256x256 JPEG before upload, so re-uploads overwrite the same object — see `src/lib/profilePicture.js`). Written only by the `admin-users` Edge Function's `upload-profile-picture` action.
 
-`customer_records` has one additional field not present in the other four tables:
+    `customer_records` has one additional field not present in the other four tables:
 
-- client_name — the company/organization this Customer account represents. Required by the Add User form when role is Customer; the `admin-users` Edge Function only reads/writes this column for `customer_records`, since it doesn't exist on `driver_records`/`supervisor_records`/`admin_records`/`helper_records`.
+    - client_name — the company/organization this Customer account represents. Required by the Add User form when role is Customer; the `admin-users` Edge Function only reads/writes this column for `customer_records`, since it doesn't exist on `driver_records`/`supervisor_records`/`admin_records`/`helper_records`.
 
-### Relationships
+    ### Relationships
 
-- `auth_id` references `users.id`. `id` is an independently generated text value, not the linked user's auth id.
+    - `auth_id` references `users.id`. `id` is an independently generated text value, not the linked user's auth id.
 
-See `AUTHENTICATION.md` for how these rows get created/synced relative to `users`, and `SUPABASE_GOTCHAS.md` #2/#7 — every new table here needs its own `service_role` grant before the `admin-users` Edge Function can write to it.
+    See `AUTHENTICATION.md` for how these rows get created/synced relative to `users`, and `SUPABASE_GOTCHAS.md` #2/#7 — every new table here needs its own `service_role` grant before the `admin-users` Edge Function can write to it.
 
----
+    ---
 
-## Storage buckets
+    ## Storage buckets
 
-### driver-profile-pics
+    ### driver-profile-pics
 
-Holds one object per user with a profile picture: `{auth_id}.jpg` (always JPEG — the client crops/re-encodes to a fixed 256x256 square before upload, see `src/lib/profilePicture.js`). Written only by the `admin-users` Edge Function's `upload-profile-picture` action, using `upsert: true` so a re-upload overwrites the same object rather than accumulating orphans.
+    Holds one object per user with a profile picture: `{auth_id}.jpg` (always JPEG — the client crops/re-encodes to a fixed 256x256 square before upload, see `src/lib/profilePicture.js`). Written only by the `admin-users` Edge Function's `upload-profile-picture` action, using `upsert: true` so a re-upload overwrites the same object rather than accumulating orphans.
 
-**Manual setup required** (not created by any migration in this repo): create the bucket in the Supabase Dashboard (Storage → New bucket → name `driver-profile-pics` → Public). It must be Public since the frontend renders `profile_picture`'s stored URL directly as an `<img src>` with no signing step. `service_role` bypasses object-level RLS the same way it bypasses table RLS (unlike gotcha #2/#7, `storage.objects` is a Supabase-managed table that already grants `service_role` full access — only the bucket itself needs to be created manually).
+    **Manual setup required** (not created by any migration in this repo): create the bucket in the Supabase Dashboard (Storage → New bucket → name `driver-profile-pics` → Public). It must be Public since the frontend renders `profile_picture`'s stored URL directly as an `<img src>` with no signing step. `service_role` bypasses object-level RLS the same way it bypasses table RLS (unlike gotcha #2/#7, `storage.objects` is a Supabase-managed table that already grants `service_role` full access — only the bucket itself needs to be created manually).
 
----
+    ---
 
-## sessions
+    ## sessions
 
-### Purpose
+    ### Purpose
 
-Represents one drowsiness monitoring session.
+    Represents one drowsiness monitoring session.
 
-A session begins when raspberry pi is turned on and monitoring starts and ends when monitoring stops.
+    A session begins when raspberry pi is turned on and monitoring starts and ends when monitoring stops.
 
-### Key Fields
+    ### Key Fields
 
-- session_id
-- created_at
-- start_time
-- end_time
-- total_alerts
-- session_duration
+    - session_id
+    - created_at
+    - start_time
+    - end_time
+    - total_alerts
+    - session_duration
 
-### Relationships
+    ### Relationships
 
-- One session can contain multiple alerts.
+    - One session can contain multiple alerts.
 
----
+    ---
 
-## crew_client_specialties
+    ## crew_client_specialties
 
-### Purpose
+    ### Purpose
 
-Join table assigning Driver/Helper crew members to the Customer accounts ("clients") they specialize in, shown on `SupCrewProfile.jsx`'s Overview tab. A "client" here is a Customer-role `users` row, displayed by its `customer_records.client_name` — there is no separate `clients` table.
+    Join table assigning Driver/Helper crew members to the Customer accounts ("clients") they specialize in, shown on `SupCrewProfile.jsx`'s Overview tab. A "client" here is a Customer-role `users` row, displayed by its `customer_records.client_name` — there is no separate `clients` table.
 
-### Key Fields
+    ### Key Fields
 
-- id (bigint, Primary Key, identity)
-- crew_auth_id — references `users.id` (the Driver/Helper).
-- client_auth_id — references `users.id` (the Customer).
-- created_at
+    - id (bigint, Primary Key, identity)
+    - crew_auth_id — references `users.id` (the Driver/Helper).
+    - client_auth_id — references `users.id` (the Customer).
+    - created_at
 
-A `(crew_auth_id, client_auth_id)` pair is unique — a crew member can't be assigned the same client twice.
+    A `(crew_auth_id, client_auth_id)` pair is unique — a crew member can't be assigned the same client twice.
 
-### Relationships
+    ### Relationships
 
-- Read/written only through the `admin-users` Edge Function's `list-clients`/`list-crew-clients`/`add-crew-client`/`remove-crew-client` actions (Admin or Supervisor caller) — same access model as `list-crew`. See `SUPABASE_GOTCHAS.md` #2/#7/#8 — needs its own `service_role` grant and `anon`/`authenticated` revoke before the Edge Function can use it.
+    - Read/written only through the `admin-users` Edge Function's `list-clients`/`list-crew-clients`/`add-crew-client`/`remove-crew-client` actions (Admin or Supervisor caller) — same access model as `list-crew`. See `SUPABASE_GOTCHAS.md` #2/#7/#8 — needs its own `service_role` grant and `anon`/`authenticated` revoke before the Edge Function can use it.
 
----
+    ---
 
-## alerts
+    ## alerts
 
-### Purpose
+    ### Purpose
 
-Stores every drowsiness event detected during a monitoring session.
+    Stores every drowsiness event detected during a monitoring session.
 
-### Key Fields
+    ### Key Fields
 
-- id
-- event_type
-- duration
-- session_id
-- created_at
+    - id
+    - event_type
+    - duration
+    - session_id
+    - created_at
 
-### Relationships
+    ### Relationships
 
-- Belongs to one monitoring session.
+    - Belongs to one monitoring session.
 
----
+    ---
 
-# Current Notes
+    # Current Notes
 
-The current database supports the drowsiness detection prototype.
+    The current database supports the drowsiness detection prototype.
 
-At this stage:
+    At this stage:
 
-- One Raspberry Pi device sends monitoring data.
-- Drowsiness events are associated with a single predefined account.
-- Multi-driver and multi-truck support has not yet been implemented.
+    - One Raspberry Pi device sends monitoring data.
+    - Drowsiness events are associated with a single predefined account.
+    - Multi-driver and multi-truck support has not yet been implemented.
 
----
-# Naming Conventions
+    ---
+    # Naming Conventions
 
-- Primary keys use `id` unless a domain-specific identifier is required.
-- Foreign keys reference the parent table's primary key.
-- Timestamps use UTC.
-- Per-role profile table ids use a single role-prefix letter + zero-padded sequence: `D` (Driver), `S` (Supervisor), `A` (Admin), `H` (Helper), `C` (Customer).
+    - Primary keys use `id` unless a domain-specific identifier is required.
+    - Foreign keys reference the parent table's primary key.
+    - Timestamps use UTC.
+    - Per-role profile table ids use a single role-prefix letter + zero-padded sequence: `D` (Driver), `S` (Supervisor), `A` (Admin), `H` (Helper), `C` (Customer).
 
 
-This document describes the current logical database design.
+    This document describes the current logical database design.
 
-Authentication, RLS policies, Edge Functions, and Supabase-specific security are documented separately.
+    Authentication, RLS policies, Edge Functions, and Supabase-specific security are documented separately.
 
-The schema will be expanded to support trips, trucks, GPS tracking, and fleet management features as development continues.
+    The schema will be expanded to support trips, trucks, GPS tracking, and fleet management features as development continues.
