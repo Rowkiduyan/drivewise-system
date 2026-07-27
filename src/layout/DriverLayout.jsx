@@ -12,7 +12,7 @@ export const driverModules = [
     description: 'Scores and safety trends'
   },
   {
-    label: 'Trips',
+    label: 'Deliveries',
     path: '/driver/trips',
     description: 'Routes and deliveries'
   },
@@ -40,7 +40,7 @@ const driverIcons = {
       <path d="M17 16v-7" />
     </svg>
   ),
-  Trips: (
+  Deliveries: (
     <svg
       viewBox="0 0 24 24"
       fill="none"

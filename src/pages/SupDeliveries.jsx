@@ -1353,7 +1353,7 @@ function SupDeliveries() {
               activeModule === 'tracking' ? 'bg-slate-900 text-white' : 'border border-slate-200 bg-white text-slate-700'
             }`}
           >
-            Live Tracking ({ongoingDeliveries.length + completedDeliveries.length})
+            Deliveries ({ongoingDeliveries.length + completedDeliveries.length})
           </button>
         </div>
 
