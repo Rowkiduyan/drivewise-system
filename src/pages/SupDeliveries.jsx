@@ -1219,7 +1219,7 @@ function SupDeliveries() {
     { label: 'Fuel Surcharge', amount: '' },
     { label: 'Loading/Unloading Fee', amount: '' },
   ]
-  const [quotationForm, setQuotationForm] = useState({ breakdownItems: defaultBreakdownItems, notes: '', validUntil: '' })
+  const [quotationForm, setQuotationForm] = useState({ breakdownItems: defaultBreakdownItems })
   const [negotiationAmount, setNegotiationAmount] = useState('')
   const [negotiationCallSchedule, setNegotiationCallSchedule] = useState('')
   const [assignment, setAssignment] = useState({ driverId: '', helperIds: [], plateNumber: '', _showDrivers: false, _showHelpers: false, _showTrucks: false })
@@ -1322,8 +1322,6 @@ function SupDeliveries() {
       breakdownItems: request.quotation?.breakdown?.length
         ? request.quotation.breakdown.map(i => ({ ...i }))
         : defaultBreakdownItems.map(i => ({ ...i })),
-      notes: request.quotation?.notes || '',
-      validUntil: request.quotation?.validUntil || '',
     })
     setAssignment({
       driverId: request.crew?.driver?.id || '',
@@ -1349,8 +1347,6 @@ function SupDeliveries() {
       quotation: {
         amount: total,
         breakdown: validItems.map(i => ({ label: i.label, amount: Number(i.amount) })),
-        notes: quotationForm.notes,
-        validUntil: quotationForm.validUntil,
       },
       status: 'QUOTED',
     })
@@ -1946,21 +1942,6 @@ function SupDeliveries() {
                           ₱{quotationForm.breakdownItems.filter(i => i.amount !== '' && Number(i.amount) > 0).reduce((sum, i) => sum + Number(i.amount), 0).toLocaleString()}
                         </p>
                       </div>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        <input
-                          type="date"
-                          value={quotationForm.validUntil}
-                          onChange={(e) => setQuotationForm((prev) => ({ ...prev, validUntil: e.target.value }))}
-                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-sky-300"
-                        />
-                        <textarea
-                          value={quotationForm.notes}
-                          onChange={(e) => setQuotationForm((prev) => ({ ...prev, notes: e.target.value }))}
-                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-sky-300"
-                          rows={2}
-                          placeholder="Quotation notes"
-                        />
-                      </div>
                       <div className="mt-4 flex flex-wrap gap-2.5">
                         <button
                           onClick={submitQuotation}
@@ -2012,7 +1993,6 @@ function SupDeliveries() {
                                 ))}
                               </div>
                             )}
-                            <p className="text-xs text-slate-500 mt-1">{selectedRequest.quotation.notes}</p>
                           </div>
 
                           {/* Customer's requested amount */}
@@ -2136,10 +2116,6 @@ function SupDeliveries() {
                             </div>
                           </div>
                         )}
-                        <div className="pt-2 border-t border-emerald-200">
-                          <p className="text-sm text-emerald-700">{selectedRequest.quotation.notes}</p>
-                          <p className="text-xs text-emerald-600 mt-1">Valid until: {selectedRequest.quotation.validUntil}</p>
-                        </div>
                       </div>
                     </div>
                   )}
