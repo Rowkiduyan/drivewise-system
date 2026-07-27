@@ -104,8 +104,7 @@ const statusConfig = {
 
 const REPORT_TABS = [
   { id: 'trip', label: 'Trip Summary', icon: Route },
-  { id: 'behavior', label: 'Driver Behavior', icon: Activity },
-  { id: 'delivery', label: 'Delivery Report', icon: ClipboardList },
+  { id: 'behavior', label: 'DriveWise Analysis', icon: Activity },
   { id: 'route', label: 'Route Deviation', icon: MapPin },
 ]
 
@@ -255,10 +254,11 @@ const COMPLETED_REPORT_DATA = {
         { location: 'BGC Branch', time: '09:15', action: 'Drop-off Completed' },
       ],
       timeline: [
-        { label: 'Departed', time: '08:30', completed: true },
-        { label: 'En Route', time: '08:30-09:10', completed: true },
-        { label: 'Arrived', time: '09:10', completed: true },
-        { label: 'Unloaded', time: '09:15', completed: true },
+        { label: 'Departed for Pickup', time: '08:00', completed: true },
+        { label: 'Arrived at Pickup Location', time: '08:15', completed: true },
+        { label: 'Departed for Drop Off', time: '08:30', completed: true },
+        { label: 'Arrived at Drop Off Location', time: '09:10', completed: true },
+        { label: 'Delivery Completed', time: '09:15', completed: true },
       ],
     },
     behavior: {
@@ -331,10 +331,11 @@ const COMPLETED_REPORT_DATA = {
         { location: 'Alabang Branch', time: '06:55', action: 'Drop-off Completed' },
       ],
       timeline: [
-        { label: 'Departed', time: '06:00', completed: true },
-        { label: 'En Route', time: '06:00-06:48', completed: true },
-        { label: 'Arrived', time: '06:48', completed: true },
-        { label: 'Unloaded', time: '06:55', completed: true },
+        { label: 'Departed for Pickup', time: '05:30', completed: true },
+        { label: 'Arrived at Pickup Location', time: '05:45', completed: true },
+        { label: 'Departed for Drop Off', time: '06:00', completed: true },
+        { label: 'Arrived at Drop Off Location', time: '06:48', completed: true },
+        { label: 'Delivery Completed', time: '06:55', completed: true },
       ],
     },
     behavior: {
@@ -464,11 +465,69 @@ function CompletedDeliveryReport({ report }) {
               ))}
             </div>
           </div>
+
+          <div className="rounded-lg bg-white border border-slate-200 p-3">
+            <p className="text-xs font-semibold text-slate-500 mb-2">Eye Closure Alerts</p>
+            <div className="space-y-1.5">
+              {report.delivery.eyeClosureAlerts.map((alert) => {
+                const Icon = ALERT_TYPE_ICONS[alert.type] || EyeOff
+                const severityColor = alert.severity === 'High' ? 'text-red-600 bg-red-50' : 'text-amber-600 bg-amber-50'
+                return (
+                  <div key={alert.id} className="flex items-center gap-2 rounded-lg border border-slate-100 p-2 text-xs">
+                    <Icon className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                    <span className="font-medium text-slate-700">{formatAlertTimestamp(alert.time)}</span>
+                    <span className="text-slate-500">{ALERT_TYPE_LABELS[alert.type] || alert.type}</span>
+                    <span className="text-slate-400">{alert.duration}s</span>
+                    <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold ${severityColor}`}>
+                      {alert.severity}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-white border border-slate-200 p-3">
+            <p className="text-xs font-semibold text-slate-500 mb-2">Delivery History</p>
+            <div className="space-y-1.5">
+              {report.delivery.history.map((entry, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs">
+                  <div className="flex flex-col items-center">
+                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
+                      i === report.delivery.history.length - 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'
+                    }`}>
+                      <Check className="h-2.5 w-2.5" />
+                    </span>
+                    {i < report.delivery.history.length - 1 && <div className="mt-0.5 h-3 w-px bg-slate-200" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-slate-700">{entry.event}</p>
+                    <p className="text-slate-400">{formatAlertTimestamp(entry.timestamp)} by {entry.actor}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
       {reportTab === 'behavior' && (
         <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
+              <p className="text-xs text-slate-500">Total Alerts</p>
+              <p className="text-lg font-bold text-slate-900">{report.delivery.totalAlerts}</p>
+            </div>
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
+              <p className="text-xs text-slate-500">Avg Duration</p>
+              <p className="text-lg font-bold text-slate-900">{report.delivery.avgAlertDuration}</p>
+            </div>
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
+              <p className="text-xs text-slate-500">Peak Time</p>
+              <p className="text-lg font-bold text-slate-900">{report.delivery.peakAlertTime}</p>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between rounded-lg bg-white border border-slate-200 p-3">
             <div>
               <p className="text-xs text-slate-500">Your Risk Level</p>
@@ -510,68 +569,6 @@ function CompletedDeliveryReport({ report }) {
                   </span>
                   <span className="font-semibold text-slate-900">{session.alerts} alerts</span>
                   <span className="text-slate-400">{formatAlertDuration(session.duration)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {reportTab === 'delivery' && (
-        <div className="space-y-3">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Total Alerts</p>
-              <p className="text-lg font-bold text-slate-900">{report.delivery.totalAlerts}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Avg Duration</p>
-              <p className="text-lg font-bold text-slate-900">{report.delivery.avgAlertDuration}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Peak Time</p>
-              <p className="text-lg font-bold text-slate-900">{report.delivery.peakAlertTime}</p>
-            </div>
-          </div>
-
-          <div className="rounded-lg bg-white border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-500 mb-2">Eye Closure Alerts</p>
-            <div className="space-y-1.5">
-              {report.delivery.eyeClosureAlerts.map((alert) => {
-                const Icon = ALERT_TYPE_ICONS[alert.type] || EyeOff
-                const severityColor = alert.severity === 'High' ? 'text-red-600 bg-red-50' : 'text-amber-600 bg-amber-50'
-                return (
-                  <div key={alert.id} className="flex items-center gap-2 rounded-lg border border-slate-100 p-2 text-xs">
-                    <Icon className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                    <span className="font-medium text-slate-700">{formatAlertTimestamp(alert.time)}</span>
-                    <span className="text-slate-500">{ALERT_TYPE_LABELS[alert.type] || alert.type}</span>
-                    <span className="text-slate-400">{alert.duration}s</span>
-                    <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold ${severityColor}`}>
-                      {alert.severity}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="rounded-lg bg-white border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-500 mb-2">Delivery History</p>
-            <div className="space-y-1.5">
-              {report.delivery.history.map((entry, i) => (
-                <div key={i} className="flex items-start gap-2 text-xs">
-                  <div className="flex flex-col items-center">
-                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
-                      i === report.delivery.history.length - 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'
-                    }`}>
-                      <Check className="h-2.5 w-2.5" />
-                    </span>
-                    {i < report.delivery.history.length - 1 && <div className="mt-0.5 h-3 w-px bg-slate-200" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-slate-700">{entry.event}</p>
-                    <p className="text-slate-400">{formatAlertTimestamp(entry.timestamp)} by {entry.actor}</p>
-                  </div>
                 </div>
               ))}
             </div>

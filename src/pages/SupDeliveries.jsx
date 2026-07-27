@@ -464,19 +464,88 @@ const mockRequests = [
   },
   {
     id: 'DEL-023',
-    customerName: 'Henry Sy Jr.',
-    companyName: 'SM Hypermarket',
-    pickupAddress: 'SM Hypermarket Warehouse, Brgy. La Huerta, Parañaque',
-    deliveryAddress: 'SM Hypermarket Sucat, Brgy. San Dionisio, Parañaque',
-    itemType: 'Frozen Goods',
-    pickupDate: '2026-08-02',
-    pickupTime: '06:00',
+    customerName: 'Rosa Tuazon',
+    companyName: 'Mercury Drug',
+    pickupAddress: 'Mercury Drug Warehouse, Brgy. San Vicente, San Pedro, Laguna',
+    deliveryAddress: 'Mercury Drug Santa Rosa Branch, Brgy. Poblacion, Santa Rosa, Laguna',
+    itemType: 'Pharmaceuticals',
+    pickupDate: '2026-08-10',
+    pickupTime: '10:00',
     status: 'PENDING',
-    createdAt: '2026-07-30 08:00',
-    destinationCoords: { lat: 14.4716, lng: 121.0178 },
-    currentLocation: { lat: 14.4800, lng: 121.0100 },
+    createdAt: '2026-08-08 15:00',
+    destinationCoords: { lat: 14.3122, lng: 121.1061 },
+    currentLocation: { lat: 14.3577, lng: 121.0586 },
     quotation: null,
     crew: null,
+  },
+  {
+    id: 'DEL-024',
+    customerName: 'Helen Reyes',
+    companyName: 'Puregold',
+    pickupAddress: 'Puregold Warehouse, Brgy. San Bartolome, Novaliches, Quezon City',
+    deliveryAddress: 'Puregold Sucat Branch, Brgy. San Dionisio, Parañaque',
+    itemType: 'Dry Food',
+    pickupDate: '2026-07-26',
+    pickupTime: '09:00',
+    dropoffDate: '2026-07-26',
+    dropoffTime: '14:00',
+    status: 'FOR_PICKUP',
+    createdAt: '2026-07-23 11:00',
+    destinationCoords: { lat: 14.4745, lng: 121.0254 },
+    currentLocation: { lat: 14.6575, lng: 121.0254 },
+    quotation: { amount: 4800, breakdown: [{ label: 'Base Delivery Fee', amount: 1800 }, { label: 'Distance Fee', amount: 900 }, { label: 'Truck Type Surcharge', amount: 600 }, { label: 'Fuel Surcharge', amount: 500 }, { label: 'Loading/Unloading Fee', amount: 1000 }], notes: 'Includes Saturday surcharge', validUntil: '2026-07-28' },
+    crew: {
+      driver: { id: 'DRV-003', name: 'Antonio Flores', phone: '+63 915 789 0123', rating: 4.6, trips: 89, avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80' },
+      helpers: [{ id: 'HLP-003', name: 'Jose Rizal', avatarUrl: 'https://images.unsplash.com/photo-1541535881962-3bb380b08458?auto=format&fit=crop&w=180&q=80' }],
+      truck: { plateNumber: 'DEF 5678', truckType: '4T_DRY', capacity: '4.0 tons' },
+    },
+    assignedAt: 'Jul 25, 2026, 10:00 AM',
+  },
+  {
+    id: 'DEL-025',
+    customerName: 'Danny Chua',
+    companyName: 'San Miguel Corporation',
+    pickupAddress: 'SMC Plant, Brgy. Bagbaguin, Meycauayan, Bulacan',
+    deliveryAddress: 'SMC Depot, Brgy. Poblacion, Valenzuela City',
+    itemType: 'Beverages',
+    pickupDate: '2026-07-26',
+    pickupTime: '06:00',
+    dropoffDate: '2026-07-26',
+    dropoffTime: '11:00',
+    status: 'OUT_FOR_DELIVERY',
+    createdAt: '2026-07-24 09:00',
+    destinationCoords: { lat: 14.6864, lng: 120.9663 },
+    currentLocation: { lat: 14.6850, lng: 120.9700 },
+    quotation: { amount: 6200, breakdown: [{ label: 'Base Delivery Fee', amount: 2000 }, { label: 'Distance Fee', amount: 1100 }, { label: 'Truck Type Surcharge', amount: 800 }, { label: 'Fuel Surcharge', amount: 700 }, { label: 'Loading/Unloading Fee', amount: 1600 }], notes: 'Bulk delivery — palletised', validUntil: '2026-07-27' },
+    crew: {
+      driver: { id: 'DRV-004', name: 'Ramon Bautista', phone: '+63 918 456 7890', rating: 4.9, trips: 215, avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80' },
+      helpers: [{ id: 'HLP-004', name: 'Eduardo Cruz', avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=180&q=80' }],
+      truck: { plateNumber: 'GHI 9012', truckType: '6T_DRY', capacity: '6.0 tons' },
+    },
+    assignedAt: 'Jul 25, 2026, 02:00 PM',
+  },
+  {
+    id: 'DEL-026',
+    customerName: 'Lorna Perez',
+    companyName: 'National Book Store',
+    pickupAddress: 'NBS Warehouse, Brgy. San Rafael, Cubao, Quezon City',
+    deliveryAddress: 'NBS SM North EDSA Branch, Brgy. Bagong Pag-asa, Quezon City',
+    itemType: 'School Supplies',
+    pickupDate: '2026-07-26',
+    pickupTime: '07:30',
+    dropoffDate: '2026-07-26',
+    dropoffTime: '12:00',
+    status: 'DELIVERED',
+    createdAt: '2026-07-22 14:00',
+    destinationCoords: { lat: 14.6570, lng: 121.0300 },
+    currentLocation: { lat: 14.6570, lng: 121.0300 },
+    quotation: { amount: 3200, breakdown: [{ label: 'Base Delivery Fee', amount: 1200 }, { label: 'Distance Fee', amount: 600 }, { label: 'Truck Type Surcharge', amount: 400 }, { label: 'Fuel Surcharge', amount: 300 }, { label: 'Loading/Unloading Fee', amount: 700 }], notes: 'Light cargo — multiple boxes', validUntil: '2026-07-25' },
+    crew: {
+      driver: { id: 'DRV-005', name: 'Felipe Gonzaga', phone: '+63 920 111 2233', rating: 4.5, trips: 67, avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=200&q=80' },
+      helpers: [{ id: 'HLP-005', name: 'Ricky Santos', avatarUrl: 'https://images.unsplash.com/photo-1541535881962-3bb380b08458?auto=format&fit=crop&w=180&q=80' }],
+      truck: { plateNumber: 'JKL 3456', truckType: 'L300', capacity: '1.5 tons' },
+    },
+    assignedAt: 'Jul 24, 2026, 09:00 AM',
   },
 ]
 
@@ -579,9 +648,8 @@ const mockTrucks = [
 
 const REPORT_TABS = [
   { id: 'trip', label: 'Trip Summary', icon: Route },
-  { id: 'behavior', label: 'Driver Behavior', icon: Activity },
-  { id: 'delivery', label: 'Delivery Report', icon: ClipboardList },
-  { id: 'route', label: 'Route Deviation', icon: Map },
+  { id: 'behavior', label: 'DriveWise Analysis', icon: Activity },
+  { id: 'route', label: 'Route Deviation Monitoring', icon: Map },
 ]
 
 function getRiskLevel(alertCount) {
@@ -730,10 +798,11 @@ const COMPLETED_REPORT_DATA = {
         { location: 'BGC Branch', time: '09:15', action: 'Drop-off Completed' },
       ],
       timeline: [
-        { label: 'Departed', time: '08:30', completed: true },
-        { label: 'En Route', time: '08:30-09:10', completed: true },
-        { label: 'Arrived', time: '09:10', completed: true },
-        { label: 'Unloaded', time: '09:15', completed: true },
+        { label: 'Departed for Pickup', time: '08:00', completed: true },
+        { label: 'Arrived at Pickup Location', time: '08:15', completed: true },
+        { label: 'Departed for Drop Off', time: '08:30', completed: true },
+        { label: 'Arrived at Drop Off Location', time: '09:10', completed: true },
+        { label: 'Delivery Completed', time: '09:15', completed: true },
       ],
     },
     behavior: {
@@ -806,10 +875,11 @@ const COMPLETED_REPORT_DATA = {
         { location: 'Alabang Branch', time: '06:55', action: 'Drop-off Completed' },
       ],
       timeline: [
-        { label: 'Departed', time: '06:00', completed: true },
-        { label: 'En Route', time: '06:00-06:48', completed: true },
-        { label: 'Arrived', time: '06:48', completed: true },
-        { label: 'Unloaded', time: '06:55', completed: true },
+        { label: 'Departed for Pickup', time: '05:30', completed: true },
+        { label: 'Arrived at Pickup Location', time: '05:45', completed: true },
+        { label: 'Departed for Drop Off', time: '06:00', completed: true },
+        { label: 'Arrived at Drop Off Location', time: '06:48', completed: true },
+        { label: 'Delivery Completed', time: '06:55', completed: true },
       ],
     },
     behavior: {
@@ -941,11 +1011,69 @@ function CompletedDeliveryReport({ delivery, onClose }) {
               ))}
             </div>
           </div>
+
+          <div className="rounded-lg bg-white border border-slate-200 p-3">
+            <p className="text-xs font-semibold text-slate-500 mb-2">Eye Closure Alerts</p>
+            <div className="space-y-1.5">
+              {report.delivery.eyeClosureAlerts.map((alert) => {
+                const Icon = ALERT_TYPE_ICONS[alert.type] || EyeOff
+                const severityColor = alert.severity === 'High' ? 'text-red-600 bg-red-50' : 'text-amber-600 bg-amber-50'
+                return (
+                  <div key={alert.id} className="flex items-center gap-2 rounded-lg border border-slate-100 p-2 text-xs">
+                    <Icon className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                    <span className="font-medium text-slate-700">{formatAlertTimestamp(alert.time)}</span>
+                    <span className="text-slate-500">{ALERT_TYPE_LABELS[alert.type] || alert.type}</span>
+                    <span className="text-slate-400">{alert.duration}s</span>
+                    <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold ${severityColor}`}>
+                      {alert.severity}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-white border border-slate-200 p-3">
+            <p className="text-xs font-semibold text-slate-500 mb-2">Delivery History</p>
+            <div className="space-y-1.5">
+              {report.delivery.history.map((entry, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs">
+                  <div className="flex flex-col items-center">
+                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
+                      i === report.delivery.history.length - 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'
+                    }`}>
+                      <Check className="h-2.5 w-2.5" />
+                    </span>
+                    {i < report.delivery.history.length - 1 && <div className="mt-0.5 h-3 w-px bg-slate-200" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-slate-700">{entry.event}</p>
+                    <p className="text-slate-400">{formatAlertTimestamp(entry.timestamp)} by {entry.actor}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
       {reportTab === 'behavior' && (
         <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
+              <p className="text-xs text-slate-500">Total Alerts</p>
+              <p className="text-lg font-bold text-slate-900">{report.delivery.totalAlerts}</p>
+            </div>
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
+              <p className="text-xs text-slate-500">Avg Duration</p>
+              <p className="text-lg font-bold text-slate-900">{report.delivery.avgAlertDuration}</p>
+            </div>
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
+              <p className="text-xs text-slate-500">Peak Time</p>
+              <p className="text-lg font-bold text-slate-900">{report.delivery.peakAlertTime}</p>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between rounded-lg bg-white border border-slate-200 p-3">
             <div>
               <p className="text-xs text-slate-500">Driver Risk Level</p>
@@ -990,68 +1118,6 @@ function CompletedDeliveryReport({ delivery, onClose }) {
                   </span>
                   <span className="font-semibold text-slate-900">{session.alerts} alerts</span>
                   <span className="text-slate-400">{formatAlertDuration(session.duration)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {reportTab === 'delivery' && (
-        <div className="space-y-3">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Total Alerts</p>
-              <p className="text-lg font-bold text-slate-900">{report.delivery.totalAlerts}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Avg Duration</p>
-              <p className="text-lg font-bold text-slate-900">{report.delivery.avgAlertDuration}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Peak Time</p>
-              <p className="text-lg font-bold text-slate-900">{report.delivery.peakAlertTime}</p>
-            </div>
-          </div>
-
-          <div className="rounded-lg bg-white border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-500 mb-2">Eye Closure Alerts</p>
-            <div className="space-y-1.5">
-              {report.delivery.eyeClosureAlerts.map((alert) => {
-                const Icon = ALERT_TYPE_ICONS[alert.type] || EyeOff
-                const severityColor = alert.severity === 'High' ? 'text-red-600 bg-red-50' : 'text-amber-600 bg-amber-50'
-                return (
-                  <div key={alert.id} className="flex items-center gap-2 rounded-lg border border-slate-100 p-2 text-xs">
-                    <Icon className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                    <span className="font-medium text-slate-700">{formatAlertTimestamp(alert.time)}</span>
-                    <span className="text-slate-500">{ALERT_TYPE_LABELS[alert.type] || alert.type}</span>
-                    <span className="text-slate-400">{alert.duration}s</span>
-                    <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold ${severityColor}`}>
-                      {alert.severity}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="rounded-lg bg-white border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-500 mb-2">Delivery History</p>
-            <div className="space-y-1.5">
-              {report.delivery.history.map((entry, i) => (
-                <div key={i} className="flex items-start gap-2 text-xs">
-                  <div className="flex flex-col items-center">
-                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
-                      i === report.delivery.history.length - 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'
-                    }`}>
-                      <Check className="h-2.5 w-2.5" />
-                    </span>
-                    {i < report.delivery.history.length - 1 && <div className="mt-0.5 h-3 w-px bg-slate-200" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-slate-700">{entry.event}</p>
-                    <p className="text-slate-400">{formatAlertTimestamp(entry.timestamp)} by {entry.actor}</p>
-                  </div>
                 </div>
               ))}
             </div>
@@ -1162,7 +1228,13 @@ function SupDeliveries() {
   const [expandedReport, setExpandedReport] = useState(null)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [page, setPage] = useState(1)
-  const ITEMS_PER_PAGE = 10
+  const [itemsPerPage, setItemsPerPage] = useState(() => Math.max(4, Math.floor((window.innerHeight - 320) / 64)))
+
+  useEffect(() => {
+    const handleResize = () => setItemsPerPage(Math.max(4, Math.floor((window.innerHeight - 320) / 64)))
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   useEffect(() => { setPage(1) }, [search, statusFilter, sortBy])
 
@@ -1203,9 +1275,9 @@ function SupDeliveries() {
     return result
   }, [inboxRows, search, statusFilter, sortBy])
 
-  const totalPages = Math.max(1, Math.ceil(filteredInbox.length / ITEMS_PER_PAGE))
+  const totalPages = Math.max(1, Math.ceil(filteredInbox.length / itemsPerPage))
   const safePage = Math.min(page, totalPages)
-  const paginatedInbox = filteredInbox.slice((safePage - 1) * ITEMS_PER_PAGE, safePage * ITEMS_PER_PAGE)
+  const paginatedInbox = filteredInbox.slice((safePage - 1) * itemsPerPage, safePage * itemsPerPage)
 
   const ongoingDeliveries = useMemo(
     () => requests.filter((r) => ['FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(r.status)),
@@ -1393,13 +1465,24 @@ function SupDeliveries() {
               </div>
             </div>
 
+            {/* Status description */}
+            {statusFilter !== 'ALL' && (
+              <p className="text-xs text-slate-500 leading-relaxed">
+                {statusFilter === 'PENDING' && 'New request submitted by the customer — review and send a quotation.'}
+                {statusFilter === 'QUOTED' && 'Quotation sent to the customer — waiting for their approval or counter-offer.'}
+                {statusFilter === 'APPROVED' && 'Customer approved the quotation — assign a driver, helpers, and truck.'}
+              </p>
+            )}
+
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="hidden grid-cols-[1.2fr_1.5fr_1.5fr_1fr_0.8fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
-                <span>Customer / Company</span>
-                <span>Pick-up Address</span>
-                <span>Drop-off Address</span>
+              <div className="hidden grid-cols-[0.7fr_0.9fr_1.3fr_1.3fr_1.3fr_0.9fr_0.8fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+                <span>Status</span>
+                <span>Request ID</span>
+                <span>Customer</span>
+                <span>Pick-up</span>
+                <span>Drop-off</span>
                 <span>Product Type</span>
-                <span className="text-right">Action</span>
+                <span className="text-center">Action</span>
               </div>
 
               <div className="divide-y divide-slate-100">
@@ -1408,18 +1491,19 @@ function SupDeliveries() {
                 )}
 
                 {paginatedInbox.map((row) => (
-                  <article key={row.id} className="grid gap-3 px-5 py-4 lg:grid-cols-[1.2fr_1.5fr_1.5fr_1fr_0.8fr] lg:items-center">
+                  <article key={row.id} className="grid gap-3 px-5 py-4 lg:grid-cols-[0.7fr_0.9fr_1.3fr_1.3fr_1.3fr_0.9fr_0.8fr] lg:items-center">
+                    <span className={`inline-flex w-min shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap ${statusBadge[row.status]}`}>
+                      {row.status.replaceAll('_', ' ')}
+                    </span>
+                    <p className="text-sm font-mono font-semibold text-slate-900">{row.id}</p>
                     <div>
                       <p className="text-sm font-semibold text-slate-900">{row.customerName}</p>
                       <p className="text-xs text-slate-500">{row.companyName}</p>
-                      <span className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusBadge[row.status]}`}>
-                        {row.status.replaceAll('_', ' ')}
-                      </span>
                     </div>
-                    <p className="text-sm text-slate-700">{row.pickupAddress}</p>
-                    <p className="text-sm text-slate-700">{row.deliveryAddress}</p>
+                    <p className="text-sm text-slate-700 line-clamp-2">{row.pickupAddress}</p>
+                    <p className="text-sm text-slate-700 line-clamp-2">{row.deliveryAddress}</p>
                     <p className="text-sm font-medium text-slate-800">{row.itemType}</p>
-                    <div className="flex justify-end">
+                    <div className="flex justify-center">
                       <button
                         onClick={() => openDetails(row)}
                         className="rounded-lg bg-sky-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-sky-700"
@@ -1434,7 +1518,7 @@ function SupDeliveries() {
               {totalPages > 1 && (
                 <div className="flex items-center justify-between border-t border-slate-200 px-5 py-3">
                   <p className="text-sm text-slate-500">
-                    Showing {(page - 1) * ITEMS_PER_PAGE + 1}–{Math.min(page * ITEMS_PER_PAGE, filteredInbox.length)} of {filteredInbox.length}
+                    Showing {(page - 1) * itemsPerPage + 1}–{Math.min(page * itemsPerPage, filteredInbox.length)} of {filteredInbox.length}
                   </p>
                   <div className="flex items-center gap-2">
                     <button
@@ -1533,7 +1617,7 @@ function SupDeliveries() {
                   </div>
 
                   <div className="space-y-4">
-                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                       <div className="border-b border-slate-200 px-4 py-3">
                         <h3 className="text-base font-semibold text-slate-900">Real-time Truck Location</h3>
                         <p className="text-xs text-slate-500">
@@ -1645,11 +1729,12 @@ function SupDeliveries() {
       </div>
 
       {selectedRequest && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" onClick={() => setSelectedRequest(null)}>
           <div
-            className={`max-h-[92vh] w-full overflow-y-auto rounded-3xl border border-slate-200 bg-white p-5 md:p-6 transition-all duration-300 ${
-              hasApproved ? 'max-w-6xl' : 'max-w-2xl'
+            className={`max-h-[92vh] w-full overflow-y-auto rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl md:p-6 transition-all duration-300 ${
+              hasApproved ? 'max-w-7xl' : 'max-w-4xl'
             }`}
+            onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -1679,6 +1764,18 @@ function SupDeliveries() {
                     <p className="text-slate-700"><span className="font-medium">Pick-up:</span> {selectedRequest.pickupAddress}</p>
                     <p className="text-slate-700"><span className="font-medium">Drop-off:</span> {selectedRequest.deliveryAddress}</p>
                     <p className="text-slate-700"><span className="font-medium">Products:</span> {selectedRequest.itemType}</p>
+                    <div className="border-t border-slate-200 pt-2 mt-2">
+                      <p className="text-slate-700"><span className="font-medium">Pickup Date/Time:</span> {selectedRequest.pickupDate} at {selectedRequest.pickupTime}</p>
+                      <p className="text-slate-700"><span className="font-medium">Drop-off Date/Time:</span> {selectedRequest.dropoffDate || 'TBD'} at {selectedRequest.dropoffTime || 'TBD'}</p>
+                    </div>
+                    {selectedRequest.truckType && (
+                      <p className="text-slate-700"><span className="font-medium">Truck Type:</span> {selectedRequest.truckType}</p>
+                    )}
+                    {selectedRequest.notes && (
+                      <div className="border-t border-slate-200 pt-2 mt-2">
+                        <p className="text-slate-700"><span className="font-medium">Customer Notes:</span> {selectedRequest.notes}</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -2044,14 +2141,6 @@ function SupDeliveries() {
                           <p className="text-xs text-emerald-600 mt-1">Valid until: {selectedRequest.quotation.validUntil}</p>
                         </div>
                       </div>
-
-                      <button
-                        onClick={cancelRequest}
-                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        <XCircle className="h-4 w-4" />
-                        Cancel Request
-                      </button>
                     </div>
                   )}
                 </div>
@@ -2065,19 +2154,9 @@ function SupDeliveries() {
                         : 'border-indigo-200 from-indigo-50 to-white'
                     }`}
                   >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-sm font-semibold text-slate-900">Dispatch and Assignment</h3>
-                        <p className="mt-1 text-xs text-slate-600">Choose the best-fit crew and truck for this approved request.</p>
-                      </div>
-                      <div className="flex gap-2 text-xs">
-                        <span className="rounded-full bg-white px-2.5 py-1 text-slate-600 ring-1 ring-slate-200">
-                          Drivers: {mockDrivers.filter((d) => d.status === 'available').length}
-                        </span>
-                        <span className="rounded-full bg-white px-2.5 py-1 text-slate-600 ring-1 ring-slate-200">
-                          Trucks: {mockTrucks.filter((t) => t.status === 'available').length}
-                        </span>
-                      </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-900">Dispatch and Assignment</h3>
+                      <p className="mt-1 text-xs text-slate-600">Choose the best-fit crew and truck for this approved request.</p>
                     </div>
 
                     {selectedRequest.crew?.driver && selectedRequest.crew?.truck?.plateNumber && (
@@ -2110,9 +2189,9 @@ function SupDeliveries() {
                               </div>
                             </>
                           ) : (
-                            <span className="text-sm text-slate-400">Select a driver...</span>
+                            <span className="flex-1 text-sm text-slate-400">Select a driver...</span>
                           )}
-                          <svg className={`h-5 w-5 text-slate-400 transition ${assignment._showDrivers ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className={`ml-auto h-5 w-5 text-slate-400 transition ${assignment._showDrivers ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                           </svg>
                         </button>
@@ -2165,7 +2244,7 @@ function SupDeliveries() {
                           ) : (
                             <span className="flex-1 text-sm text-slate-400">Select a truck...</span>
                           )}
-                          <svg className={`h-5 w-5 shrink-0 text-slate-400 transition ${assignment._showTrucks ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className={`ml-auto h-5 w-5 shrink-0 text-slate-400 transition ${assignment._showTrucks ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                           </svg>
                         </button>
@@ -2217,7 +2296,7 @@ function SupDeliveries() {
                           ) : (
                             <span className="flex-1 text-sm text-slate-400">Select helpers...</span>
                           )}
-                          <svg className={`h-5 w-5 text-slate-400 transition ${assignment._showHelpers ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className={`ml-auto h-5 w-5 shrink-0 text-slate-400 transition ${assignment._showHelpers ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                           </svg>
                         </button>
@@ -2258,17 +2337,7 @@ function SupDeliveries() {
                       </div>
                     </div>
 
-                    <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3 text-sm">
-                      <p className="font-semibold text-slate-900">Auto-filled Dispatch Details</p>
-                      <div className="mt-2 grid gap-2 text-slate-700 sm:grid-cols-2">
-                        <p><span className="font-medium">Plate Number:</span> {selectedTruck?.plateNumber || 'Select truck'}</p>
-                        <p><span className="font-medium">Driver ID:</span> {selectedDriver?.id || 'Select driver'}</p>
-                        <p><span className="font-medium">Driver Name:</span> {selectedDriver?.name || 'Select driver'}</p>
-                        <p><span className="font-medium">Delivery Location:</span> {selectedRequest.deliveryAddress}</p>
-                        <p><span className="font-medium">Date and Time:</span> {selectedRequest.pickupDate} {selectedRequest.pickupTime}</p>
-                        <p><span className="font-medium">Helpers:</span> {assignment.helperIds.length || 0} selected</p>
-                      </div>
-                    </div>
+
 
                     <button
                       onClick={() => setShowConfirmDialog(true)}
@@ -2355,29 +2424,7 @@ function SupDeliveries() {
               </div>
             </div>
 
-            <div className="mt-5 flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-4">
-              <button
-                onClick={() => setSelectedRequest(null)}
-                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Close
-              </button>
-              <button
-                onClick={() => {
-                  if (!canTrackSelectedRequest) return
-                  setActiveModule('tracking')
-                  setSelectedRequest(null)
-                }}
-                disabled={!canTrackSelectedRequest}
-                title={!canTrackSelectedRequest ? 'Tracking is available only for assigned on-going deliveries.' : undefined}
-                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-white transition ${
-                  canTrackSelectedRequest ? 'bg-slate-900 hover:bg-slate-800' : 'cursor-not-allowed bg-slate-300'
-                }`}
-              >
-                <MapPin className="h-4 w-4" />
-                Go to Live Tracking
-              </button>
-            </div>
+            <div className="mt-5 border-t border-slate-200 pt-4" />
           </div>
         </div>
       )}
