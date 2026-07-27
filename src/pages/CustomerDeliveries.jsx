@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
+import {
+  AlertTriangle, Calendar, Check, CheckCircle2, Clock, MapPin, Package, Search, Star, Truck, X
+} from 'lucide-react'
 import CustomerLayout from '../layout/CustomerLayout.jsx'
-import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 
@@ -41,37 +44,59 @@ const itemTypes = [
   { value: 'other', label: 'Other Dry Goods' }
 ]
 
-// Map click handler component
-function MapClickHandler({ onLocationSelect }) {
+// Map controller — handles view changes, map clicks, and draggable marker
+function MapController({ center, zoom, selectedLocation, onLocationChange }) {
+  const map = useMap()
+
+  useEffect(() => {
+    if (center) {
+      map.setView(center, zoom || map.getZoom(), { animate: true })
+    }
+  }, [center, zoom, map])
+
   useMapEvents({
     click(e) {
       const { lat, lng } = e.latlng
-      // Reverse geocode to get address
+      onLocationChange(`${lat.toFixed(6)}, ${lng.toFixed(6)}`, lat, lng)
       fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`)
         .then(res => res.json())
         .then(data => {
-          const address = data.display_name || `${lat.toFixed(6)}, ${lng.toFixed(6)}`
-          onLocationSelect(address, lat, lng)
+          if (data.display_name) onLocationChange(data.display_name, lat, lng)
         })
-        .catch(() => {
-          onLocationSelect(`${lat.toFixed(6)}, ${lng.toFixed(6)}`, lat, lng)
-        })
+        .catch(() => {})
     }
   })
-  return null
+
+  if (!selectedLocation) return null
+
+  return (
+    <Marker
+      position={[selectedLocation.lat, selectedLocation.lon]}
+      draggable={true}
+      eventHandlers={{
+        dragend(e) {
+          const { lat, lng } = e.target.getLatLng()
+          onLocationChange(`${lat.toFixed(6)}, ${lng.toFixed(6)}`, lat, lng)
+          fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`)
+            .then(res => res.json())
+            .then(data => {
+              if (data.display_name) onLocationChange(data.display_name, lat, lng)
+            })
+            .catch(() => {})
+        }
+      }}
+    />
+  )
 }
 
 // Location Picker Modal Component
-function LocationPickerModal({ isOpen, onClose, onSelect, currentValue }) {
+function LocationPickerModal({ isOpen, onClose, onSelect }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [suggestions, setSuggestions] = useState([])
   const [selectedLocation, setSelectedLocation] = useState(null)
-  const [mapReady, setMapReady] = useState(false)
-  
-  // Default to Philippines center (Manila)
-  const defaultCenter = [14.5995, 120.9842]
-  const [mapCenter, setMapCenter] = useState(defaultCenter)
-  
+  const [mapCenter, setMapCenter] = useState([14.5995, 120.9842])
+  const [mapZoom, setMapZoom] = useState(13)
+
   useEffect(() => {
     if (searchQuery.length > 2) {
       const timer = setTimeout(() => {
@@ -93,14 +118,15 @@ function LocationPickerModal({ isOpen, onClose, onSelect, currentValue }) {
   }, [searchQuery])
 
   const handleSuggestionClick = (suggestion) => {
-    setSelectedLocation(suggestion)
+    setSelectedLocation({ display: suggestion.display, lat: suggestion.lat, lon: suggestion.lon })
     setMapCenter([suggestion.lat, suggestion.lon])
+    setMapZoom(16)
     setSuggestions([])
     setSearchQuery('')
   }
 
-  const handleMapClick = (address, lat, lng) => {
-    setSelectedLocation({ display: address, lat, lon: lng })
+  const handleLocationChange = (display, lat, lng) => {
+    setSelectedLocation({ display, lat, lon: lng })
   }
 
   const handleConfirm = () => {
@@ -113,29 +139,31 @@ function LocationPickerModal({ isOpen, onClose, onSelect, currentValue }) {
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between border-b border-slate-200 p-4">
-          <h3 className="text-lg font-semibold text-slate-900">Pick Location on Map</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/60 p-4">
+      <div className="w-full max-w-3xl rounded-3xl border border-emerald-200/70 bg-white shadow-2xl">
+        <div className="flex items-center justify-between rounded-t-3xl border-b border-emerald-200/70 bg-white p-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Location Picker</p>
+            <h3 className="mt-1 text-lg font-semibold text-slate-900">Pick Location on Map</h3>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900">
+            <X className="h-5 w-5" />
           </button>
         </div>
-        
+
         <div className="p-4 space-y-4">
           {/* Search Input */}
           <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search for a location in Philippines..."
-              className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+              className="w-full rounded-xl border border-emerald-200 bg-white pl-10 pr-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
             {suggestions.length > 0 && (
-              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-emerald-200 rounded-xl shadow-lg max-h-48 overflow-y-auto z-10">
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-emerald-200 rounded-xl shadow-lg max-h-48 overflow-y-auto z-[9999]">
                 {suggestions.map((suggestion, index) => (
                   <button
                     key={index}
@@ -148,43 +176,51 @@ function LocationPickerModal({ isOpen, onClose, onSelect, currentValue }) {
               </div>
             )}
           </div>
-          
+
           {/* Map */}
-          <div className="h-80 rounded-xl overflow-hidden border border-emerald-200">
+          <div className="h-72 rounded-xl overflow-hidden border border-emerald-200">
             <MapContainer
               center={mapCenter}
-              zoom={13}
+              zoom={mapZoom}
               style={{ height: '100%', width: '100%' }}
-              whenReady={() => setMapReady(true)}
+              zoomControl={true}
             >
               <TileLayer
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
-              <MapClickHandler onLocationSelect={handleMapClick} />
-              {selectedLocation && (
-                <Marker position={[selectedLocation.lat, selectedLocation.lon]} />
-              )}
+              <MapController
+                center={mapCenter}
+                zoom={mapZoom}
+                selectedLocation={selectedLocation}
+                onLocationChange={handleLocationChange}
+              />
             </MapContainer>
           </div>
-          
+
           {/* Selected Location Display */}
           {selectedLocation && (
-            <div className="p-3 bg-emerald-50 rounded-xl">
-              <p className="text-sm text-emerald-800 font-medium">Selected Location:</p>
-              <p className="text-sm text-emerald-700 mt-1">{selectedLocation.display}</p>
+            <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+              <MapPin className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-emerald-700">Selected Location</p>
+                <p className="text-sm text-emerald-900 mt-0.5 break-words">{selectedLocation.display}</p>
+                <p className="text-xs text-emerald-600 mt-0.5 font-mono">
+                  {selectedLocation.lat?.toFixed(6)}, {selectedLocation.lon?.toFixed(6)}
+                </p>
+              </div>
             </div>
           )}
-          
+
           <p className="text-xs text-slate-500 text-center">
-            Click on the map or search for a location to pin it
+            Click on the map, drag the marker, or search above to pin a location
           </p>
         </div>
-        
-        <div className="flex justify-end gap-3 border-t border-slate-200 p-4">
+
+        <div className="flex justify-end gap-3 rounded-b-3xl border-t border-emerald-200/70 bg-white p-4">
           <button
             onClick={onClose}
-            className="rounded-xl border border-slate-300 px-6 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="rounded-xl border border-emerald-200/70 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-emerald-50"
           >
             Cancel
           </button>
@@ -295,7 +331,6 @@ function LocationInput({ id, label, value, onChange, required }) {
         isOpen={showMapPicker}
         onClose={() => setShowMapPicker(false)}
         onSelect={handleLocationSelect}
-        currentValue={value}
       />
     </div>
   )
@@ -303,13 +338,13 @@ function LocationInput({ id, label, value, onChange, required }) {
 
 // Status configuration
 const statusConfig = {
-  PENDING_REQUEST: { label: 'Pending Request', color: 'bg-amber-100 text-amber-800', icon: '⏳' },
-  PROCESSING: { label: 'Processing', color: 'bg-blue-100 text-blue-800', icon: '⚙️' },
-  FOR_PICKUP: { label: 'For Pickup', color: 'bg-purple-100 text-purple-800', icon: '📦' },
-  OUT_FOR_DELIVERY: { label: 'Out for Delivery', color: 'bg-indigo-100 text-indigo-800', icon: '🚚' },
-  DELIVERED: { label: 'Delivered', color: 'bg-teal-100 text-teal-800', icon: '✓' },
-  DELIVERY_COMPLETED: { label: 'Delivery Completed', color: 'bg-emerald-100 text-emerald-800', icon: '🎉' },
-  CANCELLED: { label: 'Cancelled', color: 'bg-red-100 text-red-800', icon: '✕' }
+  PENDING_REQUEST: { label: 'Pending Request', color: 'bg-amber-100 text-amber-800', icon: Clock },
+  PROCESSING: { label: 'Processing', color: 'bg-blue-100 text-blue-800', icon: AlertTriangle },
+  FOR_PICKUP: { label: 'For Pickup', color: 'bg-purple-100 text-purple-800', icon: Package },
+  OUT_FOR_DELIVERY: { label: 'Out for Delivery', color: 'bg-indigo-100 text-indigo-800', icon: Truck },
+  DELIVERED: { label: 'Delivered', color: 'bg-teal-100 text-teal-800', icon: MapPin },
+  DELIVERY_COMPLETED: { label: 'Completed', color: 'bg-emerald-100 text-emerald-800', icon: CheckCircle2 },
+  CANCELLED: { label: 'Cancelled', color: 'bg-red-100 text-red-800', icon: X }
 }
 
 // Star Rating Component
@@ -344,10 +379,20 @@ function RequestDetailModal({ request, onClose, onUpdate }) {
   const [showRatingSuccess, setShowRatingSuccess] = useState(false)
   
   const status = statusConfig[request.status] || statusConfig.PENDING_REQUEST
+  const StatusIcon = status.icon
   const itemLabel = request.itemType === 'other' 
     ? `Other: ${request.otherItemType}` 
     : itemTypes.find(i => i.value === request.itemType)?.label || request.itemType
   const truckLabel = truckTypes.find(t => t.value === request.truckType)?.label || request.truckType
+  
+  const isPending = request.status === 'PENDING_REQUEST'
+  const hasQuotationContent = request.status === 'PROCESSING'
+  const hasRightContent = hasQuotationContent || 
+    (request.status === 'FOR_PICKUP' && request.confirmedPickupDate) || 
+    request.status === 'DELIVERY_COMPLETED'
+  const quotationAmount = request.quotation
+    ? (typeof request.quotation === 'object' ? request.quotation.amount : request.quotation)
+    : null
   
   const handleQuotationSubmit = () => {
     if (quotationAction === 'approve') {
@@ -376,244 +421,234 @@ function RequestDetailModal({ request, onClose, onUpdate }) {
   }
   
   return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-slate-200 p-4 flex items-center justify-between">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+      <div className={`max-h-[92vh] w-full overflow-y-auto rounded-3xl border border-emerald-200/70 bg-white p-5 shadow-2xl md:p-6 ${hasRightContent ? 'max-w-6xl' : 'max-w-2xl'}`}>
+        <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-xs text-slate-500">Request ID: {request.id}</p>
-            <h3 className="text-lg font-semibold text-slate-900">Delivery Request Details</h3>
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Request Details</p>
+            <h2 className="mt-1 text-xl font-semibold text-slate-900 md:text-2xl">{request.id}</h2>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        
-        <div className="p-6 space-y-6">
-          {/* Status Badge */}
-          <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium ${status.color}`}>
-              <span>{status.icon}</span>
+          <div className="flex items-center gap-3 shrink-0">
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${status.color}`}>
+              <StatusIcon className="h-3.5 w-3.5" />
               {status.label}
             </span>
+            <button
+              onClick={onClose}
+              className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+            >
+              <X className="h-5 w-5" />
+            </button>
           </div>
-          
-          {/* Schedule Details */}
-          <div className="space-y-3">
-            <h4 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Schedule</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-slate-50 rounded-xl">
-                <p className="text-xs text-slate-500 mb-1">Pick Up</p>
-                <p className="text-sm font-medium text-slate-900">{request.pickupDate} at {request.pickupTime}</p>
-              </div>
-              <div className="p-4 bg-slate-50 rounded-xl">
-                <p className="text-xs text-slate-500 mb-1">Drop Off</p>
-                <p className="text-sm font-medium text-slate-900">{request.dropoffDate} at {request.dropoffTime}</p>
-              </div>
-            </div>
-          </div>
-          
-          {/* Location Details */}
-          <div className="space-y-3">
-            <h4 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Locations</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-slate-50 rounded-xl">
-                <p className="text-xs text-slate-500 mb-1">Pick Up Location</p>
-                <p className="text-sm text-slate-900">{request.pickupLocation}</p>
-              </div>
-              <div className="p-4 bg-slate-50 rounded-xl">
-                <p className="text-xs text-slate-500 mb-1">Drop Off Location</p>
-                <p className="text-sm text-slate-900">{request.dropoffLocation}</p>
-              </div>
-            </div>
-          </div>
-          
-          {/* Delivery Details */}
-          <div className="space-y-3">
-            <h4 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Delivery Details</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-slate-50 rounded-xl">
-                <p className="text-xs text-slate-500 mb-1">Truck Type</p>
-                <p className="text-sm font-medium text-slate-900">{truckLabel}</p>
-              </div>
-              <div className="p-4 bg-slate-50 rounded-xl">
-                <p className="text-xs text-slate-500 mb-1">Item Type</p>
-                <p className="text-sm font-medium text-slate-900">{itemLabel}</p>
-              </div>
-            </div>
-          </div>
-          
-          {/* Notes */}
-          {request.notes && (
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Notes</h4>
-              <div className="p-4 bg-slate-50 rounded-xl">
-                <p className="text-sm text-slate-700">{request.notes}</p>
-              </div>
-            </div>
-          )}
-          
-          {/* Quotation Section - Shows when in PROCESSING status with quotation */}
-          {request.status === 'PROCESSING' && request.quotation && !showQuotationResponse && (
-            <div className="space-y-4 p-4 bg-blue-50 rounded-xl border border-blue-200">
-              <h4 className="text-sm font-medium text-blue-800">Quotation from Supervisor</h4>
-              <div className="p-3 bg-white rounded-lg space-y-2">
-                <p className="text-2xl font-bold text-blue-600">₱{(typeof request.quotation === 'object' ? request.quotation.amount : request.quotation).toLocaleString()}</p>
-                {typeof request.quotation === 'object' && request.quotation.breakdown?.length > 0 && (
-                  <div className="border-t border-blue-200 pt-2 space-y-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-blue-600">Breakdown</p>
-                    {request.quotation.breakdown.map((item, idx) => (
-                      <div key={idx} className="flex justify-between text-xs">
-                        <span className="text-blue-700">{item.label}</span>
-                        <span className="font-medium text-blue-800">₱{Number(item.amount).toLocaleString()}</span>
-                      </div>
-                    ))}
+        </div>
+
+        <div className={`mt-5 grid gap-5 ${hasRightContent ? 'lg:grid-cols-2' : 'grid-cols-1'}`}>
+          {/* Left column — Delivery Overview */}
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-emerald-200/70 bg-white p-4">
+              <h3 className="text-sm font-semibold text-slate-900">Delivery Overview</h3>
+              <div className="mt-3 space-y-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 text-slate-400 shrink-0" />
+                  <div>
+                    <p className="text-xs text-slate-500">Pickup</p>
+                    <p className="font-medium text-slate-900">{request.pickupDate} at {request.pickupTime}</p>
                   </div>
-                )}
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => { setQuotationAction('approve'); setShowQuotationResponse(true) }}
-                  className="flex-1 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
-                >
-                  Approve Quotation
-                </button>
-                <button
-                  onClick={() => { setQuotationAction('reject'); setShowQuotationResponse(true) }}
-                  className="flex-1 rounded-xl border border-red-300 text-red-600 px-4 py-2.5 text-sm font-semibold hover:bg-red-50"
-                >
-                  Reject & Request Price Range
-                </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 text-slate-400 shrink-0" />
+                  <div>
+                    <p className="text-xs text-slate-500">Drop-off</p>
+                    <p className="font-medium text-slate-900">{request.dropoffDate} at {request.dropoffTime}</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2">
+                  <MapPin className="h-4 w-4 text-slate-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-slate-500">Pickup Location</p>
+                    <p className="font-medium text-slate-900">{request.pickupLocation}</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2">
+                  <MapPin className="h-4 w-4 text-slate-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-slate-500">Drop-off Location</p>
+                    <p className="font-medium text-slate-900">{request.dropoffLocation}</p>
+                  </div>
+                </div>
               </div>
             </div>
-          )}
-          
-          {/* Quotation Response Form */}
-          {showQuotationResponse && (
-            <div className="space-y-4 p-4 bg-blue-50 rounded-xl border border-blue-200">
-              <h4 className="text-sm font-medium text-blue-800">
-                {quotationAction === 'approve' ? 'Confirm Approval' : 'Request Price Range'}
-              </h4>
-              
-              {quotationAction === 'approve' ? (
-                <div className="space-y-3">
-                  <p className="text-sm text-slate-600">You are about to approve the quotation of <span className="font-bold">₱{(typeof request.quotation === 'object' ? request.quotation.amount : request.quotation)?.toLocaleString()}</span>. The delivery will proceed to the next step.</p>
-                  <div className="flex gap-3">
+
+            <div className="rounded-2xl border border-emerald-200/70 bg-white p-4">
+              <h3 className="text-sm font-semibold text-slate-900">Delivery Details</h3>
+              <div className="mt-3 space-y-2 text-sm">
+                <p className="text-slate-700"><span className="font-medium">Truck:</span> {truckLabel}</p>
+                <p className="text-slate-700"><span className="font-medium">Item:</span> {itemLabel}</p>
+              </div>
+            </div>
+
+            {request.notes && (
+              <div className="rounded-2xl border border-emerald-200/70 bg-white p-4">
+                <h3 className="text-sm font-semibold text-slate-900">Notes</h3>
+                <p className="mt-2 text-sm text-slate-700">{request.notes}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Right column — Status-specific actions */}
+          {hasRightContent && (
+            <div className="space-y-4">
+              {/* Quotation section — PROCESSING with quotation */}
+              {request.status === 'PROCESSING' && quotationAmount && !showQuotationResponse && (
+                <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                  <h3 className="text-sm font-semibold text-blue-800">Quotation from Supervisor</h3>
+                  <div className="mt-3 rounded-xl border border-blue-200 bg-white p-3">
+                    <p className="text-2xl font-bold text-blue-600">₱{Number(quotationAmount).toLocaleString()}</p>
+                    {typeof request.quotation === 'object' && request.quotation.breakdown?.length > 0 && (
+                      <div className="mt-2 space-y-1 border-t border-blue-100 pt-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-blue-500">Breakdown</p>
+                        {request.quotation.breakdown.map((item, idx) => (
+                          <div key={idx} className="flex justify-between text-xs">
+                            <span className="text-blue-700">{item.label}</span>
+                            <span className="font-medium text-blue-800">₱{Number(item.amount).toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-3 flex gap-3">
                     <button
-                      onClick={handleQuotationSubmit}
+                      onClick={() => { setQuotationAction('approve'); setShowQuotationResponse(true) }}
                       className="flex-1 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
                     >
-                      Confirm Approval
+                      Approve
                     </button>
                     <button
-                      onClick={() => setShowQuotationResponse(false)}
-                      className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      onClick={() => { setQuotationAction('reject'); setShowQuotationResponse(true) }}
+                      className="flex-1 rounded-xl border border-red-300 px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50"
                     >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-sm text-slate-600">Enter your preferred price range. The supervisor will review and provide a new quotation.</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-xs text-slate-500">Minimum (₱)</label>
-                      <input
-                        type="number"
-                        value={priceRange.min}
-                        onChange={(e) => setPriceRange(prev => ({ ...prev, min: e.target.value }))}
-                        placeholder="0"
-                        className="w-full rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-slate-500">Maximum (₱)</label>
-                      <input
-                        type="number"
-                        value={priceRange.max}
-                        onChange={(e) => setPriceRange(prev => ({ ...prev, max: e.target.value }))}
-                        placeholder="0"
-                        className="w-full rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex gap-3">
-                    <button
-                      onClick={handleQuotationSubmit}
-                      disabled={!priceRange.min || !priceRange.max}
-                      className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      Submit Price Range
-                    </button>
-                    <button
-                      onClick={() => setShowQuotationResponse(false)}
-                      className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Cancel
+                      Reject & Price Range
                     </button>
                   </div>
                 </div>
               )}
-            </div>
-          )}
-          
-          {/* Price Range Request Feedback */}
-          {request.status === 'PROCESSING' && request.quotationRejected && request.priceRange && (
-            <div className="p-4 bg-amber-50 rounded-xl border border-amber-200">
-              <p className="text-sm text-amber-800">
-                <span className="font-medium">Your requested price range:</span> ₱{request.priceRange.min?.toLocaleString()} - ₱{request.priceRange.max?.toLocaleString()}
-              </p>
-              <p className="text-xs text-amber-600 mt-1">Awaiting supervisor's revised quotation...</p>
-            </div>
-          )}
-          
-          {/* Pickup Schedule - Shows when in FOR_PICKUP status */}
-          {request.status === 'FOR_PICKUP' && request.confirmedPickupDate && (
-            <div className="p-4 bg-purple-50 rounded-xl border border-purple-200">
-              <h4 className="text-sm font-medium text-purple-800 mb-2">Confirmed Pickup Schedule</h4>
-              <p className="text-sm text-purple-700">
-                Pickup scheduled for: <span className="font-semibold">{request.confirmedPickupDate} at {request.confirmedPickupTime}</span>
-              </p>
-            </div>
-          )}
-          
-          {/* Rating Section - Shows when in DELIVERY_COMPLETED status */}
-          {request.status === 'DELIVERY_COMPLETED' && (
-            <div className="space-y-4 p-4 bg-emerald-50 rounded-xl border border-emerald-200">
-              <h4 className="text-sm font-medium text-emerald-800">Rate Your Delivery Experience</h4>
-              {showRatingSuccess ? (
-                <div className="text-center py-4">
-                  <p className="text-emerald-600 font-medium">Thank you for your rating!</p>
-                  <div className="flex justify-center mt-2">
-                    <StarRating rating={rating} onRate={() => {}} readonly />
-                  </div>
+
+              {/* Quotation approval/rejection form */}
+              {showQuotationResponse && (
+                <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                  <h3 className="text-sm font-semibold text-blue-800">
+                    {quotationAction === 'approve' ? 'Confirm Approval' : 'Request Price Range'}
+                  </h3>
+                  {quotationAction === 'approve' ? (
+                    <div className="mt-3 space-y-3">
+                      <p className="text-sm text-slate-600">
+                        Approve <span className="font-bold">₱{Number(quotationAmount).toLocaleString()}</span>? The delivery moves to For Pickup.
+                      </p>
+                      <div className="flex gap-3">
+                        <button onClick={handleQuotationSubmit} className="flex-1 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700">
+                          Confirm
+                        </button>
+                        <button onClick={() => setShowQuotationResponse(false)} className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      <p className="text-sm text-slate-600">Enter your preferred price range for the supervisor.</p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs text-slate-500">Min (₱)</label>
+                          <input type="number" value={priceRange.min} onChange={(e) => setPriceRange(prev => ({ ...prev, min: e.target.value }))} placeholder="0" className="w-full rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="text-xs text-slate-500">Max (₱)</label>
+                          <input type="number" value={priceRange.max} onChange={(e) => setPriceRange(prev => ({ ...prev, max: e.target.value }))} placeholder="0" className="w-full rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm" />
+                        </div>
+                      </div>
+                      <div className="flex gap-3">
+                        <button onClick={handleQuotationSubmit} disabled={!priceRange.min || !priceRange.max} className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+                          Submit
+                        </button>
+                        <button onClick={() => setShowQuotationResponse(false)} className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <>
-                  <div className="flex flex-col items-center">
-                    <StarRating rating={rating} onRate={setRating} />
-                    <p className="text-xs text-slate-500 mt-2">
-                      {rating === 1 && 'Poor'}
-                      {rating === 2 && 'Fair'}
-                      {rating === 3 && 'Good'}
-                      {rating === 4 && 'Very Good'}
-                      {rating === 5 && 'Excellent'}
-                    </p>
-                  </div>
-                  <button
-                    onClick={handleRatingSubmit}
-                    disabled={rating === 0}
-                    className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                  >
-                    Submit Rating
-                  </button>
-                </>
+              )}
+
+              {/* Price range feedback — PROCESSING and rejected */}
+              {request.status === 'PROCESSING' && request.quotationRejected && request.priceRange && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <h3 className="text-sm font-semibold text-amber-800">Price Range Requested</h3>
+                  <p className="mt-2 text-sm text-amber-800">
+                    &#x20B1;{Number(request.priceRange.min).toLocaleString()} &ndash; &#x20B1;{Number(request.priceRange.max).toLocaleString()}
+                  </p>
+                  <p className="mt-1 text-xs text-amber-600">Awaiting supervisor's revised quotation...</p>
+                </div>
+              )}
+
+              {/* Confirmed Pickup — FOR_PICKUP */}
+              {request.status === 'FOR_PICKUP' && request.confirmedPickupDate && (
+                <div className="rounded-2xl border border-purple-200 bg-purple-50 p-4">
+                  <h3 className="text-sm font-semibold text-purple-800">Confirmed Pickup Schedule</h3>
+                  <p className="mt-2 text-sm text-purple-700">
+                    <span className="font-semibold">{request.confirmedPickupDate} at {request.confirmedPickupTime}</span>
+                  </p>
+                  <p className="mt-1 text-xs text-purple-600">A crew has been assigned to pick up your items.</p>
+                </div>
+              )}
+
+              {/* Rating — DELIVERY_COMPLETED */}
+              {request.status === 'DELIVERY_COMPLETED' && (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+                    <Star className="h-4 w-4" />
+                    Rate Your Delivery
+                  </h3>
+                  {showRatingSuccess ? (
+                    <div className="mt-3 text-center">
+                      <p className="text-sm font-medium text-emerald-700">Thank you for your rating!</p>
+                      <div className="mt-2 flex justify-center">
+                        <StarRating rating={rating} onRate={() => {}} readonly />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      <div className="flex flex-col items-center">
+                        <StarRating rating={rating} onRate={setRating} />
+                        <p className="mt-1 text-xs text-slate-500">
+                          {rating === 1 && 'Poor'}
+                          {rating === 2 && 'Fair'}
+                          {rating === 3 && 'Good'}
+                          {rating === 4 && 'Very Good'}
+                          {rating === 5 && 'Excellent'}
+                        </p>
+                      </div>
+                      <button
+                        onClick={handleRatingSubmit}
+                        disabled={rating === 0}
+                        className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Submit Rating
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
+        </div>
+
+        <div className="mt-5 flex justify-end border-t border-emerald-200/70 pt-4">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-emerald-200/70 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-emerald-50"
+          >
+            Close
+          </button>
         </div>
       </div>
     </div>
@@ -623,76 +658,74 @@ function RequestDetailModal({ request, onClose, onUpdate }) {
 // Request Card Component
 function RequestCard({ request, onViewDetails }) {
   const status = statusConfig[request.status] || statusConfig.PENDING_REQUEST
+  const StatusIcon = status.icon
   const itemLabel = request.itemType === 'other' 
     ? `Other: ${request.otherItemType}` 
     : itemTypes.find(i => i.value === request.itemType)?.label || request.itemType
   
-  // Check if this specific request needs action (quotation pending approval)
   const needsAction = request.status === 'PROCESSING' && 
     request.quotation && 
     !request.quotationApproved && 
     !request.quotationRejected
   
+  const quotationAmount = request.quotation
+    ? (typeof request.quotation === 'object' ? request.quotation.amount : request.quotation)
+    : null
+  
   return (
     <div 
-      className="rounded-3xl border border-emerald-200/70 bg-white p-6 hover:shadow-md transition-shadow cursor-pointer relative"
+      className="rounded-2xl border border-emerald-200/70 bg-white p-4 hover:shadow-md transition-all cursor-pointer"
       onClick={() => onViewDetails(request)}
     >
-      {/* Action Required Indicator */}
-      {needsAction && (
-        <div className="absolute top-4 right-4">
-          <span className="relative flex h-3 w-3">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-lg font-bold text-slate-900 tracking-tight">{request.id}</span>
+            {needsAction && (
+              <span className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-sm text-slate-600 truncate">{itemLabel}</p>
+        </div>
+        <span className={`shrink-0 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${status.color}`}>
+          <StatusIcon className="h-3.5 w-3.5" />
+          {status.label}
+        </span>
+      </div>
+      
+      <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-600">
+        <div className="flex items-center gap-1.5">
+          <MapPin className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+          <span className="truncate max-w-[180px]">{request.pickupLocation}</span>
+          <span className="text-slate-300">&rarr;</span>
+          <span className="truncate max-w-[180px]">{request.dropoffLocation}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+          <span>{request.pickupDate} at {request.pickupTime} &rarr; {request.dropoffDate} at {request.dropoffTime}</span>
+        </div>
+      </div>
+      
+      {(needsAction || (!needsAction && quotationAmount && request.status === 'PROCESSING')) && (
+        <div className={`mt-3 flex items-center gap-2 rounded-xl px-3 py-2 text-xs ${needsAction ? 'bg-red-50 border border-red-200' : 'bg-blue-50 border border-blue-200'}`}>
+          {needsAction && (
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+            </span>
+          )}
+          <span className={`font-medium ${needsAction ? 'text-red-700' : 'text-blue-700'}`}>
+            Quotation: <span className="font-bold">₱{Number(quotationAmount).toLocaleString()}</span>
+            {needsAction ? ' — Action required' : ''}
           </span>
         </div>
       )}
       
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <p className="text-xs text-slate-500 mb-1">Request #{request.id}</p>
-          <p className="text-sm font-medium text-slate-900">{itemLabel}</p>
-        </div>
-        <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${status.color}`}>
-          <span>{status.icon}</span>
-          {status.label}
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-3 text-xs text-slate-600">
-        <div>
-          <p className="font-medium text-slate-500">Pick Up</p>
-          <p className="truncate">{request.pickupLocation}</p>
-          <p>{request.pickupDate} at {request.pickupTime}</p>
-        </div>
-        <div>
-          <p className="font-medium text-slate-500">Drop Off</p>
-          <p className="truncate">{request.dropoffLocation}</p>
-          <p>{request.dropoffDate} at {request.dropoffTime}</p>
-        </div>
-      </div>
-      {needsAction && (
-        <div className="mt-4 p-3 bg-red-50 rounded-xl border border-red-200">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-            </span>
-            <p className="text-xs font-semibold text-red-700">Action Required</p>
-          </div>
-          <p className="text-xs text-red-600">
-            Quotation received: <span className="font-bold">₱{(typeof request.quotation === 'object' ? request.quotation.amount : request.quotation).toLocaleString()}</span> - Please approve or reject
-          </p>
-        </div>
-      )}
-      {!needsAction && request.quotation && request.status === 'PROCESSING' && (
-        <div className="mt-4 p-3 bg-blue-50 rounded-xl">
-          <p className="text-xs text-blue-700">
-            Quotation received: <span className="font-bold">₱{(typeof request.quotation === 'object' ? request.quotation.amount : request.quotation).toLocaleString()}</span>
-          </p>
-        </div>
-      )}
       {request.rating && (
-        <div className="mt-4 flex items-center gap-1">
+        <div className="mt-2 flex items-center gap-1">
           <StarRating rating={request.rating} onRate={() => {}} readonly />
         </div>
       )}
@@ -913,9 +946,6 @@ function CustomerDeliveries() {
       <div className="flex flex-col gap-6 mb-2">
         {/* Header Section */}
         <header className="space-y-2 md:space-y-3">
-          <p className="text-xs uppercase tracking-[0.3em] text-emerald-600 font-medium">
-            Customer Interface
-          </p>
           <h1 className="text-2xl sm:text-3xl md:text-4xl font-semibold leading-tight text-slate-900">
             Deliveries
           </h1>
@@ -927,191 +957,205 @@ function CustomerDeliveries() {
         {/* Request Delivery Button */}
         <div className="flex justify-end">
           <button
-            onClick={() => setShowForm(!showForm)}
+            onClick={() => setShowForm(true)}
             className="rounded-xl bg-emerald-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
           >
-            {showForm ? 'Cancel' : '+ Request Delivery'}
+            + Request Delivery
           </button>
         </div>
 
-        {/* Request Delivery Form */}
+        {/* Request Delivery Modal */}
         {showForm && (
-          <form onSubmit={handleSubmit} className="rounded-3xl border border-emerald-200/70 bg-white p-6 space-y-6">
-            <h2 className="text-lg font-semibold text-slate-900">New Delivery Request</h2>
-
-            {/* Schedule Section */}
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Schedule</h3>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <label htmlFor="pickupDate" className="text-sm font-medium text-slate-700">Pick Up Date</label>
-                  <input
-                    type="date"
-                    id="pickupDate"
-                    name="pickupDate"
-                    value={formData.pickupDate}
-                    onChange={handleChange}
-                    required
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label htmlFor="pickupTime" className="text-sm font-medium text-slate-700">Pick Up Time</label>
-                  <input
-                    type="time"
-                    id="pickupTime"
-                    name="pickupTime"
-                    value={formData.pickupTime}
-                    onChange={handleChange}
-                    required
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label htmlFor="dropoffDate" className="text-sm font-medium text-slate-700">Drop Off Date</label>
-                  <input
-                    type="date"
-                    id="dropoffDate"
-                    name="dropoffDate"
-                    value={formData.dropoffDate}
-                    onChange={handleChange}
-                    required
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label htmlFor="dropoffTime" className="text-sm font-medium text-slate-700">Drop Off Time</label>
-                  <input
-                    type="time"
-                    id="dropoffTime"
-                    name="dropoffTime"
-                    value={formData.dropoffTime}
-                    onChange={handleChange}
-                    required
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Location Section */}
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Location</h3>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <LocationInput
-                  id="pickupLocation"
-                  label="Pick Up Location"
-                  value={formData.pickupLocation}
-                  onChange={handleChange}
-                  required
-                />
-                <LocationInput
-                  id="dropoffLocation"
-                  label="Drop Off Location"
-                  value={formData.dropoffLocation}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Truck and Item Type Section */}
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Delivery Details</h3>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <label htmlFor="truckType" className="text-sm font-medium text-slate-700">Type of Truck</label>
-                  <select
-                    id="truckType"
-                    name="truckType"
-                    value={formData.truckType}
-                    onChange={handleChange}
-                    required
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+            <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-emerald-200/70 bg-white p-5 shadow-2xl md:p-6">
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">New Request</p>
+                    <h2 className="mt-1 text-xl font-semibold text-slate-900">Delivery Request Form</h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowForm(false)}
+                    className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
                   >
-                    <option value="">Select truck type</option>
-                    {truckTypes.map(truck => (
-                      <option key={truck.value} value={truck.value}>{truck.label}</option>
-                    ))}
-                  </select>
+                    <X className="h-5 w-5" />
+                  </button>
                 </div>
-                <div className="space-y-2">
-                  <label htmlFor="itemType" className="text-sm font-medium text-slate-700">Type of Item</label>
-                  <select
-                    id="itemType"
-                    name="itemType"
-                    value={formData.itemType}
-                    onChange={handleChange}
-                    required
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                  >
-                    <option value="">Select item type</option>
-                    {itemTypes.map(item => (
-                      <option key={item.value} value={item.value}>{item.label}</option>
-                    ))}
-                  </select>
+
+                {/* Schedule Section */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Schedule</h3>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <label htmlFor="pickupDate" className="text-sm font-medium text-slate-700">Pick Up Date</label>
+                      <input
+                        type="date"
+                        id="pickupDate"
+                        name="pickupDate"
+                        value={formData.pickupDate}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="pickupTime" className="text-sm font-medium text-slate-700">Pick Up Time</label>
+                      <input
+                        type="time"
+                        id="pickupTime"
+                        name="pickupTime"
+                        value={formData.pickupTime}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="dropoffDate" className="text-sm font-medium text-slate-700">Drop Off Date</label>
+                      <input
+                        type="date"
+                        id="dropoffDate"
+                        name="dropoffDate"
+                        value={formData.dropoffDate}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="dropoffTime" className="text-sm font-medium text-slate-700">Drop Off Time</label>
+                      <input
+                        type="time"
+                        id="dropoffTime"
+                        name="dropoffTime"
+                        value={formData.dropoffTime}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
-              
-              {/* Other Item Type Input - Shows when "Other Dry Goods" is selected */}
-              {formData.itemType === 'other' && (
+
+                {/* Location Section */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Location</h3>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <LocationInput
+                      id="pickupLocation"
+                      label="Pick Up Location"
+                      value={formData.pickupLocation}
+                      onChange={handleChange}
+                      required
+                    />
+                    <LocationInput
+                      id="dropoffLocation"
+                      label="Drop Off Location"
+                      value={formData.dropoffLocation}
+                      onChange={handleChange}
+                      required
+                    />
+                  </div>
+                </div>
+
+                {/* Truck and Item Type Section */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Delivery Details</h3>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <label htmlFor="truckType" className="text-sm font-medium text-slate-700">Type of Truck</label>
+                      <select
+                        id="truckType"
+                        name="truckType"
+                        value={formData.truckType}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      >
+                        <option value="">Select truck type</option>
+                        {truckTypes.map(truck => (
+                          <option key={truck.value} value={truck.value}>{truck.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="itemType" className="text-sm font-medium text-slate-700">Type of Item</label>
+                      <select
+                        id="itemType"
+                        name="itemType"
+                        value={formData.itemType}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      >
+                        <option value="">Select item type</option>
+                        {itemTypes.map(item => (
+                          <option key={item.value} value={item.value}>{item.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  
+                  {/* Other Item Type Input */}
+                  {formData.itemType === 'other' && (
+                    <div className="space-y-2">
+                      <label htmlFor="otherItemType" className="text-sm font-medium text-slate-700">
+                        Specify Item Type <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        id="otherItemType"
+                        name="otherItemType"
+                        value={formData.otherItemType}
+                        onChange={handleChange}
+                        placeholder="Please specify the type of item..."
+                        required
+                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Notes Section */}
                 <div className="space-y-2">
-                  <label htmlFor="otherItemType" className="text-sm font-medium text-slate-700">
-                    Specify Item Type <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    id="otherItemType"
-                    name="otherItemType"
-                    value={formData.otherItemType}
+                  <label htmlFor="notes" className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Notes</label>
+                  <textarea
+                    id="notes"
+                    name="notes"
+                    value={formData.notes}
                     onChange={handleChange}
-                    placeholder="Please specify the type of item..."
-                    required
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                    placeholder="Add any special instructions or notes for the delivery..."
+                    rows={4}
+                    className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 resize-none"
                   />
                 </div>
-              )}
-            </div>
 
-            {/* Notes Section */}
-            <div className="space-y-2">
-              <label htmlFor="notes" className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Notes</label>
-              <textarea
-                id="notes"
-                name="notes"
-                value={formData.notes}
-                onChange={handleChange}
-                placeholder="Add any special instructions or notes for the delivery..."
-                rows={4}
-                className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 resize-none"
-              />
+                {/* Actions */}
+                <div className="flex justify-end gap-3 border-t border-emerald-200/70 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowForm(false)}
+                    className="rounded-xl border border-emerald-200/70 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-emerald-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
+                  >
+                    Submit Request
+                  </button>
+                </div>
+              </form>
             </div>
-
-            {/* Submit Button */}
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowForm(false)}
-                className="rounded-xl border border-slate-300 px-6 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
-              >
-                Submit Request
-              </button>
-            </div>
-          </form>
+          </div>
         )}
 
         {/* Search Bar */}
         <div className="relative">
           <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-            <svg className="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
+            <Search className="h-5 w-5 text-slate-400" />
           </div>
           <input
             type="text"
@@ -1132,137 +1176,93 @@ function CustomerDeliveries() {
           )}
         </div>
 
-        {/* Tab Navigation - Individual Status Tabs */}
-        <div className="flex gap-1 overflow-x-auto pb-1 border-b border-slate-200 scrollbar-hide">
+        {/* Tab Navigation */}
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setActiveTab('all')}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'all' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === 'all' ? 'bg-emerald-900 text-white' : 'border border-emerald-200/70 bg-white text-slate-700 hover:border-emerald-300'
+            }`}
           >
             All Requests
-            <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === 'all' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-              {deliveryRequests.length}
-            </span>
+            <span className="ml-1.5 text-xs opacity-70">({deliveryRequests.length})</span>
           </button>
-          
-          {/* Pending Request Tab */}
           <button
             onClick={() => setActiveTab('PENDING_REQUEST')}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'PENDING_REQUEST' ? 'border-amber-500 text-amber-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === 'PENDING_REQUEST' ? 'bg-amber-600 text-white' : 'border border-emerald-200/70 bg-white text-slate-700 hover:border-emerald-300'
+            }`}
           >
-            <span className="relative">
-              Pending Request
-              {statusCounts.PENDING_REQUEST > 0 && (
-                <span className="absolute -top-1 -right-3 flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                </span>
-              )}
-            </span>
-            <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === 'PENDING_REQUEST' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
-              {statusCounts.PENDING_REQUEST}
-            </span>
+            Pending
+            <span className="ml-1.5 text-xs opacity-70">({statusCounts.PENDING_REQUEST})</span>
           </button>
-          
-          {/* Processing Tab - Action Required */}
           <button
             onClick={() => setActiveTab('PROCESSING')}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'PROCESSING' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === 'PROCESSING' ? 'bg-blue-600 text-white' : 'border border-emerald-200/70 bg-white text-slate-700 hover:border-emerald-300'
+            }`}
           >
-            <span className="relative">
-              Processing
-              {actionRequiredCount > 0 && (
-                <span className="absolute -top-1 -right-3 flex">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-                </span>
-              )}
-            </span>
-            <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === 'PROCESSING' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
-              {statusCounts.PROCESSING}
-            </span>
+            Processing{actionRequiredCount > 0 ? ` (${actionRequiredCount})` : ''}
+            <span className="ml-1.5 text-xs opacity-70">({statusCounts.PROCESSING})</span>
           </button>
-          
-          {/* For Pickup Tab */}
           <button
             onClick={() => setActiveTab('FOR_PICKUP')}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'FOR_PICKUP' ? 'border-purple-500 text-purple-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === 'FOR_PICKUP' ? 'bg-purple-600 text-white' : 'border border-emerald-200/70 bg-white text-slate-700 hover:border-emerald-300'
+            }`}
           >
             For Pickup
-            <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === 'FOR_PICKUP' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'}`}>
-              {statusCounts.FOR_PICKUP}
-            </span>
+            <span className="ml-1.5 text-xs opacity-70">({statusCounts.FOR_PICKUP})</span>
           </button>
-          
-          {/* Out for Delivery Tab */}
           <button
             onClick={() => setActiveTab('OUT_FOR_DELIVERY')}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'OUT_FOR_DELIVERY' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === 'OUT_FOR_DELIVERY' ? 'bg-indigo-600 text-white' : 'border border-emerald-200/70 bg-white text-slate-700 hover:border-emerald-300'
+            }`}
           >
             Out for Delivery
-            <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === 'OUT_FOR_DELIVERY' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'}`}>
-              {statusCounts.OUT_FOR_DELIVERY}
-            </span>
+            <span className="ml-1.5 text-xs opacity-70">({statusCounts.OUT_FOR_DELIVERY})</span>
           </button>
-          
-          {/* Delivered Tab */}
           <button
             onClick={() => setActiveTab('DELIVERED')}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'DELIVERED' ? 'border-teal-500 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === 'DELIVERED' ? 'bg-teal-600 text-white' : 'border border-emerald-200/70 bg-white text-slate-700 hover:border-emerald-300'
+            }`}
           >
             Delivered
-            <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === 'DELIVERED' ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-600'}`}>
-              {statusCounts.DELIVERED}
-            </span>
+            <span className="ml-1.5 text-xs opacity-70">({statusCounts.DELIVERED})</span>
           </button>
-          
-          {/* Delivery Completed Tab */}
           <button
             onClick={() => setActiveTab('DELIVERY_COMPLETED')}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'DELIVERY_COMPLETED' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === 'DELIVERY_COMPLETED' ? 'bg-emerald-900 text-white' : 'border border-emerald-200/70 bg-white text-slate-700 hover:border-emerald-300'
+            }`}
           >
             Completed
-            <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === 'DELIVERY_COMPLETED' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-              {statusCounts.DELIVERY_COMPLETED}
-            </span>
+            <span className="ml-1.5 text-xs opacity-70">({statusCounts.DELIVERY_COMPLETED})</span>
           </button>
-          
-          {/* Cancelled Tab */}
           <button
             onClick={() => setActiveTab('CANCELLED')}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'CANCELLED' ? 'border-red-500 text-red-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === 'CANCELLED' ? 'bg-rose-600 text-white' : 'border border-emerald-200/70 bg-white text-slate-700 hover:border-emerald-300'
+            }`}
           >
             Cancelled
-            <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === 'CANCELLED' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'}`}>
-              {statusCounts.CANCELLED}
-            </span>
+            <span className="ml-1.5 text-xs opacity-70">({statusCounts.CANCELLED})</span>
           </button>
         </div>
 
-        {/* Action Required Alert Banner */}
-        {actionRequiredCount > 0 && (
-          <div className="flex items-center gap-3 rounded-xl bg-red-50 border border-red-200 p-4">
-            <div className="flex-shrink-0">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
-              </span>
-            </div>
-            <div className="flex-1">
-              <p className="text-sm font-medium text-red-800">
-                Action Required: {actionRequiredCount} quotation{actionRequiredCount > 1 ? 's' : ''} pending your approval
-              </p>
-              <p className="text-xs text-red-600 mt-0.5">
-                Please review and approve or reject the quotation(s) in the Processing tab to proceed with your delivery.
-              </p>
-            </div>
-            <button
-              onClick={() => setActiveTab('PROCESSING')}
-              className="flex-shrink-0 rounded-lg bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 transition-colors"
-            >
-              Review Now
-            </button>
-          </div>
-        )}
+        {/* Status Description */}
+        <p className="text-xs text-slate-500 leading-relaxed">
+          {activeTab === 'all' && 'Showing all delivery requests across every stage.'}
+          {activeTab === 'PENDING_REQUEST' && 'This request has been submitted and is waiting for the supervisor to review and process it.'}
+          {activeTab === 'PROCESSING' && 'The supervisor is reviewing your request and preparing a quotation for your approval.'}
+          {activeTab === 'FOR_PICKUP' && 'The request is confirmed. A crew has been assigned and is waiting for the scheduled pickup date and time.'}
+          {activeTab === 'OUT_FOR_DELIVERY' && 'Items have been picked up and the driver is en route to the drop-off location.'}
+          {activeTab === 'DELIVERED' && 'Items have arrived at the drop-off location. Waiting for delivery documents to finalise.'}
+          {activeTab === 'DELIVERY_COMPLETED' && 'All done! You can rate your delivery experience and review the completed trip details.'}
+          {activeTab === 'CANCELLED' && 'This request has been cancelled and will not proceed.'}
+        </p>
 
         {/* Delivery Requests List */}
         <div className="space-y-4">

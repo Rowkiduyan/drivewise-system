@@ -33,28 +33,24 @@ function CustomerHome() {
     <CustomerLayout title="Customer Home" background={background}>
       <div className="flex flex-col gap-8 pb-6">
         {/* Hero Section */}
-        <section className="relative rounded-3xl overflow-hidden bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-700 text-white p-8 md:p-12">
-          <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iMC4wNSI+PGNpcmNsZSBjeD0iMzAiIGN5PSIzMCIgcj0iMiIvPjwvZz48L2c+PC9zdmc+')] opacity-30"></div>
-          <div className="relative z-10">
-            <p className="text-emerald-200 text-sm font-medium tracking-wider uppercase mb-2">
-              Marvel Trucking Solutions, Inc
-            </p>
-            <h1 className="text-3xl md:text-5xl font-bold leading-tight mb-4">
-              Let Us Deliver It<br />For You!
-            </h1>
-            <p className="text-emerald-100 text-lg max-w-xl mb-6">
-              Your trusted partner for reliable, safe, and efficient trucking and logistics solutions in the Philippines since 2016.
-            </p>
-            <Link 
+        <section className="rounded-2xl border border-emerald-200/70 bg-white p-6 shadow-sm md:p-8">
+          <p className="text-xs uppercase tracking-[0.28em] text-emerald-700 font-semibold">
+            Marvel Trucking Solutions, Inc
+          </p>
+          <h1 className="mt-3 text-3xl md:text-5xl font-bold leading-tight text-slate-900">
+            Let Us Deliver It<br />For You!
+          </h1>
+          <p className="mt-3 max-w-xl text-base text-slate-600 leading-relaxed">
+            Your trusted partner for reliable, safe, and efficient trucking and logistics solutions in the Philippines since 2016.
+          </p>
+          <div className="mt-6">
+            <Link
               to="/customer/deliveries"
-              className="inline-flex items-center gap-2 bg-white text-emerald-700 px-6 py-3 rounded-full font-semibold hover:bg-emerald-50 transition-colors shadow-lg"
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
             >
               Request a Delivery Now
-              <ArrowRight className="w-5 h-5" />
+              <ArrowRight className="h-4 w-4" />
             </Link>
-          </div>
-          <div className="absolute right-0 top-0 bottom-0 w-1/3 hidden lg:flex items-center justify-center opacity-10">
-            <Truck className="w-64 h-64" />
           </div>
         </section>
 
@@ -74,15 +70,15 @@ function CustomerHome() {
         </section>
 
         {/* Mission Statement */}
-        <section className="rounded-2xl border border-emerald-200/70 bg-gradient-to-r from-emerald-50 to-teal-50 p-8">
+        <section className="rounded-2xl border border-emerald-200/70 bg-white p-5 shadow-sm sm:p-6">
           <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center">
-              <Star className="w-5 h-5 text-white" />
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100">
+              <Star className="h-5 w-5 text-emerald-600" />
             </div>
-            <h2 className="text-xl font-bold text-slate-800">Our Mission</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Our Mission</h2>
           </div>
-          <p className="text-slate-700 leading-relaxed text-lg">
-            Every customer is our best customer. We do this by providing <span className="text-emerald-700 font-semibold">reliable, safe, and efficient</span> logistics solutions with a personal touch. We're more than just trucking services in the Philippines— we provide quality customer service through happy, highly skilled workers and reliable, high tech trucks.
+          <p className="text-sm text-slate-600 leading-relaxed">
+            Every customer is our best customer. We do this by providing <span className="font-semibold text-emerald-700">reliable, safe, and efficient</span> logistics solutions with a personal touch. We're more than just trucking services in the Philippines— we provide quality customer service through happy, highly skilled workers and reliable, high tech trucks.
           </p>
         </section>
 
@@ -172,28 +168,25 @@ function CustomerHome() {
         </section>
 
         {/* CTA Banner */}
-        <section className="rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 p-8 text-center text-white">
-          <h2 className="text-2xl font-bold mb-2">Ready to Ship?</h2>
-          <p className="text-emerald-100 mb-6 max-w-md mx-auto">
+        <section className="rounded-2xl border border-emerald-200/70 bg-white p-6 text-center shadow-sm sm:p-8">
+          <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">Ready to Ship?</h2>
+          <p className="mt-2 text-sm text-slate-600 max-w-md mx-auto">
             Let us handle your delivery needs. Fast, reliable, and safe transportation across the Philippines.
           </p>
-          <Link 
-            to="/customer/deliveries"
-            className="inline-flex items-center gap-2 bg-white text-emerald-700 px-8 py-3 rounded-full font-bold hover:bg-emerald-50 transition-colors shadow-lg"
-          >
-            Request a Delivery Now
-            <ArrowRight className="w-5 h-5" />
-          </Link>
+          <div className="mt-5">
+            <Link
+              to="/customer/deliveries"
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+            >
+              Request a Delivery Now
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
         </section>
 
         {/* Footer */}
-        <footer className="text-center py-4 border-t border-emerald-100">
-          <p className="text-sm text-slate-500">
-            Providing reliable, safe and efficient logistics and trucking solutions since 2016
-          </p>
-          <p className="text-xs text-slate-400 mt-1">
-            © 2026 Marvel Trucking Solutions, Inc. All rights reserved.
-          </p>
+        <footer className="pt-6 text-center text-xs text-slate-400">
+          Providing reliable, safe and efficient logistics and trucking solutions since 2016 &bull; &copy; 2026 Marvel Trucking Solutions, Inc. All rights reserved.
         </footer>
       </div>
     </CustomerLayout>
