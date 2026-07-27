@@ -1143,6 +1143,8 @@ function SupDeliveries() {
   const [trackingTab, setTrackingTab] = useState('ongoing')
   const [ongoingLane, setOngoingLane] = useState('FOR_PICKUP')
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('ALL')
+  const [sortBy, setSortBy] = useState('createdAt_desc')
   const [selectedRequest, setSelectedRequest] = useState(null)
   const defaultBreakdownItems = [
     { label: 'Base Delivery Fee', amount: '' },
@@ -1162,7 +1164,7 @@ function SupDeliveries() {
   const [page, setPage] = useState(1)
   const ITEMS_PER_PAGE = 10
 
-  useEffect(() => { setPage(1) }, [search])
+  useEffect(() => { setPage(1) }, [search, statusFilter, sortBy])
 
   const inboxRows = useMemo(
     () => requests.filter((r) => ['PENDING', 'QUOTED', 'APPROVED', 'ASSIGNED'].includes(r.status)),
@@ -1171,16 +1173,35 @@ function SupDeliveries() {
 
   const filteredInbox = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return inboxRows
-    return inboxRows.filter(
-      (r) =>
-        r.id.toLowerCase().includes(q) ||
-        r.customerName.toLowerCase().includes(q) ||
-        r.companyName.toLowerCase().includes(q) ||
-        r.pickupAddress.toLowerCase().includes(q) ||
-        r.deliveryAddress.toLowerCase().includes(q),
-    )
-  }, [inboxRows, search])
+    let result = inboxRows
+    if (statusFilter !== 'ALL') {
+      result = result.filter((r) => r.status === statusFilter)
+    }
+    if (q) {
+      result = result.filter(
+        (r) =>
+          r.id.toLowerCase().includes(q) ||
+          r.customerName.toLowerCase().includes(q) ||
+          r.companyName.toLowerCase().includes(q) ||
+          r.pickupAddress.toLowerCase().includes(q) ||
+          r.deliveryAddress.toLowerCase().includes(q),
+      )
+    }
+    result = [...result].sort((a, b) => {
+      switch (sortBy) {
+        case 'createdAt_asc':
+          return a.createdAt.localeCompare(b.createdAt)
+        case 'customerName_asc':
+          return a.customerName.localeCompare(b.customerName)
+        case 'customerName_desc':
+          return b.customerName.localeCompare(a.customerName)
+        case 'createdAt_desc':
+        default:
+          return b.createdAt.localeCompare(a.createdAt)
+      }
+    })
+    return result
+  }, [inboxRows, search, statusFilter, sortBy])
 
   const totalPages = Math.max(1, Math.ceil(filteredInbox.length / ITEMS_PER_PAGE))
   const safePage = Math.min(page, totalPages)
@@ -1316,15 +1337,7 @@ function SupDeliveries() {
 
   return (
     <SupLayout title="Deliveries" background={null} bg="bg-[#F6F7FB]">
-      <div className="space-y-6">
-        <header className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-          <p className="text-xs uppercase tracking-[0.28em] text-sky-700">Supervisor Deliveries</p>
-          <h1 className="mt-2 text-2xl font-semibold text-slate-900 md:text-3xl">Deliveries Inbox and Live Tracking</h1>
-          <p className="mt-2 max-w-3xl text-sm text-slate-600 md:text-base">
-            Cleaner workflow for request review, quotation approval, crew assignment, and active-delivery tracking.
-          </p>
-        </header>
-
+      <div className="space-y-4">
         <div className="flex flex-wrap gap-3">
           <button
             onClick={() => setActiveModule('inbox')}
@@ -1347,14 +1360,36 @@ function SupDeliveries() {
         {activeModule === 'inbox' && (
           <section className="space-y-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search by request ID, customer, company, pickup, or drop-off"
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
-                />
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search by ID, customer, company, or address..."
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
+                  />
+                </div>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="QUOTED">Quoted</option>
+                  <option value="APPROVED">Approved</option>
+                </select>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
+                >
+                  <option value="createdAt_desc">Newest First</option>
+                  <option value="createdAt_asc">Oldest First</option>
+                  <option value="customerName_asc">Customer A–Z</option>
+                  <option value="customerName_desc">Customer Z–A</option>
+                </select>
               </div>
             </div>
 
