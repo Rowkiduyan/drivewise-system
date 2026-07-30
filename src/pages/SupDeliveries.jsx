@@ -1228,10 +1228,10 @@ function SupDeliveries() {
   const [expandedReport, setExpandedReport] = useState(null)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [page, setPage] = useState(1)
-  const [itemsPerPage, setItemsPerPage] = useState(() => Math.max(4, Math.floor((window.innerHeight - 320) / 64)))
+  const [itemsPerPage, setItemsPerPage] = useState(() => Math.max(4, Math.floor((window.innerHeight - 280) / 68)))
 
   useEffect(() => {
-    const handleResize = () => setItemsPerPage(Math.max(4, Math.floor((window.innerHeight - 320) / 64)))
+    const handleResize = () => setItemsPerPage(Math.max(4, Math.floor((window.innerHeight - 280) / 68)))
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
@@ -1405,8 +1405,8 @@ function SupDeliveries() {
 
   return (
     <SupLayout title="Deliveries" background={null} bg="bg-[#F6F7FB]">
-      <div className="space-y-4">
-        <div className="flex flex-wrap gap-3">
+      <div className="flex h-full flex-col gap-4 overflow-hidden">
+        <div className="flex shrink-0 flex-wrap gap-3">
           <button
             onClick={() => setActiveModule('inbox')}
             className={`rounded-xl px-4 py-2.5 text-sm font-medium transition ${
@@ -1426,8 +1426,8 @@ function SupDeliveries() {
         </div>
 
         {activeModule === 'inbox' && (
-          <section className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
+          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+            <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <div className="relative flex-1">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -1461,17 +1461,16 @@ function SupDeliveries() {
               </div>
             </div>
 
-            {/* Status description */}
             {statusFilter !== 'ALL' && (
-              <p className="text-xs text-slate-500 leading-relaxed">
+              <p className="shrink-0 text-xs text-slate-500 leading-relaxed">
                 {statusFilter === 'PENDING' && 'New request submitted by the customer — review and send a quotation.'}
                 {statusFilter === 'QUOTED' && 'Quotation sent to the customer — waiting for their approval or counter-offer.'}
                 {statusFilter === 'APPROVED' && 'Customer approved the quotation — assign a driver, helpers, and truck.'}
               </p>
             )}
 
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="hidden grid-cols-[0.7fr_0.9fr_1.3fr_1.3fr_1.3fr_0.9fr_0.8fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+              <div className="shrink-0 hidden grid-cols-[0.7fr_0.9fr_1.3fr_1.3fr_1.3fr_0.9fr_0.8fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
                 <span>Status</span>
                 <span>Request ID</span>
                 <span>Customer</span>
@@ -1481,7 +1480,7 @@ function SupDeliveries() {
                 <span className="text-center">Action</span>
               </div>
 
-              <div className="divide-y divide-slate-100">
+              <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
                 {paginatedInbox.length === 0 && (
                   <div className="px-5 py-14 text-center text-slate-500">No requests found in the inbox.</div>
                 )}
@@ -1512,37 +1511,71 @@ function SupDeliveries() {
               </div>
 
               {totalPages > 1 && (
-                <div className="flex items-center justify-between border-t border-slate-200 px-5 py-3">
+                <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
                   <p className="text-sm text-slate-500">
-                    Showing {(page - 1) * itemsPerPage + 1}–{Math.min(page * itemsPerPage, filteredInbox.length)} of {filteredInbox.length}
+                    Page {page} of {totalPages}
                   </p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setPage(1)}
+                      disabled={page === 1}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+                      title="First page"
+                    >
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+                    </button>
                     <button
                       onClick={() => setPage((p) => Math.max(1, p - 1))}
                       disabled={page === 1}
-                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
                     >
-                      Previous
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     </button>
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((num) => (
-                      <button
-                        key={num}
-                        onClick={() => setPage(num)}
-                        className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
-                          num === page
-                            ? 'bg-slate-900 text-white'
-                            : 'text-slate-600 hover:bg-slate-100'
-                        }`}
-                      >
-                        {num}
-                      </button>
-                    ))}
+                    <div className="flex items-center gap-1 px-1">
+                      {(() => {
+                        const pages = []
+                        if (totalPages <= 7) {
+                          for (let i = 1; i <= totalPages; i++) pages.push(i)
+                        } else {
+                          pages.push(1)
+                          if (page > 3) pages.push('...')
+                          for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i)
+                          if (page < totalPages - 2) pages.push('...')
+                          pages.push(totalPages)
+                        }
+                        return pages.map((num, idx) =>
+                          num === '...' ? (
+                            <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
+                          ) : (
+                            <button
+                              key={num}
+                              onClick={() => setPage(num)}
+                              className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
+                                num === page
+                                  ? 'bg-slate-900 text-white shadow-sm'
+                                  : 'text-slate-600 hover:bg-slate-100'
+                              }`}
+                            >
+                              {num}
+                            </button>
+                          )
+                        )
+                      })()}
+                    </div>
                     <button
                       onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                       disabled={page === totalPages}
-                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
                     >
-                      Next
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                    </button>
+                    <button
+                      onClick={() => setPage(totalPages)}
+                      disabled={page === totalPages}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+                      title="Last page"
+                    >
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
                     </button>
                   </div>
                 </div>
@@ -1552,7 +1585,7 @@ function SupDeliveries() {
         )}
 
         {activeModule === 'tracking' && (
-          <section className="space-y-4">
+          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
             <div className="flex flex-wrap gap-3 rounded-2xl border border-slate-200 bg-white p-3">
               <button
                 onClick={() => setTrackingTab('ongoing')}
