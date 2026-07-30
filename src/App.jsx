@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import CustomerDeliveries from "./pages/CustomerDeliveries.jsx";
+import CustomerRequestDelivery from "./pages/CustomerRequestDelivery.jsx";
 import CustomerHome from "./pages/CustomerHome.jsx";
 import CustomerProfile from "./pages/CustomerProfile.jsx";
 import DriverDeliveries from "./pages/DriverDeliveries.jsx";
@@ -32,6 +33,7 @@ function App() {
       />
       <Route path="/customer/home" element={<CustomerHome />} />
       <Route path="/customer/deliveries" element={<CustomerDeliveries />} />
+      <Route path="/customer/deliveries/request" element={<CustomerRequestDelivery />} />
       <Route path="/customer/profile" element={<CustomerProfile />} />
       <Route
         path="/driver"
