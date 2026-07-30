@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate, Link } from 'react-router-dom'
 import {
   ArrowLeft, Box, Check, CheckCircle2, Clock, MapPin, Package, Ruler, Search, Thermometer, X
@@ -120,10 +121,26 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
     }
   }
 
+  // Lock background scroll while the modal is open. This also keeps the blurred
+  // backdrop cheap — the page behind it stays still instead of recomputing on scroll.
+  useEffect(() => {
+    if (!isOpen) return
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [isOpen])
+
   if (!isOpen) return null
 
-  return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/60 p-4">
+  // Rendered into document.body so this overlay is a true top-level sibling of everything
+  // else on the page (including CustomerLayout's fixed mobile navbar) — otherwise browsers can
+  // fail to blur other `position: fixed` elements that live deeper inside a nested layout.
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
       <div className="w-full max-w-3xl rounded-3xl border border-emerald-200/70 bg-white shadow-2xl">
         <div className="flex items-center justify-between rounded-t-3xl border-b border-emerald-200/70 bg-white p-4">
           <div>
@@ -217,7 +234,8 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
