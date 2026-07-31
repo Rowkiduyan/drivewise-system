@@ -88,8 +88,8 @@ function CustomerLayout({ title, background, children }) {
     closeMobileMenuAfterDelay(path)
   }
 
-  const renderClientNav = (isExpanded, onItemClick) => (
-    <nav className="flex w-full flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-2">
+  const renderClientNav = (isExpanded, onItemClick, compact = false) => (
+    <nav className={`flex w-full flex-1 flex-col overflow-y-auto overflow-x-hidden px-2 ${compact ? 'gap-1.5' : 'gap-2'}`}>
       {clientModules.map((module) => (
         <NavLink
           key={module.path}
@@ -106,7 +106,9 @@ function CustomerLayout({ title, background, children }) {
             onItemClick(module.path)
           }}
           className={({ isActive }) =>
-            `flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
+            `flex items-center justify-start rounded-lg border border-transparent text-sm transition-all duration-200 ${
+              compact ? 'gap-2.5 px-2.5 py-2' : 'gap-3 px-3 py-2.5'
+            } ${
               isActive
                 ? 'border-emerald-400 bg-emerald-900 text-white rounded-lg'
                 : 'text-emerald-200 hover:border-emerald-700'
@@ -115,7 +117,11 @@ function CustomerLayout({ title, background, children }) {
         >
           <span className="h-5 w-5 flex-shrink-0">{clientIcons[module.label]}</span>
           {isExpanded && (
-            <span className="inline-flex whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100 transition-opacity duration-200">
+            <span
+              className={`inline-flex whitespace-nowrap font-semibold uppercase text-emerald-100 transition-opacity duration-200 ${
+                compact ? 'text-[11px] tracking-wide' : 'text-xs tracking-[0.2em]'
+              }`}
+            >
               {module.label}
             </span>
           )}
@@ -131,10 +137,10 @@ function CustomerLayout({ title, background, children }) {
     >
       {background}
 
-      <div className="fixed left-0 right-0 top-0 z-40 flex items-center border-b border-emerald-900/80 bg-emerald-950 px-4 py-3 text-white md:hidden">
+      <div className="fixed left-0 right-0 top-0 z-40 flex items-center border-b border-emerald-900/80 bg-emerald-950 px-3 py-2 text-white md:hidden">
         <button
           type="button"
-          className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-700 text-emerald-100 transition-colors hover:bg-emerald-900"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-700 text-emerald-100 transition-colors hover:bg-emerald-900"
           aria-label="Open navigation menu"
           aria-expanded={isMobileMenuOpen}
           onClick={() => setIsMobileMenuOpen((currentValue) => !currentValue)}
@@ -148,7 +154,7 @@ function CustomerLayout({ title, background, children }) {
 
         <div className="ml-auto flex items-center gap-3">
           <div
-            className={`flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-emerald-900 text-sm font-semibold text-white flex-shrink-0 ${
+            className={`flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-emerald-900 text-xs font-semibold text-white flex-shrink-0 ${
               profilePicture ? 'cursor-pointer' : ''
             }`}
             onClick={() => profilePicture && setIsImageViewerOpen(true)}
@@ -171,16 +177,16 @@ function CustomerLayout({ title, background, children }) {
       />
 
       <aside
-        className={`fixed left-0 top-0 z-40 flex h-screen w-56 flex-col gap-4 border-r border-emerald-900/80 bg-emerald-950 py-4 backdrop-blur transition-transform duration-300 md:hidden ${
+        className={`fixed left-0 top-0 z-40 flex h-screen w-56 flex-col gap-3 border-r border-emerald-900/80 bg-emerald-950 py-3 backdrop-blur transition-transform duration-300 md:hidden ${
           isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         role="navigation"
         aria-label="Mobile navigation"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex flex-col items-center gap-3 px-3">
+        <div className="flex flex-col items-center gap-2 px-3">
           <div
-            className={`flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-emerald-900 text-2xl font-semibold text-white flex-shrink-0 ${
+            className={`flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-emerald-900 text-base font-semibold text-white flex-shrink-0 ${
               profilePicture ? 'cursor-pointer' : ''
             }`}
             onClick={() => profilePicture && setIsImageViewerOpen(true)}
@@ -193,10 +199,10 @@ function CustomerLayout({ title, background, children }) {
           </div>
         </div>
 
-        {renderClientNav(true, navigateAfterMobileClose)}
+        {renderClientNav(true, navigateAfterMobileClose, true)}
 
         <div className="border-t border-emerald-900/80 px-2 pt-2">
-          <LogoutButton isExpanded />
+          <LogoutButton isExpanded compact iconClassName="h-4 w-4 stroke-current" />
         </div>
       </aside>
 
@@ -240,7 +246,7 @@ function CustomerLayout({ title, background, children }) {
         </aside>
 
         {/* Main Content */}
-        <div className="flex-1 min-w-0 flex flex-col overflow-hidden pt-16 md:pt-0">
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden pt-14 md:pt-0">
           <div className="flex-1 overflow-y-auto">
             <div className="h-full px-4 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8 lg:px-12 lg:py-10">
               {deactivationWarning ? (

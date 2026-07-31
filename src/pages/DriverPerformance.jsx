@@ -61,15 +61,15 @@ const RISK_ICONS = { red: ShieldAlert, amber: AlertTriangle, emerald: ShieldChec
 
 const RISK_TEXT_CLASSES = { red: 'text-red-700', amber: 'text-amber-700', emerald: 'text-emerald-700' }
 
-function RiskBadge({ tone, label }) {
+function RiskBadge({ tone, label, compact = false }) {
   const Icon = RISK_ICONS[tone] || ShieldCheck
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold ${
-        RISK_BADGE_CLASSES[tone] || RISK_BADGE_CLASSES.emerald
-      }`}
+      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full font-semibold ${
+        compact ? 'gap-1 px-2 py-0.5 text-[10px]' : 'gap-1.5 px-3 py-1 text-xs'
+      } ${RISK_BADGE_CLASSES[tone] || RISK_BADGE_CLASSES.emerald}`}
     >
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className={compact ? 'h-3 w-3' : 'h-3.5 w-3.5'} />
       {label}
     </span>
   )
@@ -115,17 +115,51 @@ function formatAlertTimestamp(value) {
   return `${monthLabel} ${day}, ${hour12}:${minute} ${suffix}`
 }
 
+// Compact "Jul 22" / "7:10am" variants of the same parsing used by
+// formatAlertTimestamp, for the mobile Trip Log card list where a full
+// "July 22, 7:10 am" per timestamp (x2 per row) doesn't fit.
+function formatShortDate(value) {
+  if (!value) {
+    return '--'
+  }
+  const raw = String(value)
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!isoMatch) {
+    return raw
+  }
+  const monthIndex = Number(isoMatch[2]) - 1
+  const day = Number(isoMatch[3])
+  const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  return `${monthLabels[monthIndex] || ''} ${day}`
+}
+
+function formatShortTime(value) {
+  if (!value) {
+    return '--'
+  }
+  const raw = String(value)
+  const match = raw.match(/[T ](\d{2}):(\d{2})/)
+  if (!match) {
+    return raw
+  }
+  const hour24 = Number(match[1])
+  const minute = match[2]
+  const hour12 = ((hour24 + 11) % 12) + 1
+  const suffix = hour24 >= 12 ? 'pm' : 'am'
+  return `${hour12}:${minute}${suffix}`
+}
+
 function PerformancePanel({ title, icon: Icon, children, right }) {
   return (
-    <section className="rounded-2xl border border-amber-200/70 bg-white p-5 shadow-sm sm:p-6">
+    <section className="rounded-2xl border border-amber-200/70 bg-white p-3 shadow-sm sm:p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-2">
-          {Icon && <Icon className="h-4 w-4 text-amber-600" />}
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</p>
+          {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-amber-600 sm:h-4 sm:w-4" />}
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 sm:text-xs sm:tracking-[0.16em]">{title}</p>
         </div>
-        {right ? <div className="text-xs text-slate-500">{right}</div> : null}
+        {right ? <div className="shrink-0 text-[10px] text-slate-500 sm:text-xs">{right}</div> : null}
       </div>
-      <div className="mt-4">{children}</div>
+      <div className="mt-2.5 sm:mt-3.5">{children}</div>
     </section>
   )
 }
@@ -139,15 +173,15 @@ const METRIC_TILE_ICON_CLASSES = {
 
 function MetricTile({ label, value, hint, icon: Icon, tone = 'slate' }) {
   return (
-    <div className="rounded-2xl border border-amber-200/70 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2">
-        <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${METRIC_TILE_ICON_CLASSES[tone]}`}>
-          {Icon && <Icon className="h-3.5 w-3.5" />}
+    <div className="rounded-2xl border border-amber-200/70 bg-white p-2.5 shadow-sm sm:p-3.5">
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md sm:h-7 sm:w-7 sm:rounded-lg ${METRIC_TILE_ICON_CLASSES[tone]}`}>
+          {Icon && <Icon className="h-2.5 w-2.5 sm:h-3.5 sm:w-3.5" />}
         </div>
-        <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</span>
+        <span className="truncate text-[9px] font-semibold uppercase tracking-[0.06em] text-slate-500 sm:text-xs sm:tracking-[0.1em]">{label}</span>
       </div>
-      <p className="mt-2.5 text-xl font-bold text-slate-900">{value}</p>
-      {hint ? <p className="mt-0.5 text-xs text-slate-500">{hint}</p> : null}
+      <p className="mt-1.5 text-base font-bold text-slate-900 sm:mt-2 sm:text-xl">{value}</p>
+      {hint ? <p className="mt-0.5 text-[10px] text-slate-500 sm:text-xs">{hint}</p> : null}
     </div>
   )
 }
@@ -281,8 +315,9 @@ function DriverPerformance() {
     let tripStatusTone = ''
     let tripStatusBadge = ''
     if (latestSession) {
-      const startLabel = latestSession.start_time ? formatAlertTimestamp(latestSession.start_time) : '--'
-      const endLabel = latestSession.end_time ? formatAlertTimestamp(latestSession.end_time) : '--'
+      const startDateLabel = latestSession.start_time ? formatShortDate(latestSession.start_time) : '--'
+      const startTimeLabel = latestSession.start_time ? formatShortTime(latestSession.start_time) : '--'
+      const endTimeLabel = latestSession.end_time ? formatShortTime(latestSession.end_time) : '--'
       if (tripAlertCount >= 4) {
         tripStatusTone = 'red'
         tripStatusBadge = 'High Risk'
@@ -293,38 +328,61 @@ function DriverPerformance() {
         tripStatusTone = 'emerald'
         tripStatusBadge = 'Safe'
       }
-      const detectionLabel = latestDetection ? ALERT_TYPE_LABELS[latestDetection] || latestDetection : '--'
-      const detectedList = detectedLabels.length ? (
-        <ul className="list-disc pl-4 text-sm text-slate-700">
-          {detectedLabels.map((entry) => (
-            <li key={entry}>{entry}</li>
-          ))}
-        </ul>
-      ) : (
-        <span className="text-sm text-slate-700">--</span>
-      )
-      const details = hasOngoingTrip
-        ? [
-            { label: 'Started', value: startLabel },
-            { label: 'Current alerts', value: tripAlertCount },
-            { label: 'Current detection', value: detectionLabel },
-            { label: 'Alerts Detected', value: detectedList },
-          ]
-        : [
-            { label: 'Start', value: startLabel },
-            { label: 'End', value: endLabel },
-            { label: 'Total alerts', value: tripAlertCount },
-            { label: 'Last Detection', value: detectionLabel },
-            { label: 'Alerts Detected', value: detectedList },
-          ]
+      const detectionLabel = latestDetection ? ALERT_TYPE_LABELS[latestDetection] || latestDetection : null
+
+      // Same fields as before (start/end, alert count, last detection, the
+      // list of detected types) but laid out as compact inline label:value
+      // pairs + tag pills instead of five stacked label-above-value blocks
+      // — the old layout took ~5 full rows on mobile for what's really
+      // just three pieces of information.
       tripStatusValue = (
-        <div className="grid gap-3 text-sm text-slate-700 sm:grid-cols-2">
-          {details.map((item) => (
-            <div key={item.label} className="space-y-1">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{item.label}</p>
-              <p className="text-sm text-slate-700">{item.value}</p>
+        <div className="space-y-2 sm:space-y-2.5">
+          <p className="text-xs text-slate-600 sm:text-sm">
+            {hasOngoingTrip ? (
+              <>
+                Started{' '}
+                <span className="font-semibold text-slate-900">
+                  {startDateLabel}, {startTimeLabel}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="font-semibold text-slate-900">{startDateLabel}</span>
+                <span className="text-slate-400"> &bull; </span>
+                <span className="font-semibold text-slate-900">
+                  {startTimeLabel}&ndash;{endTimeLabel}
+                </span>
+              </>
+            )}
+          </p>
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <span className="inline-flex items-baseline gap-1.5">
+              <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                {hasOngoingTrip ? 'Current alerts' : 'Total alerts'}
+              </span>
+              <span className="text-sm font-bold text-slate-900">{tripAlertCount}</span>
+            </span>
+            {detectionLabel ? (
+              <span className="inline-flex min-w-0 items-baseline gap-1.5">
+                <span className="shrink-0 text-[10px] uppercase tracking-wide text-slate-400">
+                  {hasOngoingTrip ? 'Detecting' : 'Last detection'}
+                </span>
+                <span className="truncate text-xs font-semibold text-slate-700">{detectionLabel}</span>
+              </span>
+            ) : null}
+          </div>
+          {detectedLabels.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {detectedLabels.map((entry) => (
+                <span
+                  key={entry}
+                  className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600"
+                >
+                  {entry}
+                </span>
+              ))}
             </div>
-          ))}
+          ) : null}
         </div>
       )
     }
@@ -439,33 +497,33 @@ function DriverPerformance() {
 
   return (
     <DriverLayout title="Performance" background={null}>
-      <div className="flex flex-col gap-6 pb-10">
+      <div className="flex w-full min-w-0 flex-col gap-3 pb-8 sm:gap-5 sm:pb-10">
         {performanceError ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-2.5 text-xs text-red-700 sm:p-4 sm:text-sm">
             {performanceError}
           </div>
         ) : null}
 
         {/* Hero row — "right now" and "this week" side by side */}
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-2.5 sm:gap-4 lg:grid-cols-2">
           <section
-            className={`rounded-2xl border p-5 shadow-sm sm:p-6 ${
+            className={`rounded-2xl border p-3 shadow-sm sm:p-5 ${
               HERO_TONE_CLASSES[heroKpi?.tone] || 'border-amber-200/70 bg-white'
             }`}
           >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+            <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 sm:text-xs sm:tracking-[0.2em]">
                 {heroKpi?.label}
               </span>
               {!isPerformanceLoading && heroKpi?.statusLabel ? (
                 <RiskBadge tone={heroKpi.tone} label={heroKpi.statusLabel} />
               ) : null}
             </div>
-            <div className="mt-4">
+            <div className="mt-2.5 sm:mt-3.5">
               {isPerformanceLoading ? (
-                <p className="text-sm text-slate-500">Loading your trip status…</p>
+                <p className="text-xs text-slate-500 sm:text-sm">Loading your trip status…</p>
               ) : typeof heroKpi?.value === 'string' ? (
-                <p className="text-sm text-slate-500">No trip data in the last 7 days.</p>
+                <p className="text-xs text-slate-500 sm:text-sm">No trip data in the last 7 days.</p>
               ) : (
                 heroKpi.value
               )}
@@ -473,33 +531,33 @@ function DriverPerformance() {
           </section>
 
           <section
-            className={`rounded-2xl border p-5 shadow-sm sm:p-6 ${
+            className={`rounded-2xl border p-3 shadow-sm sm:p-5 ${
               HERO_TONE_CLASSES[weeklyRisk.tone] || 'border-amber-200/70 bg-white'
             }`}
           >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+            <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 sm:text-xs sm:tracking-[0.2em]">
                 This Week (7 Days)
               </span>
               {!isPerformanceLoading && sessions.length > 0 ? (
                 <RiskBadge tone={weeklyRisk.tone} label={weeklyRisk.label} />
               ) : null}
             </div>
-            <div className="mt-4">
+            <div className="mt-2.5 sm:mt-3.5">
               {isPerformanceLoading ? (
-                <p className="text-sm text-slate-500">Loading your weekly summary…</p>
+                <p className="text-xs text-slate-500 sm:text-sm">Loading your weekly summary…</p>
               ) : sessions.length === 0 ? (
-                <p className="text-sm text-slate-500">No trips recorded in the last 7 days.</p>
+                <p className="text-xs text-slate-500 sm:text-sm">No trips recorded in the last 7 days.</p>
               ) : (
                 <>
-                  <p className="text-sm font-semibold text-slate-900">
+                  <p className="text-xs font-semibold text-slate-900 sm:text-sm">
                     Your performance this week was{' '}
                     <span className={RISK_TEXT_CLASSES[weeklyRisk.tone] || 'text-slate-900'}>
                       {weeklyRisk.label}
                     </span>
                     .
                   </p>
-                  <p className="mt-1 text-xs text-slate-500">
+                  <p className="mt-1 text-[11px] text-slate-500 sm:text-xs">
                     {weeklyRisk.tone === 'red' && worstSession
                       ? `Your ${formatAlertTimestamp(worstSession.start_time)} trip had ${
                           worstSession.total_alerts
@@ -509,38 +567,37 @@ function DriverPerformance() {
                       : 'No high-alert trips this week — keep it up.'}
                   </p>
 
-                  {/* Per-trip trend, oldest to newest, so the driver can see
-                      exactly which day drove the week's rating. */}
-                  <div className="mt-4 overflow-x-auto">
-                    <div className="flex min-w-[260px] items-end gap-2">
-                      {weekTrend.map((day, idx) => {
-                        const heightPct = day.alerts > 0 ? Math.max((day.alerts / maxWeekAlerts) * 100, 12) : 4
-                        const barColor =
-                          day.tone === 'red'
-                            ? 'bg-red-500'
-                            : day.tone === 'amber'
-                            ? 'bg-amber-400'
-                            : 'bg-emerald-400'
-                        return (
-                          <div
-                            key={day.sessionId || idx}
-                            className="flex flex-1 flex-col items-center gap-1"
-                            title={`${day.dayLabel} — ${day.alerts} alert${day.alerts === 1 ? '' : 's'}`}
-                          >
-                            <span className="text-[10px] font-semibold text-slate-500">
-                              {day.alerts > 0 ? day.alerts : ''}
-                            </span>
-                            <div className="flex h-16 w-full items-end rounded-md bg-slate-100">
-                              <div
-                                className={`w-full rounded-md transition ${barColor}`}
-                                style={{ height: `${heightPct}%` }}
-                              />
-                            </div>
-                            <span className="text-[10px] text-slate-400">{day.dayLabel}</span>
+                  {/* Per-trip trend, oldest to newest — exactly 7 days, so a
+                      fixed 7-column grid always fits without needing to
+                      scroll or force a min-width like the 24-hour chart. */}
+                  <div className="mt-2.5 grid grid-cols-7 gap-1.5 sm:mt-3.5 sm:gap-2">
+                    {weekTrend.map((day, idx) => {
+                      const heightPct = day.alerts > 0 ? Math.max((day.alerts / maxWeekAlerts) * 100, 12) : 4
+                      const barColor =
+                        day.tone === 'red'
+                          ? 'bg-red-500'
+                          : day.tone === 'amber'
+                          ? 'bg-amber-400'
+                          : 'bg-emerald-400'
+                      return (
+                        <div
+                          key={day.sessionId || idx}
+                          className="flex flex-col items-center gap-1"
+                          title={`${day.dayLabel} — ${day.alerts} alert${day.alerts === 1 ? '' : 's'}`}
+                        >
+                          <span className="text-[9px] font-semibold text-slate-500 sm:text-[10px]">
+                            {day.alerts > 0 ? day.alerts : ''}
+                          </span>
+                          <div className="flex h-11 w-full items-end rounded-md bg-slate-100 sm:h-16">
+                            <div
+                              className={`w-full rounded-md transition ${barColor}`}
+                              style={{ height: `${heightPct}%` }}
+                            />
                           </div>
-                        )
-                      })}
-                    </div>
+                          <span className="text-[9px] text-slate-400 sm:text-[10px]">{day.dayLabel}</span>
+                        </div>
+                      )
+                    })}
                   </div>
                 </>
               )}
@@ -551,7 +608,7 @@ function DriverPerformance() {
         {/* Insight — a plain-language read on the same data above, so drivers
             don't have to interpret the chart/breakdown themselves. */}
         {hasInsight ? (
-          <div className="flex items-start gap-3 rounded-2xl border border-amber-200/70 bg-amber-50 p-4 text-sm text-amber-900 sm:p-5">
+          <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200/70 bg-amber-50 p-2.5 text-xs text-amber-900 sm:gap-3 sm:p-4 sm:text-sm">
             <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
             <p>
               Most of your alerts this week were{' '}
@@ -563,7 +620,7 @@ function DriverPerformance() {
         ) : null}
 
         {/* 7-day summary */}
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <section className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
           <MetricTile
             label={totalAlertsKpi?.label}
             icon={AlertTriangle}
@@ -595,9 +652,9 @@ function DriverPerformance() {
         </section>
 
         {/* Alert pattern analysis */}
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-2.5 sm:gap-4 lg:grid-cols-2">
           <PerformancePanel title="Alert Type Breakdown" icon={ListChecks}>
-            <p className="text-xs text-slate-500">
+            <p className="text-[11px] text-slate-500 sm:text-xs">
               Most frequent —{' '}
               <span className="font-semibold text-slate-700">
                 {isPerformanceLoading
@@ -607,21 +664,21 @@ function DriverPerformance() {
                   : 'No alerts'}
               </span>
             </p>
-            <div className="mt-3 space-y-3">
+            <div className="mt-2 space-y-2 sm:mt-3 sm:space-y-2.5">
               {sortedAlertTypes.map((row) => {
                 const TypeIcon = ALERT_TYPE_ICON_BY_LABEL[row.type] || Activity
                 return (
                   <div key={row.type} className="space-y-1">
-                    <div className="flex items-center justify-between text-xs text-slate-600">
-                      <span className="inline-flex items-center gap-1.5 font-medium text-slate-700">
-                        <TypeIcon className="h-3.5 w-3.5 text-slate-400" />
-                        {row.type}
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-600 sm:text-xs">
+                      <span className="inline-flex min-w-0 items-center gap-1.5 truncate font-medium text-slate-700">
+                        <TypeIcon className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                        <span className="truncate">{row.type}</span>
                       </span>
-                      <span>{isPerformanceLoading ? '…' : `${row.count} · ${row.share}`}</span>
+                      <span className="shrink-0">{isPerformanceLoading ? '…' : `${row.count} · ${row.share}`}</span>
                     </div>
-                    <div className="h-2 w-full rounded-full bg-slate-100">
+                    <div className="h-1.5 w-full rounded-full bg-slate-100">
                       <div
-                        className="h-2 rounded-full bg-amber-500"
+                        className="h-1.5 rounded-full bg-amber-500"
                         style={{ width: `${row.percent}%` }}
                         aria-label={`${row.type} ${row.share}`}
                       />
@@ -638,52 +695,54 @@ function DriverPerformance() {
             right={!isPerformanceLoading && peakHour.alerts > 0 ? `Peak: ${peakHour.hour}` : null}
           >
             {isPerformanceLoading ? (
-              <p className="text-sm text-slate-500">Loading…</p>
+              <p className="text-xs text-slate-500 sm:text-sm">Loading…</p>
             ) : maxAlerts === 0 ? (
-              <p className="text-sm text-slate-500">No alerts recorded in the last 7 days.</p>
+              <p className="text-xs text-slate-500 sm:text-sm">No alerts recorded in the last 7 days.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <div className="flex min-w-[480px] items-end gap-1.5">
-                  {hourly.map((row, idx) => {
-                    const isPeak = row.hour === peakHour.hour && row.alerts > 0
-                    const heightPct = row.alerts > 0 ? Math.max((row.alerts / maxAlerts) * 100, 12) : 0
-                    const showLabel = isPeak || idx % 3 === 0
-                    return (
-                      <div
-                        key={row.hour}
-                        className="flex flex-1 flex-col items-center gap-1"
-                        title={`${row.hour} — ${row.alerts} alert${row.alerts === 1 ? '' : 's'}`}
-                      >
-                        <div className="flex h-16 w-full items-end rounded-md bg-slate-100">
-                          <div
-                            className={`w-full rounded-md transition ${isPeak ? 'bg-amber-600' : 'bg-amber-300'}`}
-                            style={{ height: `${heightPct}%` }}
-                            aria-label={`${row.hour} ${row.alerts} alerts`}
-                          />
-                        </div>
-                        <span
-                          className={`text-[10px] ${
-                            isPeak ? 'font-semibold text-amber-700' : 'text-slate-400'
-                          }`}
-                        >
-                          {showLabel ? row.hour.slice(0, 2) : ''}
-                        </span>
+              // Fluid, no forced min-width/overflow-x-auto — all 24 bars
+              // always fit the card width, even on a narrow phone. Labels
+              // thin out to every 4th hour (plus the peak) so they stay
+              // legible instead of overlapping at mobile widths.
+              <div className="flex items-end gap-[3px] sm:gap-1.5">
+                {hourly.map((row, idx) => {
+                  const isPeak = row.hour === peakHour.hour && row.alerts > 0
+                  const heightPct = row.alerts > 0 ? Math.max((row.alerts / maxAlerts) * 100, 12) : 0
+                  const showLabel = isPeak || idx % 4 === 0
+                  return (
+                    <div
+                      key={row.hour}
+                      className="flex flex-1 flex-col items-center gap-1"
+                      title={`${row.hour} — ${row.alerts} alert${row.alerts === 1 ? '' : 's'}`}
+                    >
+                      <div className="flex h-11 w-full items-end rounded-sm bg-slate-100 sm:h-16 sm:rounded-md">
+                        <div
+                          className={`w-full rounded-[1px] transition sm:rounded-md ${isPeak ? 'bg-amber-600' : 'bg-amber-300'}`}
+                          style={{ height: `${heightPct}%` }}
+                          aria-label={`${row.hour} ${row.alerts} alerts`}
+                        />
                       </div>
-                    )
-                  })}
-                </div>
+                      <span
+                        className={`text-[8px] sm:text-[10px] ${
+                          isPeak ? 'font-semibold text-amber-700' : 'text-slate-400'
+                        }`}
+                      >
+                        {showLabel ? row.hour.slice(0, 2) : ''}
+                      </span>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </PerformancePanel>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-2.5 sm:gap-4 lg:grid-cols-2">
           <PerformancePanel
             title="Recent Alerts"
             icon={AlertTriangle}
             right={!isPerformanceLoading ? `${latestAlerts.length} in 7 days` : null}
           >
-            <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
+            <div className="max-h-[300px] space-y-1.5 overflow-y-auto pr-1 sm:max-h-[360px] sm:space-y-2">
               {(isPerformanceLoading ? [] : latestAlerts).map((alert) => {
                 const TypeIcon = ALERT_TYPE_ICON_BY_LABEL[alert.type] || Activity
                 const displayDuration = formatAlertDuration(alert.duration)
@@ -691,17 +750,17 @@ function DriverPerformance() {
                 return (
                   <div
                     key={alert.id}
-                    className="flex items-center gap-3 rounded-xl border border-amber-100/70 bg-amber-50/60 px-3.5 py-2.5"
+                    className="flex items-center gap-2 rounded-lg border border-amber-100/70 bg-amber-50/60 px-2.5 py-1.5 sm:gap-3 sm:rounded-xl sm:px-3.5 sm:py-2.5"
                   >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-slate-500 ring-1 ring-inset ring-amber-200">
-                      <TypeIcon className="h-4 w-4" />
+                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-slate-500 ring-1 ring-inset ring-amber-200 sm:h-8 sm:w-8">
+                      <TypeIcon className="h-3 w-3 sm:h-4 sm:w-4" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-slate-900">{alert.type}</p>
-                      <p className="truncate text-xs text-slate-500">{formatAlertTimestamp(alert.createdAt)}</p>
+                      <p className="truncate text-xs font-semibold text-slate-900 sm:text-sm">{alert.type}</p>
+                      <p className="truncate text-[10px] text-slate-500 sm:text-xs">{formatAlertTimestamp(alert.createdAt)}</p>
                     </div>
                     {hasDuration ? (
-                      <span className="shrink-0 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                      <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700 sm:px-2.5 sm:py-1 sm:text-xs">
                         {displayDuration}
                       </span>
                     ) : null}
@@ -709,13 +768,45 @@ function DriverPerformance() {
                 )
               })}
               {!isPerformanceLoading && latestAlerts.length === 0 ? (
-                <p className="text-sm text-slate-500">No alerts found in the last 7 days.</p>
+                <p className="text-xs text-slate-500 sm:text-sm">No alerts found in the last 7 days.</p>
               ) : null}
             </div>
           </PerformancePanel>
 
           <PerformancePanel title="Trip Log" icon={ClipboardList} right="Last 7 days">
-            <div className="overflow-hidden rounded-2xl border border-amber-200/70">
+            {/* Mobile: a compact card list — the desktop table's 5 columns
+                (each holding a full "July 22, 7:10 am" timestamp) can't fit
+                a phone width without horizontal scroll, so this reorganizes
+                the same fields into two stacked lines per trip instead of
+                just shrinking the table. */}
+            <div className="space-y-1.5 sm:hidden">
+              {(isPerformanceLoading ? [] : recentSessions).map((session) => {
+                const risk = getRiskLevel(session.alerts)
+                return (
+                  <div
+                    key={session.sessionId}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-amber-100/70 bg-white px-2.5 py-1.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-slate-900">{formatShortDate(session.start)}</p>
+                      <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                        {formatShortTime(session.start)}–{formatShortTime(session.end)} · {formatAlertDuration(session.duration)}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="text-[10px] text-slate-500">{session.alerts} alert{session.alerts === 1 ? '' : 's'}</span>
+                      <RiskBadge tone={risk.tone} label={risk.label} compact />
+                    </div>
+                  </div>
+                )
+              })}
+              {!isPerformanceLoading && recentSessions.length === 0 ? (
+                <p className="text-xs text-slate-500">No sessions found in the last 7 days.</p>
+              ) : null}
+            </div>
+
+            {/* Desktop: full table, same data. */}
+            <div className="hidden overflow-hidden rounded-2xl border border-amber-200/70 sm:block">
               <table className="w-full text-left text-sm">
                 <thead className="bg-amber-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                   <tr>
@@ -743,10 +834,10 @@ function DriverPerformance() {
                   })}
                 </tbody>
               </table>
+              {!isPerformanceLoading && recentSessions.length === 0 ? (
+                <p className="p-3 text-sm text-slate-500">No sessions found in the last 7 days.</p>
+              ) : null}
             </div>
-            {!isPerformanceLoading && recentSessions.length === 0 ? (
-              <p className="mt-3 text-sm text-slate-500">No sessions found in the last 7 days.</p>
-            ) : null}
           </PerformancePanel>
         </div>
       </div>

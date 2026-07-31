@@ -5,6 +5,8 @@ import { useUserProfile } from '../lib/useUserInitials.js'
 import { useDeactivationGuard } from '../lib/useDeactivationGuard.js'
 import { formatCutoff } from '../lib/deactivation.js'
 
+// Profile isn't listed here — it's reached via the sidebar header (avatar)
+// instead of a nav item, see the header buttons below.
 export const driverModules = [
   {
     label: 'Performance',
@@ -15,11 +17,6 @@ export const driverModules = [
     label: 'Deliveries',
     path: '/driver/trips',
     description: 'Routes and deliveries'
-  },
-  {
-    label: 'Profile',
-    path: '/driver/profile',
-    description: 'Details and settings'
   }
 ]
 
@@ -53,18 +50,6 @@ const driverIcons = {
       <circle cx="8" cy="18" r="1.5" />
       <circle cx="16" cy="18" r="1.5" />
     </svg>
-  ),
-  Profile: (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      strokeWidth="1.6"
-      className={iconClassName}
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="8" r="3.5" />
-      <path d="M5 20c1.8-3 4.5-4.5 7-4.5s5.2 1.5 7 4.5" />
-    </svg>
   )
 }
 
@@ -79,7 +64,6 @@ function DriverLayout({ title, background, children }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const navigate = useNavigate()
   const { initials: userInitials, profilePicture } = useUserProfile()
-  const [isImageViewerOpen, setIsImageViewerOpen] = useState(false)
   const deactivationWarning = useDeactivationGuard()
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false)
@@ -98,8 +82,8 @@ function DriverLayout({ title, background, children }) {
     closeMobileMenuAfterDelay(path)
   }
 
-  const renderDriverNav = (isExpanded, onItemClick) => (
-    <nav className="flex w-full flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-2">
+  const renderDriverNav = (isExpanded, onItemClick, compact = false) => (
+    <nav className={`flex w-full flex-1 flex-col overflow-y-auto overflow-x-hidden px-2 ${compact ? 'gap-1.5' : 'gap-2'}`}>
       {driverModules.map((module) => (
         <NavLink
           key={module.path}
@@ -116,7 +100,9 @@ function DriverLayout({ title, background, children }) {
             onItemClick(module.path)
           }}
           className={({ isActive }) =>
-            `flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
+            `flex items-center justify-start rounded-lg border border-transparent text-sm transition-all duration-200 ${
+              compact ? 'gap-2.5 px-2.5 py-2' : 'gap-3 px-3 py-2.5'
+            } ${
               isActive
                 ? 'border-amber-400 bg-amber-900 text-white rounded-lg'
                 : 'text-amber-200 hover:border-amber-700'
@@ -125,7 +111,11 @@ function DriverLayout({ title, background, children }) {
         >
           <span className="h-5 w-5 flex-shrink-0">{driverIcons[module.label]}</span>
           {isExpanded && (
-            <span className="inline-flex whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] text-amber-100 transition-opacity duration-200">
+            <span
+              className={`inline-flex whitespace-nowrap font-semibold uppercase text-amber-100 transition-opacity duration-200 ${
+                compact ? 'text-[11px] tracking-wide' : 'text-xs tracking-[0.2em]'
+              }`}
+            >
               {module.label}
             </span>
           )}
@@ -141,10 +131,10 @@ function DriverLayout({ title, background, children }) {
     >
       {background}
 
-      <div className="fixed left-0 right-0 top-0 z-40 flex items-center border-b border-amber-900/80 bg-amber-950 px-4 py-3 text-white md:hidden">
+      <div className="fixed left-0 right-0 top-0 z-40 flex items-center border-b border-amber-900/80 bg-amber-950 px-3 py-2 text-white md:hidden">
         <button
           type="button"
-          className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-amber-700 text-amber-100 transition-colors hover:bg-amber-900"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-amber-700 text-amber-100 transition-colors hover:bg-amber-900"
           aria-label="Open navigation menu"
           aria-expanded={isMobileMenuOpen}
           onClick={() => setIsMobileMenuOpen((currentValue) => !currentValue)}
@@ -157,18 +147,18 @@ function DriverLayout({ title, background, children }) {
         </button>
 
         <div className="ml-auto flex items-center gap-3">
-          <div
-            className={`flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-amber-900 text-sm font-semibold text-white flex-shrink-0 ${
-              profilePicture ? 'cursor-pointer' : ''
-            }`}
-            onClick={() => profilePicture && setIsImageViewerOpen(true)}
+          <button
+            type="button"
+            aria-label="Go to profile"
+            onClick={() => navigate('/driver/profile')}
+            className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-amber-900 text-xs font-semibold text-white flex-shrink-0"
           >
             {profilePicture ? (
               <img src={profilePicture} alt="" className="h-full w-full object-cover" />
             ) : (
               userInitials || '...'
             )}
-          </div>
+          </button>
         </div>
       </div>
 
@@ -181,32 +171,33 @@ function DriverLayout({ title, background, children }) {
       />
 
       <aside
-        className={`fixed left-0 top-0 z-40 flex h-screen w-56 flex-col gap-4 border-r border-amber-900/80 bg-amber-950 py-4 backdrop-blur transition-transform duration-300 md:hidden ${
+        className={`fixed left-0 top-0 z-40 flex h-screen w-56 flex-col gap-3 border-r border-amber-900/80 bg-amber-950 py-3 backdrop-blur transition-transform duration-300 md:hidden ${
           isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         role="navigation"
         aria-label="Mobile navigation"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex flex-col items-center gap-3 px-3">
-          <div
-            className={`flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-amber-900 text-2xl font-semibold text-white flex-shrink-0 ${
-              profilePicture ? 'cursor-pointer' : ''
-            }`}
-            onClick={() => profilePicture && setIsImageViewerOpen(true)}
-          >
+        {/* Header — the profile shortcut, since Profile isn't a nav item below. */}
+        <button
+          type="button"
+          aria-label="Go to profile"
+          onClick={() => navigateAfterMobileClose('/driver/profile')}
+          className="flex flex-col items-center gap-2 px-3"
+        >
+          <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-amber-900 text-base font-semibold text-white flex-shrink-0">
             {profilePicture ? (
               <img src={profilePicture} alt="" className="h-full w-full object-cover" />
             ) : (
               userInitials || '...'
             )}
           </div>
-        </div>
+        </button>
 
-        {renderDriverNav(true, navigateAfterMobileClose)}
+        {renderDriverNav(true, navigateAfterMobileClose, true)}
 
         <div className="border-t border-amber-900/80 px-2 pt-2">
-          <LogoutButton isExpanded />
+          <LogoutButton isExpanded compact iconClassName="h-4 w-4 stroke-current" />
         </div>
       </aside>
 
@@ -219,19 +210,20 @@ function DriverLayout({ title, background, children }) {
           aria-label="Main navigation"
           onClick={() => setIsExpanded((currentValue) => !currentValue)}
         >
-          {/* Header */}
-          <div className="flex flex-col items-center gap-3 px-3">
+          {/* Header — the profile shortcut, since Profile isn't a nav item below. */}
+          <button
+            type="button"
+            aria-label="Go to profile"
+            onClick={(event) => {
+              event.stopPropagation()
+              navigate('/driver/profile')
+            }}
+            className="flex flex-col items-center gap-3 px-3"
+          >
             <div
               className={`flex items-center justify-center overflow-hidden rounded-full transition-all duration-300 bg-amber-900 font-semibold text-white flex-shrink-0 ${
                 isExpanded ? 'h-24 w-24 text-2xl' : 'h-10 w-10 text-sm'
-              } ${profilePicture ? 'cursor-pointer' : ''}`}
-              onClick={(event) => {
-                if (!profilePicture) {
-                  return
-                }
-                event.stopPropagation()
-                setIsImageViewerOpen(true)
-              }}
+              }`}
             >
               {profilePicture ? (
                 <img src={profilePicture} alt="" className="h-full w-full object-cover" />
@@ -239,7 +231,7 @@ function DriverLayout({ title, background, children }) {
                 userInitials || '...'
               )}
             </div>
-          </div>
+          </button>
 
           {/* Navigation */}
           {renderDriverNav(isExpanded, undefined)}
@@ -250,7 +242,7 @@ function DriverLayout({ title, background, children }) {
         </aside>
 
         {/* Main Content */}
-        <div className="flex-1 min-w-0 flex flex-col overflow-hidden pt-16 md:pt-0">
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden pt-14 md:pt-0">
           <div className="flex-1 overflow-y-auto">
             <div className="h-full px-4 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8 lg:px-12 lg:py-10">
               {deactivationWarning ? (
@@ -264,23 +256,6 @@ function DriverLayout({ title, background, children }) {
           </div>
         </div>
       </section>
-
-      {isImageViewerOpen && profilePicture ? (
-        <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Profile picture"
-          onClick={() => setIsImageViewerOpen(false)}
-        >
-          <img
-            src={profilePicture}
-            alt="Profile"
-            className="aspect-square h-auto max-h-[80vh] w-auto max-w-full rounded-full object-cover shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          />
-        </div>
-      ) : null}
     </main>
   )
 }

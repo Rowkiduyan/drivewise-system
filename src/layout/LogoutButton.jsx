@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient.js'
 
-function LogoutButton({ isExpanded, iconClassName = 'h-5 w-5 stroke-current' }) {
+function LogoutButton({ isExpanded, iconClassName = 'h-5 w-5 stroke-current', compact = false }) {
   const navigate = useNavigate()
   const [isConfirmOpen, setIsConfirmOpen] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
@@ -37,7 +37,9 @@ function LogoutButton({ isExpanded, iconClassName = 'h-5 w-5 stroke-current' }) 
         type="button"
         aria-label="Log out"
         onClick={openConfirm}
-        className={`flex items-center justify-start rounded-lg border border-transparent px-3 py-2.5 text-sm text-red-300 transition-all duration-200 hover:border-red-700 hover:bg-red-900/30 ${
+        className={`flex items-center justify-start rounded-lg border border-transparent text-sm text-red-300 transition-all duration-200 hover:border-red-700 hover:bg-red-900/30 ${
+          compact ? 'px-2.5 py-2' : 'px-3 py-2.5'
+        } ${
           isExpanded ? 'gap-3' : 'gap-0'
         }`}
       >
@@ -53,7 +55,9 @@ function LogoutButton({ isExpanded, iconClassName = 'h-5 w-5 stroke-current' }) 
           <path d="M17 8l4 4-4 4" />
         </svg>
         <span
-          className={`inline-flex overflow-hidden whitespace-nowrap text-xs font-semibold uppercase tracking-[0.2em] transition-all duration-200 ease-out ${
+          className={`inline-flex overflow-hidden whitespace-nowrap font-semibold uppercase transition-all duration-200 ease-out ${
+            compact ? 'text-[11px] tracking-wide' : 'text-xs tracking-[0.2em]'
+          } ${
             isExpanded ? 'max-w-40 opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'
           }`}
         >
