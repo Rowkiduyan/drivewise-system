@@ -5,8 +5,6 @@ import { supabase } from "../lib/supabaseClient.js";
 import {
   ArrowLeft,
   Route,
-  MoreVertical,
-  Trash2,
   X,
   Search,
   ShieldCheck,
@@ -18,6 +16,9 @@ import {
   Clock,
   ListChecks,
   ClipboardList,
+  Truck,
+  Users,
+  Building2,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,40 @@ function getInitials(fullName) {
   const [last = "", rest = ""] = fullName.split(",").map((part) => part.trim());
   const first = rest.split(" ")[0] || "";
   return (`${last.charAt(0)}${first.charAt(0)}`.toUpperCase()) || "?";
+}
+
+function buildHelperName(row) {
+  const nameParts = [row.first_name];
+  if (row.middle_name) {
+    nameParts.push(`${row.middle_name.trim().charAt(0).toUpperCase()}.`);
+  }
+  return `${row.last_name || ""}, ${nameParts.filter(Boolean).join(" ")}`.trim();
+}
+
+// ---------------------------------------------------------------------------
+// Truck & Crew Assignment — default truck/helpers for a driver, frontend-only
+// (no backing table/API yet, same as the Client Specialties mock elsewhere
+// on this page). MAX_DEFAULT_HELPERS caps default helpers at two per driver.
+// ---------------------------------------------------------------------------
+
+const MAX_DEFAULT_HELPERS = 2;
+
+const ASSIGNABLE_TRUCKS = [
+  { id: "TRK-001", plateNumber: "NGP 1042", truckType: "L300" },
+  { id: "TRK-002", plateNumber: "NDW 2183", truckType: "AUV" },
+  { id: "TRK-003", plateNumber: "NBW 3067", truckType: "1T DRY" },
+  { id: "TRK-004", plateNumber: "NGK 4290", truckType: "2T DRY" },
+  { id: "TRK-005", plateNumber: "NAP 5134", truckType: "1T REF" },
+  { id: "TRK-006", plateNumber: "NDT 6078", truckType: "2T REF" },
+  { id: "TRK-007", plateNumber: "NEQ 7215", truckType: "4T DRY" },
+  { id: "TRK-008", plateNumber: "NFY 8349", truckType: "4T REF" },
+  { id: "TRK-009", plateNumber: "NHC 9021", truckType: "L300" },
+  { id: "TRK-010", plateNumber: "NJB 1567", truckType: "AUV" },
+];
+
+function getTruckLabel(truckId) {
+  const truck = ASSIGNABLE_TRUCKS.find((entry) => entry.id === truckId);
+  return truck ? `${truck.plateNumber} · ${truck.truckType}` : "";
 }
 
 const STATUS_BADGE_CLASSES = {
@@ -271,14 +306,38 @@ function MetricTile({ label, value, hint, icon: Icon, tone = "slate" }) {
   );
 }
 
-function InfoRow({ icon: Icon, label, value }) {
+// Placeholder strings rendered by InfoRow across Personal Information and
+// Truck & Crew Assignment ("N/A", "—", "No truck assigned", "Not assigned",
+// "Unknown helper") read as muted secondary text rather than bold black —
+// there's nothing there to draw the eye to. Takes priority over `strong` so
+// a field like Assigned Truck can always pass strong and still mute itself
+// automatically when unassigned.
+const MUTED_INFO_VALUES = new Set([
+  "N/A",
+  "—",
+  "No truck assigned",
+  "Not assigned",
+  "Unknown helper",
+]);
+
+// `strong` is opt-in and reserved for key identifiers (driver name, assigned
+// truck) — every other value defaults to medium weight so it still reads as
+// the primary content of the row without competing with those identifiers.
+function InfoRow({ icon: Icon, label, value, strong = false }) {
+  const isMuted = typeof value === "string" && MUTED_INFO_VALUES.has(value);
+  const valueClasses = isMuted
+    ? "font-normal text-slate-400"
+    : strong
+    ? "font-semibold text-slate-900"
+    : "font-medium text-slate-700";
+
   return (
     <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-2.5 last:border-0">
       <span className="inline-flex items-center gap-2 text-sm text-slate-500">
         {Icon && <Icon className="h-4 w-4 text-slate-400" />}
         {label}
       </span>
-      <span className="text-sm font-semibold text-slate-900">{value}</span>
+      <span className={`text-sm ${valueClasses}`}>{value}</span>
     </div>
   );
 }
@@ -297,68 +356,13 @@ function SectionCard({ title, icon: Icon, children, className = "" }) {
   );
 }
 
-// Three-dot menu with just two actions: Add opens the add-clients modal,
-// Delete switches the list below into delete mode (each row grows a trash
-// icon). Kept as plain menu items rather than the list itself, since Add
-// and Delete lead to two different interactions (a modal vs. inline
-// per-row confirmation).
-function SpecialtyMenu({ isOpen, onToggle, onClose, onSelectAdd, onSelectDelete, canDelete }) {
+// One row in the Client Specialties stacked list. Read-only — editing
+// (adding/removing) happens in the Edit Client Specialties modal, the same
+// single-entry-point interaction the Truck & Crew Assignment card uses.
+function SpecialtyListItem({ client }) {
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-label="Manage client specialties"
-        aria-haspopup="true"
-        aria-expanded={isOpen}
-        className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-      >
-        <MoreVertical className="h-4 w-4" />
-      </button>
-
-      {isOpen && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={onClose} />
-          <div className="absolute right-0 z-20 mt-2 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
-            <button
-              type="button"
-              onClick={onSelectAdd}
-              className="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-            >
-              Add
-            </button>
-            <button
-              type="button"
-              onClick={onSelectDelete}
-              disabled={!canDelete}
-              className="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
-            >
-              Delete
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// One row in the Client Specialties stacked list. In delete mode it shows a
-// trash icon; clicking it opens a confirmation modal (rendered by the page)
-// rather than deleting immediately.
-function SpecialtyListItem({ client, isDeleteMode, onRequestDelete }) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-2">
-      <span className="text-sm text-slate-900">{client}</span>
-      {isDeleteMode && (
-        <button
-          type="button"
-          onClick={onRequestDelete}
-          aria-label={`Delete ${client}`}
-          className="rounded-lg p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-      )}
+    <div className="flex items-center justify-between gap-3 py-1.5">
+      <span className="text-sm font-medium text-slate-700">{client}</span>
     </div>
   );
 }
@@ -379,11 +383,8 @@ function SupCrewProfile() {
   const [activeTab, setActiveTab] = useState("overview");
   const [clientSpecialties, setClientSpecialties] = useState(crew?.clientSpecialties || []);
   const [availableClients, setAvailableClients] = useState([]);
-  const [isSpecialtyMenuOpen, setIsSpecialtyMenuOpen] = useState(false);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [clientsToAdd, setClientsToAdd] = useState([]);
-  const [isDeleteMode, setIsDeleteMode] = useState(false);
-  const [clientPendingDelete, setClientPendingDelete] = useState(null);
+  const [isSpecialtyModalOpen, setIsSpecialtyModalOpen] = useState(false);
+  const [specialtyDraft, setSpecialtyDraft] = useState([]);
   const [isSpecialtyBusy, setIsSpecialtyBusy] = useState(false);
   const [specialtyError, setSpecialtyError] = useState("");
   const [tripStatusFilter, setTripStatusFilter] = useState("All");
@@ -393,6 +394,15 @@ function SupCrewProfile() {
   const [sessions, setSessions] = useState([]);
   const [isPerformanceLoading, setIsPerformanceLoading] = useState(true);
   const [performanceError, setPerformanceError] = useState("");
+
+  // Truck & Crew Assignment — this driver's default truck/helpers.
+  // Frontend-only state, same mock approach as ASSIGNABLE_TRUCKS above.
+  const [helperOptions, setHelperOptions] = useState([]);
+  const [assignedTruckId, setAssignedTruckId] = useState(null);
+  const [assignedHelperIds, setAssignedHelperIds] = useState([]);
+  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [draftTruckId, setDraftTruckId] = useState("");
+  const [draftHelperIds, setDraftHelperIds] = useState([]);
 
   // clients + crew_client_specialties (see DATABASE.md) — fetched via the
   // admin-users Edge Function since the client can't read those tables
@@ -441,6 +451,31 @@ function SupCrewProfile() {
       isMounted = false;
     };
   }, [crew]);
+
+  // Helper roster for the default-helpers picker — same list-crew Edge
+  // Function as SupDeliveryCrew.jsx, filtered down to Helper accounts.
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadHelpers() {
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "list-crew" },
+      });
+
+      if (isMounted && !error) {
+        setHelperOptions(
+          (data.crew || [])
+            .filter((row) => row.role === "Helper")
+            .map((row) => ({ id: row.id, fullName: buildHelperName(row) })),
+        );
+      }
+    }
+
+    loadHelpers();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const clientFallbackNames = useMemo(
     () => availableClients.map((client) => client.name),
@@ -680,38 +715,88 @@ function SupCrewProfile() {
 
   const availableClientsToAdd = availableClients
     .map((client) => client.name)
-    .filter((name) => !clientSpecialties.includes(name));
+    .filter((name) => !specialtyDraft.includes(name));
 
-  const openAddModal = () => {
-    setClientsToAdd([]);
+  const helperNameById = useMemo(() => {
+    const map = {};
+    helperOptions.forEach((helper) => {
+      map[helper.id] = helper.fullName;
+    });
+    return map;
+  }, [helperOptions]);
+
+  const hasAssignment = Boolean(assignedTruckId || assignedHelperIds.length);
+
+  const openAssignModal = () => {
+    setDraftTruckId(assignedTruckId || "");
+    setDraftHelperIds(assignedHelperIds);
+    setIsAssignModalOpen(true);
+  };
+
+  const closeAssignModal = () => setIsAssignModalOpen(false);
+
+  const addDraftHelper = (helperId) => {
+    if (!helperId) return;
+    setDraftHelperIds((prev) =>
+      prev.includes(helperId) || prev.length >= MAX_DEFAULT_HELPERS ? prev : [...prev, helperId],
+    );
+  };
+
+  const removeDraftHelper = (helperId) => {
+    setDraftHelperIds((prev) => prev.filter((id) => id !== helperId));
+  };
+
+  const saveAssignment = () => {
+    setAssignedTruckId(draftTruckId || null);
+    setAssignedHelperIds(draftHelperIds);
+    closeAssignModal();
+  };
+
+  const removeAssignment = () => {
+    setAssignedTruckId(null);
+    setAssignedHelperIds([]);
+    closeAssignModal();
+  };
+
+  // Client Specialties — single Edit/Add entry point (same interaction
+  // style as Truck & Crew Assignment's Assign/Edit Assignment button): one
+  // modal handles both adding and removing, via a select-to-add dropdown
+  // plus removable chips for the current draft.
+  const openSpecialtyModal = () => {
+    setSpecialtyDraft(clientSpecialties);
     setSpecialtyError("");
-    setIsAddModalOpen(true);
+    setIsSpecialtyModalOpen(true);
   };
 
-  const closeAddModal = () => {
-    setIsAddModalOpen(false);
-    setClientsToAdd([]);
-  };
+  const closeSpecialtyModal = () => setIsSpecialtyModalOpen(false);
 
-  const selectClientToAdd = (client) => {
+  const addDraftSpecialty = (client) => {
     if (!client) return;
-    setClientsToAdd((prev) => (prev.includes(client) ? prev : [...prev, client]));
+    setSpecialtyDraft((prev) => (prev.includes(client) ? prev : [...prev, client]));
   };
 
-  const unselectClientToAdd = (client) => {
-    setClientsToAdd((prev) => prev.filter((entry) => entry !== client));
+  const removeDraftSpecialty = (client) => {
+    setSpecialtyDraft((prev) => prev.filter((entry) => entry !== client));
   };
 
-  const saveAddModal = async () => {
-    if (!crew || clientsToAdd.length === 0 || isSpecialtyBusy) {
+  const saveSpecialtyModal = async () => {
+    if (!crew || isSpecialtyBusy) {
+      return;
+    }
+
+    const added = specialtyDraft.filter((name) => !clientSpecialties.includes(name));
+    const removed = clientSpecialties.filter((name) => !specialtyDraft.includes(name));
+
+    if (added.length === 0 && removed.length === 0) {
+      closeSpecialtyModal();
       return;
     }
 
     setIsSpecialtyBusy(true);
     setSpecialtyError("");
 
-    const results = await Promise.all(
-      clientsToAdd.map((name) => {
+    const results = await Promise.all([
+      ...added.map((name) => {
         const client = availableClients.find((entry) => entry.name === name);
         if (!client) {
           return { error: { message: `Unknown client: ${name}` } };
@@ -720,7 +805,16 @@ function SupCrewProfile() {
           body: { action: "add-crew-client", authId: crew.id, clientId: client.id },
         });
       }),
-    );
+      ...removed.map((name) => {
+        const client = availableClients.find((entry) => entry.name === name);
+        if (!client) {
+          return { error: { message: `Unknown client: ${name}` } };
+        }
+        return supabase.functions.invoke("admin-users", {
+          body: { action: "remove-crew-client", authId: crew.id, clientId: client.id },
+        });
+      }),
+    ]);
 
     setIsSpecialtyBusy(false);
 
@@ -730,43 +824,8 @@ function SupCrewProfile() {
       return;
     }
 
-    setClientSpecialties((prev) => [...prev, ...clientsToAdd]);
-    closeAddModal();
-  };
-
-  const startDeleteMode = () => {
-    setClientPendingDelete(null);
-    setIsDeleteMode(true);
-  };
-
-  const exitDeleteMode = () => {
-    setIsDeleteMode(false);
-    setClientPendingDelete(null);
-  };
-
-  const confirmDeleteClient = async (client) => {
-    const clientRow = availableClients.find((entry) => entry.name === client);
-    if (!crew || !clientRow) {
-      setClientPendingDelete(null);
-      return;
-    }
-
-    setIsSpecialtyBusy(true);
-    setSpecialtyError("");
-
-    const { error } = await supabase.functions.invoke("admin-users", {
-      body: { action: "remove-crew-client", authId: crew.id, clientId: clientRow.id },
-    });
-
-    setIsSpecialtyBusy(false);
-    setClientPendingDelete(null);
-
-    if (error) {
-      setSpecialtyError(error.message || "Unable to remove client specialty.");
-      return;
-    }
-
-    setClientSpecialties((prev) => prev.filter((entry) => entry !== client));
+    setClientSpecialties(specialtyDraft);
+    closeSpecialtyModal();
   };
 
   const filteredTrips = trips.filter((trip) => {
@@ -826,7 +885,7 @@ function SupCrewProfile() {
 
   return (
     <SupLayout title="Crew Profile" background={null} bg="bg-white">
-      <div className="flex flex-col gap-4 pb-6">
+      <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-4 pb-6">
         {/* Sticky within the scroll area, pulled up to sit close to the page
             edge rather than trailing SupLayout's generous top padding. */}
         <div className="sticky top-0 z-30 -mt-2 w-full border-b border-slate-200 bg-white py-1.5 shadow-sm sm:-mt-4">
@@ -882,73 +941,131 @@ function SupCrewProfile() {
           ))}
         </div>
 
-        {/* Overview tab */}
+        {/* Overview tab — two columns: Personal Information on the left;
+            Client Specialties + Truck & Crew Assignment stacked on the right,
+            since both are assignment-related and read as one group. Columns
+            use items-start (not stretch) so the right side's two compact
+            cards settle at their natural height instead of one being padded
+            out to match the taller Personal Information card. */}
         {activeTab === "overview" && (
-          <SectionCard title="Personal Information">
-            <div className="grid gap-6 lg:grid-cols-2">
-              <div>
-                <InfoRow label="Full Name" value={crew.fullName} />
-                <InfoRow label="Position" value={crew.position} />
-                <InfoRow label="Contact Number" value={crew.contactNumber} />
-                <InfoRow label="Personal Email" value={crew.personalEmail || "N/A"} />
-                <InfoRow label="Work Email" value={crew.workEmail || "N/A"} />
-                <InfoRow label="Birthday" value={crew.birthday || "N/A"} />
-                <InfoRow label="Age" value={crew.age ?? "N/A"} />
-                <InfoRow label="Employment Start Date" value={crew.dateJoined} />
-              </div>
+          // items-stretch (the grid default) makes both columns match the
+          // taller one's height — Personal Information — without hardcoding
+          // a number anywhere. The right column is a flex-col that inherits
+          // that stretched height; Client Specialties stays flex-none
+          // (sized to its own compact content) and Truck & Crew Assignment
+          // is flex-1, so it alone absorbs whatever's left, keeping the two
+          // right-side cards flush with Personal Information at every
+          // specialty count / assignment state.
+          <div className="grid gap-4 lg:grid-cols-2 lg:gap-6">
+            <SectionCard title="Personal Information">
+              <InfoRow label="Full Name" value={crew.fullName} />
+              <InfoRow label="Position" value={crew.position} />
+              <InfoRow label="Contact Number" value={crew.contactNumber} />
+              <InfoRow label="Personal Email" value={crew.personalEmail || "N/A"} />
+              <InfoRow label="Work Email" value={crew.workEmail || "N/A"} />
+              <InfoRow label="Birthday" value={crew.birthday || "N/A"} />
+              <InfoRow label="Age" value={crew.age ?? "N/A"} />
+              <InfoRow label="Employment Start Date" value={crew.dateJoined} />
+            </SectionCard>
 
-              <div className="lg:border-l lg:border-slate-100 lg:pl-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Client Specialties
-                  </h3>
-                  {isDeleteMode ? (
-                    <button
-                      type="button"
-                      onClick={exitDeleteMode}
-                      className="text-xs font-semibold text-blue-600 transition hover:text-blue-700"
-                    >
-                      Done
-                    </button>
-                  ) : (
-                    <SpecialtyMenu
-                      isOpen={isSpecialtyMenuOpen}
-                      onToggle={() => setIsSpecialtyMenuOpen((prev) => !prev)}
-                      onClose={() => setIsSpecialtyMenuOpen(false)}
-                      onSelectAdd={() => {
-                        setIsSpecialtyMenuOpen(false);
-                        openAddModal();
-                      }}
-                      onSelectDelete={() => {
-                        setIsSpecialtyMenuOpen(false);
-                        startDeleteMode();
-                      }}
-                      canDelete={clientSpecialties.length > 0}
-                    />
-                  )}
+            <div className="flex flex-col gap-3">
+              {/* Client Specialties — capped at 2-3 per driver in practice,
+                  so it stays flex-none/compact rather than growing to fill
+                  the column. A single Edit/Add button in the header (no
+                  three-dot menu) opens one modal for both adding and
+                  removing, matching Truck & Crew Assignment's interaction
+                  below so the two cards read as one "assignment" area. */}
+              <section className="flex flex-none flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Building2 className="h-4 w-4 text-blue-600" />
+                    <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      Client Specialties
+                    </h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={openSpecialtyModal}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+                  >
+                    {clientSpecialties.length > 0 ? "Edit" : "Add"}
+                  </button>
                 </div>
 
-                <div className="mt-1 divide-y divide-slate-100">
+                <div className="mt-2 divide-y divide-slate-100">
                   {clientSpecialties.length === 0 ? (
-                    <p className="py-2.5 text-sm text-slate-500">No clients assigned yet.</p>
+                    <p className="py-2 text-sm font-normal text-slate-400">No clients assigned yet.</p>
                   ) : (
                     clientSpecialties.map((client) => (
-                      <SpecialtyListItem
-                        key={client}
-                        client={client}
-                        isDeleteMode={isDeleteMode}
-                        onRequestDelete={() => setClientPendingDelete(client)}
-                      />
+                      <SpecialtyListItem key={client} client={client} />
                     ))
                   )}
                 </div>
+              </section>
 
-                {specialtyError ? (
-                  <p className="mt-3 text-xs text-red-600">{specialtyError}</p>
-                ) : null}
-              </div>
+              {/* Truck & Crew Assignment — separate card, same chrome as
+                  Client Specialties above (drivers only; helpers don't get a
+                  default truck). flex-1 lets it grow to soak up whatever
+                  height Client Specialties doesn't use, so the right column
+                  as a whole lines up with Personal Information. The Remove
+                  Assignment slot always renders (just hidden via `invisible`
+                  when unassigned) and mt-auto pins it to the card's bottom
+                  edge, so neither toggling an assignment nor the card's
+                  variable height ever shifts anything internally. */}
+              {isDriver && (
+                <section className="flex flex-1 flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Truck className="h-4 w-4 text-blue-600" />
+                      <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        Truck &amp; Crew Assignment
+                      </h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={openAssignModal}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+                    >
+                      {hasAssignment ? "Edit Assignment" : "Assign"}
+                    </button>
+                  </div>
+
+                  <div className="mt-2 divide-y divide-slate-100">
+                    <InfoRow
+                      icon={Truck}
+                      label="Assigned Truck"
+                      value={assignedTruckId ? getTruckLabel(assignedTruckId) : "No truck assigned"}
+                      strong
+                    />
+                    <InfoRow
+                      icon={Users}
+                      label="Default Helper 1"
+                      value={assignedHelperIds[0] ? helperNameById[assignedHelperIds[0]] || "Unknown helper" : "Not assigned"}
+                    />
+                    <InfoRow
+                      icon={Users}
+                      label="Default Helper 2"
+                      value={assignedHelperIds[1] ? helperNameById[assignedHelperIds[1]] || "Unknown helper" : "Not assigned"}
+                    />
+                  </div>
+
+                  <div
+                    className={`mt-auto flex justify-end pt-3 ${hasAssignment ? "" : "invisible pointer-events-none"}`}
+                    aria-hidden={!hasAssignment}
+                  >
+                    <button
+                      type="button"
+                      onClick={removeAssignment}
+                      tabIndex={hasAssignment ? 0 : -1}
+                      className="text-xs font-semibold text-red-600 transition hover:text-red-700"
+                    >
+                      Remove Assignment
+                    </button>
+                  </div>
+                </section>
+              )}
             </div>
-          </SectionCard>
+          </div>
         )}
 
         {/* Performance tab — alert/session analysis for this driver */}
@@ -1244,23 +1361,27 @@ function SupCrewProfile() {
           </div>
         )}
 
-        {isAddModalOpen && (
+        {/* Edit Client Specialties modal — one entry point for both adding
+            and removing (select-to-add dropdown + removable chips), the
+            same shape as the Assign Truck & Helpers modal below so the two
+            "assignment" cards share one interaction pattern. */}
+        {isSpecialtyModalOpen && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="add-specialty-title"
-            onClick={closeAddModal}
+            aria-labelledby="edit-specialty-title"
+            onClick={closeSpecialtyModal}
           >
             <div
               className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
               onClick={(event) => event.stopPropagation()}
             >
-              <h3 id="add-specialty-title" className="text-base font-semibold text-slate-900">
-                Add Client Specialties
+              <h3 id="edit-specialty-title" className="text-base font-semibold text-slate-900">
+                Edit Client Specialties
               </h3>
               <p className="mt-1 text-sm text-slate-500">
-                Pick clients one at a time to assign to this crew member.
+                Pick which clients this crew member specializes in.
               </p>
 
               <div className="mt-4">
@@ -1270,37 +1391,35 @@ function SupCrewProfile() {
                 <select
                   id="client-to-add"
                   value=""
-                  onChange={(event) => selectClientToAdd(event.target.value)}
+                  onChange={(event) => addDraftSpecialty(event.target.value)}
                   className="mt-1.5 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
                 >
                   <option value="">Select a client…</option>
-                  {availableClientsToAdd
-                    .filter((client) => !clientsToAdd.includes(client))
-                    .map((client) => (
-                      <option key={client} value={client}>
-                        {client}
-                      </option>
-                    ))}
+                  {availableClientsToAdd.map((client) => (
+                    <option key={client} value={client}>
+                      {client}
+                    </option>
+                  ))}
                 </select>
 
                 <p className="mt-4 text-sm font-medium text-slate-700">
-                  Selected{clientsToAdd.length > 0 ? ` (${clientsToAdd.length})` : ""}:
+                  Selected{specialtyDraft.length > 0 ? ` (${specialtyDraft.length})` : ""}:
                 </p>
                 {/* Fixed height (~5 rows) so the modal doesn't grow with every
                     pick — beyond 5 selections the list scrolls in place. */}
                 <div className="mt-1.5 h-[190px] overflow-y-auto rounded-xl border border-slate-200">
-                  {clientsToAdd.length === 0 ? (
+                  {specialtyDraft.length === 0 ? (
                     <div className="flex h-full items-center justify-center px-3">
                       <p className="text-sm text-slate-400">No clients picked yet.</p>
                     </div>
                   ) : (
                     <div className="divide-y divide-slate-100">
-                      {clientsToAdd.map((client) => (
+                      {specialtyDraft.map((client) => (
                         <div key={client} className="flex items-center justify-between gap-3 px-3 py-2">
                           <span className="text-sm text-slate-900">{client}</span>
                           <button
                             type="button"
-                            onClick={() => unselectClientToAdd(client)}
+                            onClick={() => removeDraftSpecialty(client)}
                             aria-label={`Remove ${client} from selection`}
                             className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
                           >
@@ -1311,20 +1430,24 @@ function SupCrewProfile() {
                     </div>
                   )}
                 </div>
+
+                {specialtyError ? (
+                  <p className="mt-3 text-xs text-red-600">{specialtyError}</p>
+                ) : null}
               </div>
 
               <div className="mt-5 flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={closeAddModal}
+                  onClick={closeSpecialtyModal}
                   className="rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={saveAddModal}
-                  disabled={clientsToAdd.length === 0 || isSpecialtyBusy}
+                  onClick={saveSpecialtyModal}
+                  disabled={isSpecialtyBusy}
                   className="rounded-xl bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
                 >
                   {isSpecialtyBusy ? "Saving..." : "Save"}
@@ -1334,42 +1457,128 @@ function SupCrewProfile() {
           </div>
         )}
 
-        {clientPendingDelete && (
+        {/* Assign Truck & Helpers modal — same overlay/card styling as the
+            Client Specialties modal above. */}
+        {isAssignModalOpen && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="delete-specialty-title"
-            onClick={() => setClientPendingDelete(null)}
+            aria-labelledby="assign-crew-title"
+            onClick={closeAssignModal}
           >
             <div
-              className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
+              className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
               onClick={(event) => event.stopPropagation()}
             >
-              <h3 id="delete-specialty-title" className="text-base font-semibold text-slate-900">
-                Delete client specialty
+              <h3 id="assign-crew-title" className="text-base font-semibold text-slate-900">
+                Assign Truck &amp; Helpers
               </h3>
-              <p className="mt-1.5 text-sm text-slate-500">
-                Are you sure you want to delete <span className="font-medium text-slate-700">{clientPendingDelete}</span> from
-                this crew member?
+              <p className="mt-1 text-sm text-slate-500">
+                Set {crew.fullName}&apos;s default truck and helpers for new deliveries.
               </p>
 
-              <div className="mt-5 flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setClientPendingDelete(null)}
-                  className="rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              {/* Default truck */}
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-slate-700" htmlFor="assign-truck">
+                  Default Truck
+                </label>
+                <select
+                  id="assign-truck"
+                  value={draftTruckId}
+                  onChange={(event) => setDraftTruckId(event.target.value)}
+                  className="mt-1.5 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => confirmDeleteClient(clientPendingDelete)}
-                  disabled={isSpecialtyBusy}
-                  className="rounded-xl bg-red-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-300"
-                >
-                  {isSpecialtyBusy ? "Deleting..." : "Delete"}
-                </button>
+                  <option value="">No truck assigned</option>
+                  {ASSIGNABLE_TRUCKS.map((truck) => (
+                    <option key={truck.id} value={truck.id}>
+                      {truck.plateNumber} · {truck.truckType}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Default helpers — same "select to add" pattern as the
+                  Client Specialties modal, capped at MAX_DEFAULT_HELPERS. */}
+              <div className="mt-4">
+                <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700" htmlFor="assign-helper">
+                  <Users className="h-3.5 w-3.5 text-slate-400" />
+                  Default Helpers (up to {MAX_DEFAULT_HELPERS})
+                </label>
+
+                {draftHelperIds.length >= MAX_DEFAULT_HELPERS ? (
+                  <p className="mt-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                    Maximum of {MAX_DEFAULT_HELPERS} helpers selected. Remove one to add another.
+                  </p>
+                ) : (
+                  <select
+                    id="assign-helper"
+                    value=""
+                    onChange={(event) => addDraftHelper(event.target.value)}
+                    className="mt-1.5 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                  >
+                    <option value="">Select a helper…</option>
+                    {helperOptions
+                      .filter((helper) => !draftHelperIds.includes(helper.id))
+                      .map((helper) => (
+                        <option key={helper.id} value={helper.id}>
+                          {helper.fullName}
+                        </option>
+                      ))}
+                  </select>
+                )}
+
+                <div className="mt-2 divide-y divide-slate-100 rounded-xl border border-slate-200">
+                  {draftHelperIds.length === 0 ? (
+                    <p className="px-3 py-2.5 text-sm text-slate-400">No helpers picked yet.</p>
+                  ) : (
+                    draftHelperIds.map((helperId) => (
+                      <div key={helperId} className="flex items-center justify-between gap-3 px-3 py-2">
+                        <span className="text-sm text-slate-900">
+                          {helperNameById[helperId] || "Unknown helper"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeDraftHelper(helperId)}
+                          aria-label={`Remove ${helperNameById[helperId] || "helper"} from selection`}
+                          className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-center justify-between gap-2">
+                {hasAssignment ? (
+                  <button
+                    type="button"
+                    onClick={removeAssignment}
+                    className="rounded-xl px-3.5 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                  >
+                    Remove Assignment
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={closeAssignModal}
+                    className="rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveAssignment}
+                    className="rounded-xl bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+                  >
+                    Save
+                  </button>
+                </div>
               </div>
             </div>
           </div>
