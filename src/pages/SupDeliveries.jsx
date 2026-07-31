@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
-  Calendar,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -26,11 +25,19 @@ import {
   ChevronUp,
   Navigation,
   Map,
+  Camera,
+  Vibrate,
+  Volume2,
+  Coffee,
+  Timer,
+  Fuel,
+  AlertCircle,
 } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import SupLayout from '../layout/SupLayout.jsx'
+import { customer_deliveries, delivery_drivers, delivery_helpers, delivery_trucks, delivery_quotations, delivery_cancellations, delivery_monitoring, delivery_alert_monitoring, delivery_supervisor_data, completed_delivery_reports } from '../lib/mockDeliveriesData.js'
 
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -53,36 +60,6 @@ const endIcon = L.divIcon({
   iconAnchor: [12, 12],
 })
 
-const deliverySteps = [
-  'REQUEST_CREATED',
-  'QUOTATION_SENT',
-  'CREW_ASSIGNED',
-  'PICKUP',
-  'DELIVERED',
-]
-
-const statusByStep = {
-  FOR_REVIEW: 'REQUEST_CREATED',
-  QUOTED: 'QUOTATION_SENT',
-  COUNTER_OFFER: 'QUOTATION_SENT',
-  UPDATED_QUOTATION: 'QUOTATION_SENT',
-  APPROVED: 'CREW_ASSIGNED',
-  ASSIGNED: 'CREW_ASSIGNED',
-  FOR_PICKUP: 'PICKUP',
-  OUT_FOR_DELIVERY: 'PICKUP',
-  DELIVERED: 'DELIVERED',
-  COMPLETED: 'DELIVERED',
-  CANCELLED: 'REQUEST_CREATED',
-}
-
-const stepLabel = {
-  REQUEST_CREATED: 'Request Created',
-  QUOTATION_SENT: 'Quotation Sent',
-  CREW_ASSIGNED: 'Crew Assigned',
-  PICKUP: 'Pickup',
-  DELIVERED: 'Delivered',
-}
-
 const statusBadge = {
   FOR_REVIEW: 'bg-amber-100 text-amber-700',
   QUOTED: 'bg-sky-100 text-sky-700',
@@ -95,6 +72,12 @@ const statusBadge = {
   DELIVERED: 'bg-emerald-100 text-emerald-700',
   COMPLETED: 'bg-green-100 text-green-700',
   CANCELLED: 'bg-rose-100 text-rose-700',
+  DECLINED: 'bg-rose-100 text-rose-700',
+}
+
+const transitStatusLabel = {
+  FOR_PICKUP: 'PICKUP',
+  OUT_FOR_DELIVERY: 'DROPOFF',
 }
 
 function formatDateTime(dateStr, timeStr) {
@@ -140,10 +123,6 @@ function getTotalDistance(r) {
   const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
   return `${(dist * 2).toFixed(1)} km`
 }
-function getPriceRange(r) {
-  if (r.quotation?.amount) return `₱${r.quotation.amount.toLocaleString()}`
-  return '—'
-}
 function getTotalDays(r) {
   if (!r.pickupDate || !r.dropoffDate) return 1
   const d1 = new Date(r.pickupDate), d2 = new Date(r.dropoffDate)
@@ -167,6 +146,191 @@ function parseMoney(str) {
   return isNaN(num) ? 0 : num
 }
 
+function isDetailedBreakdown(quotation) {
+  return Boolean(quotation?.breakdown && !Array.isArray(quotation.breakdown) && quotation.breakdown.directExpenses)
+}
+
+function MoneyInput({ value, onValueChange, accent = 'blue' }) {
+  const accentClasses = {
+    blue: 'border-blue-200 focus:border-blue-500 focus:ring-blue-300',
+    amber: 'border-amber-200 focus:border-amber-500 focus:ring-amber-300',
+  }
+  const strip = (raw) => String(raw).replace(/[^0-9.]/g, '')
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => onValueChange(strip(e.target.value))}
+      onBlur={(e) => {
+        const clean = strip(e.target.value)
+        if (clean && !isNaN(parseFloat(clean))) {
+          onValueChange(parseFloat(clean).toLocaleString('en-US', { minimumFractionDigits: 2 }))
+        }
+      }}
+      className={`w-40 rounded-lg border px-3 py-2 text-sm text-right font-mono outline-none focus:ring-1 bg-white ${accentClasses[accent]}`}
+      placeholder="0.00"
+    />
+  )
+}
+
+function QuotationExpenseForm({
+  form,
+  onFormChange,
+  distanceKm,
+  distanceLabel,
+  isLargeTruckFlag,
+  directTotal,
+  indirectTotal,
+  operatingTotal,
+  income,
+  proposedRate,
+  onSubmit,
+  submitLabel,
+}) {
+  const fm = (v) => parseMoney(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const directExpenses = form.directExpenses
+  const indirectExpenses = form.indirectExpenses
+  const setField = (fieldPath, value) => {
+    onFormChange((p) => {
+      const next = { ...p }
+      const keys = fieldPath.split('.')
+      let cursor = next
+      for (let i = 0; i < keys.length - 1; i++) {
+        cursor[keys[i]] = { ...cursor[keys[i]] }
+        cursor = cursor[keys[i]]
+      }
+      cursor[keys[keys.length - 1]] = value
+      return next
+    })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border-2 border-blue-200 bg-blue-50/60 p-4">
+        <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-blue-800 mb-4">
+          <span className="h-3 w-3 rounded-full bg-blue-600" />
+          Direct Expenses
+        </h4>
+
+        <div className="flex items-center justify-between gap-3 py-2 border-b border-blue-100">
+          <span className="text-sm font-medium text-slate-700">Depreciation Expenses</span>
+          <MoneyInput value={directExpenses.depreciation} onValueChange={(v) => setField('directExpenses.depreciation', v)} />
+        </div>
+
+        <div className="flex items-center justify-between gap-3 py-2 border-b border-blue-100">
+          <span className="text-sm font-medium text-slate-700">Diesel Rate</span>
+          <MoneyInput value={directExpenses.dieselRate} onValueChange={(v) => setField('directExpenses.dieselRate', v)} />
+        </div>
+        <p className="text-sm text-blue-700 ml-1 mt-1 mb-2">
+          a. Total diesel expenses:{' '}
+          <span className="font-semibold">
+            ₱{(parseMoney(directExpenses.dieselRate) * distanceKm).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          </span>
+          <span className="text-blue-500 ml-1">
+            ({directExpenses.dieselRate || '0'} × {distanceLabel})
+          </span>
+        </p>
+
+        <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">Repairs and Maintenance</p>
+        <div className="flex items-center justify-between gap-3 py-1.5">
+          <span className="text-sm font-medium text-slate-700 pl-4">a. Batteries</span>
+          <MoneyInput value={directExpenses.repairsAndMaintenance.batteries} onValueChange={(v) => setField('directExpenses.repairsAndMaintenance.batteries', v)} />
+        </div>
+        <div className="flex items-center justify-between gap-3 py-1.5">
+          <span className="text-sm font-medium text-slate-700 pl-4">b. Tires</span>
+          <MoneyInput value={directExpenses.repairsAndMaintenance.tires} onValueChange={(v) => setField('directExpenses.repairsAndMaintenance.tires', v)} />
+        </div>
+
+        <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">Salaries and Wages</p>
+        <div className="flex items-center justify-between gap-3 py-1.5">
+          <span className="text-sm font-medium text-slate-700 pl-4">a. Driver</span>
+          <MoneyInput value={directExpenses.salariesAndWages.driver} onValueChange={(v) => setField('directExpenses.salariesAndWages.driver', v)} />
+        </div>
+        <div className="flex items-center justify-between gap-3 py-1.5">
+          <span className="text-sm font-medium text-slate-700 pl-4">b. Helper (1)</span>
+          <MoneyInput value={directExpenses.salariesAndWages.helper1} onValueChange={(v) => setField('directExpenses.salariesAndWages.helper1', v)} />
+        </div>
+        {isLargeTruckFlag && (
+          <div className="flex items-center justify-between gap-3 py-1.5">
+            <span className="text-sm font-medium text-slate-700 pl-4">c. Helper (2)</span>
+            <MoneyInput value={directExpenses.salariesAndWages.helper2} onValueChange={(v) => setField('directExpenses.salariesAndWages.helper2', v)} />
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3 py-1.5 mt-1">
+          <span className="text-sm font-medium text-slate-700">Trip Allowance</span>
+          <MoneyInput value={directExpenses.tripAllowance} onValueChange={(v) => setField('directExpenses.tripAllowance', v)} />
+        </div>
+        <div className="flex items-center justify-between gap-3 py-1.5">
+          <span className="text-sm font-medium text-slate-700">Lodging Allowance</span>
+          <MoneyInput value={directExpenses.lodgingAllowance} onValueChange={(v) => setField('directExpenses.lodgingAllowance', v)} />
+        </div>
+        <div className="flex items-center justify-between gap-3 py-1.5">
+          <span className="text-sm font-medium text-slate-700">Toll/Parking (Delivery Truck)</span>
+          <MoneyInput value={directExpenses.tollParking} onValueChange={(v) => setField('directExpenses.tollParking', v)} />
+        </div>
+
+        <div className="mt-3 flex items-center justify-between rounded-lg bg-blue-200/60 px-4 py-3">
+          <span className="text-sm font-bold text-blue-900">Total Direct Expenses</span>
+          <span className="text-base font-bold text-blue-900">₱{fm(directTotal)}</span>
+        </div>
+      </div>
+
+      <div className="rounded-xl border-2 border-amber-200 bg-amber-50/60 p-4">
+        <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-amber-800 mb-4">
+          <span className="h-3 w-3 rounded-full bg-amber-600" />
+          Indirect Expenses
+        </h4>
+
+        <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
+          <span className="text-sm font-medium text-slate-700">Administration Fees</span>
+          <MoneyInput accent="amber" value={indirectExpenses.adminFees} onValueChange={(v) => setField('indirectExpenses.adminFees', v)} />
+        </div>
+        <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
+          <span className="text-sm font-medium text-slate-700">Insurance (Vehicle)</span>
+          <MoneyInput accent="amber" value={indirectExpenses.insurance} onValueChange={(v) => setField('indirectExpenses.insurance', v)} />
+        </div>
+        <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
+          <span className="text-sm font-medium text-slate-700">Motor Vehicle Registration</span>
+          <MoneyInput accent="amber" value={indirectExpenses.motorVehicleReg} onValueChange={(v) => setField('indirectExpenses.motorVehicleReg', v)} />
+        </div>
+        <div className="flex items-center justify-between gap-3 py-2">
+          <span className="text-sm font-medium text-slate-700">Rental (Garage)</span>
+          <MoneyInput accent="amber" value={indirectExpenses.garageRental} onValueChange={(v) => setField('indirectExpenses.garageRental', v)} />
+        </div>
+
+        <div className="mt-3 flex items-center justify-between rounded-lg bg-amber-200/60 px-4 py-3">
+          <span className="text-sm font-bold text-amber-900">Total Indirect Expenses</span>
+          <span className="text-base font-bold text-amber-900">₱{fm(indirectTotal)}</span>
+        </div>
+      </div>
+
+      <div className="rounded-xl border-2 border-slate-300 bg-slate-100/70 p-4 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-slate-700">Total Operating Expenses</span>
+          <span className="text-base font-bold text-slate-900">₱{fm(operatingTotal)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-slate-700">Income (15%)</span>
+          <span className="text-base font-bold text-emerald-700">₱{fm(income)}</span>
+        </div>
+        <div className="flex items-center justify-between border-t-2 border-slate-300 pt-2">
+          <span className="text-sm font-bold text-slate-900 uppercase">Proposed Rate</span>
+          <span className="text-lg font-bold text-sky-700">₱{fm(proposedRate)}</span>
+        </div>
+      </div>
+
+      <button
+        onClick={onSubmit}
+        className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-sky-700 transition"
+      >
+        <Send className="h-4 w-4" />
+        {submitLabel}
+      </button>
+    </div>
+  )
+}
+
 const stageStatus = {
   FOR_REVIEW: 0,
   QUOTED: 1,
@@ -179,12 +343,100 @@ const stageStatus = {
   DELIVERED: 4,
   COMPLETED: 4,
   CANCELLED: -1,
+  DECLINED: -1,
 }
 
+/**
+ * ===== PROGRESS DETAILS — BACKEND GUIDE =====
+ *
+ * This card ("Progress Details") is the supervisor's view of a delivery
+ * request's lifecycle. It renders STAGES (review → quotation → crew
+ * assignment → transit → delivered) and each stage's SUBSTEPS.
+ *
+ * FRONT-END CONTRACT:
+ * 1. A substep only appears once it is DONE, i.e. once its `detail`
+ *    (a short timestamp/actor string like `· Jul 25, 2026 09:00` or
+ *    `by Supervisor · Jul 25, 2026 09:00`) is filled in. Steps that have
+ *    not happened yet are NOT shown. `detail: null` = not done.
+ * 2. A stage is "completed" when the request status is past its stage
+ *    index (see `stageStatus`), and "current" while it is the active one.
+ *
+ * STAGES → REQUIRED BACKEND DATA
+ * ------------------------------
+ * 1) review
+ *      - Request Received → done as soon as the request exists (uses
+ *        `request.createdAt`).
+ * 2) quotation
+ *      - Initial Quotation Sent           → done when a quotation exists
+ *                                           (`request.quotation`).
+ *      - Customer Quotation Bid Received  → done when the customer sends a
+ *                                           counter-offer (`request.customerWants`).
+ *      - Updated Quotation Submitted      → done when the supervisor submits
+ *                                           the revised quotation
+ *                                           (`request.updatedQuotation`).
+ *                                           NOTE: this IS the final quotation;
+ *                                           there is intentionally NO separate
+ *                                           "Final Quotation Sent" step.
+ *      - Quotation Approved / Quotation Declined
+ *                                         → added ONLY once the customer's
+ *                                           decision is recorded. "Approved"
+ *                                           when status reaches APPROVED (or
+ *                                           later); "Declined" when status is
+ *                                           DECLINED/CANCELLED. There is
+ *                                           intentionally NO "Customer Quotation
+ *                                           Approval Received" step — the
+ *                                           customer may decline, which leads to
+ *                                           a request cancellation.
+ *      - Proceed to Delivery / Request Cancelled
+ *                                         → terminal outcome of the quotation
+ *                                           stage. After approval the supervisor
+ *                                           must NEXT assign a delivery crew
+ *                                           (see stage 3), not jump to delivery.
+ * 3) assignment
+ *      - Delivery Crew has been Assigned  → done when `request.crew.driver`
+ *                                           exists and `request.assignedAt` is set.
+ * 4) transit
+ *      - Each leg (left dispatch / arrived at pickup / left pickup /
+ *        arrived at drop-off) is done when the backend records the truck
+ *        movement timestamp. Currently mock data leaves these unset, so they
+ *        correctly stay hidden until the backend provides the timestamps.
+ * 5) delivered
+ *      - Delivery Crew confirmed delivery → done when the crew confirms
+ *                                           delivery and a timestamp is recorded.
+ *
+ * BACKEND TO-DO / API CONTRACT:
+ * - Persist a timestamp (+ actor) for every milestone above and expose them on
+ *   the delivery request payload.
+ * - Map each `request.status` to the `stageStatus` index so the correct stage
+ *   is marked current/completed. Keep `stageStatus` and `statusBadge` in sync
+ *   when adding statuses (e.g. DECLINED).
+ * - Quotation outcome statuses: APPROVED (and later) → proceed to delivery;
+ *   DECLINED/CANCELLED → request cancelled.
+ */
 function buildProgressData(request) {
   const idx = stageStatus[request.status] ?? 0
   const registeredAt = request.createdAt
   const now = new Date().toLocaleString('en-PH', { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+
+  const isApproved = idx >= 2
+  const isDeclined = request.status === 'DECLINED' || request.status === 'CANCELLED'
+
+  const quotationSubsteps = [
+    { label: 'Initial Quotation Sent', detail: request.quotation ? `by Supervisor · ${registeredAt}` : null },
+    { label: 'Customer Quotation Bid Received', detail: request.customerWants ? `· ${registeredAt}` : null },
+    { label: 'Updated Quotation Submitted', detail: request.updatedQuotation ? `by Supervisor · ${registeredAt}` : null },
+  ]
+  if (isApproved) {
+    quotationSubsteps.push(
+      { label: 'Quotation Approved', detail: `by Customer · ${registeredAt}` },
+      { label: 'Proceed to Delivery', detail: `· ${registeredAt}` },
+    )
+  } else if (isDeclined) {
+    quotationSubsteps.push(
+      { label: 'Quotation Declined', detail: `by Customer · ${registeredAt}` },
+      { label: 'Request Cancelled', detail: `· ${registeredAt}` },
+    )
+  }
 
   const stages = [
     {
@@ -199,13 +451,7 @@ function buildProgressData(request) {
       key: 'quotation',
       label: 'Negotiating Quotation',
       completedLabel: 'Quotation Approved',
-      substeps: [
-        { label: 'Initial Quotation Sent', detail: request.quotation ? `by Supervisor · ${registeredAt}` : null },
-        { label: 'Customer Quotation Bid Received', detail: request.customerWants ? `· ${registeredAt}` : null, cancelPoint: false },
-        { label: 'Updated Quotation Submitted', detail: request.updatedQuotation ? `· ${registeredAt}` : null },
-        { label: 'Final Quotation Sent', detail: null },
-        { label: 'Customer Quotation Approval Received', detail: request.status !== 'QUOTED' && request.quotation ? `· ${registeredAt}` : null, cancelPoint: false },
-      ],
+      substeps: quotationSubsteps,
     },
     {
       key: 'assignment',
@@ -240,681 +486,151 @@ function buildProgressData(request) {
   }))
 }
 
-const mockRequests = [
-  {
-    id: 'DEL-001',
-    customerName: 'Juan Dela Cruz',
-    companyName: '7-Eleven',
-    pickupAddress: '140 M. Suarez Avenue, Brgy. San Miguel, Pasig, Metro Manila',
-    deliveryAddress: '123 Main Street, Brgy. Central, Quezon City, Metro Manila',
-    itemType: 'Dry Food',
-    pickupDate: '2026-07-25',
-    pickupTime: '09:00',
-    dropoffDate: '2026-07-25',
-    dropoffTime: '12:00',
-    status: 'FOR_REVIEW',
-    createdAt: '2026-07-22 10:30',
-    destinationCoords: { lat: 14.6465, lng: 121.0521 },
-    currentLocation: { lat: 14.593, lng: 121.032 },
-    quotation: null,
-    crew: {
-      driver: { id: 'DRV-001', name: 'Carlos Mendoza', phone: '+63 912 311 1222', rating: 4.8, trips: 126, avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80' },
-      helpers: [{ id: 'HLP-001', name: 'Pedro Garcia', avatarUrl: 'https://images.unsplash.com/photo-1541535881962-3bb380b08458?auto=format&fit=crop&w=180&q=80' }],
-      truck: { plateNumber: 'ABC 1234', truckType: 'AUV', capacity: '5.0 tons' },
-    },
-  },
-  {
-    id: 'DEL-002',
-    customerName: 'Maria Santos',
-    companyName: 'Arla',
-    pickupAddress: '456 Industrial Complex, Brgy. San Antonio, Makati',
-    deliveryAddress: '789 Residential Area, Brgy. Poblacion, Muntinlupa',
-    itemType: 'Frozen Goods',
-    pickupDate: '2026-07-25',
-    pickupTime: '14:00',
-    dropoffDate: '2026-07-25',
-    dropoffTime: '17:00',
-    status: 'APPROVED',
-    createdAt: '2026-07-21 08:00',
-    destinationCoords: { lat: 14.3834, lng: 121.0419 },
-    currentLocation: { lat: 14.5172, lng: 121.0198 },
-    quotation: { amount: 3500, breakdown: [{ label: 'Base Delivery Fee', amount: 1200 }, { label: 'Distance Fee', amount: 710 }, { label: 'Truck Type Surcharge', amount: 500 }, { label: 'Fuel Surcharge', amount: 400 }, { label: 'Loading/Unloading Fee', amount: 690 }], notes: 'Includes cold chain handling', validUntil: '2026-07-24' },
-    crew: null,
-  },
-  {
-    id: 'DEL-003',
-    customerName: 'Carlo Gomez',
-    companyName: 'Jollibee',
-    pickupAddress: '321 Warehouse District, Brgy. Valenzuela, Caloocan',
-    deliveryAddress: '654 Business Park, Brgy. Bicutan, Parañaque',
-    itemType: 'Fast Food',
-    pickupDate: '2026-07-24',
-    pickupTime: '07:00',
-    dropoffDate: '2026-07-24',
-    dropoffTime: '10:00',
-    status: 'QUOTED',
-    createdAt: '2026-07-20 14:00',
-    destinationCoords: { lat: 14.4934, lng: 121.0405 },
-    currentLocation: { lat: 14.5264, lng: 121.0108 },
-    quotation: {
-      amount: 14835,
-      breakdown: {
-        directExpenses: {
-          depreciation: '1,500.00',
-          dieselRate: '58.00',
-          repairsAndMaintenance: { batteries: '2,000.00', tires: '3,500.00' },
-          salariesAndWages: { driver: '800.00', helper1: '500.00', helper2: '400.00' },
-          tripAllowance: '350.00',
-          lodgingAllowance: '250.00',
-          tollParking: '200.00',
-        },
-        indirectExpenses: {
-          adminFees: '500.00',
-          insurance: '1,200.00',
-          motorVehicleReg: '800.00',
-          garageRental: '1,000.00',
-        },
-        calculated: {
-          distanceKm: 24.5,
-          totalDays: 1,
-          dieselTotal: 1421,
-          directTotal: 9400,
-          indirectTotal: 3500,
-          operatingTotal: 12900,
-          income: 1935,
-          proposedRate: 14835,
-        },
-      },
-    },
-    crew: null,
-    customerWants: 4800,
-  },
-  {
-    id: 'DEL-004',
-    customerName: 'Ana Ramirez',
-    companyName: 'McDonald\'s',
-    pickupAddress: 'Pasig Hub, Brgy. San Joaquin, Pasig',
-    deliveryAddress: 'BGC Branch, Brgy. Fort Bonifacio, Taguig',
-    itemType: 'Frozen Goods',
-    pickupDate: '2026-07-20',
-    pickupTime: '08:30',
-    dropoffDate: '2026-07-20',
-    dropoffTime: '12:00',
-    status: 'COMPLETED',
-    createdAt: '2026-07-18 10:00',
-    destinationCoords: { lat: 14.5506, lng: 121.0471 },
-    currentLocation: { lat: 14.5506, lng: 121.0471 },
-    quotation: { amount: 4200, breakdown: [{ label: 'Base Delivery Fee', amount: 1500 }, { label: 'Distance Fee', amount: 800 }, { label: 'Truck Type Surcharge', amount: 600 }, { label: 'Fuel Surcharge', amount: 500 }, { label: 'Loading/Unloading Fee', amount: 800 }], notes: 'Standard delivery', validUntil: '2026-07-22' },
-    crew: {
-      driver: { id: 'DRV-001', name: 'Carlos Mendoza', phone: '+63 912 311 1222', rating: 4.8, trips: 126, avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80' },
-      helpers: [{ id: 'HLP-001', name: 'Pedro Garcia', avatarUrl: 'https://images.unsplash.com/photo-1541535881962-3bb380b08458?auto=format&fit=crop&w=180&q=80' }],
-      truck: { plateNumber: 'ABC 1234', truckType: 'AUV', capacity: '1.2 tons' },
-    },
-    assignedAt: 'Jul 19, 2026, 08:00 AM',
-  },
-  {
-    id: 'DEL-005',
-    customerName: 'Roberto Dimagiba',
-    companyName: 'Chowking',
-    pickupAddress: 'Cavite Depot, Brgy. San Antonio, Cavite',
-    deliveryAddress: 'Alabang Branch, Brgy. Alabang, Muntinlupa',
-    itemType: 'Dry Food',
-    pickupDate: '2026-07-19',
-    pickupTime: '06:00',
-    dropoffDate: '2026-07-19',
-    dropoffTime: '09:00',
-    status: 'COMPLETED',
-    createdAt: '2026-07-17 09:00',
-    destinationCoords: { lat: 14.4201, lng: 121.0312 },
-    currentLocation: { lat: 14.4201, lng: 121.0312 },
-    quotation: { amount: 3800, breakdown: [{ label: 'Base Delivery Fee', amount: 1200 }, { label: 'Distance Fee', amount: 600 }, { label: 'Truck Type Surcharge', amount: 500 }, { label: 'Fuel Surcharge', amount: 400 }, { label: 'Loading/Unloading Fee', amount: 1100 }], notes: 'Early morning delivery', validUntil: '2026-07-21' },
-    crew: {
-      driver: { id: 'DRV-002', name: 'Miguel Santos', phone: '+63 917 832 4100', rating: 4.7, trips: 104, avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=200&q=80' },
-      helpers: [{ id: 'HLP-002', name: 'Luis Torres', avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=180&q=80' }],
-      truck: { plateNumber: 'XYZ 5678', truckType: '2T_REF', capacity: '2.0 tons' },
-    },
-    assignedAt: 'Jul 18, 2026, 10:00 AM',
-  },
-  {
-    id: 'DEL-006',
-    customerName: 'Lisa Mendiola',
-    companyName: 'KFC',
-    pickupAddress: 'Manila Warehouse, Brgy. Santa Cruz, Manila',
-    deliveryAddress: 'Ortigas Branch, Brgy. San Antonio, Pasig',
-    itemType: 'Fast Food',
-    pickupDate: '2026-07-17',
-    pickupTime: '11:00',
-    dropoffDate: '2026-07-17',
-    dropoffTime: '14:00',
-    status: 'CANCELLED',
-    createdAt: '2026-07-15 13:00',
-    destinationCoords: { lat: 14.5864, lng: 121.0605 },
-    currentLocation: { lat: 14.5864, lng: 121.0605 },
-    quotation: { amount: 2900, breakdown: [{ label: 'Base Delivery Fee', amount: 1000 }, { label: 'Distance Fee', amount: 500 }, { label: 'Truck Type Surcharge', amount: 400 }, { label: 'Fuel Surcharge', amount: 300 }, { label: 'Loading/Unloading Fee', amount: 700 }], notes: 'Standard rate', validUntil: '2026-07-19' },
-    crew: null,
-  },
-  {
-    id: 'DEL-007',
-    customerName: 'Pedro Gonzales',
-    companyName: 'Shell Depot',
-    pickupAddress: 'Shell Gas Complex, Brgy. Tabang, Guiguinto, Bulacan',
-    deliveryAddress: 'Balagtas Station, Brgy. Poblacion, Balagtas, Bulacan',
-    itemType: 'Dry Food',
-    pickupDate: '2026-07-28',
-    pickupTime: '08:00',
-    dropoffDate: '2026-07-28',
-    dropoffTime: '11:00',
-    status: 'FOR_REVIEW',
-    createdAt: '2026-07-25 09:00',
-    destinationCoords: { lat: 14.8145, lng: 120.9056 },
-    currentLocation: { lat: 14.8205, lng: 120.8950 },
-    quotation: null,
-    crew: null,
-  },
-  {
-    id: 'DEL-008',
-    customerName: 'Sofia Reyes',
-    companyName: 'SM Appliance Center',
-    pickupAddress: 'SM Warehouse, Brgy. San Jose, San Fernando, Pampanga',
-    deliveryAddress: 'SM Clark, Brgy. Balibago, Angeles City, Pampanga',
-    itemType: 'Dry Food',
-    pickupDate: '2026-07-28',
-    pickupTime: '10:00',
-    dropoffDate: '2026-07-28',
-    dropoffTime: '13:00',
-    status: 'FOR_REVIEW',
-    createdAt: '2026-07-25 11:30',
-    destinationCoords: { lat: 15.1628, lng: 120.5897 },
-    currentLocation: { lat: 15.1752, lng: 120.5907 },
-    quotation: null,
-    crew: null,
-  },
+const quotationsByDelivery = {}
+for (const q of delivery_quotations) {
+  if (!quotationsByDelivery[q.delivery_id]) quotationsByDelivery[q.delivery_id] = {}
+  quotationsByDelivery[q.delivery_id][q.quotation_type] = q
+}
 
+const cancellationsByDelivery = {}
+for (const c of delivery_cancellations) {
+  cancellationsByDelivery[c.delivery_id] = {
+    cancelledAt: c.cancelled_at,
+    cancelledBy: c.cancelled_by,
+    cancelledFromStatus: c.cancelled_from_status,
+    cancellationReason: c.cancellation_reason,
+  }
+}
 
-  {
-    id: 'DEL-011',
-    customerName: 'Ramon Bautista',
-    companyName: 'Pizza Hut',
-    pickupAddress: 'Pizza Hut Commissary, Brgy. San Antonio, Makati',
-    deliveryAddress: 'Pizza Hut Katipunan, Brgy. Loyola Heights, Quezon City',
-    itemType: 'Fast Food',
-    pickupDate: '2026-07-27',
-    pickupTime: '09:00',
-    dropoffDate: '2026-07-27',
-    dropoffTime: '12:00',
-    status: 'COUNTER_OFFER',
-    createdAt: '2026-07-24 08:15',
-    destinationCoords: { lat: 14.6357, lng: 121.0747 },
-    currentLocation: { lat: 14.6398, lng: 121.0668 },
-    quotation: {
-      amount: 8500,
-      breakdown: {
-        directExpenses: {
-          depreciation: '800.00',
-          dieselRate: '55.00',
-          repairsAndMaintenance: { batteries: '1,000.00', tires: '1,500.00' },
-          salariesAndWages: { driver: '600.00', helper1: '400.00', helper2: '' },
-          tripAllowance: '250.00',
-          lodgingAllowance: '150.00',
-          tollParking: '100.00',
-        },
-        indirectExpenses: {
-          adminFees: '300.00',
-          insurance: '800.00',
-          motorVehicleReg: '500.00',
-          garageRental: '600.00',
-        },
-        calculated: {
-          distanceKm: 18.5,
-          totalDays: 1,
-          dieselTotal: 1017.5,
-          directTotal: 5567.5,
-          indirectTotal: 2200,
-          operatingTotal: 7767.5,
-          income: 1165.125,
-          proposedRate: 8932.625,
-        },
-      },
-    },
-    crew: null,
-    customerWants: 12000,
-  },
+const mockRequests = customer_deliveries.map((row) => {
+  const qtns = quotationsByDelivery[row.id] || {}
+  return {
+    id: row.id,
+    customerName: row.customer_name,
+    companyName: row.company_name,
+    itemType: row.item_type,
+    otherItemType: row.other_item_type,
+    truckType: row.truck_type,
+    cargoWeight: row.cargo_weight,
+    pickupDate: row.pickup_date,
+    pickupTime: row.pickup_time,
+    dropoffDate: row.dropoff_date,
+    dropoffTime: row.dropoff_time,
+    pickupAddress: row.pickup_location,
+    deliveryAddress: row.dropoff_location,
+    budgetMin: row.budget_min,
+    budgetMax: row.budget_max,
+    notes: row.notes,
+    status: row.status,
+    createdAt: row.created_at,
+    quotation: qtns.initial ? { ...qtns.initial, breakdown: qtns.initial.breakdown, amount: qtns.initial.amount, notes: qtns.initial.notes, validUntil: qtns.initial.valid_until } : null,
+    updatedQuotation: qtns.updated ? { ...qtns.updated, breakdown: qtns.updated.breakdown, amount: qtns.updated.amount, notes: qtns.updated.notes, validUntil: qtns.updated.valid_until } : null,
+    approvedAmount: row.approved_amount,
+    cancellation: cancellationsByDelivery[row.id] || null,
+    ...delivery_supervisor_data[row.id],
+  }
+})
+const mockDrivers = delivery_drivers.map((d) => ({
+  id: d.id,
+  name: d.name,
+  status: d.status,
+  phone: d.phone,
+  rating: d.rating,
+  trips: d.trips,
+  defaultHelperIds: d.default_helper_ids,
+}))
 
+const mockHelpers = delivery_helpers.map((h) => ({
+  id: h.id,
+  name: h.name,
+  status: h.status,
+}))
 
+const mockTrucks = delivery_trucks.map((t) => ({
+  plateNumber: t.plate_number,
+  truckType: t.truck_type,
+  status: t.status,
+  capacity: t.capacity,
+  commodityType: t.commodity_type,
+  defaultDriverId: t.default_driver_id,
+}))
 
-  {
-    id: 'DEL-015',
-    customerName: 'Mark Anthony Hernandez',
-    companyName: 'Puregold',
-    pickupAddress: 'Puregold Warehouse, Brgy. Tambo, Parañaque',
-    deliveryAddress: 'Puregold Sucat, Brgy. San Dionisio, Parañaque',
-    itemType: 'Frozen Goods',
-    pickupDate: '2026-07-31',
-    pickupTime: '08:00',
-    dropoffDate: '2026-07-31',
-    dropoffTime: '12:00',
-    status: 'APPROVED',
-    createdAt: '2026-07-28 09:20',
-    destinationCoords: { lat: 14.4716, lng: 121.0178 },
-    currentLocation: { lat: 14.4900, lng: 121.0100 },
-    quotation: { amount: 4100, breakdown: [{ label: 'Base Delivery Fee', amount: 1400 }, { label: 'Distance Fee', amount: 700 }, { label: 'Truck Type Surcharge', amount: 550 }, { label: 'Fuel Surcharge', amount: 450 }, { label: 'Loading/Unloading Fee', amount: 1000 }], notes: 'Includes cold storage handling', validUntil: '2026-07-30' },
-    crew: null,
-  },
+const monitoringByDelivery = delivery_monitoring.reduce((map, row) => {
+  map[row.delivery_id] = {
+    deliveryId: row.delivery_id,
+    driver: mockDrivers.find((d) => d.id === row.driver_id) || null,
+    helpers: (row.helper_ids || []).map((id) => mockHelpers.find((h) => h.id === id)).filter(Boolean),
+    truck: mockTrucks.find((t) => t.plateNumber === row.truck_plate_number) || null,
+    currentLocation: { lat: row.current_lat, lng: row.current_lng },
+    speedKmh: row.speed_kmh,
+    lastUpdate: row.last_update,
+    status: row.status,
+  }
+  return map
+}, {})
 
-  {
-    id: 'DEL-017',
-    customerName: 'Emilio Jacinto',
-    companyName: 'Petron Corporation',
-    pickupAddress: 'Petron Depot, Brgy. San Roque, Marikina',
-    deliveryAddress: 'Petron Gas Station EDSA, Brgy. San Lorenzo, Makati',
-    itemType: 'Dry Food',
-    pickupDate: '2026-08-01',
-    pickupTime: '06:00',
-    dropoffDate: '2026-08-01',
-    dropoffTime: '09:00',
-    status: 'APPROVED',
-    createdAt: '2026-07-29 08:30',
-    destinationCoords: { lat: 14.5547, lng: 121.0239 },
-    currentLocation: { lat: 14.5700, lng: 121.0150 },
-    quotation: { amount: 3600, breakdown: [{ label: 'Base Delivery Fee', amount: 1200 }, { label: 'Distance Fee', amount: 650 }, { label: 'Truck Type Surcharge', amount: 500 }, { label: 'Fuel Surcharge', amount: 350 }, { label: 'Loading/Unloading Fee', amount: 900 }], notes: 'Early morning delivery', validUntil: '2026-07-31' },
-    crew: null,
-  },
-  {
-    id: 'DEL-018',
-    customerName: 'Lorna Santiago',
-    companyName: 'Goldilocks',
-    pickupAddress: 'Goldilocks Commissary, Brgy. Pinyahan, Quezon City',
-    deliveryAddress: 'Goldilocks SM Dasma, Brgy. Paliparan III, Dasmariñas, Cavite',
-    itemType: 'Frozen Goods',
-    pickupDate: '2026-07-26',
-    pickupTime: '04:00',
-    dropoffDate: '2026-07-26',
-    dropoffTime: '08:00',
-    status: 'COMPLETED',
-    createdAt: '2026-07-23 14:00',
-    destinationCoords: { lat: 14.3084, lng: 120.9633 },
-    currentLocation: { lat: 14.3084, lng: 120.9633 },
-    quotation: { amount: 4800, breakdown: [{ label: 'Base Delivery Fee', amount: 1600 }, { label: 'Distance Fee', amount: 1000 }, { label: 'Truck Type Surcharge', amount: 700 }, { label: 'Fuel Surcharge', amount: 500 }, { label: 'Loading/Unloading Fee', amount: 1000 }], notes: 'Long distance delivery with refrigeration', validUntil: '2026-07-25' },
-    crew: {
-      driver: { id: 'DRV-003', name: 'Ricardo Lopez', phone: '+63 919 553 1170', rating: 4.9, trips: 168, avatarUrl: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&w=200&q=80' },
-      helpers: [{ id: 'HLP-003', name: 'Rico Aquino', avatarUrl: 'https://images.unsplash.com/photo-1463453091185-61582044d556?auto=format&fit=crop&w=180&q=80' }],
-      truck: { plateNumber: 'DEF 9012', truckType: 'L300', capacity: '1.0 ton' },
-    },
-    assignedAt: 'Jul 24, 2026, 09:00 AM',
-  },
-  {
-    id: 'DEL-019',
-    customerName: 'Nestor Cabrera',
-    companyName: 'Mini Stop',
-    pickupAddress: 'Mini Stop Warehouse, Brgy. San Isidro, Cainta, Rizal',
-    deliveryAddress: 'Mini Stop Angono, Brgy. San Vicente, Angono, Rizal',
-    itemType: 'Dry Food',
-    pickupDate: '2026-07-28',
-    pickupTime: '11:00',
-    dropoffDate: '2026-07-28',
-    dropoffTime: '14:00',
-    status: 'QUOTED',
-    createdAt: '2026-07-26 11:00',
-    destinationCoords: { lat: 14.5261, lng: 121.1536 },
-    currentLocation: { lat: 14.5400, lng: 121.1400 },
-    quotation: {
-      amount: 6780,
-      breakdown: {
-        directExpenses: {
-          depreciation: '700.00',
-          dieselRate: '52.00',
-          repairsAndMaintenance: { batteries: '800.00', tires: '1,200.00' },
-          salariesAndWages: { driver: '500.00', helper1: '350.00', helper2: '' },
-          tripAllowance: '200.00',
-          lodgingAllowance: '100.00',
-          tollParking: '80.00',
-        },
-        indirectExpenses: {
-          adminFees: '250.00',
-          insurance: '600.00',
-          motorVehicleReg: '400.00',
-          garageRental: '500.00',
-        },
-        calculated: {
-          distanceKm: 15.2,
-          totalDays: 1,
-          dieselTotal: 790.4,
-          directTotal: 4820.4,
-          indirectTotal: 1750,
-          operatingTotal: 6570.4,
-          income: 985.56,
-          proposedRate: 7555.96,
-        },
-      },
-    },
-    crew: null,
-  },
-  {
-    id: 'DEL-020',
-    customerName: 'Catherine De Leon',
-    companyName: 'Army Navy',
-    pickupAddress: 'Army Navy Commissary, Brgy. Bel-Air, Makati',
-    deliveryAddress: 'Army Navy BGC, Brgy. Fort Bonifacio, Taguig',
-    itemType: 'Fast Food',
-    pickupDate: '2026-07-29',
-    pickupTime: '07:00',
-    dropoffDate: '2026-07-29',
-    dropoffTime: '10:00',
-    status: 'APPROVED',
-    createdAt: '2026-07-26 15:00',
-    destinationCoords: { lat: 14.5521, lng: 121.0528 },
-    currentLocation: { lat: 14.5600, lng: 121.0450 },
-    quotation: { amount: 3000, breakdown: [{ label: 'Base Delivery Fee', amount: 1000 }, { label: 'Distance Fee', amount: 550 }, { label: 'Truck Type Surcharge', amount: 400 }, { label: 'Fuel Surcharge', amount: 350 }, { label: 'Loading/Unloading Fee', amount: 700 }], notes: 'Weekday delivery', validUntil: '2026-07-30' },
-    crew: null,
-  },
+const alertsByDelivery = delivery_alert_monitoring.reduce((map, row) => {
+  map[row.delivery_id] = {
+    deliveryId: row.delivery_id,
+    cameraStatus: row.camera_status,
+    eyeDetection: row.eye_detection,
+    drowsinessLevel: row.drowsiness_level,
+    prolongedEyeClosure: row.prolonged_eye_closure,
+    repeatedEyeClosure: row.repeated_eye_closure,
+    yawnCount: row.yawn_count,
+    eyeDetectionFailures: row.eye_detection_failures,
+    avgClosureDurationMs: row.avg_closure_duration_ms,
+    seatVibration: row.seat_vibration,
+    audioAlert: row.audio_alert,
+    lastAlert: row.last_alert,
+    lastAlertAt: row.last_alert_at,
+    drivingHours: row.driving_hours,
+    drivingDistanceKm: row.driving_distance_km,
+    recommendedRestStop: row.recommended_rest_stop,
+    restStopDistanceKm: row.rest_stop_distance_km,
+    alertHistory: row.alert_history || [],
+  }
+  return map
+}, {})
 
+const DROWSINESS_TONES = {
+  LOW: { box: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200', badge: 'bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500' },
+  MODERATE: { box: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200', badge: 'bg-amber-100 text-amber-700', dot: 'bg-amber-500' },
+  HIGH: { box: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200', badge: 'bg-red-100 text-red-700', dot: 'bg-red-500' },
+}
 
+const ALERT_SEVERITY_DOTS = {
+  INFO: 'bg-sky-400',
+  WARNING: 'bg-amber-400',
+  CRITICAL: 'bg-rose-500',
+}
 
-  {
-    id: 'DEL-024',
-    customerName: 'Helen Reyes',
-    companyName: 'Puregold',
-    pickupAddress: 'Puregold Warehouse, Brgy. San Bartolome, Novaliches, Quezon City',
-    deliveryAddress: 'Puregold Sucat Branch, Brgy. San Dionisio, Parañaque',
-    itemType: 'Dry Food',
-    pickupDate: '2026-07-26',
-    pickupTime: '09:00',
-    dropoffDate: '2026-07-26',
-    dropoffTime: '14:00',
-    status: 'FOR_PICKUP',
-    createdAt: '2026-07-23 11:00',
-    destinationCoords: { lat: 14.4745, lng: 121.0254 },
-    currentLocation: { lat: 14.6575, lng: 121.0254 },
-    quotation: { amount: 4800, breakdown: [{ label: 'Base Delivery Fee', amount: 1800 }, { label: 'Distance Fee', amount: 900 }, { label: 'Truck Type Surcharge', amount: 600 }, { label: 'Fuel Surcharge', amount: 500 }, { label: 'Loading/Unloading Fee', amount: 1000 }], notes: 'Includes Saturday surcharge', validUntil: '2026-07-28' },
-    crew: {
-      driver: { id: 'DRV-003', name: 'Antonio Flores', phone: '+63 915 789 0123', rating: 4.6, trips: 89, avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80' },
-      helpers: [{ id: 'HLP-003', name: 'Jose Rizal', avatarUrl: 'https://images.unsplash.com/photo-1541535881962-3bb380b08458?auto=format&fit=crop&w=180&q=80' }],
-      truck: { plateNumber: 'DEF 5678', truckType: '4T_DRY', capacity: '4.0 tons' },
-    },
-    assignedAt: 'Jul 25, 2026, 10:00 AM',
-  },
-  {
-    id: 'DEL-025',
-    customerName: 'Danny Chua',
-    companyName: 'San Miguel Corporation',
-    pickupAddress: 'SMC Plant, Brgy. Bagbaguin, Meycauayan, Bulacan',
-    deliveryAddress: 'SMC Depot, Brgy. Poblacion, Valenzuela City',
-    itemType: 'Beverages',
-    pickupDate: '2026-07-26',
-    pickupTime: '06:00',
-    dropoffDate: '2026-07-26',
-    dropoffTime: '11:00',
-    status: 'OUT_FOR_DELIVERY',
-    createdAt: '2026-07-24 09:00',
-    destinationCoords: { lat: 14.6864, lng: 120.9663 },
-    currentLocation: { lat: 14.6850, lng: 120.9700 },
-    quotation: { amount: 6200, breakdown: [{ label: 'Base Delivery Fee', amount: 2000 }, { label: 'Distance Fee', amount: 1100 }, { label: 'Truck Type Surcharge', amount: 800 }, { label: 'Fuel Surcharge', amount: 700 }, { label: 'Loading/Unloading Fee', amount: 1600 }], notes: 'Bulk delivery — palletised', validUntil: '2026-07-27' },
-    crew: {
-      driver: { id: 'DRV-004', name: 'Ramon Bautista', phone: '+63 918 456 7890', rating: 4.9, trips: 215, avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80' },
-      helpers: [{ id: 'HLP-004', name: 'Eduardo Cruz', avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=180&q=80' }],
-      truck: { plateNumber: 'GHI 9012', truckType: '6T_DRY', capacity: '6.0 tons' },
-    },
-    assignedAt: 'Jul 25, 2026, 02:00 PM',
-  },
-  {
-    id: 'DEL-026',
-    customerName: 'Lorna Perez',
-    companyName: 'National Book Store',
-    pickupAddress: 'NBS Warehouse, Brgy. San Rafael, Cubao, Quezon City',
-    deliveryAddress: 'NBS SM North EDSA Branch, Brgy. Bagong Pag-asa, Quezon City',
-    itemType: 'School Supplies',
-    pickupDate: '2026-07-26',
-    pickupTime: '07:30',
-    dropoffDate: '2026-07-26',
-    dropoffTime: '12:00',
-    status: 'DELIVERED',
-    createdAt: '2026-07-22 14:00',
-    destinationCoords: { lat: 14.6570, lng: 121.0300 },
-    currentLocation: { lat: 14.6570, lng: 121.0300 },
-    quotation: { amount: 3200, breakdown: [{ label: 'Base Delivery Fee', amount: 1200 }, { label: 'Distance Fee', amount: 600 }, { label: 'Truck Type Surcharge', amount: 400 }, { label: 'Fuel Surcharge', amount: 300 }, { label: 'Loading/Unloading Fee', amount: 700 }], notes: 'Light cargo — multiple boxes', validUntil: '2026-07-25' },
-    crew: {
-      driver: { id: 'DRV-005', name: 'Felipe Gonzaga', phone: '+63 920 111 2233', rating: 4.5, trips: 67, avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=200&q=80' },
-      helpers: [{ id: 'HLP-005', name: 'Ricky Santos', avatarUrl: 'https://images.unsplash.com/photo-1541535881962-3bb380b08458?auto=format&fit=crop&w=180&q=80' }],
-      truck: { plateNumber: 'JKL 3456', truckType: 'L300', capacity: '1.5 tons' },
-    },
-    assignedAt: 'Jul 24, 2026, 09:00 AM',
-  },
-  {
-    id: 'DEL-040',
-    customerName: 'Antonio Bautista',
-    companyName: 'LBC Express',
-    pickupAddress: 'LBC Main Hub, Brgy. San Nicolas, Pasig',
-    deliveryAddress: 'LBC Branch, Brgy. Poblacion, San Pablo, Laguna',
-    itemType: 'Dry Food',
-    pickupDate: '2026-08-05',
-    pickupTime: '08:00',
-    dropoffDate: '2026-08-06',
-    dropoffTime: '12:00',
-    status: 'COUNTER_OFFER',
-    createdAt: '2026-08-01 10:30',
-    destinationCoords: { lat: 14.3587, lng: 121.0789 },
-    currentLocation: { lat: 14.5600, lng: 121.0600 },
-    quotation: {
-      amount: 18500,
-      breakdown: {
-        directExpenses: {
-          depreciation: '2,000.00',
-          dieselRate: '62.00',
-          repairsAndMaintenance: { batteries: '2,500.00', tires: '4,000.00' },
-          salariesAndWages: { driver: '1,000.00', helper1: '600.00', helper2: '500.00' },
-          tripAllowance: '400.00',
-          lodgingAllowance: '300.00',
-          tollParking: '250.00',
-        },
-        indirectExpenses: {
-          adminFees: '600.00',
-          insurance: '1,500.00',
-          motorVehicleReg: '900.00',
-          garageRental: '1,200.00',
-        },
-        calculated: {
-          distanceKm: 72.3,
-          totalDays: 2,
-          dieselTotal: 4482.6,
-          directTotal: 13932.6,
-          indirectTotal: 4200,
-          operatingTotal: 18132.6,
-          income: 2719.89,
-          proposedRate: 20852.49,
-        },
-      },
-    },
-    customerWants: 16000,
-    crew: null,
-  },
-  {
-    id: 'DEL-041',
-    customerName: 'Marlon Torres',
-    companyName: 'DHL Express',
-    pickupAddress: 'DHL Hub, Brgy. San Martin, Parañaque',
-    deliveryAddress: 'DHL Branch, Brgy. Poblacion, Lipa, Batangas',
-    itemType: 'Dry Food',
-    pickupDate: '2026-08-10',
-    pickupTime: '06:00',
-    dropoffDate: '2026-08-11',
-    dropoffTime: '14:00',
-    status: 'UPDATED_QUOTATION',
-    createdAt: '2026-08-05 09:00',
-    destinationCoords: { lat: 13.9418, lng: 121.1624 },
-    currentLocation: { lat: 14.5100, lng: 121.0000 },
-    quotation: {
-      amount: 12500,
-      breakdown: {
-        directExpenses: {
-          depreciation: '1,200.00',
-          dieselRate: '55.00',
-          repairsAndMaintenance: { batteries: '1,800.00', tires: '2,500.00' },
-          salariesAndWages: { driver: '700.00', helper1: '450.00', helper2: '' },
-          tripAllowance: '300.00',
-          lodgingAllowance: '200.00',
-          tollParking: '150.00',
-        },
-        indirectExpenses: {
-          adminFees: '400.00',
-          insurance: '1,000.00',
-          motorVehicleReg: '600.00',
-          garageRental: '800.00',
-        },
-        calculated: {
-          distanceKm: 85.6,
-          totalDays: 2,
-          dieselTotal: 4708,
-          directTotal: 8470,
-          indirectTotal: 2800,
-          operatingTotal: 11270,
-          income: 1690.5,
-          proposedRate: 12960.5,
-        },
-      },
-    },
-    customerWants: 10000,
-    updatedQuotation: {
-      amount: 11000,
-      breakdown: {
-        directExpenses: {
-          depreciation: '1,000.00',
-          dieselRate: '55.00',
-          repairsAndMaintenance: { batteries: '1,500.00', tires: '2,000.00' },
-          salariesAndWages: { driver: '600.00', helper1: '400.00', helper2: '' },
-          tripAllowance: '250.00',
-          lodgingAllowance: '150.00',
-          tollParking: '100.00',
-        },
-        indirectExpenses: {
-          adminFees: '350.00',
-          insurance: '800.00',
-          motorVehicleReg: '500.00',
-          garageRental: '600.00',
-        },
-        calculated: {
-          distanceKm: 85.6,
-          totalDays: 2,
-          dieselTotal: 4708,
-          directTotal: 7290,
-          indirectTotal: 2250,
-          operatingTotal: 9540,
-          income: 1431,
-          proposedRate: 10971,
-        },
-      },
-    },
-    crew: null,
-  },
-]
+function getDefaultDriverForTruck(truck) {
+  return truck ? mockDrivers.find(d => d.id === truck.defaultDriverId) || null : null
+}
 
-const mockDrivers = [
-  {
-    id: 'DRV-001',
-    name: 'Carlos Mendoza',
-    status: 'available',
-    phone: '+63 912 311 1222',
-    rating: 4.8,
-    trips: 126,
-    avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80',
-  },
-  {
-    id: 'DRV-002',
-    name: 'Miguel Santos',
-    status: 'available',
-    phone: '+63 917 832 4100',
-    rating: 4.7,
-    trips: 104,
-    avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=200&q=80',
-  },
-  {
-    id: 'DRV-003',
-    name: 'Ricardo Lopez',
-    status: 'available',
-    phone: '+63 919 553 1170',
-    rating: 4.9,
-    trips: 168,
-    avatarUrl: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&w=200&q=80',
-  },
-  {
-    id: 'DRV-004',
-    name: 'Antonio Reyes',
-    status: 'on_delivery',
-    phone: '+63 922 730 2811',
-    rating: 4.6,
-    trips: 89,
-    avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&q=80',
-  },
-]
+function getDefaultHelpersForDriver(driver) {
+  return driver?.defaultHelperIds ? [...driver.defaultHelperIds] : []
+}
 
-const mockHelpers = [
-  {
-    id: 'HLP-001',
-    name: 'Pedro Garcia',
-    status: 'available',
-    avatarUrl: 'https://images.unsplash.com/photo-1541535881962-3bb380b08458?auto=format&fit=crop&w=180&q=80',
-  },
-  {
-    id: 'HLP-002',
-    name: 'Luis Torres',
-    status: 'available',
-    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=180&q=80',
-  },
-  {
-    id: 'HLP-003',
-    name: 'Rico Aquino',
-    status: 'available',
-    avatarUrl: 'https://images.unsplash.com/photo-1463453091185-61582044d556?auto=format&fit=crop&w=180&q=80',
-  },
-  {
-    id: 'HLP-004',
-    name: 'Victor Cruz',
-    status: 'on_delivery',
-    avatarUrl: 'https://images.unsplash.com/photo-1552058544-f2b08422138a?auto=format&fit=crop&w=180&q=80',
-  },
-]
-
-const mockTrucks = [
-  {
-    plateNumber: 'ABC 1234',
-    truckType: 'AUV',
-    status: 'available',
-    capacity: '1.2 tons',
-    imageUrl: 'https://images.unsplash.com/photo-1556122071-e404eaedb77f?auto=format&fit=crop&w=600&q=80',
-  },
-  {
-    plateNumber: 'XYZ 5678',
-    truckType: '2T_REF',
-    status: 'available',
-    capacity: '2.0 tons',
-    imageUrl: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=600&q=80',
-  },
-  {
-    plateNumber: 'DEF 9012',
-    truckType: 'L300',
-    status: 'available',
-    capacity: '1.0 ton',
-    imageUrl: 'https://images.unsplash.com/photo-1519003722824-194d4455a60c?auto=format&fit=crop&w=600&q=80',
-  },
-  {
-    plateNumber: 'JKL 7890',
-    truckType: '2T_DRY',
-    status: 'on_delivery',
-    capacity: '2.0 tons',
-    imageUrl: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=600&q=80',
-  },
-]
+function getInitials(name) {
+  return name
+    ? name
+        .split(' ')
+        .map((n) => n[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase()
+    : '?'
+}
 
 const REPORT_TABS = [
-  { id: 'trip', label: 'Trip Summary', icon: Route },
-  { id: 'behavior', label: 'DriveWise Analysis', icon: Activity },
-  { id: 'route', label: 'Route Deviation Monitoring', icon: Map },
+  { id: 'details', label: 'Delivery Request Details', icon: ClipboardList },
+  { id: 'quotation', label: 'Quotation', icon: FileText },
+  { id: 'trip', label: 'Trip Details', icon: Route },
+  { id: 'behavior', label: 'DriveWise Report', icon: Activity },
+  { id: 'route', label: 'Route Deviation Report', icon: Map },
 ]
-
-function getRiskLevel(alertCount) {
-  if (alertCount >= 4) return { tone: 'red', label: 'High Risk' }
-  if (alertCount >= 2) return { tone: 'amber', label: 'Moderate' }
-  return { tone: 'emerald', label: 'Safe' }
-}
 
 const RISK_BADGE_CLASSES = {
   red: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200',
@@ -932,12 +648,6 @@ function RiskBadge({ tone, label }) {
       {label}
     </span>
   )
-}
-
-const ALERT_TYPE_LABELS = {
-  prolonged_eye_closure: 'Prolonged Eye Closure',
-  pattern_eye_closure_yawn: 'Eye Closure + Yawn',
-  pattern_repeated_eye_closure: 'Repeated Eye Closure',
 }
 
 const ALERT_TYPE_ICONS = {
@@ -1018,185 +728,702 @@ function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoo
   )
 }
 
-const COMPLETED_REPORT_DATA = {
-  'DEL-004': {
-    routeDeviation: {
-      planned: [
-        [14.560, 121.070],
-        [14.557, 121.060],
-        [14.555, 121.053],
-        [14.553, 121.048],
-        [14.550, 121.047],
-      ],
-      actual: [
-        [14.560, 121.070],
-        [14.557, 121.060],
-        [14.562, 121.055],
-        [14.555, 121.052],
-        [14.553, 121.048],
-        [14.550, 121.047],
-      ],
-      plannedDistance: '5.8 km',
-      actualDistance: '6.4 km',
-      deviationDistance: '0.6 km',
-      deviationPercent: 10.3,
-      aiSummary: 'Minor route deviation detected. The driver briefly deviated north near the C5-Meralco intersection, adding approximately 0.6 km to the planned route. This appears to be a navigation correction rather than an intentional detour. No significant impact on delivery time or safety.',
-      aiVerdict: 'Minor Deviation',
-      aiVerdictTone: 'amber',
-    },
-    trip: {
-      route: 'Pasig Hub → BGC Branch',
-      distance: '14.2 km',
-      duration: '45 min',
-      startTime: '2026-07-20T08:30:00',
-      endTime: '2026-07-20T09:15:00',
-      stops: [
-        { location: 'Pasig Hub', time: '08:30', action: 'Departure' },
-        { location: 'C5 Road Checkpoint', time: '08:48', action: 'Waypoint' },
-        { location: 'BGC Branch', time: '09:15', action: 'Drop-off Completed' },
-      ],
-      timeline: [
-        { label: 'Departed for Pickup', time: '08:00', completed: true },
-        { label: 'Arrived at Pickup Location', time: '08:15', completed: true },
-        { label: 'Departed for Drop Off', time: '08:30', completed: true },
-        { label: 'Arrived at Drop Off Location', time: '09:10', completed: true },
-        { label: 'Delivery Completed', time: '09:15', completed: true },
-      ],
-    },
-    behavior: {
-      totalAlerts: 2,
-      avgAlertsPerTrip: 2.0,
-      riskLevel: getRiskLevel(2),
-      alertsByType: [
-        { type: 'prolonged_eye_closure', count: 1, label: 'Prolonged Eye Closure' },
-        { type: 'pattern_repeated_eye_closure', count: 1, label: 'Repeated Eye Closure' },
-      ],
-      sessions: [
-        { start: '2026-07-20T08:30:00', end: '2026-07-20T09:15:00', alerts: 2, duration: 2700 },
-      ],
-    },
-    delivery: {
-      totalAlerts: 2,
-      totalSessions: 1,
-      avgAlertDuration: '47s',
-      peakAlertTime: '08:45 AM',
-      eyeClosureAlerts: [
-        { id: 'A-1', time: '2026-07-20T08:42:00', type: 'prolonged_eye_closure', duration: 45, severity: 'Moderate' },
-        { id: 'A-2', time: '2026-07-20T08:55:00', type: 'pattern_repeated_eye_closure', duration: 50, severity: 'High' },
-      ],
-      history: [
-        { event: 'Delivery Request Created', timestamp: '2026-07-18T10:00:00', actor: 'System' },
-        { event: 'Quotation Approved', timestamp: '2026-07-18T14:30:00', actor: 'Supervisor' },
-        { event: 'Crew Assigned — Carlos Mendoza + ABC 1234', timestamp: '2026-07-19T08:00:00', actor: 'Supervisor' },
-        { event: 'Picked Up from Pasig Hub', timestamp: '2026-07-20T08:30:00', actor: 'Driver' },
-        { event: 'Delivered to BGC Branch', timestamp: '2026-07-20T09:15:00', actor: 'Driver' },
-        { event: 'Marked as Completed', timestamp: '2026-07-20T09:20:00', actor: 'System' },
-      ],
-    },
-  },
-  'DEL-005': {
-    routeDeviation: {
-      planned: [
-        [14.300, 120.960],
-        [14.320, 120.970],
-        [14.350, 120.985],
-        [14.380, 121.000],
-        [14.400, 121.015],
-        [14.420, 121.031],
-      ],
-      actual: [
-        [14.300, 120.960],
-        [14.310, 120.965],
-        [14.330, 120.945],
-        [14.360, 120.965],
-        [14.390, 121.010],
-        [14.410, 121.025],
-        [14.420, 121.031],
-      ],
-      plannedDistance: '18.2 km',
-      actualDistance: '22.8 km',
-      deviationDistance: '4.6 km',
-      deviationPercent: 25.3,
-      aiSummary: 'Significant route deviation detected. The driver took an alternative route through General Trias residential areas instead of staying on Aguinaldo Highway, adding 4.6 km to the planned route. This deviation is notable and may indicate driver unfamiliarity with the area or a deliberate choice to avoid traffic. Recommend reviewing the trip log for this delivery to assess any impact on schedule or fuel efficiency.',
-      aiVerdict: 'Significant Deviation',
-      aiVerdictTone: 'red',
-    },
-    trip: {
-      route: 'Cavite Depot → Alabang Branch',
-      distance: '22.8 km',
-      duration: '55 min',
-      startTime: '2026-07-19T06:00:00',
-      endTime: '2026-07-19T06:55:00',
-      stops: [
-        { location: 'Cavite Depot', time: '06:00', action: 'Departure' },
-        { location: 'General Trias Toll', time: '06:20', action: 'Waypoint' },
-        { location: 'Alabang Branch', time: '06:55', action: 'Drop-off Completed' },
-      ],
-      timeline: [
-        { label: 'Departed for Pickup', time: '05:30', completed: true },
-        { label: 'Arrived at Pickup Location', time: '05:45', completed: true },
-        { label: 'Departed for Drop Off', time: '06:00', completed: true },
-        { label: 'Arrived at Drop Off Location', time: '06:48', completed: true },
-        { label: 'Delivery Completed', time: '06:55', completed: true },
-      ],
-    },
-    behavior: {
-      totalAlerts: 5,
-      avgAlertsPerTrip: 5.0,
-      riskLevel: getRiskLevel(5),
-      alertsByType: [
-        { type: 'prolonged_eye_closure', count: 2, label: 'Prolonged Eye Closure' },
-        { type: 'pattern_eye_closure_yawn', count: 2, label: 'Eye Closure + Yawn' },
-        { type: 'pattern_repeated_eye_closure', count: 1, label: 'Repeated Eye Closure' },
-      ],
-      sessions: [
-        { start: '2026-07-19T06:00:00', end: '2026-07-19T06:55:00', alerts: 5, duration: 3300 },
-      ],
-    },
-    delivery: {
-      totalAlerts: 5,
-      totalSessions: 1,
-      avgAlertDuration: '52s',
-      peakAlertTime: '06:30 AM',
-      eyeClosureAlerts: [
-        { id: 'A-3', time: '2026-07-19T06:12:00', type: 'prolonged_eye_closure', duration: 60, severity: 'High' },
-        { id: 'A-4', time: '2026-07-19T06:20:00', type: 'pattern_eye_closure_yawn', duration: 45, severity: 'Moderate' },
-        { id: 'A-5', time: '2026-07-19T06:28:00', type: 'pattern_eye_closure_yawn', duration: 55, severity: 'High' },
-        { id: 'A-6', time: '2026-07-19T06:35:00', type: 'prolonged_eye_closure', duration: 50, severity: 'Moderate' },
-        { id: 'A-7', time: '2026-07-19T06:42:00', type: 'pattern_repeated_eye_closure', duration: 50, severity: 'High' },
-      ],
-      history: [
-        { event: 'Delivery Request Created', timestamp: '2026-07-17T09:00:00', actor: 'System' },
-        { event: 'Quotation Approved', timestamp: '2026-07-17T15:00:00', actor: 'Supervisor' },
-        { event: 'Crew Assigned — Miguel Santos + XYZ 5678', timestamp: '2026-07-18T10:00:00', actor: 'Supervisor' },
-        { event: 'Picked Up from Cavite Depot', timestamp: '2026-07-19T06:00:00', actor: 'Driver' },
-        { event: 'Delivered to Alabang Branch', timestamp: '2026-07-19T06:55:00', actor: 'Driver' },
-        { event: 'Marked as Completed', timestamp: '2026-07-19T07:00:00', actor: 'System' },
-      ],
-    },
-  },
+function DeliveryRequestDetails({ request }) {
+  return (
+    <div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+          <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+            Customer Details
+          </h4>
+          <div className="space-y-1.5">
+            <Row label="Name" value={request.customerName} />
+            <Row label="Company" value={request.companyName} />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+          <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+            Schedule
+          </h4>
+          <div className="space-y-1.5">
+            <Row label="Pickup" value={formatDateTime(request.pickupDate, request.pickupTime)} />
+            <Row label="Drop-off" value={formatDateTime(request.dropoffDate, request.dropoffTime)} />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+          <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-purple-400" />
+            Vehicle Type
+          </h4>
+          <div className="space-y-1.5">
+            <Row label="Truck Type" value={getTruckType(request)} />
+            <Row label="Capacity" value={getTruckCapacity(request)} />
+            <Row label="Commodity Type" value={getCommodityType(request.itemType)} />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+          <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            Deliverable Items
+          </h4>
+          <div className="space-y-1.5">
+            <Row label="Item Type" value={request.itemType} />
+            <Row label="Est. Total Weight" value={getEstimatedWeight(request.itemType)} />
+          </div>
+        </div>
+
+        <div className="col-span-2">
+          <div className="flex items-center justify-between rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50/50 border border-blue-100 px-4 py-3">
+            <span className="text-sm font-semibold text-slate-600">Price Range Bid</span>
+            <span className="text-sm font-bold text-blue-700">less than PHP 10,000.00</span>
+          </div>
+        </div>
+
+        {request.notes && (
+          <div className="col-span-2 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+            <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+              Delivery Notes
+            </h4>
+            <p className="text-sm text-slate-700 leading-relaxed">{request.notes}</p>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+        <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+          Location
+        </h4>
+        <div className="mb-3">
+          <Row label="Total Distance (2-way)" value={getTotalDistance(request)} />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-2">
+            <div className="flex items-start gap-2">
+              <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-100">
+                <span className="text-[10px] font-bold text-blue-600">P</span>
+              </div>
+              <div className="min-w-0">
+                <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Pick-up Location</span>
+                <span className="block truncate text-sm font-medium text-slate-900">{request.pickupAddress}</span>
+              </div>
+            </div>
+            <iframe
+              title="Pickup - Google Map"
+              src={toGoogleMapEmbed(getPickupCoords(request))}
+              className="h-36 w-full rounded-lg border border-slate-200"
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-start gap-2">
+              <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100">
+                <span className="text-[10px] font-bold text-rose-600">D</span>
+              </div>
+              <div className="min-w-0">
+                <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Drop-off Location</span>
+                <span className="block truncate text-sm font-medium text-slate-900">{request.deliveryAddress}</span>
+              </div>
+            </div>
+            <iframe
+              title="Drop-off - Google Map"
+              src={toGoogleMapEmbed(request.destinationCoords)}
+              className="h-36 w-full rounded-lg border border-slate-200"
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
-function CompletedDeliveryReport({ delivery, onClose }) {
-  const report = COMPLETED_REPORT_DATA[delivery.id]
-  const [reportTab, setReportTab] = useState('trip')
+function BreakdownRow({ label, value, indent = false }) {
+  const num = typeof value === 'number' ? value : Number(value || 0)
+  return (
+    <div className={`flex items-center justify-between py-1.5 ${indent ? 'pl-4' : ''}`}>
+      <span className="text-sm font-medium text-slate-700">{label}</span>
+      <span className="text-sm font-mono text-slate-900">₱{num.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+    </div>
+  )
+}
+
+function QuotationBreakdown({ quotation, title }) {
+  const b = quotation?.breakdown || {}
+  const d = b.directExpenses || {}
+  const i = b.indirectExpenses || {}
+  const c = b.calculated || {}
+  const fm = (v) => `₱${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-sky-500" />
+          <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">{title}</h4>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {quotation.validUntil && (
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">Valid until {quotation.validUntil}</span>
+          )}
+          <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold text-sky-700">{fm(quotation.amount)}</span>
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-xl border-2 border-sky-200 bg-sky-50/40 p-4">
+          <h5 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-sky-800 mb-3">
+            <span className="h-3 w-3 rounded-full bg-sky-500" />
+            Direct Expenses
+          </h5>
+          <div className="space-y-1.5">
+            <BreakdownRow label="Depreciation" value={d.depreciation} />
+            <div>
+              <BreakdownRow label="Diesel Rate" value={d.dieselRate} />
+              <p className="ml-1 text-sm text-slate-600">
+                a. Total diesel expenses: <span className="font-semibold">{fm(c.dieselTotal)}</span>
+              </p>
+            </div>
+            <p className="pt-2 text-sm font-semibold text-slate-700">Repairs and Maintenance</p>
+            <BreakdownRow indent label="a. Batteries" value={d.repairsAndMaintenance?.batteries} />
+            <BreakdownRow indent label="b. Tires" value={d.repairsAndMaintenance?.tires} />
+            <p className="pt-2 text-sm font-semibold text-slate-700">Salaries and Wages</p>
+            <BreakdownRow indent label="a. Driver" value={d.salariesAndWages?.driver} />
+            <BreakdownRow indent label="b. Helper (1)" value={d.salariesAndWages?.helper1} />
+            {d.salariesAndWages?.helper2 && <BreakdownRow indent label="c. Helper (2)" value={d.salariesAndWages?.helper2} />}
+            <BreakdownRow label="Trip Allowance" value={d.tripAllowance} />
+            <BreakdownRow label="Lodging Allowance" value={d.lodgingAllowance} />
+            <BreakdownRow label="Toll/Parking (Delivery Truck)" value={d.tollParking} />
+            <div className="mt-3 flex items-center justify-between rounded-lg bg-sky-100/70 px-4 py-3">
+              <span className="text-sm font-bold text-slate-800">Total Direct Expenses</span>
+              <span className="text-base font-bold text-slate-800">{fm(c.directTotal)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border-2 border-amber-200 bg-amber-50/40 p-4">
+          <h5 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-amber-800 mb-3">
+            <span className="h-3 w-3 rounded-full bg-amber-500" />
+            Indirect Expenses
+          </h5>
+          <div className="space-y-1.5">
+            <BreakdownRow label="Administration Fees" value={i.adminFees} />
+            <BreakdownRow label="Insurance (Vehicle)" value={i.insurance} />
+            <BreakdownRow label="Motor Vehicle Registration" value={i.motorVehicleReg} />
+            <BreakdownRow label="Rental (Garage)" value={i.garageRental} />
+            <div className="mt-3 flex items-center justify-between rounded-lg bg-amber-100/70 px-4 py-3">
+              <span className="text-sm font-bold text-slate-800">Total Indirect Expenses</span>
+              <span className="text-base font-bold text-slate-800">{fm(c.indirectTotal)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2 rounded-xl border-2 border-slate-300 bg-slate-100/70 p-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-slate-700">Total Operating Expenses</span>
+          <span className="text-base font-bold text-slate-900">{fm(c.operatingTotal)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-slate-700">Income (15%)</span>
+          <span className="text-base font-bold text-emerald-700">{fm(c.income)}</span>
+        </div>
+        <div className="flex items-center justify-between border-t-2 border-slate-300 pt-2">
+          <span className="text-sm font-bold uppercase text-slate-900">Proposed Rate</span>
+          <span className="text-lg font-bold text-sky-700">{fm(quotation.amount)}</span>
+        </div>
+      </div>
+
+      {quotation.notes && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Quotation Note</p>
+          <p className="text-sm text-slate-700">{quotation.notes}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function QuotationTab({ delivery }) {
+  const steps = []
+  if (delivery.quotation) steps.push({ key: 'initial', title: 'Initial Quotation', quotation: delivery.quotation })
+  if (delivery.updatedQuotation) steps.push({ key: 'updated', title: 'Updated Quotation', quotation: delivery.updatedQuotation })
+
+  if (steps.length === 0 && !delivery.approvedAmount) {
+    return <p className="py-8 text-center text-sm text-slate-500">No quotation was submitted for this delivery.</p>
+  }
+
+  return (
+    <div className="space-y-6">
+      {delivery.approvedAmount && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border-2 border-emerald-200 bg-emerald-50/60 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            <span className="text-sm font-semibold text-slate-700">Final Approved Amount</span>
+          </div>
+          <span className="text-lg font-bold text-emerald-700">₱{Number(delivery.approvedAmount).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+        </div>
+      )}
+
+      {steps.map((step, idx) => (
+        <div key={step.key} className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="mb-4 flex items-center gap-2">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-bold text-white">{idx + 1}</span>
+            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">{step.title}</h4>
+            {steps.length === 1 && (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Approved</span>
+            )}
+            {steps.length > 1 && idx === steps.length - 1 && (
+              <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700">Final</span>
+            )}
+          </div>
+          <QuotationBreakdown quotation={step.quotation} title={step.title} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function StatusChip({ icon: Icon, label, ok, value }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <p className="flex items-center gap-1.5 text-xs text-slate-500">
+        <Icon className="h-3.5 w-3.5" />
+        {label}
+      </p>
+      <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+        <span className={`h-2 w-2 rounded-full ${ok ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function Metric({ label, value }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-0.5 text-lg font-bold text-slate-900">{value}</p>
+    </div>
+  )
+}
+
+function TripDetailsTab({ delivery, report }) {
+  const t = report.trip
+  const crew = delivery.crew
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
+          <Route className="mx-auto h-4 w-4 text-slate-400" />
+          <p className="mt-1 text-xs text-slate-500">Distance</p>
+          <p className="text-sm font-bold text-slate-900">{t.distance}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
+          <Clock className="mx-auto h-4 w-4 text-slate-400" />
+          <p className="mt-1 text-xs text-slate-500">Duration</p>
+          <p className="text-sm font-bold text-slate-900">{t.duration}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
+          <Navigation className="mx-auto h-4 w-4 text-slate-400" />
+          <p className="mt-1 text-xs text-slate-500">Departed</p>
+          <p className="text-sm font-bold text-slate-900">{formatAlertTimestamp(t.startTime)}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
+          <MapPin className="mx-auto h-4 w-4 text-slate-400" />
+          <p className="mt-1 text-xs text-slate-500">Arrived</p>
+          <p className="text-sm font-bold text-slate-900">{formatAlertTimestamp(t.endTime)}</p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Route</p>
+          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold ${
+            t.arrivedOnTime ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+          }`}>
+            {t.arrivedOnTime ? <Check className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
+            {t.arrivedOnTime ? 'On time' : `Late by ${t.lateMinutes} min`}
+          </span>
+        </div>
+        <p className="text-sm font-semibold text-slate-900">{t.route}</p>
+        <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+          <Row label="Scheduled Pickup" value={formatAlertTimestamp(t.scheduledStart)} />
+          <Row label="Actual Departure" value={formatAlertTimestamp(t.startTime)} />
+          <Row label="Scheduled Drop-off" value={formatAlertTimestamp(t.scheduledEnd)} />
+          <Row label="Actual Arrival" value={formatAlertTimestamp(t.endTime)} />
+          <Row label="Waiting at Pickup" value={t.waitingTime} />
+          <Row label="Idle at Drop-off" value={t.idleTime} />
+        </div>
+      </div>
+
+      {crew?.driver && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Delivery Crew</p>
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-sm font-bold text-white">
+              {getInitials(crew.driver.name)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-slate-900">{crew.driver.name}</p>
+              <p className="flex items-center gap-2 text-xs text-slate-500">
+                <Truck className="h-3.5 w-3.5" />
+                {crew.truck?.plateNumber} • {crew.truck?.truckType}
+              </p>
+            </div>
+            {crew.driver.rating && (
+              <div className="shrink-0 text-right">
+                <p className="text-xs text-slate-500">Rating</p>
+                <p className="text-sm font-bold text-amber-600">★ {crew.driver.rating}</p>
+              </div>
+            )}
+          </div>
+          {crew.helpers?.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              {crew.helpers.map((h) => (
+                <span key={h.id} className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+                  <Users className="h-3 w-3 text-slate-400" />
+                  {h.name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {t.restStops?.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4">
+          <p className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-amber-700">
+            <Coffee className="h-3.5 w-3.5" />
+            Rest Stops
+          </p>
+          <div className="space-y-2">
+            {t.restStops.map((rs, i) => (
+              <div key={i} className="flex items-start gap-2 text-sm">
+                <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+                  <Coffee className="h-2.5 w-2.5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-slate-900">{rs.location}</p>
+                  <p className="text-xs text-slate-500">{rs.purpose}</p>
+                  <p className="text-xs text-slate-400">{rs.duration} • {rs.distanceFromStart} from start • {rs.drivingTime} driving</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Trip Stops</p>
+        <div className="space-y-1.5">
+          {t.stops.map((stop, i) => (
+            <div key={i} className="flex items-start gap-2 text-sm">
+              <div className="flex flex-col items-center">
+                <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
+                  i === 0 ? 'bg-sky-100 text-sky-700' : i === t.stops.length - 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'
+                }`}>
+                  <MapPin className="h-2.5 w-2.5" />
+                </span>
+                {i < t.stops.length - 1 && <div className="mt-0.5 h-3 w-px bg-slate-200" />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-slate-700">{stop.location}</p>
+                <p className="text-xs text-slate-400">{stop.time} — {stop.action}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Trip Progress Timeline</p>
+        <div className="space-y-2">
+          {t.timeline.map((step, i) => (
+            <div key={i} className="flex items-center gap-2 text-sm">
+              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${step.completed ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
+                <Check className="h-3 w-3" />
+              </span>
+              <span className="font-medium text-slate-700">{step.label}</span>
+              <span className="ml-auto text-slate-400">{step.time}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DriveWiseAnalysisTab({ report }) {
+  const b = report.behavior
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const tone = DROWSINESS_TONES[b.drowsinessLevel] || DROWSINESS_TONES.LOW
+  const barColor = tone.badge === 'bg-red-100 text-red-700' ? 'bg-red-500' : tone.badge === 'bg-amber-100 text-amber-700' ? 'bg-amber-500' : 'bg-emerald-500'
+  const lastAlert = b.alertHistory && b.alertHistory.length > 0 ? b.alertHistory[b.alertHistory.length - 1] : null
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div>
+            <p className="text-xs text-slate-500">Driver Risk Level</p>
+            <p className="text-sm font-semibold text-slate-900">{b.totalAlerts} alerts this trip</p>
+          </div>
+          <RiskBadge tone={b.riskLevel.tone} label={b.riskLevel.label} />
+        </div>
+        <div className={`flex items-center justify-between rounded-xl p-3 ${tone.box}`}>
+          <div>
+            <p className="text-xs opacity-70">Drowsiness Level</p>
+            <p className="text-sm font-semibold">AI camera-based detection</p>
+          </div>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${tone.badge}`}>{b.drowsinessLevel}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatusChip icon={Camera} label="Camera Feed" ok={b.cameraStatus === 'ACTIVE'} value={b.cameraStatus} />
+        <StatusChip icon={EyeOff} label="Eye Detection" ok={b.eyeDetection === 'DETECTED'} value={b.eyeDetection} />
+        <StatusChip icon={Vibrate} label="Seat Vibration" ok={b.alertMechanism?.seatVibration === 'ACTIVE'} value={b.alertMechanism?.seatVibration} />
+        <StatusChip icon={Volume2} label="Audio Alert" ok={b.alertMechanism?.audioAlert === 'ACTIVE'} value={b.alertMechanism?.audioAlert} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Metric label="Total Alerts" value={report.delivery.totalAlerts} />
+        <Metric label="Avg. Eye Closure" value={b.avgClosureDuration} />
+        <Metric label="Yawns" value={b.yawnCount} />
+        <Metric label="Detection Failures" value={b.eyeDetectionFailures} />
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Alert Type Breakdown</p>
+        <div className="space-y-2">
+          {b.alertsByType.map((item) => {
+            const Icon = ALERT_TYPE_ICONS[item.type] || AlertTriangle
+            const pct = b.totalAlerts > 0 ? Math.round((item.count / b.totalAlerts) * 100) : 0
+            return (
+              <div key={item.type}>
+                <div className="mb-1 flex items-center gap-2 text-sm">
+                  <Icon className="h-3.5 w-3.5 text-slate-500" />
+                  <span className="flex-1 text-slate-700">{item.label}</span>
+                  <span className="font-semibold text-slate-900">{item.count}</span>
+                  <span className="text-xs text-slate-400">({pct}%)</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-slate-100">
+                  <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Session Log</p>
+        <div className="space-y-1.5">
+          {b.sessions.map((session, i) => (
+            <div key={i} className="flex items-center justify-between text-sm">
+              <span className="text-slate-600">{formatAlertTimestamp(session.start)} — {formatAlertTimestamp(session.end)}</span>
+              <span className="font-semibold text-slate-900">{session.alerts} alerts</span>
+              <span className="text-slate-400">{formatAlertDuration(session.duration)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {b.recommendedRestStop && (
+        <div className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
+            <Coffee className="h-4 w-4" />
+          </span>
+          <div className="flex-1">
+            <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Recommended Rest Stop</p>
+            <p className="text-sm font-semibold text-slate-900">{b.recommendedRestStop}</p>
+          </div>
+        </div>
+      )}
+
+      {b.alertHistory && b.alertHistory.length > 0 && (
+        <div className="overflow-hidden rounded-xl bg-slate-50 ring-1 ring-inset ring-slate-200">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(!historyOpen)}
+            className="flex w-full items-center justify-between gap-2 p-3 text-left"
+          >
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Last Alert</p>
+              <p className="mt-0.5 text-sm font-bold text-slate-900">{lastAlert.type}</p>
+              <p className="text-xs text-slate-500">{lastAlert.time}</p>
+            </div>
+            <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-400">
+              History ({b.alertHistory.length})
+              {historyOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </span>
+          </button>
+          {historyOpen && (
+            <div className="max-h-56 space-y-1 overflow-y-auto border-t border-slate-200 px-3 py-2">
+              {b.alertHistory.map((h, i) => (
+                <div key={i} className="flex items-center justify-between gap-2 py-1">
+                  <span className="flex min-w-0 items-center gap-2 text-xs text-slate-700">
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${ALERT_SEVERITY_DOTS[h.severity] || ALERT_SEVERITY_DOTS.INFO}`} />
+                    <span className="truncate">{h.type}</span>
+                  </span>
+                  <span className="shrink-0 text-xs text-slate-500">{h.time}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {b.analysis && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+            <Activity className="h-3.5 w-3.5" />
+            DriveWise Report
+          </p>
+          <p className="text-sm leading-relaxed text-slate-700">{b.analysis}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RouteDeviationTab({ report }) {
+  const r = report.routeDeviation
+  const red = r.aiVerdictTone === 'red'
+  return (
+    <div className="space-y-4">
+      <RouteDeviationMap
+        plannedRoute={r.planned}
+        actualRoute={r.actual}
+        pickupCoords={r.planned[0]}
+        dropoffCoords={r.planned[r.planned.length - 1]}
+      />
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Metric label="Planned Distance" value={r.plannedDistance} />
+        <Metric label="Actual Distance" value={r.actualDistance} />
+        <Metric label="Deviation" value={r.deviationDistance} />
+        <Metric label="Deviation %" value={`${r.deviationPercent}%`} />
+      </div>
+
+      <div className={`flex items-start gap-3 rounded-xl border p-4 ${red ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'}`}>
+        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white ${red ? 'bg-red-500' : 'bg-amber-500'}`}>
+          {red ? <ShieldAlert className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className={`font-semibold ${red ? 'text-red-800' : 'text-amber-800'}`}>AI Route Analysis: {r.aiVerdict}</p>
+          <p className={`mt-1 text-sm leading-relaxed ${red ? 'text-red-700' : 'text-amber-700'}`}>{r.aiSummary}</p>
+        </div>
+      </div>
+
+      {r.deviationSegments?.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Deviation Segments</p>
+          <div className="space-y-2">
+            {r.deviationSegments.map((seg, i) => (
+              <div key={i} className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-slate-900">{seg.location}</p>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${seg.severity === 'Significant' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                    {seg.severity}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">{seg.reason}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-700">+{seg.extraDistance} extra</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="flex items-center gap-1.5 text-xs text-slate-500">
+            <Timer className="h-3.5 w-3.5" />
+            Schedule Impact
+          </p>
+          <p className={`mt-1 text-sm font-bold ${r.scheduleImpact && r.scheduleImpact.toLowerCase().includes('delay') ? 'text-rose-600' : 'text-emerald-600'}`}>
+            {r.scheduleImpact || '—'}
+          </p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="flex items-center gap-1.5 text-xs text-slate-500">
+            <Fuel className="h-3.5 w-3.5" />
+            Fuel Impact
+          </p>
+          <p className="mt-1 text-sm font-bold text-slate-900">{r.fuelImpact || '—'}</p>
+        </div>
+      </div>
+
+      {r.recommendations?.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Recommendations</p>
+          <ul className="space-y-1.5">
+            {r.recommendations.map((rec, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
+                <span className="text-slate-700">{rec}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#059669' }} />
+          <span className="text-slate-600">Planned Route</span>
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#2563eb' }} />
+          <span className="text-slate-600">Actual Route</span>
+        </div>
+        <span className="ml-auto flex items-center gap-1 text-[10px] text-slate-400">
+          <MapPin className="h-3 w-3" />
+          S = Start, E = End
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function CompletedDeliveryReport({ delivery }) {
+  const report = completed_delivery_reports[delivery.id]
+  const [reportTab, setReportTab] = useState('details')
 
   if (!report) {
     return (
-      <div className="rounded-xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
+      <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
         No detailed report available for this delivery.
       </div>
     )
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Delivery Report</p>
-        <button onClick={onClose} className="text-xs text-sky-600 hover:text-sky-800 font-medium">Close</button>
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 md:px-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${
+            delivery.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+          }`}>
+            {delivery.status}
+          </span>
+          <h3 className="text-sm font-semibold text-slate-900">Delivery Report — {delivery.id}</h3>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <Package className="h-3.5 w-3.5" />
+          {delivery.companyName} • {delivery.deliveryAddress}
+        </div>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-2 border-b border-slate-200 mb-4">
+      <div className="flex gap-2 overflow-x-auto border-b border-slate-200 bg-slate-50 px-4 py-2.5 md:px-5">
         {REPORT_TABS.map((tab) => {
           const Icon = tab.icon
           const isActive = reportTab === tab.id
@@ -1204,8 +1431,8 @@ function CompletedDeliveryReport({ delivery, onClose }) {
             <button
               key={tab.id}
               onClick={() => setReportTab(tab.id)}
-              className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                isActive ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
+              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                isActive ? 'bg-slate-900 text-white shadow-sm' : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-100'
               }`}
             >
               <Icon className="h-3.5 w-3.5" />
@@ -1215,240 +1442,59 @@ function CompletedDeliveryReport({ delivery, onClose }) {
         })}
       </div>
 
-      {reportTab === 'trip' && (
-        <div className="space-y-3">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <Route className="mx-auto h-4 w-4 text-slate-400" />
-              <p className="mt-1 text-xs text-slate-500">Distance</p>
-              <p className="text-sm font-bold text-slate-900">{report.trip.distance}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <Clock className="mx-auto h-4 w-4 text-slate-400" />
-              <p className="mt-1 text-xs text-slate-500">Duration</p>
-              <p className="text-sm font-bold text-slate-900">{report.trip.duration}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <MapPin className="mx-auto h-4 w-4 text-slate-400" />
-              <p className="mt-1 text-xs text-slate-500">Route</p>
-              <p className="text-sm font-bold text-slate-900 truncate" title={report.trip.route}>{report.trip.route}</p>
-            </div>
-          </div>
+      <div className="p-4 md:p-5">
+        {reportTab === 'details' && <DeliveryRequestDetails request={delivery} />}
+        {reportTab === 'quotation' && <QuotationTab delivery={delivery} />}
+        {reportTab === 'trip' && <TripDetailsTab delivery={delivery} report={report} />}
+        {reportTab === 'behavior' && <DriveWiseAnalysisTab report={report} />}
+        {reportTab === 'route' && <RouteDeviationTab report={report} />}
+      </div>
+    </div>
+  )
+}
 
-          <div className="rounded-lg bg-white border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-500 mb-2">Trip Timeline</p>
-            <div className="space-y-2">
-              {report.trip.timeline.map((step, i) => (
-                <div key={i} className="flex items-center gap-2 text-xs">
-                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${step.completed ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
-                    <Check className="h-3 w-3" />
-                  </span>
-                  <span className="font-medium text-slate-700">{step.label}</span>
-                  <span className="ml-auto text-slate-400">{step.time}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+function CancelledDeliveryDetails({ delivery }) {
+  const cancellation = delivery.cancellation || {}
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+        <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-rose-700">
+          <XCircle className="h-3.5 w-3.5" />
+          Cancellation Details
+        </p>
+        <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+          <Row label="Reason" value={cancellation.cancellationReason || '—'} />
+          <Row label="Cancelled by" value={cancellation.cancelledBy === 'customer' ? 'Customer' : 'Supervisor'} />
+          <Row label="Cancelled at" value={cancellation.cancelledAt || '—'} />
+          <Row label="Status before cancellation" value={(cancellation.cancelledFromStatus || '').replaceAll('_', ' ')} />
+        </div>
+      </div>
 
-          <div className="rounded-lg bg-white border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-500 mb-2">Trip Stops</p>
+      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Request Details (before cancellation)</p>
+        <DeliveryRequestDetails request={delivery} />
+      </div>
+
+      {(delivery.quotation || delivery.approvedAmount) && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Quotation Before Cancellation</p>
+          {delivery.quotation ? (
+            <QuotationBreakdown quotation={delivery.quotation} title="Quotation" />
+          ) : (
             <div className="space-y-1.5">
-              {report.trip.stops.map((stop, i) => (
-                <div key={i} className="flex items-start gap-2 text-xs">
-                  <div className="flex flex-col items-center">
-                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${i === 0 ? 'bg-sky-100 text-sky-700' : i === report.trip.stops.length - 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
-                      <MapPin className="h-2.5 w-2.5" />
-                    </span>
-                    {i < report.trip.stops.length - 1 && <div className="mt-0.5 h-3 w-px bg-slate-200" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-slate-700">{stop.location}</p>
-                    <p className="text-slate-400">{stop.time} — {stop.action}</p>
-                  </div>
-                </div>
-              ))}
+              {delivery.approvedAmount && <Row label="Approved Amount" value={`₱${Number(delivery.approvedAmount).toLocaleString()}`} />}
             </div>
-          </div>
-
-          <div className="rounded-lg bg-white border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-500 mb-2">Eye Closure Alerts</p>
-            <div className="space-y-1.5">
-              {report.delivery.eyeClosureAlerts.map((alert) => {
-                const Icon = ALERT_TYPE_ICONS[alert.type] || EyeOff
-                const severityColor = alert.severity === 'High' ? 'text-red-600 bg-red-50' : 'text-amber-600 bg-amber-50'
-                return (
-                  <div key={alert.id} className="flex items-center gap-2 rounded-lg border border-slate-100 p-2 text-xs">
-                    <Icon className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                    <span className="font-medium text-slate-700">{formatAlertTimestamp(alert.time)}</span>
-                    <span className="text-slate-500">{ALERT_TYPE_LABELS[alert.type] || alert.type}</span>
-                    <span className="text-slate-400">{alert.duration}s</span>
-                    <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold ${severityColor}`}>
-                      {alert.severity}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="rounded-lg bg-white border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-500 mb-2">Delivery History</p>
-            <div className="space-y-1.5">
-              {report.delivery.history.map((entry, i) => (
-                <div key={i} className="flex items-start gap-2 text-xs">
-                  <div className="flex flex-col items-center">
-                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
-                      i === report.delivery.history.length - 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'
-                    }`}>
-                      <Check className="h-2.5 w-2.5" />
-                    </span>
-                    {i < report.delivery.history.length - 1 && <div className="mt-0.5 h-3 w-px bg-slate-200" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-slate-700">{entry.event}</p>
-                    <p className="text-slate-400">{formatAlertTimestamp(entry.timestamp)} by {entry.actor}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          )}
         </div>
       )}
 
-      {reportTab === 'behavior' && (
-        <div className="space-y-3">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Total Alerts</p>
-              <p className="text-lg font-bold text-slate-900">{report.delivery.totalAlerts}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Avg Duration</p>
-              <p className="text-lg font-bold text-slate-900">{report.delivery.avgAlertDuration}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Peak Time</p>
-              <p className="text-lg font-bold text-slate-900">{report.delivery.peakAlertTime}</p>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between rounded-lg bg-white border border-slate-200 p-3">
-            <div>
-              <p className="text-xs text-slate-500">Driver Risk Level</p>
-              <p className="text-lg font-bold text-slate-900">{report.behavior.totalAlerts} alerts</p>
-            </div>
-            <RiskBadge tone={report.behavior.riskLevel.tone} label={report.behavior.riskLevel.label} />
-          </div>
-
-          <div className="rounded-lg bg-white border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-500 mb-2">Alert Type Breakdown</p>
-            <div className="space-y-2">
-              {report.behavior.alertsByType.map((item) => {
-                const Icon = ALERT_TYPE_ICONS[item.type] || AlertTriangle
-                const pct = report.behavior.totalAlerts > 0 ? Math.round((item.count / report.behavior.totalAlerts) * 100) : 0
-                return (
-                  <div key={item.type}>
-                    <div className="flex items-center gap-2 text-xs mb-1">
-                      <Icon className="h-3.5 w-3.5 text-slate-500" />
-                      <span className="flex-1 text-slate-700">{item.label}</span>
-                      <span className="font-semibold text-slate-900">{item.count}</span>
-                      <span className="text-slate-400">({pct}%)</span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-slate-100">
-                      <div
-                        className="h-full rounded-full bg-amber-500 transition-all"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="rounded-lg bg-white border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-500 mb-2">Session Log</p>
-            <div className="space-y-1.5">
-              {report.behavior.sessions.map((session, i) => (
-                <div key={i} className="flex items-center justify-between text-xs">
-                  <span className="text-slate-600">
-                    {formatAlertTimestamp(session.start)} — {formatAlertTimestamp(session.end)}
-                  </span>
-                  <span className="font-semibold text-slate-900">{session.alerts} alerts</span>
-                  <span className="text-slate-400">{formatAlertDuration(session.duration)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {reportTab === 'route' && (
-        <div className="space-y-3">
-          <RouteDeviationMap
-            plannedRoute={report.routeDeviation.planned}
-            actualRoute={report.routeDeviation.actual}
-            pickupCoords={report.routeDeviation.planned[0]}
-            dropoffCoords={report.routeDeviation.planned[report.routeDeviation.planned.length - 1]}
-          />
-
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Planned Distance</p>
-              <p className="text-sm font-bold text-slate-900">{report.routeDeviation.plannedDistance}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Actual Distance</p>
-              <p className="text-sm font-bold text-slate-900">{report.routeDeviation.actualDistance}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Deviation</p>
-              <p className="text-sm font-bold text-slate-900">{report.routeDeviation.deviationDistance}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-center">
-              <p className="text-xs text-slate-500">Deviation %</p>
-              <p className="text-sm font-bold text-slate-900">{report.routeDeviation.deviationPercent}%</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 rounded-lg border p-3 text-xs"
-            style={{
-              borderColor: report.routeDeviation.aiVerdictTone === 'red' ? '#fecaca' : '#fde68a',
-              backgroundColor: report.routeDeviation.aiVerdictTone === 'red' ? '#fef2f2' : '#fffbeb',
-            }}
-          >
-            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white ${
-              report.routeDeviation.aiVerdictTone === 'red' ? 'bg-red-500' : 'bg-amber-500'
-            }`}>
-              <Navigation className="h-4 w-4" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className={`font-semibold ${
-                report.routeDeviation.aiVerdictTone === 'red' ? 'text-red-800' : 'text-amber-800'
-              }`}>
-                AI Route Analysis: {report.routeDeviation.aiVerdict}
-              </p>
-              <p className={`mt-1 leading-relaxed ${
-                report.routeDeviation.aiVerdictTone === 'red' ? 'text-red-700' : 'text-amber-700'
-              }`}>
-                {report.routeDeviation.aiSummary}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4 rounded-lg bg-white border border-slate-200 p-3">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#059669' }} />
-              <span className="text-slate-600">Planned Route</span>
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#2563eb' }} />
-              <span className="text-slate-600">Actual Route</span>
-            </div>
-            <span className="ml-auto text-[10px] text-slate-400 flex items-center gap-1">
-              <MapPin className="h-3 w-3" />
-              S = Start, E = End
-            </span>
+      {delivery.crew?.driver && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Assigned Crew Before Cancellation</p>
+          <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+            <Row label="Driver" value={delivery.crew.driver.name} />
+            <Row label="Truck" value={`${delivery.crew.truck.plateNumber} • ${delivery.crew.truck.truckType}`} />
+            <Row label="Helpers" value={delivery.crew.helpers.map((h) => h.name).join(', ') || '—'} />
           </div>
         </div>
       )}
@@ -1461,11 +1507,99 @@ function toGoogleMapEmbed(coords) {
   return `https://maps.google.com/maps?q=${coords.lat},${coords.lng}&z=14&output=embed`
 }
 
+function filterDeliveryList(list, q) {
+  const query = q.trim().toLowerCase()
+  if (!query) return list
+  return list.filter(
+    (r) =>
+      r.id.toLowerCase().includes(query) ||
+      r.customerName.toLowerCase().includes(query) ||
+      r.companyName.toLowerCase().includes(query) ||
+      r.pickupAddress.toLowerCase().includes(query) ||
+      r.deliveryAddress.toLowerCase().includes(query),
+  )
+}
+
+function PaginationBar({ page, setPage, totalPages }) {
+  if (totalPages <= 1) return null
+  return (
+    <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
+      <p className="text-sm text-slate-500">
+        Page {page} of {totalPages}
+      </p>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setPage(1)}
+          disabled={page === 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+          title="First page"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+        </button>
+        <button
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page === 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+        </button>
+        <div className="flex items-center gap-1 px-1">
+          {(() => {
+            const pages = []
+            if (totalPages <= 7) {
+              for (let i = 1; i <= totalPages; i++) pages.push(i)
+            } else {
+              pages.push(1)
+              if (page > 3) pages.push('...')
+              for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i)
+              if (page < totalPages - 2) pages.push('...')
+              pages.push(totalPages)
+            }
+            return pages.map((num, idx) =>
+              num === '...' ? (
+                <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
+              ) : (
+                <button
+                  key={num}
+                  onClick={() => setPage(num)}
+                  className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
+                    num === page
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {num}
+                </button>
+              )
+            )
+          })()}
+        </div>
+        <button
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page === totalPages}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+        </button>
+        <button
+          onClick={() => setPage(totalPages)}
+          disabled={page === totalPages}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+          title="Last page"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function SupDeliveries() {
   const [requests, setRequests] = useState(mockRequests)
   const [activeModule, setActiveModule] = useState('inbox')
-  const [trackingTab, setTrackingTab] = useState('ongoing')
-  const [ongoingLane, setOngoingLane] = useState('FOR_PICKUP')
+  const [transitSearch, setTransitSearch] = useState('')
+  const [transitStatusFilter, setTransitStatusFilter] = useState('ALL')
+  const [monitoredDeliveryId, setMonitoredDeliveryId] = useState(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('ALL')
   const [sortBy, setSortBy] = useState('createdAt_desc')
@@ -1488,12 +1622,10 @@ function SupDeliveries() {
     },
   }
   const [quotationForm, setQuotationForm] = useState({ ...defaultQuotationForm })
-  const [negotiationAmount, setNegotiationAmount] = useState('')
-  const [negotiationCallSchedule, setNegotiationCallSchedule] = useState('')
   const [assignment, setAssignment] = useState({ driverId: '', helperIds: [], plateNumber: '', _showDrivers: false, _showHelpers: false, _showTrucks: false })
   const [hasApproved, setHasApproved] = useState(false)
   const [quotationSubmitted, setQuotationSubmitted] = useState(false)
-  const [expandedReport, setExpandedReport] = useState(null)
+  const [selectedReportId, setSelectedReportId] = useState(null)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [showDeclineDialog, setShowDeclineDialog] = useState(false)
   const [showQuotationConfirmDialog, setShowQuotationConfirmDialog] = useState(false)
@@ -1504,17 +1636,21 @@ function SupDeliveries() {
   const [showDeclineCounterOfferDialog, setShowDeclineCounterOfferDialog] = useState(false)
   const [showUpdateQuotationDialog, setShowUpdateQuotationDialog] = useState(false)
   const [showDetails, setShowDetails] = useState(true)
+  const [showQuotation, setShowQuotation] = useState(true)
   const [showProgressDetails, setShowProgressDetails] = useState(false)
+  const [alertHistoryOpenId, setAlertHistoryOpenId] = useState(null)
   const [page, setPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(() => Math.max(4, Math.floor((window.innerHeight - 280) / 68)))
+  const [completedSearch, setCompletedSearch] = useState('')
+  const [completedPage, setCompletedPage] = useState(1)
+  const [cancelledSearch, setCancelledSearch] = useState('')
+  const [cancelledPage, setCancelledPage] = useState(1)
 
   useEffect(() => {
     const handleResize = () => setItemsPerPage(Math.max(4, Math.floor((window.innerHeight - 280) / 68)))
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
-
-  useEffect(() => { setPage(1) }, [search, statusFilter, sortBy])
 
   const inboxRows = useMemo(
     () => requests.filter((r) => ['FOR_REVIEW', 'QUOTED', 'COUNTER_OFFER', 'UPDATED_QUOTATION', 'ASSIGNED'].includes(r.status)),
@@ -1604,28 +1740,62 @@ function SupDeliveries() {
     [requests],
   )
 
-  const canTrackSelectedRequest = Boolean(
-    selectedRequest
-      && ['FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(selectedRequest.status)
-      && selectedRequest.crew?.driver
-      && selectedRequest.crew?.truck?.plateNumber,
-  )
+  const filteredTransit = useMemo(() => {
+    const q = transitSearch.trim().toLowerCase()
+    let result = ongoingDeliveries
+    if (transitStatusFilter !== 'ALL') {
+      result = result.filter((r) => r.status === transitStatusFilter)
+    }
+    if (q) {
+      result = result.filter(
+        (r) =>
+          r.id.toLowerCase().includes(q) ||
+          r.customerName.toLowerCase().includes(q) ||
+          r.companyName.toLowerCase().includes(q) ||
+          r.pickupAddress.toLowerCase().includes(q) ||
+          r.deliveryAddress.toLowerCase().includes(q),
+      )
+    }
+    return [...result].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  }, [ongoingDeliveries, transitSearch, transitStatusFilter])
+
+  const monitoredDelivery = useMemo(() => {
+    const preferred = filteredTransit.find((r) => r.id === monitoredDeliveryId)
+    return preferred || filteredTransit[0] || ongoingDeliveries[0] || null
+  }, [filteredTransit, monitoredDeliveryId, ongoingDeliveries])
 
   const completedDeliveries = useMemo(
-    () => requests.filter((r) => ['COMPLETED', 'CANCELLED'].includes(r.status)),
+    () => requests.filter((r) => r.status === 'COMPLETED'),
     [requests],
   )
 
-  const laneRows = ongoingDeliveries.filter((d) => d.status === ongoingLane)
+  const cancelledDeliveries = useMemo(
+    () => requests.filter((r) => r.status === 'CANCELLED'),
+    [requests],
+  )
 
-  const highlightedTracking = useMemo(() => {
-    const preferred = laneRows[0]
-    return preferred || ongoingDeliveries[0] || null
-  }, [laneRows, ongoingDeliveries])
+  const selectedCompletedReport = selectedReportId && !selectedReportId.startsWith('cancel-')
+    ? completedDeliveries.find((d) => d.id === selectedReportId) || null
+    : null
+  const selectedCancelledReport = selectedReportId && selectedReportId.startsWith('cancel-')
+    ? cancelledDeliveries.find((d) => d.id === selectedReportId.slice(7)) || null
+    : null
 
-  const activeStepIndex = selectedRequest
-    ? deliverySteps.indexOf(statusByStep[selectedRequest.status] || 'REQUEST_CREATED')
-    : -1
+  const filteredCompleted = useMemo(
+    () => filterDeliveryList(completedDeliveries, completedSearch),
+    [completedDeliveries, completedSearch],
+  )
+  const completedTotalPages = Math.max(1, Math.ceil(filteredCompleted.length / itemsPerPage))
+  const completedSafePage = Math.min(completedPage, completedTotalPages)
+  const paginatedCompleted = filteredCompleted.slice((completedSafePage - 1) * itemsPerPage, completedSafePage * itemsPerPage)
+
+  const filteredCancelled = useMemo(
+    () => filterDeliveryList(cancelledDeliveries, cancelledSearch),
+    [cancelledDeliveries, cancelledSearch],
+  )
+  const cancelledTotalPages = Math.max(1, Math.ceil(filteredCancelled.length / itemsPerPage))
+  const cancelledSafePage = Math.min(cancelledPage, cancelledTotalPages)
+  const paginatedCancelled = filteredCancelled.slice((cancelledSafePage - 1) * itemsPerPage, cancelledSafePage * itemsPerPage)
 
   const selectedDriver = mockDrivers.find((d) => d.id === assignment.driverId)
   const selectedTruck = mockTrucks.find((t) => t.plateNumber === assignment.plateNumber)
@@ -1638,6 +1808,10 @@ function SupDeliveries() {
     setHasApproved(request.status !== 'FOR_REVIEW')
     // Quotation step is considered done if the request already has a quotation
     setQuotationSubmitted(Boolean(request.quotation))
+    setShowInitialQuotation(false)
+    // Collapse the Quotation section by default for APPROVED requests with an approved quotation,
+    // so the dispatch/assignment section is seen first.
+    setShowQuotation(request.status !== 'APPROVED' || !request.quotation)
     setQuotationForm({
       directExpenses: request.quotation?.breakdown?.directExpenses || { ...defaultQuotationForm.directExpenses },
       indirectExpenses: request.quotation?.breakdown?.indirectExpenses || { ...defaultQuotationForm.indirectExpenses },
@@ -1657,10 +1831,6 @@ function SupDeliveries() {
     setSelectedRequest((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev))
   }
 
-  const fm = (v) => {
-    const n = parseMoney(v)
-    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-  }
   const getDirectTotal = () => {
     const d = quotationForm.directExpenses
     const distKm = selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0
@@ -1748,13 +1918,6 @@ function SupDeliveries() {
       },
     })
     setShowDetails(false)
-  }
-
-  const approveRequest = () => {
-    if (!selectedRequest) return
-    updateRequest(selectedRequest.id, { status: 'APPROVED' })
-    setHasApproved(true)
-    setQuotationSubmitted(true)
   }
 
   const openDeclineDialog = () => {
@@ -1859,9 +2022,9 @@ function SupDeliveries() {
           <div className="sticky top-0 z-30 -mt-2 w-full border-b border-slate-200 bg-white/95 backdrop-blur-sm px-4 sm:px-5 py-2 shadow-sm sm:-mt-4">
             <button
               onClick={() => setSelectedRequest(null)}
-              className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600 bg-transparent border-none cursor-pointer p-0"
+              className="group inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1.5 pl-3 pr-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.97]"
             >
-              <ArrowLeft className="h-4 w-4" />
+              <ArrowLeft className="h-4 w-4 text-slate-400 transition-transform group-hover:-translate-x-0.5 group-hover:text-blue-600" />
               Back
             </button>
           </div>
@@ -1927,29 +2090,31 @@ function SupDeliveries() {
                   </div>
                 </div>
 
-                <div className="space-y-2 ml-11">
-                  {currentStage.substeps.filter(s => s.detail || s.label).map((substep, si) => (
-                    <div key={si} className="flex items-start gap-2 text-sm">
-                      <span className={`mt-1 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border ${
-                        substep.detail ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300'
-                      }`}>
-                        {substep.detail && <Check className="h-2 w-2 text-white" />}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-sm ${substep.detail ? 'text-slate-900' : 'text-slate-400'}`}>
-                          {substep.cancelPoint && selectedRequest.status === 'CANCELLED' ? (
-                            <span className="text-rose-600 font-medium">{substep.cancelReason || 'Cancelled'}</span>
-                          ) : (
-                            <>
-                              {substep.label}
-                              {substep.detail && <span className="text-slate-500 ml-1">{substep.detail}</span>}
-                            </>
-                          )}
-                        </p>
+                {(() => {
+                  const previewSubstep = progressData.flatMap(s => s.substeps).filter(s => s.detail).pop()
+                  if (!previewSubstep) return null
+                  return (
+                    <div className="space-y-2 ml-11">
+                      <div className="flex items-start gap-2 text-sm">
+                        <span className="mt-1 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border border-emerald-500 bg-emerald-500">
+                          <Check className="h-2 w-2 text-white" />
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-slate-900">
+                            {previewSubstep.cancelPoint && selectedRequest.status === 'CANCELLED' ? (
+                              <span className="text-rose-600 font-medium">{previewSubstep.cancelReason || 'Cancelled'}</span>
+                            ) : (
+                              <>
+                                {previewSubstep.label}
+                                {previewSubstep.detail && <span className="text-slate-500 ml-1">{previewSubstep.detail}</span>}
+                              </>
+                            )}
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  ))}
-                </div>
+                  )
+                })()}
 
                 <button
                   onClick={() => setShowProgressDetails(prev => !prev)}
@@ -1962,7 +2127,7 @@ function SupDeliveries() {
 
                 {showProgressDetails && (
                   <div className="mt-4 ml-11 space-y-5 border-l-2 border-slate-200 pl-4">
-                    {progressData.map((stage, si) => (
+                    {progressData.map((stage) => (
                       <div key={stage.key}>
                         <div className="flex items-center gap-2 mb-2">
                           <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
@@ -1983,19 +2148,11 @@ function SupDeliveries() {
                           </p>
                         </div>
                         <div className="ml-8 space-y-2">
-                          {stage.substeps.map((substep, si2) => (
+                          {stage.substeps.filter(s => s.detail).map((substep, si2) => (
                             <div key={si2} className="flex items-start gap-2 text-sm">
-                              <span className={`mt-1.5 flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-full ${
-                                substep.detail || (stage.status === 'completed') ? 'bg-emerald-500' :
-                                stage.status === 'current' ? 'bg-blue-500' :
-                                'bg-slate-200'
-                              }`} />
+                              <span className="mt-1.5 flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-full bg-emerald-500" />
                               <div className="flex-1 min-w-0">
-                                <p className={`${
-                                  substep.detail || stage.status === 'completed' ? 'text-slate-900' :
-                                  stage.status === 'current' ? 'text-slate-700' :
-                                  'text-slate-400'
-                                }`}>
+                                <p className="text-slate-900">
                                   {substep.label}
                                   {substep.detail && <span className="text-slate-500 ml-1">{substep.detail}</span>}
                                 </p>
@@ -2164,6 +2321,7 @@ function SupDeliveries() {
                           : 'Quotation'}
                       </h3>
                     </div>
+                    <div className="flex items-center gap-2">
                     {(!selectedRequest.quotation || !quotationSubmitted) && !adjustingQuotation && (
                       <button
                         onClick={submitQuotation}
@@ -2173,8 +2331,35 @@ function SupDeliveries() {
                         Submit Quotation
                       </button>
                     )}
+                    <button
+                      onClick={() => setShowQuotation((s) => !s)}
+                      className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition bg-transparent border-none cursor-pointer"
+                      aria-label={showQuotation ? 'Hide Quotation' : 'Show Quotation'}
+                    >
+                      {showQuotation ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    </button>
+                    </div>
                   </div>
+                  {showQuotation && (
                   <div className="p-4 space-y-4">
+
+                    {/* — Approved Amount (post-approval statuses) — */}
+                    {['APPROVED', 'ASSIGNED', 'FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'].includes(selectedRequest.status) && (selectedRequest.approvedAmount || selectedRequest.quotation) && (
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-xs font-medium text-emerald-600 uppercase tracking-wide">Approved Amount</p>
+                            <p className="text-2xl font-bold text-emerald-800">
+                              PHP {Number(selectedRequest.approvedAmount ?? selectedRequest.quotation?.amount).toLocaleString()}
+                            </p>
+                          </div>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                            <Check className="h-3 w-3" />
+                            Approved
+                          </span>
+                        </div>
+                      </div>
+                    )}
 
                     {/* — Customer Info (read-only, always shown) — */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2208,178 +2393,20 @@ function SupDeliveries() {
 
                     {/* === CASE 1: Editable form (new quotation — not yet submitted) === */}
                     {(!selectedRequest.quotation || !quotationSubmitted) && !adjustingQuotation && (
-                      <div className="space-y-4">
-
-                        {/* — Direct Expenses — */}
-                        <div className="rounded-xl border-2 border-blue-200 bg-blue-50/60 p-4">
-                          <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-blue-800 mb-4">
-                            <span className="h-3 w-3 rounded-full bg-blue-600" />
-                            Direct Expenses
-                          </h4>
-
-                          <div className="flex items-center justify-between gap-3 py-2 border-b border-blue-100">
-                            <span className="text-sm font-medium text-slate-700">Depreciation Expenses</span>
-                            <input type="text" value={quotationForm.directExpenses.depreciation}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, depreciation: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, depreciation: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-
-                          <div className="flex items-center justify-between gap-3 py-2 border-b border-blue-100">
-                            <span className="text-sm font-medium text-slate-700">Diesel Rate</span>
-                            <input type="text" value={quotationForm.directExpenses.dieselRate}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, dieselRate: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, dieselRate: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <p className="text-sm text-blue-700 ml-1 mt-1 mb-2">
-                            a. Total diesel expenses:{' '}
-                            <span className="font-semibold">
-                              ₱{(
-                                parseMoney(quotationForm.directExpenses.dieselRate) *
-                                (selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0)
-                              ).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                            </span>
-                            <span className="text-blue-500 ml-1">
-                              ({quotationForm.directExpenses.dieselRate || '0'} × {selectedRequest ? getTotalDistance(selectedRequest) : '0'})
-                            </span>
-                          </p>
-
-                          <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">Repairs and Maintenance</p>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700 pl-4">a. Batteries</span>
-                            <input type="text" value={quotationForm.directExpenses.repairsAndMaintenance.batteries}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, repairsAndMaintenance: { ...p.directExpenses.repairsAndMaintenance, batteries: r } } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, repairsAndMaintenance: { ...p.directExpenses.repairsAndMaintenance, batteries: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700 pl-4">b. Tires</span>
-                            <input type="text" value={quotationForm.directExpenses.repairsAndMaintenance.tires}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, repairsAndMaintenance: { ...p.directExpenses.repairsAndMaintenance, tires: r } } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, repairsAndMaintenance: { ...p.directExpenses.repairsAndMaintenance, tires: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-
-                          <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">Salaries and Wages</p>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700 pl-4">a. Driver</span>
-                            <input type="text" value={quotationForm.directExpenses.salariesAndWages.driver}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, driver: r } } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, driver: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700 pl-4">b. Helper (1)</span>
-                            <input type="text" value={quotationForm.directExpenses.salariesAndWages.helper1}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, helper1: r } } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, helper1: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          {isLargeTruck(selectedRequest) && (
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700 pl-4">c. Helper (2)</span>
-                            <input type="text" value={quotationForm.directExpenses.salariesAndWages.helper2}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, helper2: r } } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, helper2: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          )}
-
-                          <div className="flex items-center justify-between gap-3 py-1.5 mt-1">
-                            <span className="text-sm font-medium text-slate-700">Trip Allowance</span>
-                            <input type="text" value={quotationForm.directExpenses.tripAllowance}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, tripAllowance: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, tripAllowance: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700">Lodging Allowance</span>
-                            <input type="text" value={quotationForm.directExpenses.lodgingAllowance}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, lodgingAllowance: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, lodgingAllowance: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700">Toll/Parking (Delivery Truck)</span>
-                            <input type="text" value={quotationForm.directExpenses.tollParking}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, tollParking: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, tollParking: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-
-                          <div className="mt-3 flex items-center justify-between rounded-lg bg-blue-200/60 px-4 py-3">
-                            <span className="text-sm font-bold text-blue-900">Total Direct Expenses</span>
-                            <span className="text-base font-bold text-blue-900">₱{fm(getDirectTotal())}</span>
-                          </div>
-                        </div>
-
-                        {/* — Indirect Expenses — */}
-                        <div className="rounded-xl border-2 border-amber-200 bg-amber-50/60 p-4">
-                          <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-amber-800 mb-4">
-                            <span className="h-3 w-3 rounded-full bg-amber-600" />
-                            Indirect Expenses
-                          </h4>
-
-                          <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
-                            <span className="text-sm font-medium text-slate-700">Administration Fees</span>
-                            <input type="text" value={quotationForm.indirectExpenses.adminFees}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, adminFees: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, adminFees: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-amber-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
-                            <span className="text-sm font-medium text-slate-700">Insurance (Vehicle)</span>
-                            <input type="text" value={quotationForm.indirectExpenses.insurance}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, insurance: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, insurance: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-amber-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
-                            <span className="text-sm font-medium text-slate-700">Motor Vehicle Registration</span>
-                            <input type="text" value={quotationForm.indirectExpenses.motorVehicleReg}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, motorVehicleReg: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, motorVehicleReg: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-amber-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-2">
-                            <span className="text-sm font-medium text-slate-700">Rental (Garage)</span>
-                            <input type="text" value={quotationForm.indirectExpenses.garageRental}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, garageRental: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, garageRental: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-amber-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-300 bg-white" placeholder="0.00" />
-                          </div>
-
-                          <div className="mt-3 flex items-center justify-between rounded-lg bg-amber-200/60 px-4 py-3">
-                            <span className="text-sm font-bold text-amber-900">Total Indirect Expenses</span>
-                            <span className="text-base font-bold text-amber-900">₱{fm(getIndirectTotal())}</span>
-                          </div>
-                        </div>
-
-                        {/* — Summary — */}
-                        <div className="rounded-xl border-2 border-slate-300 bg-slate-100/70 p-4 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-semibold text-slate-700">Total Operating Expenses</span>
-                            <span className="text-base font-bold text-slate-900">₱{fm(getOperatingTotal())}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-semibold text-slate-700">Income (15%)</span>
-                            <span className="text-base font-bold text-emerald-700">₱{fm(getIncome())}</span>
-                          </div>
-                          <div className="flex items-center justify-between border-t-2 border-slate-300 pt-2">
-                            <span className="text-sm font-bold text-slate-900 uppercase">Proposed Rate</span>
-                            <span className="text-lg font-bold text-sky-700">₱{fm(getProposedRate())}</span>
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={submitQuotation}
-                          className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-sky-700 transition"
-                        >
-                          <Send className="h-4 w-4" />
-                          Submit Quotation
-                        </button>
-                      </div>
+                      <QuotationExpenseForm
+                        form={quotationForm}
+                        onFormChange={setQuotationForm}
+                        distanceKm={selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0}
+                        distanceLabel={selectedRequest ? getTotalDistance(selectedRequest) : '0'}
+                        isLargeTruckFlag={selectedRequest ? isLargeTruck(selectedRequest) : false}
+                        directTotal={getDirectTotal()}
+                        indirectTotal={getIndirectTotal()}
+                        operatingTotal={getOperatingTotal()}
+                        income={getIncome()}
+                        proposedRate={getProposedRate()}
+                        onSubmit={submitQuotation}
+                        submitLabel="Submit Quotation"
+                      />
                     )}
 
                     {/* === CASE 2: Read-only form (submitted — QUOTED or COUNTER_OFFER) === */}
@@ -2397,11 +2424,11 @@ function SupDeliveries() {
                         )}
 
                         {/* Read-only form content (shown by default for QUOTED, collapsible for COUNTER_OFFER and UPDATED_QUOTATION) */}
-                        {(showInitialQuotation || (selectedRequest.status !== 'COUNTER_OFFER' && selectedRequest.status !== 'UPDATED_QUOTATION')) && (
+                        {(showInitialQuotation || (selectedRequest.status !== 'COUNTER_OFFER' && selectedRequest.status !== 'UPDATED_QUOTATION')) && isDetailedBreakdown(selectedRequest.quotation) && (
                           <div className="space-y-4">
 
-                            {/* — Initial Quotation header for COUNTER_OFFER / UPDATED_QUOTATION — */}
-                            {(selectedRequest.status === 'COUNTER_OFFER' || selectedRequest.status === 'UPDATED_QUOTATION') && (
+                            {/* — Initial Quotation header for COUNTER_OFFER / UPDATED_QUOTATION / APPROVED — */}
+                            {(selectedRequest.status === 'COUNTER_OFFER' || selectedRequest.status === 'UPDATED_QUOTATION' || selectedRequest.status === 'APPROVED') && (
                               <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-200/60 px-4 py-2.5">
                                 <FileText className="h-4 w-4 text-slate-600" />
                                 <span className="text-sm font-bold uppercase tracking-wider text-slate-700">Initial Quotation</span>
@@ -2720,209 +2747,26 @@ function SupDeliveries() {
 
                     {/* === CASE 3: Adjusting quotation (pre-filled editable form) === */}
                     {adjustingQuotation && (
-                      <div className="space-y-4">
-
-                        {/* — Direct Expenses (editable, pre-filled) — */}
-                        <div className="rounded-xl border-2 border-blue-200 bg-blue-50/60 p-4">
-                          <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-blue-800 mb-4">
-                            <span className="h-3 w-3 rounded-full bg-blue-600" />
-                            Direct Expenses
-                          </h4>
-
-                          <div className="flex items-center justify-between gap-3 py-2 border-b border-blue-100">
-                            <span className="text-sm font-medium text-slate-700">Depreciation Expenses</span>
-                            <input type="text" value={quotationForm.directExpenses.depreciation}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, depreciation: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, depreciation: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-
-                          <div className="flex items-center justify-between gap-3 py-2 border-b border-blue-100">
-                            <span className="text-sm font-medium text-slate-700">Diesel Rate</span>
-                            <input type="text" value={quotationForm.directExpenses.dieselRate}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, dieselRate: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, dieselRate: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <p className="text-sm text-blue-700 ml-1 mt-1 mb-2">
-                            a. Total diesel expenses:{' '}
-                            <span className="font-semibold">
-                              ₱{(
-                                parseMoney(quotationForm.directExpenses.dieselRate) *
-                                (selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0)
-                              ).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                            </span>
-                            <span className="text-blue-500 ml-1">
-                              ({quotationForm.directExpenses.dieselRate || '0'} × {selectedRequest ? getTotalDistance(selectedRequest) : '0'})
-                            </span>
-                          </p>
-
-                          <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">Repairs and Maintenance</p>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700 pl-4">a. Batteries</span>
-                            <input type="text" value={quotationForm.directExpenses.repairsAndMaintenance.batteries}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, repairsAndMaintenance: { ...p.directExpenses.repairsAndMaintenance, batteries: r } } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, repairsAndMaintenance: { ...p.directExpenses.repairsAndMaintenance, batteries: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700 pl-4">b. Tires</span>
-                            <input type="text" value={quotationForm.directExpenses.repairsAndMaintenance.tires}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, repairsAndMaintenance: { ...p.directExpenses.repairsAndMaintenance, tires: r } } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, repairsAndMaintenance: { ...p.directExpenses.repairsAndMaintenance, tires: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-
-                          <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">Salaries and Wages</p>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700 pl-4">a. Driver</span>
-                            <input type="text" value={quotationForm.directExpenses.salariesAndWages.driver}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, driver: r } } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, driver: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700 pl-4">b. Helper (1)</span>
-                            <input type="text" value={quotationForm.directExpenses.salariesAndWages.helper1}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, helper1: r } } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, helper1: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          {isLargeTruck(selectedRequest) && (
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700 pl-4">c. Helper (2)</span>
-                            <input type="text" value={quotationForm.directExpenses.salariesAndWages.helper2}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, helper2: r } } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, salariesAndWages: { ...p.directExpenses.salariesAndWages, helper2: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          )}
-
-                          <div className="flex items-center justify-between gap-3 py-1.5 mt-1">
-                            <span className="text-sm font-medium text-slate-700">Trip Allowance</span>
-                            <input type="text" value={quotationForm.directExpenses.tripAllowance}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, tripAllowance: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, tripAllowance: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700">Lodging Allowance</span>
-                            <input type="text" value={quotationForm.directExpenses.lodgingAllowance}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, lodgingAllowance: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, lodgingAllowance: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-1.5">
-                            <span className="text-sm font-medium text-slate-700">Toll/Parking (Delivery Truck)</span>
-                            <input type="text" value={quotationForm.directExpenses.tollParking}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, tollParking: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, directExpenses: { ...p.directExpenses, tollParking: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-300 bg-white" placeholder="0.00" />
-                          </div>
-
-                          <div className="mt-3 flex items-center justify-between rounded-lg bg-blue-200/60 px-4 py-3">
-                            <span className="text-sm font-bold text-blue-900">Total Direct Expenses</span>
-                            <span className="text-base font-bold text-blue-900">₱{fm(getDirectTotal())}</span>
-                          </div>
-                        </div>
-
-                        {/* — Indirect Expenses (editable, pre-filled) — */}
-                        <div className="rounded-xl border-2 border-amber-200 bg-amber-50/60 p-4">
-                          <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-amber-800 mb-4">
-                            <span className="h-3 w-3 rounded-full bg-amber-600" />
-                            Indirect Expenses
-                          </h4>
-
-                          <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
-                            <span className="text-sm font-medium text-slate-700">Administration Fees</span>
-                            <input type="text" value={quotationForm.indirectExpenses.adminFees}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, adminFees: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, adminFees: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-amber-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
-                            <span className="text-sm font-medium text-slate-700">Insurance (Vehicle)</span>
-                            <input type="text" value={quotationForm.indirectExpenses.insurance}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, insurance: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, insurance: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-amber-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
-                            <span className="text-sm font-medium text-slate-700">Motor Vehicle Registration</span>
-                            <input type="text" value={quotationForm.indirectExpenses.motorVehicleReg}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, motorVehicleReg: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, motorVehicleReg: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-amber-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-300 bg-white" placeholder="0.00" />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 py-2">
-                            <span className="text-sm font-medium text-slate-700">Rental (Garage)</span>
-                            <input type="text" value={quotationForm.indirectExpenses.garageRental}
-                              onChange={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, garageRental: r } })) }}
-                              onBlur={(e) => { const r = e.target.value.replace(/[^0-9.]/g, ''); if (r && !isNaN(parseFloat(r))) setQuotationForm(p => ({ ...p, indirectExpenses: { ...p.indirectExpenses, garageRental: parseFloat(r).toLocaleString('en-US', { minimumFractionDigits: 2 }) } })) }}
-                              className="w-40 rounded-lg border border-amber-200 px-3 py-2 text-sm text-right font-mono outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-300 bg-white" placeholder="0.00" />
-                          </div>
-
-                          <div className="mt-3 flex items-center justify-between rounded-lg bg-amber-200/60 px-4 py-3">
-                            <span className="text-sm font-bold text-amber-900">Total Indirect Expenses</span>
-                            <span className="text-base font-bold text-amber-900">₱{fm(getIndirectTotal())}</span>
-                          </div>
-                        </div>
-
-                        {/* — Summary — */}
-                        <div className="rounded-xl border-2 border-slate-300 bg-slate-100/70 p-4 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-semibold text-slate-700">Total Operating Expenses</span>
-                            <span className="text-base font-bold text-slate-900">₱{fm(getOperatingTotal())}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-semibold text-slate-700">Income (15%)</span>
-                            <span className="text-base font-bold text-emerald-700">₱{fm(getIncome())}</span>
-                          </div>
-                          <div className="flex items-center justify-between border-t-2 border-slate-300 pt-2">
-                            <span className="text-sm font-bold text-slate-900 uppercase">Proposed Rate</span>
-                            <span className="text-lg font-bold text-sky-700">₱{fm(getProposedRate())}</span>
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={handleSubmitUpdatedQuotation}
-                          className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-sky-700 transition"
-                        >
-                          <Send className="h-4 w-4" />
-                          Submit Updated Quotation
-                        </button>
-                      </div>
+                      <QuotationExpenseForm
+                        form={quotationForm}
+                        onFormChange={setQuotationForm}
+                        distanceKm={selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0}
+                        distanceLabel={selectedRequest ? getTotalDistance(selectedRequest) : '0'}
+                        isLargeTruckFlag={selectedRequest ? isLargeTruck(selectedRequest) : false}
+                        directTotal={getDirectTotal()}
+                        indirectTotal={getIndirectTotal()}
+                        operatingTotal={getOperatingTotal()}
+                        income={getIncome()}
+                        proposedRate={getProposedRate()}
+                        onSubmit={handleSubmitUpdatedQuotation}
+                        submitLabel="Submit Updated Quotation"
+                      />
                     )}
 
                   </div>
+                  )}
                 </div>
               )}
-
-                  {['APPROVED', 'ASSIGNED', 'FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'].includes(selectedRequest.status) && selectedRequest.quotation && (
-                    <div className="mt-3 space-y-3">
-                      <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                        <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                        <p className="text-sm text-emerald-800 font-medium">
-                          Quotation Approved
-                        </p>
-                      </div>
-
-                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 space-y-3">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="text-xs font-medium text-emerald-600 uppercase tracking-wide">Approved Amount</p>
-                            <p className="text-2xl font-bold text-emerald-800">
-                              PHP {Number(selectedRequest.quotation.amount).toLocaleString()}
-                            </p>
-                          </div>
-                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                            <Check className="h-3 w-3" />
-                            Approved
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
 
               {hasApproved && quotationSubmitted && ['APPROVED', 'ASSIGNED', 'FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'].includes(selectedRequest.status) && (
                 <div
@@ -2933,8 +2777,8 @@ function SupDeliveries() {
                   }`}
                 >
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-900">Dispatch and Assignment</h3>
-                    <p className="mt-1 text-xs text-slate-600">Choose the best-fit crew and truck for this approved request.</p>
+                    <h3 className="text-sm font-semibold text-slate-900">Assign Vehicle and Delivery Crew</h3>
+                    <p className="mt-1 text-xs text-slate-600">Pick a vehicle — its default driver and helper are pre-filled. You can override them before confirming.</p>
                   </div>
 
                   {selectedRequest.crew?.driver && selectedRequest.crew?.truck?.plateNumber && (
@@ -2951,7 +2795,79 @@ function SupDeliveries() {
                   )}
 
                   <div className="mt-4 space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Available Drivers</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Available Vehicles</p>
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setAssignment(prev => ({ ...prev, _showTrucks: !prev._showTrucks }))}
+                        className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
+                      >
+                        {selectedTruck ? (
+                          <div className="flex flex-1 items-center gap-3 min-w-0">
+                            <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-center text-[10px] font-bold leading-tight text-indigo-700">{selectedTruck.truckType}</span>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold text-slate-900">{selectedTruck.plateNumber}</p>
+                              <p className="text-xs text-slate-500">{selectedTruck.truckType} • {selectedTruck.commodityType} • {selectedTruck.capacity}</p>
+                              {selectedDriver && (
+                                <p className="mt-0.5 truncate text-[10px] font-medium text-indigo-600">Default driver: {selectedDriver.name}</p>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="flex-1 text-sm text-slate-400">Select a vehicle...</span>
+                        )}
+                        <svg className={`ml-auto h-5 w-5 shrink-0 text-slate-400 transition ${assignment._showTrucks ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                      {assignment._showTrucks && (
+                        <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                          {mockTrucks.filter(t => t.status === 'available' || t.plateNumber === assignment.plateNumber).map(truck => {
+                            const defaultDriver = getDefaultDriverForTruck(truck)
+                            return (
+                              <button
+                                key={truck.plateNumber}
+                                type="button"
+                                onClick={() => {
+                                  const defaultDriver = getDefaultDriverForTruck(truck)
+                                  setAssignment(prev => ({
+                                    ...prev,
+                                    plateNumber: truck.plateNumber,
+                                    driverId: defaultDriver ? defaultDriver.id : prev.driverId,
+                                    helperIds: defaultDriver ? getDefaultHelpersForDriver(defaultDriver) : prev.helperIds,
+                                    _showTrucks: false,
+                                  }))
+                                }}
+                                className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
+                                  assignment.plateNumber === truck.plateNumber ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
+                                }`}
+                              >
+                                <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-center text-[10px] font-bold leading-tight text-slate-600">{truck.truckType}</span>
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-semibold text-slate-900">{truck.plateNumber}</p>
+                                  <p className="text-xs text-slate-500">{truck.truckType} • {truck.commodityType} • {truck.capacity}</p>
+                                  {defaultDriver && (
+                                    <p className="mt-0.5 text-[10px] text-slate-400">Default driver: {defaultDriver.name}</p>
+                                  )}
+                                </div>
+                                {assignment.plateNumber === truck.plateNumber && (
+                                  <svg className="h-5 w-5 shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                )}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Driver
+                      <span className="ml-1 font-normal normal-case text-slate-400">(default for vehicle — change if needed)</span>
+                    </p>
                     <div className="relative">
                       <button
                         type="button"
@@ -2960,7 +2876,7 @@ function SupDeliveries() {
                       >
                         {selectedDriver ? (
                           <>
-                            <img src={selectedDriver.avatarUrl} alt={selectedDriver.name} className="h-10 w-10 rounded-lg object-cover" />
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">{getInitials(selectedDriver.name)}</span>
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-sm font-semibold text-slate-900">{selectedDriver.name}</p>
                               <p className="text-xs text-slate-500">{selectedDriver.id} • ★ {selectedDriver.rating} • {selectedDriver.trips} trips</p>
@@ -2980,13 +2896,18 @@ function SupDeliveries() {
                               key={driver.id}
                               type="button"
                               onClick={() => {
-                                setAssignment(prev => ({ ...prev, driverId: driver.id, _showDrivers: false }))
+                                setAssignment(prev => ({
+                                  ...prev,
+                                  driverId: driver.id,
+                                  helperIds: getDefaultHelpersForDriver(driver),
+                                  _showDrivers: false,
+                                }))
                               }}
                               className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
                                 assignment.driverId === driver.id ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
                               }`}
                             >
-                              <img src={driver.avatarUrl} alt={driver.name} className="h-9 w-9 rounded-lg object-cover" />
+                              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(driver.name)}</span>
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-semibold text-slate-900">{driver.name}</p>
                                 <p className="text-xs text-slate-500">{driver.trips} trips • ★ {driver.rating}</p>
@@ -3004,58 +2925,10 @@ function SupDeliveries() {
                   </div>
 
                   <div className="mt-4 space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Available Trucks</p>
-                    <div className="relative">
-                      <button
-                        type="button"
-                        onClick={() => setAssignment(prev => ({ ...prev, _showTrucks: !prev._showTrucks }))}
-                        className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
-                      >
-                        {selectedTruck ? (
-                          <div className="flex items-center gap-3 flex-1 min-w-0">
-                            <img src={selectedTruck.imageUrl} alt={selectedTruck.plateNumber} className="h-10 w-16 rounded-lg object-cover" />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-slate-900">{selectedTruck.plateNumber}</p>
-                              <p className="text-xs text-slate-500">{selectedTruck.truckType} • {selectedTruck.capacity}</p>
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="flex-1 text-sm text-slate-400">Select a truck...</span>
-                        )}
-                        <svg className={`ml-auto h-5 w-5 shrink-0 text-slate-400 transition ${assignment._showTrucks ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                      {assignment._showTrucks && (
-                        <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {mockTrucks.filter(t => t.status === 'available' || t.plateNumber === assignment.plateNumber).map(truck => (
-                            <button
-                              key={truck.plateNumber}
-                              type="button"
-                              onClick={() => setAssignment(prev => ({ ...prev, plateNumber: truck.plateNumber, _showTrucks: false }))}
-                              className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
-                                assignment.plateNumber === truck.plateNumber ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
-                              }`}
-                            >
-                              <img src={truck.imageUrl} alt={truck.plateNumber} className="h-10 w-16 rounded-lg object-cover shrink-0" />
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-semibold text-slate-900">{truck.plateNumber}</p>
-                                <p className="text-xs text-slate-500">{truck.truckType} • {truck.capacity}</p>
-                              </div>
-                              {assignment.plateNumber === truck.plateNumber && (
-                                <svg className="h-5 w-5 shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                </svg>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-4 space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Available Helpers (max 2)</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Helpers
+                      <span className="ml-1 font-normal normal-case text-slate-400">(default for driver — change if needed)</span>
+                    </p>
                     <div className="relative">
                       <button
                         type="button"
@@ -3065,8 +2938,7 @@ function SupDeliveries() {
                         {selectedHelpers.length > 0 ? (
                           <div className="flex flex-1 flex-wrap items-center gap-2">
                             {selectedHelpers.map(h => (
-                              <span key={h.id} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
-                                <img src={h.avatarUrl} alt={h.name} className="h-5 w-5 rounded object-cover" />
+                              <span key={h.id} className="inline-flex items-center rounded-lg bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
                                 {h.name}
                               </span>
                             ))}
@@ -3093,7 +2965,7 @@ function SupDeliveries() {
                                   isSelected ? 'bg-indigo-50' : disabled ? 'opacity-40 cursor-not-allowed' : 'hover:bg-slate-50'
                                 }`}
                               >
-                                <img src={helper.avatarUrl} alt={helper.name} className="h-9 w-9 rounded-lg object-cover" />
+                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(helper.name)}</span>
                                 <div className="min-w-0 flex-1">
                                   <p className={`truncate text-sm font-semibold ${isSelected ? 'text-indigo-900' : 'text-slate-900'}`}>{helper.name}</p>
                                   <p className="text-xs text-slate-500">{helper.id} • Loading Team</p>
@@ -3118,11 +2990,11 @@ function SupDeliveries() {
                   <button
                     onClick={() => setShowConfirmDialog(true)}
                     disabled={!canConfirmAssignment}
-                    title={!canConfirmAssignment ? 'Select a driver, truck, and at least one helper.' : undefined}
+                    title={!canConfirmAssignment ? 'Select a vehicle and at least one helper.' : undefined}
                     className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Users className="h-4 w-4" />
-                    {selectedRequest.crew?.driver ? 'Update Drivers and Helpers' : 'Confirm Drivers and Helpers'}
+                    {selectedRequest.crew?.driver ? 'Update Vehicle and Crew' : 'Confirm Vehicle and Crew'}
                   </button>
                 </div>
               )}
@@ -3143,7 +3015,7 @@ function SupDeliveries() {
 
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                         <div className="flex items-center gap-3">
-                          <img src={selectedDriver.avatarUrl} alt={selectedDriver.name} className="h-10 w-10 rounded-lg object-cover" />
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">{getInitials(selectedDriver.name)}</span>
                           <div>
                             <p className="text-sm font-semibold text-slate-900">{selectedDriver.name}</p>
                             <p className="text-xs text-slate-500">Driver</p>
@@ -3154,14 +3026,14 @@ function SupDeliveries() {
                             <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Helpers</p>
                             {selectedHelpers.map(h => (
                               <div key={h.id} className="flex items-center gap-3">
-                                <img src={h.avatarUrl} alt={h.name} className="h-8 w-8 rounded-lg object-cover" />
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(h.name)}</span>
                                 <p className="text-sm text-slate-900">{h.name}</p>
                               </div>
                             ))}
                           </div>
                         )}
                         <div className="border-t border-slate-200 pt-3 flex items-center gap-3">
-                          <img src={selectedTruck.imageUrl} alt={selectedTruck.plateNumber} className="h-10 w-16 rounded-lg object-cover" />
+                          <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-center text-[10px] font-bold leading-tight text-slate-600">{selectedTruck.truckType}</span>
                           <div>
                             <p className="text-sm font-semibold text-slate-900">{selectedTruck.plateNumber}</p>
                             <p className="text-xs text-slate-500">{selectedTruck.truckType} • {selectedTruck.capacity}</p>
@@ -3396,32 +3268,85 @@ function SupDeliveries() {
         </>
       ) : (
         <div className="flex h-full flex-col gap-4 overflow-hidden">
-          <div className="flex shrink-0 flex-wrap gap-3">
+          {!selectedReportId && (
+          <div className="flex shrink-0 flex-wrap gap-2">
           <button
             onClick={() => setActiveModule('inbox')}
-            className={`rounded-xl px-4 py-2.5 text-sm font-medium transition ${
-              activeModule === 'inbox' ? 'bg-slate-900 text-white' : 'border border-slate-200 bg-white text-slate-700'
+            className={`group inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 ${
+              activeModule === 'inbox'
+                ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
+                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 hover:shadow-sm'
             }`}
           >
-            Delivery Requests Inbox ({inboxRows.length})
+            Delivery Requests Inbox
+            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none ${
+              activeModule === 'inbox' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-200'
+            }`}>
+              {inboxRows.length}
+            </span>
           </button>
           <button
             onClick={() => setActiveModule('assignment')}
-            className={`rounded-xl px-4 py-2.5 text-sm font-medium transition ${
-              activeModule === 'assignment' ? 'bg-indigo-600 text-white' : 'border border-slate-200 bg-white text-slate-700'
+            className={`group inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 ${
+              activeModule === 'assignment'
+                ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
+                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 hover:shadow-sm'
             }`}
           >
-            Assign Delivery Crew ({pendingAssignments.length})
+            Assign Vehicle
+            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none ${
+              activeModule === 'assignment' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-200'
+            }`}>
+              {pendingAssignments.length}
+            </span>
           </button>
           <button
-            onClick={() => setActiveModule('tracking')}
-            className={`rounded-xl px-4 py-2.5 text-sm font-medium transition ${
-              activeModule === 'tracking' ? 'bg-slate-900 text-white' : 'border border-slate-200 bg-white text-slate-700'
+            onClick={() => setActiveModule('transit')}
+            className={`group inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 ${
+              activeModule === 'transit'
+                ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
+                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 hover:shadow-sm'
             }`}
           >
-            Deliveries ({ongoingDeliveries.length + completedDeliveries.length})
+            In Transit Deliveries
+            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none ${
+              activeModule === 'transit' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-200'
+            }`}>
+              {ongoingDeliveries.length}
+            </span>
           </button>
-        </div>
+          <button
+            onClick={() => setActiveModule('completed')}
+            className={`group inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 ${
+              activeModule === 'completed'
+                ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
+                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 hover:shadow-sm'
+            }`}
+          >
+            Completed Deliveries
+            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none ${
+              activeModule === 'completed' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-200'
+            }`}>
+              {completedDeliveries.length}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveModule('cancelled')}
+            className={`group inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 ${
+              activeModule === 'cancelled'
+                ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
+                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 hover:shadow-sm'
+            }`}
+          >
+            Cancellations
+            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none ${
+              activeModule === 'cancelled' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-200'
+            }`}>
+              {cancelledDeliveries.length}
+            </span>
+          </button>
+          </div>
+          )}
 
         {activeModule === 'inbox' && (
           <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
@@ -3431,14 +3356,14 @@ function SupDeliveries() {
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <input
                     value={search}
-                    onChange={(e) => setSearch(e.target.value)}
+                    onChange={(e) => { setSearch(e.target.value); setPage(1) }}
                     placeholder="Search by ID, customer, company, or address..."
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
                   />
                 </div>
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}
                   className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
                 >
                   <option value="ALL">All Statuses</option>
@@ -3449,7 +3374,7 @@ function SupDeliveries() {
                 </select>
                 <select
                   value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value)}
+                  onChange={(e) => { setSortBy(e.target.value); setPage(1) }}
                   className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
                 >
                   <option value="createdAt_desc">Newest First</option>
@@ -3461,7 +3386,7 @@ function SupDeliveries() {
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="shrink-0 hidden grid-cols-[0.55fr_0.65fr_1.1fr_1.6fr_1.6fr_0.55fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.55fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                 <span className="text-center">Status</span>
                 <span className="text-center">Request ID</span>
                 <span className="text-left">Customer</span>
@@ -3480,10 +3405,10 @@ function SupDeliveries() {
                   <article
                     key={row.id}
                     onClick={() => openDetails(row)}
-                    className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 lg:grid-cols-[0.55fr_0.65fr_1.1fr_1.6fr_1.6fr_0.55fr_0.3fr] lg:items-center"
+                    className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.55fr_0.3fr] lg:items-center"
                   >
                     <div className="flex justify-center">
-                      <span className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap ${statusBadge[row.status]}`}>
+                      <span className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[row.status]}`}>
                         {row.status.replaceAll('_', ' ')}
                       </span>
                     </div>
@@ -3502,76 +3427,7 @@ function SupDeliveries() {
                   ))}
               </div>
 
-              {totalPages > 1 && (
-                <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
-                  <p className="text-sm text-slate-500">
-                    Page {page} of {totalPages}
-                  </p>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setPage(1)}
-                      disabled={page === 1}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
-                      title="First page"
-                    >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
-                    </button>
-                    <button
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      disabled={page === 1}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
-                    >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-                    </button>
-                    <div className="flex items-center gap-1 px-1">
-                      {(() => {
-                        const pages = []
-                        if (totalPages <= 7) {
-                          for (let i = 1; i <= totalPages; i++) pages.push(i)
-                        } else {
-                          pages.push(1)
-                          if (page > 3) pages.push('...')
-                          for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i)
-                          if (page < totalPages - 2) pages.push('...')
-                          pages.push(totalPages)
-                        }
-                        return pages.map((num, idx) =>
-                          num === '...' ? (
-                            <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
-                          ) : (
-                            <button
-                              key={num}
-                              onClick={() => setPage(num)}
-                              className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
-                                num === page
-                                  ? 'bg-slate-900 text-white shadow-sm'
-                                  : 'text-slate-600 hover:bg-slate-100'
-                              }`}
-                            >
-                              {num}
-                            </button>
-                          )
-                        )
-                      })()}
-                    </div>
-                    <button
-                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={page === totalPages}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
-                    >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                    </button>
-                    <button
-                      onClick={() => setPage(totalPages)}
-                      disabled={page === totalPages}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
-                      title="Last page"
-                    >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
-                    </button>
-                  </div>
-                </div>
-              )}
+              <PaginationBar page={page} setPage={setPage} totalPages={totalPages} />
             </div>
           </section>
         )}
@@ -3609,7 +3465,7 @@ function SupDeliveries() {
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="shrink-0 hidden grid-cols-[0.55fr_0.65fr_1.1fr_1.6fr_1.6fr_0.7fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                 <span className="text-center">Status</span>
                 <span className="text-center">Request ID</span>
                 <span className="text-left">Customer</span>
@@ -3631,15 +3487,11 @@ function SupDeliveries() {
                 {paginatedAssign.map((row) => (
                   <article
                     key={row.id}
-                    onClick={() => {
-                      setSelectedRequest(row)
-                      setHasApproved(true)
-                      setQuotationSubmitted(true)
-                    }}
-                    className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 lg:grid-cols-[0.55fr_0.65fr_1.1fr_1.6fr_1.6fr_0.7fr_0.3fr] lg:items-center"
+                    onClick={() => openDetails(row)}
+                    className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] lg:items-center"
                   >
                     <div className="flex justify-center">
-                      <span className="inline-flex shrink-0 rounded-full bg-indigo-100 px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap text-indigo-700">
+                      <span className="inline-flex max-w-full rounded-full bg-indigo-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] text-indigo-700">
                         APPROVED
                       </span>
                     </div>
@@ -3660,248 +3512,514 @@ function SupDeliveries() {
                 ))}
               </div>
 
-              {assignTotalPages > 1 && (
-                <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
-                  <p className="text-sm text-slate-500">
-                    Page {assignPage} of {assignTotalPages}
-                  </p>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setAssignPage(1)}
-                      disabled={assignPage === 1}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
-                      title="First page"
-                    >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
-                    </button>
-                    <button
-                      onClick={() => setAssignPage((p) => Math.max(1, p - 1))}
-                      disabled={assignPage === 1}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
-                    >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-                    </button>
-                    <div className="flex items-center gap-1 px-1">
-                      {(() => {
-                        const pages = []
-                        if (assignTotalPages <= 7) {
-                          for (let i = 1; i <= assignTotalPages; i++) pages.push(i)
-                        } else {
-                          pages.push(1)
-                          if (assignPage > 3) pages.push('...')
-                          for (let i = Math.max(2, assignPage - 1); i <= Math.min(assignTotalPages - 1, assignPage + 1); i++) pages.push(i)
-                          if (assignPage < assignTotalPages - 2) pages.push('...')
-                          pages.push(assignTotalPages)
-                        }
-                        return pages.map((num, idx) =>
-                          num === '...' ? (
-                            <span key={`ellipsis-a-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
-                          ) : (
-                            <button
-                              key={num}
-                              onClick={() => setAssignPage(num)}
-                              className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
-                                num === assignPage
-                                  ? 'bg-slate-900 text-white shadow-sm'
-                                  : 'text-slate-600 hover:bg-slate-100'
-                              }`}
-                            >
-                              {num}
-                            </button>
-                          )
-                        )
-                      })()}
-                    </div>
-                    <button
-                      onClick={() => setAssignPage((p) => Math.min(assignTotalPages, p + 1))}
-                      disabled={assignPage === assignTotalPages}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
-                    >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                    </button>
-                    <button
-                      onClick={() => setAssignPage(assignTotalPages)}
-                      disabled={assignPage === assignTotalPages}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
-                      title="Last page"
-                    >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
-                    </button>
-                  </div>
-                </div>
-              )}
+              <PaginationBar page={assignPage} setPage={setAssignPage} totalPages={assignTotalPages} />
             </div>
           </section>
         )}
 
-        {activeModule === 'tracking' && (
+        {activeModule === 'transit' && (
           <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
-            <div className="flex flex-wrap gap-3 rounded-2xl border border-slate-200 bg-white p-3">
-              <button
-                onClick={() => setTrackingTab('ongoing')}
-                className={`rounded-xl px-4 py-2 text-sm font-medium ${
-                  trackingTab === 'ongoing' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                On-going Deliveries ({ongoingDeliveries.length})
-              </button>
-              <button
-                onClick={() => setTrackingTab('completed')}
-                className={`rounded-xl px-4 py-2 text-sm font-medium ${
-                  trackingTab === 'completed' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                Completed Deliveries ({completedDeliveries.length})
-              </button>
+            <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={transitSearch}
+                    onChange={(e) => setTransitSearch(e.target.value)}
+                    placeholder="Search by ID, customer, company, or address..."
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
+                  />
+                </div>
+                <select
+                  value={transitStatusFilter}
+                  onChange={(e) => setTransitStatusFilter(e.target.value)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="FOR_PICKUP">PICKUP</option>
+                  <option value="OUT_FOR_DELIVERY">DROPOFF</option>
+                  <option value="DELIVERED">Delivered</option>
+                </select>
+              </div>
             </div>
 
-            {trackingTab === 'ongoing' && (
-              <>
-                <div className="flex flex-wrap gap-3">
-                  {['FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED'].map((lane) => (
-                    <button
-                      key={lane}
-                      onClick={() => setOngoingLane(lane)}
-                      className={`rounded-xl px-4 py-2 text-sm font-semibold ${
-                        ongoingLane === lane ? 'bg-emerald-600 text-white' : 'border border-slate-200 bg-white text-slate-700'
-                      }`}
-                    >
-                      {lane === 'FOR_PICKUP' ? 'For Pickup' : lane === 'OUT_FOR_DELIVERY' ? 'Out for Delivery' : 'Delivered'}
-                    </button>
-                  ))}
+            <div className="grid min-h-0 gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+              <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="shrink-0 hidden grid-cols-[0.6fr_0.7fr_1.2fr_0.5fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                  <span className="text-center">Status</span>
+                  <span className="text-center">Request ID</span>
+                  <span className="text-left">Customer</span>
+                  <span className="text-right">View Details</span>
                 </div>
 
-                <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <h3 className="text-base font-semibold text-slate-900">Active Deliveries List</h3>
-                    <div className="mt-3 space-y-3">
-                      {laneRows.length === 0 && <p className="text-sm text-slate-500">No deliveries in this status.</p>}
-                      {laneRows.map((delivery) => (
-                        <button
-                          key={delivery.id}
-                          onClick={() => openDetails(delivery)}
-                          className="w-full rounded-xl border border-slate-200 p-3 text-left transition hover:border-sky-300 hover:bg-sky-50"
-                        >
-                          <p className="text-sm font-semibold text-slate-900">{delivery.id} • {delivery.companyName}</p>
-                          <p className="mt-1 text-xs text-slate-600">{delivery.deliveryAddress}</p>
-                          <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-                            <Truck className="h-3.5 w-3.5" />
-                            <span>{delivery.crew?.truck?.plateNumber || 'Truck TBA'}</span>
-                            <Calendar className="ml-3 h-3.5 w-3.5" />
-                            <span>{delivery.pickupDate} {delivery.pickupTime}</span>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                  {filteredTransit.length === 0 && (
+                    <div className="px-5 py-14 text-center text-slate-500">No in-transit deliveries found.</div>
+                  )}
 
-                  <div className="space-y-4">
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                      <div className="border-b border-slate-200 px-4 py-3">
-                        <h3 className="text-base font-semibold text-slate-900">Real-time Truck Location</h3>
-                        <p className="text-xs text-slate-500">
-                          {highlightedTracking ? `${highlightedTracking.id} • ${highlightedTracking.status.replaceAll('_', ' ')}` : 'No active truck'}
-                        </p>
+                  {filteredTransit.map((delivery) => (
+                    <article
+                      key={delivery.id}
+                      onClick={() => setMonitoredDeliveryId(delivery.id)}
+                      className={`grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.6fr_0.7fr_1.2fr_0.5fr] lg:items-center ${
+                        monitoredDelivery?.id === delivery.id ? 'bg-sky-50 hover:bg-sky-50' : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex justify-center">
+                        <span className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[delivery.status]}`}>
+                          {transitStatusLabel[delivery.status] ?? delivery.status.replaceAll('_', ' ')}
+                        </span>
                       </div>
+                      <p className="text-sm font-mono font-semibold text-slate-900 text-center">{delivery.id}</p>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{delivery.customerName}</p>
+                        <p className="text-xs text-slate-500">{delivery.companyName}</p>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openDetails(delivery)
+                        }}
+                        className="flex items-center justify-end gap-0.5 text-sm font-semibold text-sky-600 hover:text-sky-700"
+                      >
+                        View Details
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </div>
+
+              <div className="min-h-0 space-y-4 overflow-y-auto">
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="border-b border-slate-200 px-4 py-3">
+                    <h3 className="text-base font-semibold text-slate-900">Real-time Monitoring</h3>
+                    <p className="text-xs text-slate-500">
+                      {monitoredDelivery ? `${monitoredDelivery.id} • ${transitStatusLabel[monitoredDelivery.status] ?? monitoredDelivery.status.replaceAll('_', ' ')}` : 'No active truck'}
+                    </p>
+                  </div>
+                  {monitoredDelivery ? (
+                    <div className="p-4">
                       <iframe
                         title="Live Delivery Map"
-                        src={toGoogleMapEmbed(highlightedTracking?.currentLocation || highlightedTracking?.destinationCoords)}
-                        className="h-64 w-full"
+                        src={toGoogleMapEmbed(monitoringByDelivery[monitoredDelivery.id]?.currentLocation || monitoredDelivery.currentLocation || monitoredDelivery.destinationCoords)}
+                        className="h-56 w-full rounded-xl"
                         loading="lazy"
                         referrerPolicy="no-referrer-when-downgrade"
                       />
+                      {monitoringByDelivery[monitoredDelivery.id] && (
+                        <div className="mt-4 space-y-3">
+                          <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
+                              {getInitials(monitoringByDelivery[monitoredDelivery.id].driver?.name || '?')}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-slate-900">
+                                {monitoringByDelivery[monitoredDelivery.id].driver?.name || 'Driver TBA'}
+                              </p>
+                              <p className="truncate text-xs text-slate-500">
+                                <Truck className="mr-1 inline h-3.5 w-3.5" />
+                                {monitoringByDelivery[monitoredDelivery.id].truck?.plateNumber || 'Truck TBA'}
+                                {monitoringByDelivery[monitoredDelivery.id].truck && ` • ${monitoringByDelivery[monitoredDelivery.id].truck.truckType}`}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="rounded-xl bg-slate-50 p-3">
+                              <p className="text-xs text-slate-500">Speed</p>
+                              <p className="text-xl font-bold text-slate-900">{monitoringByDelivery[monitoredDelivery.id].speedKmh} km/h</p>
+                          </div>
+                          <div className="rounded-xl bg-slate-50 p-3">
+                            <p className="text-xs text-slate-500">Last Update</p>
+                            <p className="text-sm font-bold text-slate-900">{monitoringByDelivery[monitoredDelivery.id].lastUpdate}</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  ) : (
+                    <div className="p-4">
+                      <p className="py-10 text-center text-sm text-slate-500">No active truck to monitor.</p>
                     </div>
+                  )}
+                </div>
 
-                    <div className="grid grid-cols-2 gap-3 rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="rounded-xl bg-slate-50 p-3">
-                        <p className="text-xs text-slate-500">Driver Analytics</p>
-                        <p className="text-xl font-bold text-slate-900">94%</p>
-                        <p className="text-xs text-slate-500">Average on-time rate</p>
-                      </div>
-                      <div className="rounded-xl bg-slate-50 p-3">
-                        <p className="text-xs text-slate-500">Active Trucks</p>
-                        <p className="text-xl font-bold text-slate-900">{ongoingDeliveries.length}</p>
-                        <p className="text-xs text-slate-500">Across all lanes</p>
-                      </div>
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                    <div>
+                      <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                        <Activity className="h-4 w-4 text-emerald-600" />
+                        DriveWise Alerts
+                      </h3>
+                      <p className="text-xs text-slate-500">AI driver monitoring • drowsiness & rest safety</p>
+                    </div>
+                    {alertsByDelivery[monitoredDelivery?.id] ? (
+                      <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                        <span className="relative flex h-2 w-2">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                        </span>
+                        LIVE
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {monitoredDelivery && alertsByDelivery[monitoredDelivery.id] ? (
+                    (() => {
+                      const alert = alertsByDelivery[monitoredDelivery.id]
+                      const tone = DROWSINESS_TONES[alert.drowsinessLevel] || DROWSINESS_TONES.LOW
+                      const cameraOk = alert.cameraStatus === 'ACTIVE'
+                      const eyesOk = alert.eyeDetection === 'DETECTED'
+                      return (
+                        <div className="space-y-3 p-4">
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="rounded-xl bg-slate-50 p-3">
+                              <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                <Camera className="h-3.5 w-3.5" />
+                                Camera Feed
+                              </p>
+                              <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${cameraOk ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                <span className={`h-2 w-2 rounded-full ${cameraOk ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                {alert.cameraStatus}
+                              </p>
+                            </div>
+                            <div className="rounded-xl bg-slate-50 p-3">
+                              <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                <EyeOff className="h-3.5 w-3.5" />
+                                Eye Detection
+                              </p>
+                              <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${eyesOk ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                <span className={`h-2 w-2 rounded-full ${eyesOk ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                {alert.eyeDetection}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="rounded-xl bg-slate-50 p-3">
+                              <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                <Vibrate className="h-3.5 w-3.5" />
+                                Seat Vibration
+                              </p>
+                              <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${alert.seatVibration === 'ACTIVE' ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                <span className={`h-2 w-2 rounded-full ${alert.seatVibration === 'ACTIVE' ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                                {alert.seatVibration}
+                              </p>
+                            </div>
+                            <div className="rounded-xl bg-slate-50 p-3">
+                              <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                <Volume2 className="h-3.5 w-3.5" />
+                                Audio Alert
+                              </p>
+                              <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${alert.audioAlert === 'ACTIVE' ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                <span className={`h-2 w-2 rounded-full ${alert.audioAlert === 'ACTIVE' ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                                {alert.audioAlert}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className={`rounded-xl p-3 ${tone.box}`}>
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                Drowsiness Level
+                              </p>
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${tone.badge}`}>{alert.drowsinessLevel}</span>
+                            </div>
+                            <p className="mt-1 text-xs opacity-80">
+                              Driving {alert.drivingHours} hrs • {alert.drivingDistanceKm} km • Avg. eye closure {alert.avgClosureDurationMs} ms
+                            </p>
+                          </div>
+
+                          <div>
+                            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Alert Triggers</p>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="rounded-xl bg-slate-50 p-3">
+                                <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                  <Repeat className="h-3.5 w-3.5" />
+                                  Prolonged Eye Closure
+                                </p>
+                                <p className="mt-0.5 text-lg font-bold text-slate-900">{alert.prolongedEyeClosure}</p>
+                              </div>
+                              <div className="rounded-xl bg-slate-50 p-3">
+                                <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                  <Repeat className="h-3.5 w-3.5" />
+                                  Repeated Eye Closure
+                                </p>
+                                <p className="mt-0.5 text-lg font-bold text-slate-900">{alert.repeatedEyeClosure}</p>
+                              </div>
+                              <div className="rounded-xl bg-slate-50 p-3">
+                                <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                  <Activity className="h-3.5 w-3.5" />
+                                  Yawning
+                                </p>
+                                <p className="mt-0.5 text-lg font-bold text-slate-900">{alert.yawnCount}</p>
+                              </div>
+                              <div className="rounded-xl bg-slate-50 p-3">
+                                <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                  <EyeOff className="h-3.5 w-3.5" />
+                                  Eye Detection Failures
+                                </p>
+                                <p className="mt-0.5 text-lg font-bold text-slate-900">{alert.eyeDetectionFailures}</p>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="overflow-hidden rounded-xl bg-slate-50">
+                            <button
+                              type="button"
+                              onClick={() => setAlertHistoryOpenId(alertHistoryOpenId === monitoredDelivery.id ? null : monitoredDelivery.id)}
+                              className="flex w-full items-center justify-between gap-2 p-3 text-left"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Last Alert</p>
+                                <p className="mt-0.5 text-sm font-bold text-slate-900">{alert.lastAlert}</p>
+                                <p className="text-xs text-slate-500">{alert.lastAlertAt}</p>
+                              </div>
+                              <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-400">
+                                History ({alert.alertHistory.length})
+                                {alertHistoryOpenId === monitoredDelivery.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                              </span>
+                            </button>
+                            {alertHistoryOpenId === monitoredDelivery.id && (
+                              <div className="max-h-56 space-y-1 overflow-y-auto border-t border-slate-200 px-3 py-2">
+                                {alert.alertHistory.length > 0 ? (
+                                  alert.alertHistory.map((h, i) => (
+                                    <div key={i} className="flex items-center justify-between gap-2 py-1">
+                                      <span className="flex min-w-0 items-center gap-2 text-xs text-slate-700">
+                                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${ALERT_SEVERITY_DOTS[h.severity] || ALERT_SEVERITY_DOTS.INFO}`} />
+                                        <span className="truncate">{h.type}</span>
+                                      </span>
+                                      <span className="shrink-0 text-xs text-slate-500">{h.time}</span>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <p className="py-2 text-center text-xs text-slate-500">No alert history recorded.</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-800">
+                              <Coffee className="h-3.5 w-3.5" />
+                              Recommended Rest Stop
+                            </p>
+                            <p className="mt-1 text-sm font-bold text-slate-900">{alert.recommendedRestStop}</p>
+                            <p className="mt-0.5 flex items-center gap-1.5 text-xs text-amber-700">
+                              <Navigation className="h-3.5 w-3.5" />
+                              {alert.restStopDistanceKm} km ahead • Driving {alert.drivingHours} hrs / {alert.drivingDistanceKm} km
+                            </p>
+                          </div>
+                        </div>
+                      )
+                    })()
+                  ) : (
+                    <div className="p-4">
+                      <p className="py-8 text-center text-sm text-slate-500">No DriveWise telemetry for this delivery yet.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeModule === 'completed' && (
+          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+            {selectedCompletedReport ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="shrink-0 border-b border-slate-200 bg-white/95 px-4 py-2 shadow-sm backdrop-blur-sm sm:px-5">
+                  <button
+                    onClick={() => setSelectedReportId(null)}
+                    className="group inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1.5 pl-3 pr-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.97]"
+                  >
+                    <ArrowLeft className="h-4 w-4 text-slate-400 transition-transform group-hover:-translate-x-0.5 group-hover:text-blue-600" />
+                    Back
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+                  <CompletedDeliveryReport delivery={selectedCompletedReport} />
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <div className="relative flex-1">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={completedSearch}
+                        onChange={(e) => { setCompletedSearch(e.target.value); setCompletedPage(1) }}
+                        placeholder="Search by ID, customer, company, or address..."
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
+                      />
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="whitespace-nowrap text-sm text-slate-500">{completedDeliveries.length} deliveries completed</span>
                     </div>
                   </div>
+                </div>
+
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.8fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                    <span className="text-center">Status</span>
+                    <span className="text-center">Request ID</span>
+                    <span className="text-left">Customer</span>
+                    <span className="text-left">Pick-up</span>
+                    <span className="text-left">Drop-off</span>
+                    <span className="text-left">Crew</span>
+                    <span></span>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                    {paginatedCompleted.length === 0 && (
+                      <div className="flex flex-col items-center justify-center px-5 py-16 text-center">
+                        <CheckCircle2 className="h-10 w-10 text-emerald-400 mb-3" />
+                        <p className="text-sm font-medium text-slate-900">No completed deliveries found</p>
+                        <p className="mt-1 text-xs text-slate-500">Adjust your search or check back later.</p>
+                      </div>
+                    )}
+
+                    {paginatedCompleted.map((delivery) => (
+                      <article
+                        key={delivery.id}
+                        onClick={() => setSelectedReportId(delivery.id)}
+                        className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.8fr_0.3fr] lg:items-center hover:bg-slate-50"
+                      >
+                        <div className="flex justify-center">
+                          <span className="inline-flex max-w-full rounded-full bg-emerald-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-emerald-700 xl:text-[11px]">
+                            {delivery.status}
+                          </span>
+                        </div>
+                        <p className="text-sm font-mono font-semibold text-slate-900 text-center">{delivery.id}</p>
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{delivery.customerName}</p>
+                          <p className="text-xs text-slate-500">{delivery.companyName}</p>
+                        </div>
+                        <p className="text-sm text-slate-700 line-clamp-2">{delivery.pickupAddress}</p>
+                        <p className="text-sm text-slate-700 line-clamp-2">{delivery.deliveryAddress}</p>
+                        <div className="min-w-0 text-xs text-slate-500">
+                          {delivery.crew?.truck && (
+                            <p className="flex items-center gap-1 truncate">
+                              <Truck className="h-3 w-3 shrink-0" />
+                              {delivery.crew.truck.plateNumber}
+                            </p>
+                          )}
+                          {delivery.crew?.driver && (
+                            <p className="flex items-center gap-1 truncate">
+                              <Users className="h-3 w-3 shrink-0" />
+                              {delivery.crew.driver.name}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex justify-center">
+                          <ChevronRight className="h-4 w-4 text-slate-400" />
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+
+                  <PaginationBar page={completedSafePage} setPage={setCompletedPage} totalPages={completedTotalPages} />
                 </div>
               </>
             )}
+          </section>
+        )}
 
-            {trackingTab === 'completed' && (
-              <div className="space-y-4">
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <h3 className="text-base font-semibold text-slate-900">Completed Deliveries History</h3>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {completedDeliveries.filter(d => d.status === 'COMPLETED').length} completed, {completedDeliveries.filter(d => d.status === 'CANCELLED').length} cancelled
-                  </p>
-                  <div className="mt-3 space-y-3">
-                    {completedDeliveries.length === 0 && (
-                      <p className="text-sm text-slate-500 py-4 text-center">No completed deliveries yet.</p>
-                    )}
-                    {completedDeliveries.map((delivery) => (
-                      <div key={delivery.id} className="rounded-xl border border-slate-200 overflow-hidden">
-                        <article className="p-3">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <p className="text-sm font-semibold text-slate-900">{delivery.id}</p>
-                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                  delivery.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
-                                }`}>
-                                  {delivery.status}
-                                </span>
-                              </div>
-                              <p className="text-xs text-slate-600 mt-0.5">{delivery.companyName} • {delivery.deliveryAddress}</p>
-                              {delivery.crew?.driver && (
-                                <div className="mt-2 flex items-center gap-3 text-xs text-slate-500">
-                                  <span className="flex items-center gap-1">
-                                    <Truck className="h-3 w-3" />
-                                    {delivery.crew.truck.plateNumber}
-                                  </span>
-                                  <span className="flex items-center gap-1">
-                                    <Users className="h-3 w-3" />
-                                    {delivery.crew.driver.name}
-                                  </span>
-                                  <span className="flex items-center gap-1">
-                                    <Calendar className="h-3 w-3" />
-                                    {delivery.pickupDate}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                            <button
-                              onClick={() =>
-                                setExpandedReport(expandedReport === delivery.id ? null : delivery.id)
-                              }
-                              className={`shrink-0 inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                                expandedReport === delivery.id
-                                  ? 'bg-slate-100 text-slate-700'
-                                  : 'bg-sky-50 text-sky-700 hover:bg-sky-100'
-                              }`}
-                            >
-                              {expandedReport === delivery.id ? (
-                                <>Hide Report <ChevronUp className="h-3 w-3" /></>
-                              ) : (
-                                <>View Report <ChevronDown className="h-3 w-3" /></>
-                              )}
-                            </button>
-                          </div>
-                        </article>
-                        {expandedReport === delivery.id && (
-                          <div className="border-t border-slate-200 px-3 pb-3 pt-0">
-                            <CompletedDeliveryReport
-                              delivery={delivery}
-                              onClose={() => setExpandedReport(null)}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+        {activeModule === 'cancelled' && (
+          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+            {selectedCancelledReport ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="shrink-0 border-b border-slate-200 bg-white/95 px-4 py-2 shadow-sm backdrop-blur-sm sm:px-5">
+                  <button
+                    onClick={() => setSelectedReportId(null)}
+                    className="group inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1.5 pl-3 pr-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.97]"
+                  >
+                    <ArrowLeft className="h-4 w-4 text-slate-400 transition-transform group-hover:-translate-x-0.5 group-hover:text-blue-600" />
+                    Back
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+                  <CancelledDeliveryDetails delivery={selectedCancelledReport} />
                 </div>
               </div>
+            ) : (
+              <>
+                <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <div className="relative flex-1">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={cancelledSearch}
+                        onChange={(e) => { setCancelledSearch(e.target.value); setCancelledPage(1) }}
+                        placeholder="Search by ID, customer, company, or address..."
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
+                      />
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="whitespace-nowrap text-sm text-slate-500">{cancelledDeliveries.length} request{cancelledDeliveries.length === 1 ? '' : 's'} cancelled</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.9fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                    <span className="text-center">Status</span>
+                    <span className="text-center">Request ID</span>
+                    <span className="text-left">Customer</span>
+                    <span className="text-left">Pick-up</span>
+                    <span className="text-left">Drop-off</span>
+                    <span className="text-center">Cancelled From</span>
+                    <span></span>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                    {paginatedCancelled.length === 0 && (
+                      <div className="flex flex-col items-center justify-center px-5 py-16 text-center">
+                        <XCircle className="h-10 w-10 text-rose-300 mb-3" />
+                        <p className="text-sm font-medium text-slate-900">No cancellations found</p>
+                        <p className="mt-1 text-xs text-slate-500">Adjust your search or check back later.</p>
+                      </div>
+                    )}
+
+                    {paginatedCancelled.map((delivery) => (
+                      <article
+                        key={delivery.id}
+                        onClick={() => setSelectedReportId(`cancel-${delivery.id}`)}
+                        className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.9fr_0.3fr] lg:items-center hover:bg-slate-50"
+                      >
+                        <div className="flex justify-center">
+                          <span className="inline-flex max-w-full rounded-full bg-rose-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-rose-700 xl:text-[11px]">
+                            {delivery.status}
+                          </span>
+                        </div>
+                        <p className="text-sm font-mono font-semibold text-slate-900 text-center">{delivery.id}</p>
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{delivery.customerName}</p>
+                          <p className="text-xs text-slate-500">{delivery.companyName}</p>
+                        </div>
+                        <p className="text-sm text-slate-700 line-clamp-2">{delivery.pickupAddress}</p>
+                        <p className="text-sm text-slate-700 line-clamp-2">{delivery.deliveryAddress}</p>
+                        <div className="flex justify-center">
+                          {delivery.cancellation ? (
+                            <span className="inline-flex max-w-full rounded-full bg-slate-100 px-2 py-0.5 text-center text-[10px] font-semibold text-slate-600">
+                              {delivery.cancellation.cancelledFromStatus.replaceAll('_', ' ')}
+                            </span>
+                          ) : (
+                            <span className="text-sm text-slate-400">—</span>
+                          )}
+                        </div>
+                        <div className="flex justify-center">
+                          <ChevronRight className="h-4 w-4 text-slate-400" />
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+
+                  <PaginationBar page={cancelledSafePage} setPage={setCancelledPage} totalPages={cancelledTotalPages} />
+                </div>
+              </>
             )}
           </section>
         )}
