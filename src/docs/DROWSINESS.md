@@ -53,7 +53,7 @@ Provides haptic feedback to alert the driver when drowsiness is detected.
 5. The system evaluates whether any alert conditions are met.
 6. If an alert condition is satisfied:
    - The vibration motor is activated.
-   - An audio alert is sent to the driver's mobile application.
+   - An audio alert is sent to the driver's web application.
 7. Once the driver's eyes remain open continuously for at least three seconds, the vibration alert stops.
 
 ---
@@ -94,7 +94,7 @@ If the driver's eyes cannot be detected continuously for **3 seconds**, the syst
 When drowsiness is detected:
 
 - The vibration motor is activated.
-- An audio alert is sent to the driver's mobile application.
+- An audio alert is sent to the driver's web application.
 - The vibration continues until the driver's eyes remain open continuously for at least **3 seconds**.
 
 ---

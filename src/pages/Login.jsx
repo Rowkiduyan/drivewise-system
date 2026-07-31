@@ -274,6 +274,9 @@ function Login() {
                   )}
                 </button>
               </div>
+              <p className="text-xs text-slate-500">
+                Forgot your password? Contact an admin to reset it.
+              </p>
             </div>
 
             <label className="flex items-center gap-2 text-sm text-slate-600">
@@ -287,7 +290,10 @@ function Login() {
             </label>
 
             {showError ? (
-              <p className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <p
+                role="alert"
+                className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+              >
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
                 {formHint}
               </p>
