@@ -32,6 +32,7 @@ import {
   Timer,
   Fuel,
   AlertCircle,
+  Lock,
 } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -1801,6 +1802,7 @@ function SupDeliveries() {
   const selectedTruck = mockTrucks.find((t) => t.plateNumber === assignment.plateNumber)
   const selectedHelpers = mockHelpers.filter((h) => assignment.helperIds.includes(h.id))
   const canConfirmAssignment = Boolean(selectedDriver && selectedTruck && selectedHelpers.length > 0)
+  const isInTransitStatus = ['FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(selectedRequest?.status)
 
   const openDetails = (request) => {
     setSelectedRequest(request)
@@ -2171,18 +2173,17 @@ function SupDeliveries() {
           <div className="grid grid-cols-1 gap-5">
             <div className="space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-                  <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowDetails((s) => !s)}
+                  className="flex w-full items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 bg-transparent cursor-pointer text-left transition hover:bg-slate-50"
+                  aria-expanded={showDetails}
+                >
+                  <span className="flex items-center gap-2">
                     <ClipboardList className="h-4 w-4 text-blue-600" />
-                    <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Delivery Request Details</h3>
-                  </div>
-                  <button
-                    onClick={() => setShowDetails(s => !s)}
-                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition bg-transparent border-none cursor-pointer"
-                  >
-                    {showDetails ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                  </button>
-                </div>
+                    <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Delivery Request Details</span>
+                  </span>
+                  {showDetails ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
+                </button>
                 {showDetails && <div className="p-4">
                   <div className="grid grid-cols-2 gap-3">
                     {/* Customer Details */}
@@ -2309,7 +2310,11 @@ function SupDeliveries() {
               {hasApproved && (
                 <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
                   <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-                    <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowQuotation((s) => !s)}
+                      className="flex flex-1 items-center gap-2 bg-transparent border-none cursor-pointer text-left transition hover:opacity-80"
+                      aria-expanded={showQuotation}
+                    >
                       <Send className="h-4 w-4 text-sky-600" />
                       <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                         {adjustingQuotation
@@ -2320,7 +2325,7 @@ function SupDeliveries() {
                           ? 'Quotation History'
                           : 'Quotation'}
                       </h3>
-                    </div>
+                    </button>
                     <div className="flex items-center gap-2">
                     {(!selectedRequest.quotation || !quotationSubmitted) && !adjustingQuotation && (
                       <button
@@ -2777,8 +2782,17 @@ function SupDeliveries() {
                   }`}
                 >
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-900">Assign Vehicle and Delivery Crew</h3>
-                    <p className="mt-1 text-xs text-slate-600">Pick a vehicle — its default driver and helper are pre-filled. You can override them before confirming.</p>
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      {isInTransitStatus ? 'Assigned Vehicle and Delivery Crew' : 'Assign Vehicle and Delivery Crew'}
+                    </h3>
+                    {isInTransitStatus ? (
+                      <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-600">
+                        <Lock className="h-3.5 w-3.5 text-slate-400" />
+                        The crew is locked once the delivery is in transit. Changes can no longer be made.
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-xs text-slate-600">Pick a vehicle — its default driver and helper are pre-filled. You can override them before confirming.</p>
+                    )}
                   </div>
 
                   {selectedRequest.crew?.driver && selectedRequest.crew?.truck?.plateNumber && (
@@ -2794,6 +2808,55 @@ function SupDeliveries() {
                     </div>
                   )}
 
+                  {isInTransitStatus ? (
+                    <div className="mt-4 space-y-3">
+                      {selectedRequest.crew?.truck && (
+                        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-200 text-center text-[10px] font-bold leading-tight text-slate-600">
+                            {selectedRequest.crew.truck.truckType}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold text-slate-900">{selectedRequest.crew.truck.plateNumber}</p>
+                            <p className="text-xs text-slate-500">
+                              {selectedRequest.crew.truck.truckType} • {selectedRequest.crew.truck.commodityType} • {selectedRequest.crew.truck.capacity}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      {selectedRequest.crew?.driver && (
+                        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-200 text-sm font-bold text-slate-600">
+                            {getInitials(selectedRequest.crew.driver.name)}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold text-slate-900">{selectedRequest.crew.driver.name}</p>
+                            <p className="text-xs text-slate-500">
+                              {selectedRequest.crew.driver.id} • ★ {selectedRequest.crew.driver.rating} • {selectedRequest.crew.driver.trips} trips
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      {selectedRequest.crew?.helpers && selectedRequest.crew.helpers.length > 0 && (
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Helpers</p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {selectedRequest.crew.helpers.map((h) => (
+                              <span key={h.id} className="inline-flex items-center rounded-lg bg-slate-200 px-2 py-1 text-xs font-medium text-slate-700">
+                                {h.name}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {selectedRequest.assignedAt && (
+                        <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                          <Clock className="h-3.5 w-3.5" />
+                          Saved {selectedRequest.assignedAt}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <>
                   <div className="mt-4 space-y-2">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Available Vehicles</p>
                     <div className="relative">
@@ -2996,6 +3059,8 @@ function SupDeliveries() {
                     <Users className="h-4 w-4" />
                     {selectedRequest.crew?.driver ? 'Update Vehicle and Crew' : 'Confirm Vehicle and Crew'}
                   </button>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -3672,6 +3737,19 @@ function SupDeliveries() {
                       const eyesOk = alert.eyeDetection === 'DETECTED'
                       return (
                         <div className="space-y-3 p-4">
+                          <div className={`rounded-xl p-3 ${tone.box}`}>
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                Drowsiness Level
+                              </p>
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${tone.badge}`}>{alert.drowsinessLevel}</span>
+                            </div>
+                            <p className="mt-1 text-xs opacity-80">
+                              Driving {alert.drivingHours} hrs • {alert.drivingDistanceKm} km • Avg. eye closure {alert.avgClosureDurationMs} ms
+                            </p>
+                          </div>
+
                           <div className="grid grid-cols-2 gap-3">
                             <div className="rounded-xl bg-slate-50 p-3">
                               <p className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -3716,19 +3794,6 @@ function SupDeliveries() {
                                 {alert.audioAlert}
                               </p>
                             </div>
-                          </div>
-
-                          <div className={`rounded-xl p-3 ${tone.box}`}>
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
-                                <AlertTriangle className="h-3.5 w-3.5" />
-                                Drowsiness Level
-                              </p>
-                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${tone.badge}`}>{alert.drowsinessLevel}</span>
-                            </div>
-                            <p className="mt-1 text-xs opacity-80">
-                              Driving {alert.drivingHours} hrs • {alert.drivingDistanceKm} km • Avg. eye closure {alert.avgClosureDurationMs} ms
-                            </p>
                           </div>
 
                           <div>
