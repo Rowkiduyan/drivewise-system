@@ -368,7 +368,7 @@ function SupTruckProfile() {
 
   if (!truck) {
     return (
-      <SupLayout title="Truck Profile" background={null} bg="bg-white">
+      <SupLayout title="Truck Profile" background={null} bg="bg-[#F6F7FB]">
         <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
           <p className="text-lg font-semibold text-slate-900">No truck selected</p>
           <p className="max-w-sm text-sm text-slate-500">
@@ -387,11 +387,9 @@ function SupTruckProfile() {
   }
 
   return (
-    <SupLayout title="Truck Profile" background={null} bg="bg-white">
+    <SupLayout title="Truck Profile" background={null} bg="bg-[#F6F7FB]">
       <div className="flex flex-col gap-4 pb-6">
-        {/* Sticky within the scroll area, pulled up to sit close to the page
-            edge rather than trailing SupLayout's generous top padding. */}
-        <div className="sticky top-0 z-30 -mt-2 w-full border-b border-slate-200 bg-white py-1.5 shadow-sm sm:-mt-4">
+        <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
           <Link
             to="/supervisor/trucks"
             className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"

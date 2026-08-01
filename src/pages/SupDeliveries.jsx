@@ -2020,13 +2020,13 @@ function SupDeliveries() {
     <SupLayout title="Deliveries" background={null} bg="bg-[#F6F7FB]">
       {selectedRequest ? (
         <>
-        <div className="flex flex-col gap-4 overflow-y-auto pb-6">
-          <div className="sticky top-0 z-30 -mt-2 w-full border-b border-slate-200 bg-white/95 backdrop-blur-sm px-4 sm:px-5 py-2 shadow-sm sm:-mt-4">
+        <div className="flex flex-col gap-4 pb-6">
+          <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
             <button
               onClick={() => setSelectedRequest(null)}
-              className="group inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1.5 pl-3 pr-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.97]"
+              className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
             >
-              <ArrowLeft className="h-4 w-4 text-slate-400 transition-transform group-hover:-translate-x-0.5 group-hover:text-blue-600" />
+              <ArrowLeft className="h-4 w-4" />
               Back
             </button>
           </div>
@@ -3894,12 +3894,12 @@ function SupDeliveries() {
           <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
             {selectedCompletedReport ? (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="shrink-0 border-b border-slate-200 bg-white/95 px-4 py-2 shadow-sm backdrop-blur-sm sm:px-5">
+                <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
                   <button
                     onClick={() => setSelectedReportId(null)}
-                    className="group inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1.5 pl-3 pr-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.97]"
+                    className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
                   >
-                    <ArrowLeft className="h-4 w-4 text-slate-400 transition-transform group-hover:-translate-x-0.5 group-hover:text-blue-600" />
+                    <ArrowLeft className="h-4 w-4" />
                     Back
                   </button>
                 </div>
@@ -3996,12 +3996,12 @@ function SupDeliveries() {
           <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
             {selectedCancelledReport ? (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="shrink-0 border-b border-slate-200 bg-white/95 px-4 py-2 shadow-sm backdrop-blur-sm sm:px-5">
+                <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
                   <button
                     onClick={() => setSelectedReportId(null)}
-                    className="group inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1.5 pl-3 pr-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.97]"
+                    className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
                   >
-                    <ArrowLeft className="h-4 w-4 text-slate-400 transition-transform group-hover:-translate-x-0.5 group-hover:text-blue-600" />
+                    <ArrowLeft className="h-4 w-4" />
                     Back
                   </button>
                 </div>

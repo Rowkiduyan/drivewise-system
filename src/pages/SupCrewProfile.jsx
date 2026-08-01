@@ -376,6 +376,80 @@ const TABS_BASE = [
 const TRIP_STATUS_OPTIONS = ["Completed", "Ongoing", "Cancelled"];
 const TRIPS_PAGE_SIZE = 6;
 
+function PaginationBar({ page, setPage, totalPages }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
+      <p className="text-sm text-slate-500">
+        Page {page} of {totalPages}
+      </p>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setPage(1)}
+          disabled={page === 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+          title="First page"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+        </button>
+        <button
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page === 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+        </button>
+        <div className="flex items-center gap-1 px-1">
+          {(() => {
+            const pages = [];
+            if (totalPages <= 7) {
+              for (let i = 1; i <= totalPages; i++) pages.push(i);
+            } else {
+              pages.push(1);
+              if (page > 3) pages.push('...');
+              for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i);
+              if (page < totalPages - 2) pages.push('...');
+              pages.push(totalPages);
+            }
+            return pages.map((num, idx) =>
+              num === '...' ? (
+                <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
+              ) : (
+                <button
+                  key={num}
+                  onClick={() => setPage(num)}
+                  className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
+                    num === page
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {num}
+                </button>
+              )
+            );
+          })()}
+        </div>
+        <button
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page === totalPages}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+        </button>
+        <button
+          onClick={() => setPage(totalPages)}
+          disabled={page === totalPages}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+          title="Last page"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SupCrewProfile() {
   const location = useLocation();
   const crew = location.state?.crew;
@@ -862,7 +936,7 @@ function SupCrewProfile() {
 
   if (!crew) {
     return (
-      <SupLayout title="Crew Profile" background={null} bg="bg-white">
+      <SupLayout title="Crew Profile" background={null} bg="bg-[#F6F7FB]">
         <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
           <p className="text-lg font-semibold text-slate-900">No crew member selected</p>
           <p className="max-w-sm text-sm text-slate-500">
@@ -884,11 +958,9 @@ function SupCrewProfile() {
   const tabs = TABS_BASE.filter((tab) => !tab.driversOnly || isDriver);
 
   return (
-    <SupLayout title="Crew Profile" background={null} bg="bg-white">
+    <SupLayout title="Crew Profile" background={null} bg="bg-[#F6F7FB]">
       <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-4 pb-6">
-        {/* Sticky within the scroll area, pulled up to sit close to the page
-            edge rather than trailing SupLayout's generous top padding. */}
-        <div className="sticky top-0 z-30 -mt-2 w-full border-b border-slate-200 bg-white py-1.5 shadow-sm sm:-mt-4">
+        <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
           <Link
             to="/supervisor/delivery-crew"
             className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
@@ -1591,20 +1663,20 @@ function SupCrewProfile() {
             within one always-visible table. */}
         {activeTab === "trips" && (
           <div className="flex flex-col gap-4">
-            <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-3.5">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <div className="relative flex-1">
                   <label className="sr-only" htmlFor="trip-search">
                     Search trip history
                   </label>
-                  <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <input
                     id="trip-search"
                     type="text"
                     value={tripSearchTerm}
                     onChange={(event) => updateTripSearch(event.target.value)}
                     placeholder="Search by client, route, or trip ID..."
-                    className="h-10 w-full rounded-xl border border-slate-300 bg-slate-50 py-2 pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
                   />
                 </div>
 
@@ -1615,7 +1687,7 @@ function SupCrewProfile() {
                   id="trip-status-filter"
                   value={tripStatusFilter}
                   onChange={(event) => updateTripStatusFilter(event.target.value)}
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:w-52"
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
                 >
                   <option value="All">All Statuses ({tripStatusCounts.All})</option>
                   {TRIP_STATUS_OPTIONS.map((status) => (
@@ -1625,7 +1697,7 @@ function SupCrewProfile() {
                   ))}
                 </select>
               </div>
-            </section>
+            </div>
 
             <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
               <div className="overflow-x-auto">
@@ -1669,38 +1741,7 @@ function SupCrewProfile() {
                 </table>
               </div>
 
-              {filteredTrips.length > 0 && (
-                <nav
-                  className="flex flex-col items-center justify-between gap-3 border-t border-slate-100 px-4 py-4 sm:flex-row sm:px-5"
-                  aria-label="Trip history pagination"
-                >
-                  <p className="text-[11px] font-medium text-slate-500 sm:text-xs">
-                    Showing {tripPageStart + 1}–{Math.min(tripPageStart + TRIPS_PAGE_SIZE, filteredTrips.length)} of{" "}
-                    {filteredTrips.length}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={safeTripPage === 1}
-                      onClick={() => setTripPage((page) => Math.max(1, page - 1))}
-                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Previous
-                    </button>
-                    <span className="text-[11px] font-medium text-slate-500 sm:text-xs">
-                      Page {safeTripPage} of {totalTripPages}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={safeTripPage === totalTripPages}
-                      onClick={() => setTripPage((page) => Math.min(totalTripPages, page + 1))}
-                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </nav>
-              )}
+              <PaginationBar page={safeTripPage} setPage={setTripPage} totalPages={totalTripPages} />
             </section>
           </div>
         )}

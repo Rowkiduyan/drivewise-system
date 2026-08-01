@@ -159,7 +159,7 @@ function FilterSelect({ id, label, value, onChange, options, counts, allLabel })
         id={id}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:w-44"
+        className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
       >
         <option value="All">
           {allLabel}
@@ -280,35 +280,35 @@ function SupTrucks() {
   };
 
   return (
-    <SupLayout title="Trucks" background={null} bg="bg-white">
+    <SupLayout title="Trucks" background={null} bg="bg-[#F6F7FB]">
       <div className="flex h-full min-h-0 flex-col gap-3">
         {/* Search and Filter Toolbar — search and filters share one row, with
             filters right-aligned. This is the common modern dashboard layout
             (e.g. Linear, Notion tables): the search stays the primary, most
             prominent control while filters sit as a secondary cluster the
             eye reaches after. Wraps to a stacked layout on small screens. */}
-        <section className="sticky top-0 z-20 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur sm:p-3.5">
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+        <section className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             {/* Search */}
-            <div className="relative w-full lg:flex-1">
+            <div className="relative flex-1">
               <label className="sr-only" htmlFor="truck-search">
                 Search truck records
               </label>
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
                 id="truck-search"
                 type="text"
                 value={searchTerm}
                 onChange={(event) => updateSearch(event.target.value)}
                 placeholder="Search by plate, brand, model, type, or device no..."
-                className="h-10 w-full rounded-xl border border-slate-300 bg-slate-50 py-2 pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
               />
             </div>
 
             {/* Filters — one dropdown per dimension, all styled identically so
                 the set reads as one system and scales cleanly if more filters
                 are added later. */}
-            <div className="flex flex-wrap items-center gap-1.5 lg:flex-none lg:justify-end">
+            <div className="flex flex-wrap items-center gap-2 sm:flex-none sm:justify-end">
               <FilterSelect
                 id="status-filter"
                 label="Status"
