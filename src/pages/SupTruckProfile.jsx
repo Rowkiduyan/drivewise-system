@@ -311,6 +311,81 @@ const TABS = [
 
 const TRIP_STATUS_FILTERS = ["All", "Completed", "Ongoing", "Cancelled"];
 const MAINTENANCE_STATUS_FILTERS = ["All", "Completed", "Scheduled", "Overdue"];
+const PAGE_SIZE = 10;
+
+function PaginationBar({ page, setPage, totalPages }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
+      <p className="text-sm text-slate-500">
+        Page {page} of {totalPages}
+      </p>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setPage(1)}
+          disabled={page === 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+          title="First page"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+        </button>
+        <button
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page === 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+        </button>
+        <div className="flex items-center gap-1 px-1">
+          {(() => {
+            const pages = [];
+            if (totalPages <= 7) {
+              for (let i = 1; i <= totalPages; i++) pages.push(i);
+            } else {
+              pages.push(1);
+              if (page > 3) pages.push('...');
+              for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i);
+              if (page < totalPages - 2) pages.push('...');
+              pages.push(totalPages);
+            }
+            return pages.map((num, idx) =>
+              num === '...' ? (
+                <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
+              ) : (
+                <button
+                  key={num}
+                  onClick={() => setPage(num)}
+                  className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
+                    num === page
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {num}
+                </button>
+              )
+            );
+          })()}
+        </div>
+        <button
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page === totalPages}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+        </button>
+        <button
+          onClick={() => setPage(totalPages)}
+          disabled={page === totalPages}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+          title="Last page"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function SupTruckProfile() {
   const location = useLocation();
@@ -318,6 +393,7 @@ function SupTruckProfile() {
 
   const [activeTab, setActiveTab] = useState("overview");
   const [tripStatusFilter, setTripStatusFilter] = useState("All");
+  const [tripPage, setTripPage] = useState(1);
   const [maintenanceStatusFilter, setMaintenanceStatusFilter] = useState("All");
 
   const trips = useMemo(() => (truck ? buildMockTrips(truck) : []), [truck]);
@@ -352,6 +428,16 @@ function SupTruckProfile() {
     Completed: trips.filter((trip) => trip.status === "Completed").length,
     Ongoing: trips.filter((trip) => trip.status === "Ongoing").length,
     Cancelled: trips.filter((trip) => trip.status === "Cancelled").length,
+  };
+
+  const totalTripPages = Math.max(1, Math.ceil(filteredTrips.length / PAGE_SIZE));
+  const safeTripPage = Math.min(tripPage, totalTripPages);
+  const tripPageStart = (safeTripPage - 1) * PAGE_SIZE;
+  const pagedTrips = filteredTrips.slice(tripPageStart, tripPageStart + PAGE_SIZE);
+
+  const updateTripStatusFilter = (status) => {
+    setTripStatusFilter(status);
+    setTripPage(1);
   };
 
   const filteredMaintenance =
@@ -466,7 +552,7 @@ function SupTruckProfile() {
                 <button
                   key={status}
                   type="button"
-                  onClick={() => setTripStatusFilter(status)}
+                  onClick={() => updateTripStatusFilter(status)}
                   className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
                     tripStatusFilter === status
                       ? "border-blue-600 bg-blue-600 text-white"
@@ -499,7 +585,7 @@ function SupTruckProfile() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredTrips.map((trip) => (
+                  {pagedTrips.map((trip) => (
                     <tr key={trip.id} className="transition hover:bg-slate-50">
                       <td className="px-5 py-4 font-medium text-slate-900">{trip.id}</td>
                       <td className="px-5 py-4 text-slate-700">{trip.dateLabel}</td>
@@ -520,6 +606,7 @@ function SupTruckProfile() {
                   )}
                 </tbody>
               </table>
+              <PaginationBar page={safeTripPage} setPage={setTripPage} totalPages={totalTripPages} />
             </section>
           </div>
         )}

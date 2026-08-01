@@ -174,6 +174,80 @@ function FilterSelect({ id, label, value, onChange, options, counts, allLabel })
   );
 }
 
+function PaginationBar({ page, setPage, totalPages }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
+      <p className="text-sm text-slate-500">
+        Page {page} of {totalPages}
+      </p>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setPage(1)}
+          disabled={page === 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+          title="First page"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+        </button>
+        <button
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page === 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+        </button>
+        <div className="flex items-center gap-1 px-1">
+          {(() => {
+            const pages = [];
+            if (totalPages <= 7) {
+              for (let i = 1; i <= totalPages; i++) pages.push(i);
+            } else {
+              pages.push(1);
+              if (page > 3) pages.push('...');
+              for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i);
+              if (page < totalPages - 2) pages.push('...');
+              pages.push(totalPages);
+            }
+            return pages.map((num, idx) =>
+              num === '...' ? (
+                <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
+              ) : (
+                <button
+                  key={num}
+                  onClick={() => setPage(num)}
+                  className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
+                    num === page
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {num}
+                </button>
+              )
+            );
+          })()}
+        </div>
+        <button
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page === totalPages}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+        </button>
+        <button
+          onClick={() => setPage(totalPages)}
+          disabled={page === totalPages}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+          title="Last page"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const STATUS_OPTIONS = ["Available", "On Delivery", "Maintenance", "Offline"];
 const TYPE_OPTIONS = TRUCK_TYPES;
 const STATUS_SORT_SEQUENCE = ["On Delivery", "Available", "Maintenance", "Offline"];
@@ -413,36 +487,7 @@ function SupTrucks() {
             </div>
 
             {/* Pagination */}
-            <nav
-              className="sticky bottom-0 flex flex-col items-center justify-between gap-3 border-t border-slate-100 bg-white px-4 py-4 sm:flex-row sm:px-5"
-              aria-label="Truck list pagination"
-            >
-              <p className="text-[11px] font-medium text-slate-500 sm:text-xs">
-                Showing {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, filteredTrucks.length)} of{' '}
-                {filteredTrucks.length}
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={safePage === 1}
-                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Previous
-                </button>
-                <span className="text-[11px] font-medium text-slate-500 sm:text-xs">
-                  Page {safePage} of {totalPages}
-                </span>
-                <button
-                  type="button"
-                  disabled={safePage === totalPages}
-                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Next
-                </button>
-              </div>
-            </nav>
+            <PaginationBar page={safePage} setPage={setCurrentPage} totalPages={totalPages} />
           </div>
         </div>
       </div>

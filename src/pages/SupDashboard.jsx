@@ -584,7 +584,7 @@ function SupDashboard() {
     <SupLayout
       title="Supervisor Dashboard"
       background={background}
-      bg="bg-[#FAF9F6]"
+      bg="bg-[#F6F7FB]"
     >
       {/* Centered max‑width container for a compact layout */}
       <div className="mx-auto max-w-7xl px-2 sm:px-4 lg:px-6 flex flex-col gap-3">

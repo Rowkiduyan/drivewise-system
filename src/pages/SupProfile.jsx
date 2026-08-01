@@ -262,7 +262,7 @@ function SupProfile() {
   };
 
   return (
-    <SupLayout title="Supervisor Profile" background={null} bg="bg-white">
+    <SupLayout title="Supervisor Profile" background={null} bg="bg-[#F6F7FB]">
       <div className="flex flex-col gap-6 pb-10">
         {profileError ? (
           <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
