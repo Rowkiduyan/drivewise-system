@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail } from 'lucide-react'
+import { AlertCircle, Eye, EyeOff, HelpCircle, Loader2, Lock, Mail } from 'lucide-react'
 import { REMEMBER_ME_KEY, supabase } from '../lib/supabaseClient.js'
 import { getDeactivationStatus } from '../lib/deactivation.js'
 import logoMark from '../layout/images/Logoo.png'
@@ -274,9 +274,6 @@ function Login() {
                   )}
                 </button>
               </div>
-              <p className="text-xs text-slate-500">
-                Forgot your password? Contact an admin to reset it.
-              </p>
             </div>
 
             <label className="flex items-center gap-2 text-sm text-slate-600">
@@ -314,6 +311,14 @@ function Login() {
               )}
             </button>
           </form>
+
+          <div className="mt-6 flex items-start justify-center gap-1.5 border-t border-slate-200 pt-4 text-xs text-slate-500 lg:justify-start">
+            <HelpCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-slate-400" aria-hidden="true" />
+            <p>
+              Trouble signing in, or need a password reset?{' '}
+              <span className="font-medium text-slate-700">Contact your system administrator.</span>
+            </p>
+          </div>
         </div>
       </div>
 
