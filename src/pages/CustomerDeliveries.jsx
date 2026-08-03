@@ -70,7 +70,7 @@ const emptyStateCopy = {
   all: { title: 'No delivery requests yet', subtitle: 'Tap "Request Delivery" to submit your first one.' },
   PENDING_REQUEST: { title: 'No pending requests', subtitle: 'Newly submitted requests awaiting review will show up here.' },
   PROCESSING: { title: 'Nothing in processing', subtitle: 'Requests being quoted by a supervisor will show up here.' },
-  FOR_PICKUP: { title: 'No deliveries for pickup', subtitle: 'Confirmed requests with an assigned crew will show up here.' },
+  FOR_PICKUP: { title: 'No deliveries for pickup', subtitle: 'Confirmed requests ready for pickup will show up here.' },
   OUT_FOR_DELIVERY: { title: 'Nothing out for delivery', subtitle: 'Deliveries currently en route will show up here.' },
   DELIVERED: { title: 'No delivered items', subtitle: 'Items awaiting your confirmation will show up here.' },
   DELIVERY_COMPLETED: { title: 'No completed deliveries yet', subtitle: 'Finished deliveries will show up here.' },
@@ -229,7 +229,7 @@ function buildCustomerTimeline(request) {
     },
     {
       key: 'pickup',
-      label: 'Crew Assigned — For Pickup',
+      label: 'Scheduled for Pickup',
       substeps: request.crew ? [
         { label: 'Delivery Crew Assigned', timestamp: sentTs },
         ...(request.confirmedPickupDate ? [{ label: `Pickup Scheduled — ${request.confirmedPickupDate} at ${request.confirmedPickupTime}`, timestamp: null }] : []),
@@ -1590,7 +1590,7 @@ function RequestDetailView({ request, onBack, onUpdate }) {
                 Quotation collapsible in the main column above. */}
             {request.status === 'PROCESSING' && quotationAmount && !showQuotationResponse && (
               <div className="rounded-2xl border border-blue-200 bg-blue-50 p-2.5 md:hidden">
-                <h3 className="text-xs font-semibold text-blue-800 md:text-sm">Quotation from Supervisor</h3>
+                <h3 className="text-xs font-semibold text-blue-800 md:text-sm">Your Quotation</h3>
                 {request.previousQuotation && request.priceRange && (
                   <p className="mt-1 text-[10px] text-blue-600 md:text-xs">
                     Revised after you requested ₱{Number(request.priceRange.min).toLocaleString()}–₱{Number(request.priceRange.max).toLocaleString()}
@@ -1693,7 +1693,7 @@ function RequestDetailView({ request, onBack, onUpdate }) {
                 <p className="mt-1.5 text-xs text-purple-700">
                   <span className="font-semibold">{request.confirmedPickupDate} at {request.confirmedPickupTime}</span>
                 </p>
-                <p className="mt-1 text-[10px] text-purple-600">A crew has been assigned to pick up your items.</p>
+                <p className="mt-1 text-[10px] text-purple-600">Your pickup is confirmed.</p>
               </div>
             )}
 
@@ -2645,7 +2645,7 @@ function CustomerDeliveries() {
         </Link>
       </div>
 
-      <div className="flex flex-col gap-4 mb-2 pb-24 sm:gap-6 md:pb-0" style={interFontStyle}>
+      <div className="flex flex-col gap-4 mb-2 pb-24 sm:gap-6 md:gap-4 md:pb-0" style={interFontStyle}>
         {/* Search Bar + Request Delivery Button. Desktop (md+) wraps this in
             its own bordered white card, matching the Supervisor's search/
             filter card that sits above its table (separate from the table's
@@ -2720,7 +2720,7 @@ function CustomerDeliveries() {
               desktop row/header are suppressed (desktopHidden) in favor of
               the Supervisor-style list+monitoring split rendered below —
               mobile keeps using this same list either way. */}
-          <div className={isMonitoringTab ? '' : 'md:mt-3 md:overflow-hidden md:rounded-2xl md:border md:border-slate-200 md:bg-white'}>
+          <div className={isMonitoringTab ? '' : 'md:overflow-hidden md:rounded-2xl md:border md:border-slate-200 md:bg-white'}>
             <div className={isMonitoringTab ? 'hidden' : 'hidden gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 md:grid md:grid-cols-[0.7fr_0.6fr_1.7fr_1.6fr_1.6fr_0.3fr]'}>
               <span className="text-center">Status</span>
               <span className="text-center">Request ID</span>
@@ -2764,7 +2764,7 @@ function CustomerDeliveries() {
               and the Real-time Monitoring card on the right for whichever
               request is selected. Mobile keeps the plain list above. */}
           {isMonitoringTab && filteredRequests.length > 0 && (
-            <div className="hidden md:mt-3 md:grid md:grid-cols-[1.15fr_0.85fr] md:gap-4">
+            <div className="hidden md:grid md:grid-cols-[1.15fr_0.85fr] md:gap-4">
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 <div className="grid grid-cols-[0.55fr_0.55fr_1.5fr_0.5fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <span className="text-center">Status</span>
