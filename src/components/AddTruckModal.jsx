@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { mockDevices } from "../lib/deviceData.js";
 import { X } from "lucide-react";
 
 // Duplicate options to avoid circular imports
@@ -53,6 +54,7 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
   const [brandOptions, setBrandOptions] = useState(INITIAL_BRAND_OPTIONS);
   const [modelOptions, setModelOptions] = useState(INITIAL_MODEL_OPTIONS);
 
+  const [truckTypeOptions, setTruckTypeOptions] = useState(TRUCK_TYPES);
   const [formData, setFormData] = useState({
     plateNumber: "",
     brand: "",
@@ -60,11 +62,20 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
     model: "",
     customModel: "",
     truckType: TRUCK_TYPES[0],
+    customTruckType: "",
     status: STATUS_OPTIONS[0],
     deviceStatus: DEVICE_STATUS_OPTIONS[0],
     assignedDriver: "",
-    assignedDeviceNo: "",
+    deviceId: "",
     yearModel: 2026,
+    // New fields
+    maximumCapacity: "",
+    dimensionsWidth: "",
+    dimensionsHeight: "",
+    vehicleLength: "",
+    currentMileage: "",
+    maintenanceInterval: "",
+    maintenanceMileageInterval: "",
     odometer: "",
     fuelLevel: "",
     dateAcquired: "",
@@ -77,15 +88,16 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
     if (isOpen) {
       setFormData({
         plateNumber: "",
-        brand: "",
+        maximumCapacity: "2000",
         customBrand: "",
         model: "",
         customModel: "",
         truckType: TRUCK_TYPES[0],
+        customTruckType: "",
         status: STATUS_OPTIONS[0],
         deviceStatus: DEVICE_STATUS_OPTIONS[0],
         assignedDriver: "",
-        assignedDeviceNo: "",
+        deviceId: "",
         yearModel: 2026,
         odometer: "",
         fuelLevel: "",
@@ -99,7 +111,7 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
     const { name, value } = e.target;
     let newValue = value;
     // Auto‑capitalize
-    if (name === "plateNumber" || name === "assignedDeviceNo") {
+    if (name === "plateNumber" || name === "deviceId") {
       newValue = newValue.toUpperCase();
     }
     // Auto‑format Plate Number (space after first three characters)
@@ -111,15 +123,7 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
         newValue = stripped;
       }
     }
-    // Auto‑format Device No. (hyphen after first three characters)
-    if (name === "assignedDeviceNo") {
-      const stripped = newValue.replace(/-/g, "");
-      if (stripped.length > 3) {
-        newValue = stripped.slice(0, 3) + "-" + stripped.slice(3);
-      } else {
-        newValue = stripped;
-      }
-    }
+    // No special formatting for deviceId (handled via dropdown)
     setFormData((prev) => ({ ...prev, [name]: newValue }));
   };
 
@@ -132,19 +136,30 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
     const finalModel =
       formData.model === "Custom" ? formData.customModel : formData.model;
 
+    const finalTruckType =
+      formData.truckType === "Custom"
+        ? formData.customTruckType
+        : formData.truckType;
     const processed = {
       plateNumber: formData.plateNumber,
       brand: finalBrand,
       model: finalModel,
-      truckType: formData.truckType,
-      status: formData.status,
+      truckType: finalTruckType,
       deviceStatus: formData.deviceStatus,
-      assignedDriver: formData.assignedDriver,
-      assignedDeviceNo: formData.assignedDeviceNo,
+      deviceId: formData.deviceId,
       yearModel: Number(formData.yearModel),
+      dateAcquired: formData.dateAcquired,
+      // New fields (numeric where appropriate)
+      maximumCapacity: Number(formData.maximumCapacity),
+      dimensionsWidth: Number(formData.dimensionsWidth),
+      dimensionsHeight: Number(formData.dimensionsHeight),
+      vehicleLength: Number(formData.vehicleLength),
+      currentMileage: Number(formData.currentMileage),
+      maintenanceInterval: formData.maintenanceInterval,
+      maintenanceMileageInterval: Number(formData.maintenanceMileageInterval),
+      // Retain old fields if still needed elsewhere
       odometer: Number(formData.odometer),
       fuelLevel: Number(formData.fuelLevel),
-      dateAcquired: formData.dateAcquired,
     };
     try {
       onSubmit(processed);
@@ -163,6 +178,13 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
         !modelOptions.includes(finalModel)
       ) {
         setModelOptions((prev) => [...prev, finalModel]);
+      }
+      if (
+        formData.truckType === "Custom" &&
+        finalTruckType &&
+        !truckTypeOptions.includes(finalTruckType)
+      ) {
+        setTruckTypeOptions((prev) => [...prev, finalTruckType]);
       }
     } catch (err) {
       console.error(err);
@@ -186,7 +208,7 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
         {/* Removed datalists – using select dropdowns for Brand and Model */}
         <form
           onSubmit={handleSubmit}
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2"
+          className="grid grid-cols-1 gap-2 sm:grid-cols-2 text-xs"
         >
           {/* Row 1: Plate Number | Date Acquired */}
           <div>
@@ -293,12 +315,23 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
               required
             >
-              {TRUCK_TYPES.map((type) => (
+              {truckTypeOptions.map((type) => (
                 <option key={type} value={type}>
                   {type}
                 </option>
               ))}
+              <option value="Custom">Custom</option>
             </select>
+            {formData.truckType === "Custom" && (
+              <input
+                name="customTruckType"
+                placeholder="Enter custom truck type"
+                value={formData.customTruckType}
+                onChange={handleChange}
+                className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                required
+              />
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700">
@@ -316,16 +349,24 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
           {/* Row 4: Device No. | Device Status */}
           <div>
             <label className="block text-sm font-medium text-slate-700">
-              Device No.
+              Device ID
             </label>
-            <input
-              name="assignedDeviceNo"
-              placeholder="DWD-1001"
-              value={formData.assignedDeviceNo}
+            <select
+              name="deviceId"
+              value={formData.deviceId}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
               required
-            />
+            >
+              <option value="" disabled>
+                Select device
+              </option>
+              {mockDevices.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.id}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700">
@@ -345,66 +386,117 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               ))}
             </select>
           </div>
-          {/* Assigned Driver – full width */}
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-slate-700">
-              Assigned Driver (Optional)
-            </label>
-            <input
-              name="assignedDriver"
-              placeholder="Ramos, Juan A."
-              value={formData.assignedDriver}
-              onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-            />
-          </div>
-          {/* Row 5: Fuel Level | Odometer */}
+          {/* New fields: Vehicle Height (m) */}
           <div>
             <label className="block text-sm font-medium text-slate-700">
-              Fuel Level (%)
+              Container Height (m)
             </label>
             <input
-              name="fuelLevel"
+              name="dimensionsHeight"
               type="number"
-              placeholder="50"
-              value={formData.fuelLevel}
+              step="1"
+              placeholder="1.8"
+              value={formData.dimensionsHeight}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
               required
             />
           </div>
+          {/* New fields: Vehicle Width (m) */}
           <div>
             <label className="block text-sm font-medium text-slate-700">
-              Odometer
+              Container Width (m)
             </label>
             <input
-              name="odometer"
+              name="dimensionsWidth"
               type="number"
+              step="1"
+              placeholder="2.5"
+              value={formData.dimensionsWidth}
+              onChange={handleChange}
+              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              required
+            />
+          </div>
+          {/* New field: Vehicle Length (m) */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Container Length (m)
+            </label>
+            <input
+              name="vehicleLength"
+              type="number"
+              step="1"
+              placeholder="5.0"
+              value={formData.vehicleLength}
+              onChange={handleChange}
+              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              required
+            />
+          </div>
+          {/* New fields: Maximum Capacity (kg) */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Maximum Capacity (kg)
+            </label>
+            <input
+              name="maximumCapacity"
+              type="number"
+              step="1"
+              placeholder="2000"
+              value={formData.maximumCapacity}
+              onChange={handleChange}
+              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              required
+            />
+          </div>
+          {/* Current Mileage */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Current Mileage (km)
+            </label>
+            <input
+              name="currentMileage"
+              type="number"
+              step="1"
               placeholder="12000"
-              value={formData.odometer}
+              value={formData.currentMileage}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
               required
             />
           </div>
-          {/* Status – full width */}
-          <div className="sm:col-span-2">
+          {/* Maintenance Mileage Interval */}
+          <div>
             <label className="block text-sm font-medium text-slate-700">
-              Status
+              Maintenance Mileage Interval (km)
             </label>
-            <select
-              name="status"
-              value={formData.status}
+            <input
+              name="maintenanceMileageInterval"
+              type="number"
+              step="1"
+              placeholder="5000"
+              value={formData.maintenanceMileageInterval}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
               required
-            >
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
+            />
+          </div>
+          {/* Maintenance Interval */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Maintenance Interval (month/s)
+            </label>
+            <input
+              name="maintenanceInterval"
+              type="number"
+              step="1"
+              placeholder="6"
+              value={formData.maintenanceInterval}
+              onChange={handleChange}
+              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              required
+            />
           </div>
           {/* Action buttons */}
           <div className="sm:col-span-2 flex justify-end space-x-2 pt-2">
