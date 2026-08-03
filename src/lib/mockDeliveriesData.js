@@ -27,7 +27,7 @@ export const customer_deliveries = [
     budget_min: 3000,
     budget_max: 5000,
     notes: 'Fragile items — handle with care',
-    status: 'FOR_REVIEW',
+    status: 'PENDING_REQUEST',
     created_at: '2026-07-22 10:30',
   },
   {
@@ -69,7 +69,7 @@ export const customer_deliveries = [
     budget_min: 4800,
     budget_max: 8000,
     notes: 'Rush delivery requested',
-    status: 'QUOTED',
+    status: 'QUOTATION_SUBMITTED',
     created_at: '2026-07-20 14:00',
   },
   {
@@ -153,7 +153,7 @@ export const customer_deliveries = [
     budget_min: 3000,
     budget_max: 4500,
     notes: 'Fuel depot pickup',
-    status: 'FOR_REVIEW',
+    status: 'PENDING_REQUEST',
     created_at: '2026-07-25 09:00',
   },
   {
@@ -174,7 +174,7 @@ export const customer_deliveries = [
     budget_min: 5000,
     budget_max: 8000,
     notes: 'Large appliances on pallets',
-    status: 'FOR_REVIEW',
+    status: 'PENDING_REQUEST',
     created_at: '2026-07-25 11:30',
   },
   {
@@ -195,7 +195,7 @@ export const customer_deliveries = [
     budget_min: 12000,
     budget_max: 15000,
     notes: 'Busy lunch-hour window',
-    status: 'COUNTER_OFFER',
+    status: 'COUNTER_OFFER_SUBMITTED',
     created_at: '2026-07-24 08:15',
   },
   {
@@ -279,7 +279,7 @@ export const customer_deliveries = [
     budget_min: 6000,
     budget_max: 8000,
     notes: 'Standard dry goods delivery',
-    status: 'QUOTED',
+    status: 'QUOTATION_SUBMITTED',
     created_at: '2026-07-26 11:00',
   },
   {
@@ -321,7 +321,7 @@ export const customer_deliveries = [
     budget_min: 5000,
     budget_max: 6500,
     notes: 'Includes Saturday surcharge',
-    status: 'FOR_PICKUP',
+    status: 'OUT_FOR_PICKUP',
     created_at: '2026-07-23 11:00',
   },
   {
@@ -342,7 +342,7 @@ export const customer_deliveries = [
     budget_min: 6500,
     budget_max: 9000,
     notes: 'Bulk delivery — palletised',
-    status: 'OUT_FOR_DELIVERY',
+    status: 'OUT_FOR_DROPOFF',
     created_at: '2026-07-24 09:00',
   },
   {
@@ -384,7 +384,7 @@ export const customer_deliveries = [
     budget_min: 16000,
     budget_max: 20000,
     notes: 'Long-haul provincial delivery',
-    status: 'COUNTER_OFFER',
+    status: 'COUNTER_OFFER_SUBMITTED',
     created_at: '2026-08-01 10:30',
   },
   {
@@ -405,7 +405,7 @@ export const customer_deliveries = [
     budget_min: 10000,
     budget_max: 13000,
     notes: 'Multi-day provincial delivery',
-    status: 'UPDATED_QUOTATION',
+    status: 'FINAL_QUOTATION_SUBMITTED',
     created_at: '2026-08-05 09:00',
   },
   {
@@ -1443,28 +1443,28 @@ export const delivery_cancellations = [
     delivery_id: 'DEL-006',
     cancelled_at: '2026-07-16 10:00',
     cancelled_by: 'customer',
-    cancelled_from_status: 'QUOTED',
+    cancelled_from_status: 'QUOTATION_SUBMITTED',
     cancellation_reason: 'Change of schedule',
   },
   {
     delivery_id: 'DEL-009',
     cancelled_at: '2026-07-21 09:45',
     cancelled_by: 'customer',
-    cancelled_from_status: 'FOR_REVIEW',
+    cancelled_from_status: 'PENDING_REQUEST',
     cancellation_reason: 'Found another transport provider',
   },
   {
     delivery_id: 'DEL-010',
     cancelled_at: '2026-07-19 11:30',
     cancelled_by: 'customer',
-    cancelled_from_status: 'QUOTED',
+    cancelled_from_status: 'QUOTATION_SUBMITTED',
     cancellation_reason: 'Pricing or budget concerns',
   },
   {
     delivery_id: 'DEL-012',
     cancelled_at: '2026-07-21 15:20',
     cancelled_by: 'supervisor',
-    cancelled_from_status: 'FOR_PICKUP',
+    cancelled_from_status: 'OUT_FOR_PICKUP',
     cancellation_reason: 'No longer needed',
   },
 ]
@@ -1484,7 +1484,7 @@ export const delivery_monitoring = [
     current_lng: 121.0254,
     speed_kmh: 35,
     last_update: '2026-07-26 10:05',
-    status: 'EN_ROUTE_TO_PICKUP',
+    status: 'OUT_FOR_PICKUP',
   },
   {
     delivery_id: 'DEL-025',
@@ -1495,7 +1495,7 @@ export const delivery_monitoring = [
     current_lng: 120.97,
     speed_kmh: 48,
     last_update: '2026-07-26 10:07',
-    status: 'EN_ROUTE_TO_DROPOFF',
+    status: 'OUT_FOR_DROPOFF',
   },
   {
     delivery_id: 'DEL-026',
@@ -1506,7 +1506,7 @@ export const delivery_monitoring = [
     current_lng: 121.03,
     speed_kmh: 0,
     last_update: '2026-07-26 10:10',
-    status: 'ARRIVED_AT_DROPOFF',
+    status: 'ARRIVED_DROPOFF',
   },
 ]
 

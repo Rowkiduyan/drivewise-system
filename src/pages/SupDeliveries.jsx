@@ -48,6 +48,10 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 })
 
+// Explicit Inter typeface for this page's content, matching SupLayout's
+// own font stack instead of relying solely on inherited font-family.
+const interFontStyle = { fontFamily: 'Inter, system-ui, sans-serif' }
+
 const startIcon = L.divIcon({
   className: '',
   html: '<div style="background:#2563eb;color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.3)">S</div>',
@@ -62,25 +66,52 @@ const endIcon = L.divIcon({
   iconAnchor: [12, 12],
 })
 
-const statusBadge = {
-  FOR_REVIEW: 'bg-amber-100 text-amber-700',
-  QUOTED: 'bg-sky-100 text-sky-700',
-  COUNTER_OFFER: 'bg-orange-100 text-orange-700',
-  UPDATED_QUOTATION: 'bg-purple-100 text-purple-700',
-  APPROVED: 'bg-teal-100 text-teal-700',
-  ASSIGNED: 'bg-indigo-100 text-indigo-700',
-  FOR_PICKUP: 'bg-cyan-100 text-cyan-700',
-  OUT_FOR_DELIVERY: 'bg-blue-100 text-blue-700',
-  DELIVERED: 'bg-emerald-100 text-emerald-700',
-  ISSUE: 'bg-amber-100 text-amber-700',
-  COMPLETED: 'bg-green-100 text-green-700',
-  CANCELLED: 'bg-rose-100 text-rose-700',
-  DECLINED: 'bg-rose-100 text-rose-700',
+// Column/badge labels show only the numbered statuses. The a/b/c sub-statuses
+// (e.g. QUOTATION_SUBMITTED, OUT_FOR_PICKUP) are stored on the request and only
+// reflected on the progress timeline via `buildProgressData`.
+const statusLabel = {
+  PENDING_REQUEST: 'Pending Request',
+  QUOTATION_SUBMITTED: 'Processing',
+  COUNTER_OFFER_SUBMITTED: 'Processing',
+  FINAL_QUOTATION_SUBMITTED: 'Processing',
+  APPROVED: 'Approved',
+  ASSIGNED: 'Assigned',
+  OUT_FOR_PICKUP: 'Pickup',
+  ARRIVED_PICKUP: 'Pickup',
+  OUT_FOR_DROPOFF: 'Dropoff',
+  ARRIVED_DROPOFF: 'Dropoff',
+  DELIVERED: 'Delivered',
+  COMPLETED: 'Completed',
+  CANCELLED: 'Cancelled',
 }
 
-const transitStatusLabel = {
-  FOR_PICKUP: 'PICKUP',
-  OUT_FOR_DELIVERY: 'DROPOFF',
+// Numbered status → the sub-statuses that fall under it (used by the
+// toolbar status filter so "Processing" matches all quotation rounds, etc.).
+const statusFilterGroups = {
+  PROCESSING: ['QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED'],
+  PICKUP: ['OUT_FOR_PICKUP', 'ARRIVED_PICKUP'],
+  DROPOFF: ['OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF'],
+}
+
+function matchesStatusFilter(status, filter) {
+  const group = statusFilterGroups[filter]
+  return group ? group.includes(status) : status === filter
+}
+
+const statusBadge = {
+  PENDING_REQUEST: 'bg-amber-100 text-amber-700',
+  QUOTATION_SUBMITTED: 'bg-sky-100 text-sky-700',
+  COUNTER_OFFER_SUBMITTED: 'bg-sky-100 text-sky-700',
+  FINAL_QUOTATION_SUBMITTED: 'bg-sky-100 text-sky-700',
+  APPROVED: 'bg-teal-100 text-teal-700',
+  ASSIGNED: 'bg-indigo-100 text-indigo-700',
+  OUT_FOR_PICKUP: 'bg-cyan-100 text-cyan-700',
+  ARRIVED_PICKUP: 'bg-cyan-100 text-cyan-700',
+  OUT_FOR_DROPOFF: 'bg-blue-100 text-blue-700',
+  ARRIVED_DROPOFF: 'bg-blue-100 text-blue-700',
+  DELIVERED: 'bg-emerald-100 text-emerald-700',
+  COMPLETED: 'bg-green-100 text-green-700',
+  CANCELLED: 'bg-rose-100 text-rose-700',
 }
 
 function formatDateTime(dateStr, timeStr) {
@@ -335,26 +366,28 @@ function QuotationExpenseForm({
 }
 
 const stageStatus = {
-  FOR_REVIEW: 0,
-  QUOTED: 1,
-  COUNTER_OFFER: 1,
-  UPDATED_QUOTATION: 1,
+  PENDING_REQUEST: 0,
+  QUOTATION_SUBMITTED: 1,
+  COUNTER_OFFER_SUBMITTED: 1,
+  FINAL_QUOTATION_SUBMITTED: 1,
   APPROVED: 2,
-  ASSIGNED: 2,
-  FOR_PICKUP: 3,
-  OUT_FOR_DELIVERY: 3,
-  DELIVERED: 4,
-  COMPLETED: 4,
+  ASSIGNED: 3,
+  OUT_FOR_PICKUP: 4,
+  ARRIVED_PICKUP: 4,
+  OUT_FOR_DROPOFF: 5,
+  ARRIVED_DROPOFF: 5,
+  DELIVERED: 6,
+  COMPLETED: 7,
   CANCELLED: -1,
-  DECLINED: -1,
 }
 
 /**
  * ===== PROGRESS DETAILS — BACKEND GUIDE =====
  *
  * This card ("Progress Details") is the supervisor's view of a delivery
- * request's lifecycle. It renders STAGES (review → quotation → crew
- * assignment → transit → delivered) and each stage's SUBSTEPS.
+ * request's lifecycle. It renders STAGES (pending → processing → approved →
+ * assigned → pickup → dropoff → delivered → completed) and each stage's
+ * SUBSTEPS.
  *
  * FRONT-END CONTRACT:
  * 1. A substep only appears once it is DONE, i.e. once its `detail`
@@ -363,129 +396,204 @@ const stageStatus = {
  *    not happened yet are NOT shown. `detail: null` = not done.
  * 2. A stage is "completed" when the request status is past its stage
  *    index (see `stageStatus`), and "current" while it is the active one.
+ * 3. DISPLAY CONTRACT: the status column / badge shows ONLY the numbered
+ *    statuses (Pending Request, Processing, Approved, Assigned, Pickup,
+ *    Dropoff, Delivered, Completed, Cancelled — see `statusLabel`). The a/b/c
+ *    sub-statuses are stored on `request.status` for the timeline to derive
+ *    which SUBSTEPS are done, but they are NEVER shown as the column label.
+ *
+ * STATUS FLOW (backend must persist these `request.status` values):
+ * 1. PENDING_REQUEST            — unprocessed request from the customer.
+ * 2. PROCESSING (one of):
+ *      QUOTATION_SUBMITTED        — first quotation sent by the supervisor.
+ *      COUNTER_OFFER_SUBMITTED    — counter-offer received from the customer.
+ *      FINAL_QUOTATION_SUBMITTED  — final/updated quotation sent by the
+ *                                   supervisor after a counter-offer.
+ *    (PROCESSING stays active until the customer approves a quotation.)
+ * 3. APPROVED                    — customer approved a quotation and the final
+ *                                  delivery rate is confirmed. Waiting for
+ *                                  delivery crew/truck assignment.
+ * 4. ASSIGNED                    — delivery crew and truck assigned. Waiting
+ *                                  for the pickup to start.
+ * 5. PICKUP (one of):
+ *      OUT_FOR_PICKUP             — crew is on the way to the pickup location.
+ *      ARRIVED_PICKUP             — crew has arrived at the pickup location.
+ * 6. DROPOFF (one of):
+ *      OUT_FOR_DROPOFF            — crew is on the way to the dropoff location.
+ *      ARRIVED_DROPOFF            — crew has arrived at the dropoff location.
+ * 7. DELIVERED                   — crew confirmed delivery. If the customer
+ *                                  reports an issue, status STAYS DELIVERED
+ *                                  (issueReported=true, issueReportedAt set)
+ *                                  until the customer confirms it is resolved;
+ *                                  the timeline shows an "Issue Reported"
+ *                                  substep while it is open.
+ * 8. COMPLETED                   — customer confirmed the delivery, OR the
+ *                                  request auto-completes 7 days after
+ *                                  DELIVERED with no other action
+ *                                  (see `autoCompleteDelivered`).
  *
  * STAGES → REQUIRED BACKEND DATA
  * ------------------------------
- * 1) review
+ * 1) pending
  *      - Request Received → done as soon as the request exists (uses
  *        `request.createdAt`).
- * 2) quotation
- *      - Initial Quotation Sent           → done when a quotation exists
- *                                           (`request.quotation`).
- *      - Customer Quotation Bid Received  → done when the customer sends a
- *                                           counter-offer (`request.customerWants`).
- *      - Updated Quotation Submitted      → done when the supervisor submits
- *                                           the revised quotation
- *                                           (`request.updatedQuotation`).
- *                                           NOTE: this IS the final quotation;
- *                                           there is intentionally NO separate
- *                                           "Final Quotation Sent" step.
- *      - Quotation Approved / Quotation Declined
- *                                         → added ONLY once the customer's
- *                                           decision is recorded. "Approved"
- *                                           when status reaches APPROVED (or
- *                                           later); "Declined" when status is
- *                                           DECLINED/CANCELLED. There is
- *                                           intentionally NO "Customer Quotation
- *                                           Approval Received" step — the
- *                                           customer may decline, which leads to
- *                                           a request cancellation.
- *      - Proceed to Delivery / Request Cancelled
- *                                         → terminal outcome of the quotation
- *                                           stage. After approval the supervisor
- *                                           must NEXT assign a delivery crew
- *                                           (see stage 3), not jump to delivery.
- * 3) assignment
- *      - Delivery Crew has been Assigned  → done when `request.crew.driver`
- *                                           exists and `request.assignedAt` is set.
- * 4) transit
- *      - Each leg (left dispatch / arrived at pickup / left pickup /
- *        arrived at drop-off) is done when the backend records the truck
- *        movement timestamp. Currently mock data leaves these unset, so they
- *        correctly stay hidden until the backend provides the timestamps.
- * 5) delivered
- *      - Delivery Crew confirmed delivery → done when the crew confirms
- *                                           delivery and a timestamp is recorded.
+ * 2) processing
+ *      - Quotation Submitted        → done when the supervisor submits the
+ *                                     first quotation (`request.quotation`).
+ *      - Counter Offer Submitted    → done when the customer sends a counter
+ *                                     offer (`request.customerWants`).
+ *      - Final Quotation Submitted  → done when the supervisor submits the
+ *                                     revised quotation (`request.updatedQuotation`).
+ *      - Quotation Approved         → added once the customer approves
+ *                                     (`request.status` reaches APPROVED or
+ *                                     later). There is intentionally NO
+ *                                     "Quotation Declined" step — a declined /
+ *                                     unapproved quotation ends the request in
+ *                                     CANCELLED, which renders as a cancel
+ *                                     point on the pending stage instead.
+ * 3) approved
+ *      - Quotation approved — final rate confirmed → done when status reaches
+ *        APPROVED (or later).
+ * 4) assigned
+ *      - Delivery crew and truck assigned → done when `request.crew.driver`
+ *        exists and `request.assignedAt` is set.
+ * 5) pickup
+ *      - Crew out to pick up the items → done when the backend records the
+ *        truck leaving dispatch for pickup (status OUT_FOR_PICKUP).
+ *      - Crew arrived at pickup location → done when status reaches
+ *        ARRIVED_PICKUP (or later).
+ * 6) dropoff
+ *      - Crew out to deliver the items → done when status reaches
+ *        OUT_FOR_DROPOFF (or later).
+ *      - Crew arrived at dropoff location → done when status reaches
+ *        ARRIVED_DROPOFF (or later).
+ * 7) delivered
+ *      - Crew confirmed delivery → done when status reaches DELIVERED (or
+ *        later) and `request.deliveredAt` (or `dropoffDate`) is recorded.
+ *      - Issue Reported → added when `request.issueReported` is true and the
+ *        issue is not yet resolved. It is REMOVED once `resolvedAt` is set
+ *        (customer confirmed the issue is resolved).
+ * 8) completed
+ *      - Delivery completed → done when status is COMPLETED (`request.completedAt`).
  *
  * BACKEND TO-DO / API CONTRACT:
  * - Persist a timestamp (+ actor) for every milestone above and expose them on
  *   the delivery request payload.
  * - Map each `request.status` to the `stageStatus` index so the correct stage
- *   is marked current/completed. Keep `stageStatus` and `statusBadge` in sync
- *   when adding statuses (e.g. DECLINED).
- * - Quotation outcome statuses: APPROVED (and later) → proceed to delivery;
- *   DECLINED/CANCELLED → request cancelled.
+ *   is marked current/completed. Keep `stageStatus`, `statusLabel` and
+ *   `statusBadge` in sync when adding statuses.
+ * - Delivery request keeps status DELIVERED while an issue is unresolved;
+ *   the Issues module reads `request.issueReported`, not a separate status.
+ * - COMPLETED after customer confirmation, or auto after 7 days (see
+ *   `autoCompleteDelivered`).
  */
 function buildProgressData(request) {
   const idx = stageStatus[request.status] ?? 0
   const registeredAt = request.createdAt
   const now = new Date().toLocaleString('en-PH', { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 
-  const isApproved = idx >= 2
-  const isDeclined = request.status === 'DECLINED' || request.status === 'CANCELLED'
+  const isCancelled = request.status === 'CANCELLED'
+  const isApprovedOrLater = idx >= 2
 
-  const quotationSubsteps = [
-    { label: 'Initial Quotation Sent', detail: request.quotation ? `by Supervisor · ${registeredAt}` : null },
-    { label: 'Customer Quotation Bid Received', detail: request.customerWants ? `· ${registeredAt}` : null },
-    { label: 'Updated Quotation Submitted', detail: request.updatedQuotation ? `by Supervisor · ${registeredAt}` : null },
+  const pickupOutDone = idx >= 4
+  const pickupArrivedDone = ['ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(request.status)
+  const dropoffOutDone = ['OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(request.status)
+  const dropoffArrivedDone = ['ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(request.status)
+  const deliveredDone = ['DELIVERED', 'COMPLETED'].includes(request.status)
+  const issueOpen = Boolean(request.issueReported && !request.resolvedAt)
+  const issueResolved = Boolean(request.issueReported && request.resolvedAt)
+
+  const processingSubsteps = [
+    { label: 'Quotation Submitted', detail: request.quotation ? `by Supervisor · ${registeredAt}` : null },
+    { label: 'Counter Offer Submitted', detail: request.customerWants ? `by Customer · ${registeredAt}` : null },
+    { label: 'Final Quotation Submitted', detail: request.updatedQuotation ? `by Supervisor · ${registeredAt}` : null },
   ]
-  if (isApproved) {
-    quotationSubsteps.push(
-      { label: 'Quotation Approved', detail: `by Customer · ${registeredAt}` },
-      { label: 'Proceed to Delivery', detail: `· ${registeredAt}` },
-    )
-  } else if (isDeclined) {
-    quotationSubsteps.push(
-      { label: 'Quotation Declined', detail: `by Customer · ${registeredAt}` },
-      { label: 'Request Cancelled', detail: `· ${registeredAt}` },
-    )
+  if (isApprovedOrLater) {
+    processingSubsteps.push({ label: 'Quotation Approved', detail: `by Customer · ${registeredAt}` })
+  }
+
+  const deliveredSubsteps = [
+    {
+      label: 'Delivery crew confirmed delivery',
+      detail: deliveredDone ? `by Crew · ${request.deliveredAt || request.dropoffDate || registeredAt}` : null,
+    },
+  ]
+  if (issueOpen) {
+    deliveredSubsteps.push({ label: 'Issue Reported', detail: request.issueReportedAt ? `by Customer · ${request.issueReportedAt}` : `by Customer · ${registeredAt}`, warning: true })
+  } else if (issueResolved) {
+    deliveredSubsteps.push({ label: 'Issue Resolved', detail: `by Customer · ${request.resolvedAt}` })
   }
 
   const stages = [
     {
-      key: 'review',
-      label: 'Reviewing Delivery Request',
-      completedLabel: 'Reviewed Delivery Request',
+      key: 'pending',
+      label: 'Pending Request',
+      completedLabel: 'Request Received',
       substeps: [
-        { label: 'Request Received', detail: registeredAt, cancelPoint: request.status === 'CANCELLED', cancelReason: 'Cancelled by supervisor' },
+        { label: 'Request Received', detail: registeredAt },
+        ...(isCancelled ? [{ label: 'Request Cancelled', detail: `· ${registeredAt}`, cancelPoint: true, cancelReason: 'Request cancelled', warning: true }] : []),
       ],
     },
     {
-      key: 'quotation',
-      label: 'Negotiating Quotation',
+      key: 'processing',
+      label: 'Processing Request',
+      completedLabel: 'Quotation Submitted',
+      substeps: processingSubsteps,
+    },
+    {
+      key: 'approved',
+      label: 'Quotation Approved',
       completedLabel: 'Quotation Approved',
-      substeps: quotationSubsteps,
-    },
-    {
-      key: 'assignment',
-      label: 'Assigning Delivery Crew',
-      completedLabel: 'Assigned Delivery Crew',
       substeps: [
-        { label: 'Delivery Crew has been Assigned', detail: request.crew?.driver ? `by Supervisor · ${request.assignedAt || now}` : null },
+        { label: 'Quotation approved — final delivery rate confirmed', detail: isApprovedOrLater ? `by Customer · ${registeredAt}` : null },
       ],
     },
     {
-      key: 'transit',
-      label: 'In Transit',
+      key: 'assigned',
+      label: 'Assigning Delivery Crew',
+      completedLabel: 'Delivery Crew Assigned',
       substeps: [
-        { label: `Truck left dispatch location for Pickup`, detail: null },
-        { label: `Truck arrived at pickup location`, detail: null },
-        { label: `Truck left pickup location on its way to drop off location`, detail: null },
-        { label: `Truck arrived at drop off location`, detail: null },
+        { label: 'Delivery crew and truck assigned', detail: request.crew?.driver ? `by Supervisor · ${request.assignedAt || now}` : null },
+      ],
+    },
+    {
+      key: 'pickup',
+      label: 'Pickup',
+      completedLabel: 'Pickup Completed',
+      substeps: [
+        { label: 'Delivery crew is out to pick up the items', detail: pickupOutDone ? `· ${request.pickupDate || registeredAt}` : null },
+        { label: 'Delivery crew arrived at the pickup location', detail: pickupArrivedDone ? `· ${request.pickupDate || registeredAt}` : null },
+      ],
+    },
+    {
+      key: 'dropoff',
+      label: 'Dropoff',
+      completedLabel: 'Dropoff Completed',
+      substeps: [
+        { label: 'Delivery crew is out to deliver the items', detail: dropoffOutDone ? `· ${request.dropoffDate || registeredAt}` : null },
+        { label: 'Delivery crew arrived at the dropoff location', detail: dropoffArrivedDone ? `· ${request.dropoffDate || registeredAt}` : null },
       ],
     },
     {
       key: 'delivered',
       label: 'Delivered',
+      completedLabel: 'Delivery Completed',
+      substeps: deliveredSubsteps,
+    },
+    {
+      key: 'completed',
+      label: 'Completed',
+      completedLabel: 'Delivery Completed',
       substeps: [
-        { label: 'Delivery Crew confirmed delivery', detail: null },
+        { label: 'Delivery confirmed completed', detail: request.completedAt || request.resolvedAt ? `· ${request.completedAt || request.resolvedAt}` : null },
       ],
     },
   ]
 
+  const isCompleted = request.status === 'COMPLETED'
   return stages.map((stage, i) => ({
     ...stage,
-    status: i < idx ? 'completed' : i === idx ? 'current' : 'pending',
+    status: i < idx || (isCompleted && i === idx) ? 'completed' : i === idx ? 'current' : 'pending',
   }))
 }
 
@@ -519,7 +627,7 @@ const reportedIssues = [
     itemType: 'Beverages',
     truckType: '4T',
     cargoWeight: '3100',
-    status: 'ISSUE',
+    status: 'DELIVERED',
     pickupDate: '2026-07-28',
     pickupTime: '09:00',
     dropoffDate: '2026-07-28',
@@ -528,6 +636,7 @@ const reportedIssues = [
     deliveryAddress: '222 BGC, Taguig',
     createdAt: '2026-07-28T09:00:00',
     issueCategory: 'Item damaged',
+    issueReported: true,
     issueDescription: 'Two cases of bottles arrived with visible damage. Reported on receipt.',
     issueReportedAt: 'Jul 28, 2026 14:32',
     phone: '0917 555 0131',
@@ -549,7 +658,7 @@ const reportedIssues = [
     itemType: 'Dry Food',
     truckType: '6T',
     cargoWeight: '4800',
-    status: 'ISSUE',
+    status: 'DELIVERED',
     pickupDate: '2026-07-30',
     pickupTime: '08:00',
     dropoffDate: '2026-07-31',
@@ -558,6 +667,7 @@ const reportedIssues = [
     deliveryAddress: '888 Ortigas Center, Pasig',
     createdAt: '2026-07-30T10:15:00',
     issueCategory: 'Missing item(s)',
+    issueReported: true,
     issueDescription: 'Three boxes short on the manifest. Customer asked to verify the count.',
     issueReportedAt: 'Jul 30, 2026 17:40',
     phone: '0918 555 0212',
@@ -580,7 +690,7 @@ const reportedIssues = [
     itemType: 'Fast Food',
     truckType: '2T',
     cargoWeight: '1500',
-    status: 'ISSUE',
+    status: 'DELIVERED',
     pickupDate: '2026-08-01',
     pickupTime: '07:00',
     dropoffDate: '2026-08-01',
@@ -589,6 +699,7 @@ const reportedIssues = [
     deliveryAddress: '777 Greenbelt, Makati',
     createdAt: '2026-08-01T08:05:00',
     issueCategory: 'Wrong item delivered',
+    issueReported: true,
     issueDescription: 'Received saturated goods instead of the ordered stock. Awaiting supervisor reply.',
     issueReportedAt: 'Aug 1, 2026 13:12',
     phone: '0919 555 0404',
@@ -601,6 +712,37 @@ const reportedIssues = [
     ],
     quotation: { amount: '7600' },
     crew: { driver: { name: 'Teodoro Salazar' }, truck: { plateNumber: 'JKL 3456', truckType: '2T' } },
+  },
+  {
+    id: 'DEL-074',
+    customerName: 'Ramon Bautista',
+    companyName: 'Bautista Merchandising',
+    itemType: 'Frozen Goods',
+    truckType: '2T_REF',
+    cargoWeight: '2100',
+    status: 'DELIVERED',
+    pickupDate: '2026-08-02',
+    pickupTime: '09:30',
+    dropoffDate: '2026-08-02',
+    dropoffTime: '14:00',
+    pickupAddress: '890 Aurora Boulevard, Cubao, Quezon City',
+    deliveryAddress: '456 Trade Center, Binondo, Manila',
+    createdAt: '2026-08-02T10:00:00',
+    issueCategory: 'Delivery delay',
+    issueReported: true,
+    issueDescription: 'Shipment arrived 4 hours behind the scheduled window, affecting the store’s cold-chain timeline.',
+    issueReportedAt: 'Aug 2, 2026 18:05',
+    phone: '0920 555 0707',
+    email: 'ramon.bautista@bautistamerch.example',
+    resolvedAt: null,
+    destinationCoords: { lat: 14.5995, lng: 120.9842 },
+    currentLocation: { lat: 14.6018, lng: 120.9789 },
+    messages: [
+      { id: 'm1', sender: 'customer', text: 'Our frozen shipment arrived 4 hours late. The scheduled window was 10:00 AM - 12:00 PM but the truck arrived past 2:00 PM.', at: 'Aug 2, 2026 18:05' },
+      { id: 'm2', sender: 'supervisor', text: 'We apologize for the delay. The truck was held up in heavy traffic along EDSA. We will review the route plan for this area.', at: 'Aug 2, 2026 18:40' },
+    ],
+    quotation: { amount: '11800' },
+    crew: { driver: { name: 'Lito Ramos' }, truck: { plateNumber: 'ABC 1234', truckType: '2T_REF' } },
   },
 ]
 
@@ -1568,7 +1710,7 @@ function CancelledDeliveryDetails({ delivery }) {
           <Row label="Reason" value={cancellation.cancellationReason || '—'} />
           <Row label="Cancelled by" value={cancellation.cancelledBy === 'customer' ? 'Customer' : 'Supervisor'} />
           <Row label="Cancelled at" value={cancellation.cancelledAt || '—'} />
-          <Row label="Status before cancellation" value={(cancellation.cancelledFromStatus || '').replaceAll('_', ' ')} />
+          <Row label="Status before cancellation" value={statusLabel[cancellation.cancelledFromStatus] ?? (cancellation.cancelledFromStatus || '—').replaceAll('_', ' ')} />
         </div>
       </div>
 
@@ -1625,7 +1767,7 @@ function IssueDetailView({ delivery, onResolve, onSendMessage }) {
           <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${
             isResolved ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
           }`}>
-            {isResolved ? 'COMPLETED' : 'ISSUE'}
+            {isResolved ? 'Resolved' : 'Issue'}
           </span>
           <h3 className="text-sm font-semibold text-slate-900">Delivery Report — {delivery.id}</h3>
         </div>
@@ -1814,6 +1956,7 @@ function autoCompleteDelivered(list) {
   let changed = false
   const next = list.map((r) => {
     if (r.status !== 'DELIVERED') return r
+    if (r.issueReported && !r.resolvedAt) return r
     const deliveredRef = r.deliveredAt
       ? new Date(r.deliveredAt)
       : r.dropoffDate
@@ -1953,6 +2096,7 @@ function SupDeliveries() {
   const [completedPage, setCompletedPage] = useState(1)
   const [cancelledPage, setCancelledPage] = useState(1)
   const [issuesPage, setIssuesPage] = useState(1)
+  const [transitPage, setTransitPage] = useState(1)
   const [selectedIssue, setSelectedIssue] = useState(null)
 
   useEffect(() => {
@@ -1962,7 +2106,7 @@ function SupDeliveries() {
   }, [])
 
   const inboxRows = useMemo(
-    () => requests.filter((r) => ['FOR_REVIEW', 'QUOTED', 'COUNTER_OFFER', 'UPDATED_QUOTATION', 'ASSIGNED'].includes(r.status)),
+    () => requests.filter((r) => ['PENDING_REQUEST', 'QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED', 'ASSIGNED'].includes(r.status)),
     [requests],
   )
 
@@ -1977,7 +2121,7 @@ function SupDeliveries() {
     const q = search.trim().toLowerCase()
     let result = pendingAssignments
     if (statusFilter !== 'ALL') {
-      result = result.filter((r) => r.status === statusFilter)
+      result = result.filter((r) => matchesStatusFilter(r.status, statusFilter))
     }
     if (q) {
       result = result.filter(
@@ -2000,7 +2144,7 @@ function SupDeliveries() {
     const q = search.trim().toLowerCase()
     let result = inboxRows
     if (statusFilter !== 'ALL') {
-      result = result.filter((r) => r.status === statusFilter)
+      result = result.filter((r) => matchesStatusFilter(r.status, statusFilter))
     }
     if (q) {
       result = result.filter(
@@ -2020,7 +2164,7 @@ function SupDeliveries() {
   const paginatedInbox = filteredInbox.slice((safePage - 1) * itemsPerPage, safePage * itemsPerPage)
 
   const ongoingDeliveries = useMemo(
-    () => requests.filter((r) => ['FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(r.status)),
+    () => requests.filter((r) => ['OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED'].includes(r.status)),
     [requests],
   )
 
@@ -2028,7 +2172,7 @@ function SupDeliveries() {
     const q = search.trim().toLowerCase()
     let result = ongoingDeliveries
     if (statusFilter !== 'ALL') {
-      result = result.filter((r) => r.status === statusFilter)
+      result = result.filter((r) => matchesStatusFilter(r.status, statusFilter))
     }
     if (q) {
       result = result.filter(
@@ -2042,6 +2186,10 @@ function SupDeliveries() {
     }
     return sortNewestFirst(result)
   }, [ongoingDeliveries, search, statusFilter])
+
+  const transitTotalPages = Math.max(1, Math.ceil(filteredTransit.length / itemsPerPage))
+  const transitSafePage = Math.min(transitPage, transitTotalPages)
+  const paginatedTransit = filteredTransit.slice((transitSafePage - 1) * itemsPerPage, transitSafePage * itemsPerPage)
 
   const monitoredDelivery = useMemo(() => {
     const preferred = filteredTransit.find((r) => r.id === monitoredDeliveryId)
@@ -2082,7 +2230,7 @@ function SupDeliveries() {
   const paginatedCancelled = filteredCancelled.slice((cancelledSafePage - 1) * itemsPerPage, cancelledSafePage * itemsPerPage)
 
   const reportedIssuesList = useMemo(
-    () => requests.filter((r) => r.status === 'ISSUE'),
+    () => requests.filter((r) => r.issueReported),
     [requests],
   )
 
@@ -2098,7 +2246,7 @@ function SupDeliveries() {
   const selectedTruck = mockTrucks.find((t) => t.plateNumber === assignment.plateNumber)
   const selectedHelpers = mockHelpers.filter((h) => assignment.helperIds.includes(h.id))
   const canConfirmAssignment = Boolean(selectedDriver && selectedTruck && selectedHelpers.length > 0)
-  const isInTransitStatus = ['FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(selectedRequest?.status)
+  const isInTransitStatus = ['OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED'].includes(selectedRequest?.status)
 
   const moduleTabs = [
     { id: 'inbox', label: 'Delivery Requests Inbox', mobileLabel: 'Inbox', count: inboxRows.length },
@@ -2117,6 +2265,7 @@ function SupDeliveries() {
     setCompletedPage(1)
     setCancelledPage(1)
     setIssuesPage(1)
+    setTransitPage(1)
   }
 
   const onGlobalSearchChange = (value) => {
@@ -2126,6 +2275,7 @@ function SupDeliveries() {
     setCompletedPage(1)
     setCancelledPage(1)
     setIssuesPage(1)
+    setTransitPage(1)
   }
 
   const resolveIssue = (id) => {
@@ -2137,9 +2287,9 @@ function SupDeliveries() {
       minute: '2-digit',
     })
     setRequests((prev) =>
-      prev.map((issue) => (issue.id === id ? { ...issue, resolvedAt, status: 'COMPLETED' } : issue)),
+      prev.map((issue) => (issue.id === id ? { ...issue, resolvedAt, completedAt: resolvedAt, status: 'COMPLETED' } : issue)),
     )
-    setSelectedIssue((prev) => (prev && prev.id === id ? { ...prev, resolvedAt, status: 'COMPLETED' } : prev))
+    setSelectedIssue((prev) => (prev && prev.id === id ? { ...prev, resolvedAt, completedAt: resolvedAt, status: 'COMPLETED' } : prev))
   }
 
   const sendIssueMessage = (id, text) => {
@@ -2173,8 +2323,8 @@ function SupDeliveries() {
 
   const openDetails = (request) => {
     setSelectedRequest(request)
-    // If request is already past PENDING (APPROVED, QUOTED, etc.), expand the modal immediately
-    setHasApproved(request.status !== 'FOR_REVIEW')
+    // If request is already past PENDING, expand the modal immediately
+    setHasApproved(request.status !== 'PENDING_REQUEST')
     // Quotation step is considered done if the request already has a quotation
     setQuotationSubmitted(Boolean(request.quotation))
     setShowInitialQuotation(false)
@@ -2254,7 +2404,7 @@ function SupDeliveries() {
           },
         },
       },
-      status: 'QUOTED',
+      status: 'QUOTATION_SUBMITTED',
     })
     setQuotationSubmitted(true)
     setShowQuotationConfirmDialog(false)
@@ -2266,7 +2416,6 @@ function SupDeliveries() {
 
   const startQuotation = () => {
     if (!selectedRequest) return
-    updateRequest(selectedRequest.id, { status: 'APPROVED' })
     setHasApproved(true)
     setQuotationSubmitted(false)
     setQuotationForm({
@@ -2295,7 +2444,7 @@ function SupDeliveries() {
   }
   const confirmDecline = () => {
     if (!selectedRequest) return
-    updateRequest(selectedRequest.id, { status: 'DECLINED' })
+    updateRequest(selectedRequest.id, { status: 'CANCELLED' })
     setShowDeclineDialog(false)
     setSelectedRequest(null)
   }
@@ -2349,7 +2498,7 @@ function SupDeliveries() {
           },
         },
       },
-      status: 'UPDATED_QUOTATION',
+      status: 'FINAL_QUOTATION_SUBMITTED',
     })
     setAdjustingQuotation(false)
     setBidDeclined(false)
@@ -2387,7 +2536,7 @@ function SupDeliveries() {
     <SupLayout title="Deliveries" background={null} bg="bg-[#F6F7FB]">
       {selectedRequest ? (
         <>
-        <div className="flex flex-col gap-4 pb-6">
+        <div className="flex flex-col gap-4 pb-6" style={interFontStyle}>
           <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
             <button
               onClick={() => setSelectedRequest(null)}
@@ -2410,13 +2559,13 @@ function SupDeliveries() {
                       {selectedRequest.id} • {selectedRequest.companyName}
                     </h1>
                     <span className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge[selectedRequest.status]}`}>
-                      {selectedRequest.status.replaceAll('_', ' ')}
+                      {statusLabel[selectedRequest.status] ?? selectedRequest.status.replaceAll('_', ' ')}
                     </span>
                   </div>
                   <p className="mt-0.5 text-xs text-slate-500">{selectedRequest.customerName}</p>
                 </div>
               </div>
-              {selectedRequest.status === 'FOR_REVIEW' && (
+              {selectedRequest.status === 'PENDING_REQUEST' && (
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setShowProceedQuotationDialog(true)}
@@ -2451,16 +2600,23 @@ function SupDeliveries() {
                   </span>
                   <div className="flex-1">
                     <p className="text-sm font-semibold text-slate-900">
-                      {currentStage.status === 'completed' ? currentStage.completedLabel || currentStage.label : currentStage.label}
+                      {selectedRequest.status === 'CANCELLED'
+                        ? 'Request Cancelled'
+                        : currentStage.status === 'completed' ? currentStage.completedLabel || currentStage.label : currentStage.label}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {currentStage.status === 'completed' ? 'Completed' : currentStage.status === 'current' ? 'In Progress' : 'Pending'}
+                      {selectedRequest.status === 'CANCELLED'
+                        ? 'Cancelled'
+                        : currentStage.status === 'completed' ? 'Completed' : currentStage.status === 'current' ? 'In Progress' : 'Pending'}
                     </p>
                   </div>
                 </div>
 
                 {(() => {
-                  const previewSubstep = progressData.flatMap(s => s.substeps).filter(s => s.detail).pop()
+                  const allDone = progressData.flatMap(s => s.substeps).filter(s => s.detail)
+                  const previewSubstep = selectedRequest.status === 'CANCELLED'
+                    ? allDone.find(s => s.cancelPoint) || allDone[allDone.length - 1]
+                    : allDone[allDone.length - 1]
                   if (!previewSubstep) return null
                   return (
                     <div className="space-y-2 ml-11">
@@ -2519,9 +2675,9 @@ function SupDeliveries() {
                         <div className="ml-8 space-y-2">
                           {stage.substeps.filter(s => s.detail).map((substep, si2) => (
                             <div key={si2} className="flex items-start gap-2 text-sm">
-                              <span className="mt-1.5 flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-full bg-emerald-500" />
+                              <span className={`mt-1.5 flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-full ${substep.warning ? 'bg-amber-500' : 'bg-emerald-500'}`} />
                               <div className="flex-1 min-w-0">
-                                <p className="text-slate-900">
+                                <p className={`${substep.warning ? 'font-medium text-amber-700' : 'text-slate-900'}`}>
                                   {substep.label}
                                   {substep.detail && <span className="text-slate-500 ml-1">{substep.detail}</span>}
                                 </p>
@@ -2686,9 +2842,9 @@ function SupDeliveries() {
                       <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                         {adjustingQuotation
                           ? 'Adjusted Quotation'
-                          : selectedRequest.status === 'COUNTER_OFFER'
+                          : selectedRequest.status === 'COUNTER_OFFER_SUBMITTED'
                           ? 'Quotation Review'
-                          : selectedRequest.status === 'UPDATED_QUOTATION'
+                          : selectedRequest.status === 'FINAL_QUOTATION_SUBMITTED'
                           ? 'Quotation History'
                           : 'Quotation'}
                       </h3>
@@ -2716,7 +2872,7 @@ function SupDeliveries() {
                   <div className="p-4 space-y-4">
 
                     {/* — Approved Amount (post-approval statuses) — */}
-                    {['APPROVED', 'ASSIGNED', 'FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'].includes(selectedRequest.status) && (selectedRequest.approvedAmount || selectedRequest.quotation) && (
+                    {['APPROVED', 'ASSIGNED', 'OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(selectedRequest.status) && (selectedRequest.approvedAmount || selectedRequest.quotation) && (
                       <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
                         <div className="flex justify-between items-start">
                           <div>
@@ -2781,11 +2937,11 @@ function SupDeliveries() {
                       />
                     )}
 
-                    {/* === CASE 2: Read-only form (submitted — QUOTED or COUNTER_OFFER) === */}
+                    {/* === CASE 2: Read-only form (submitted — quotation submitted or counter-offer received) === */}
                     {(selectedRequest.quotation && quotationSubmitted) && !adjustingQuotation && (
                       <>
-                        {/* Collapsible toggle for COUNTER_OFFER and UPDATED_QUOTATION */}
-                        {(selectedRequest.status === 'COUNTER_OFFER' || selectedRequest.status === 'UPDATED_QUOTATION') && (
+                        {/* Collapsible toggle for COUNTER_OFFER_SUBMITTED and FINAL_QUOTATION_SUBMITTED */}
+                        {(selectedRequest.status === 'COUNTER_OFFER_SUBMITTED' || selectedRequest.status === 'FINAL_QUOTATION_SUBMITTED') && (
                           <button
                             onClick={() => setShowInitialQuotation(!showInitialQuotation)}
                             className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900 transition bg-transparent border-none cursor-pointer"
@@ -2795,12 +2951,12 @@ function SupDeliveries() {
                           </button>
                         )}
 
-                        {/* Read-only form content (shown by default for QUOTED, collapsible for COUNTER_OFFER and UPDATED_QUOTATION) */}
-                        {(showInitialQuotation || (selectedRequest.status !== 'COUNTER_OFFER' && selectedRequest.status !== 'UPDATED_QUOTATION')) && isDetailedBreakdown(selectedRequest.quotation) && (
+                        {/* Read-only form content (shown by default for QUOTATION_SUBMITTED, collapsible for COUNTER_OFFER_SUBMITTED and FINAL_QUOTATION_SUBMITTED) */}
+                        {(showInitialQuotation || (selectedRequest.status !== 'COUNTER_OFFER_SUBMITTED' && selectedRequest.status !== 'FINAL_QUOTATION_SUBMITTED')) && isDetailedBreakdown(selectedRequest.quotation) && (
                           <div className="space-y-4">
 
-                            {/* — Initial Quotation header for COUNTER_OFFER / UPDATED_QUOTATION / APPROVED — */}
-                            {(selectedRequest.status === 'COUNTER_OFFER' || selectedRequest.status === 'UPDATED_QUOTATION' || selectedRequest.status === 'APPROVED') && (
+                            {/* — Initial Quotation header for COUNTER_OFFER_SUBMITTED / FINAL_QUOTATION_SUBMITTED / APPROVED — */}
+                            {(selectedRequest.status === 'COUNTER_OFFER_SUBMITTED' || selectedRequest.status === 'FINAL_QUOTATION_SUBMITTED' || selectedRequest.status === 'APPROVED') && (
                               <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-200/60 px-4 py-2.5">
                                 <FileText className="h-4 w-4 text-slate-600" />
                                 <span className="text-sm font-bold uppercase tracking-wider text-slate-700">Initial Quotation</span>
@@ -2930,15 +3086,15 @@ function SupDeliveries() {
                         )}
 
                         {/* QUOTED: Waiting message */}
-                        {selectedRequest.status === 'QUOTED' && !selectedRequest.customerWants && (
+                        {selectedRequest.status === 'QUOTATION_SUBMITTED' && !selectedRequest.customerWants && (
                           <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 mt-4">
                             <div className="h-2 w-2 animate-pulse rounded-full bg-sky-500" />
                             <p className="text-sm text-sky-800">Waiting for customer to review quotation.</p>
                           </div>
                         )}
 
-                        {/* COUNTER_OFFER: Customer's Counter Offer section */}
-                        {selectedRequest.status === 'COUNTER_OFFER' && (
+                        {/* COUNTER_OFFER_SUBMITTED: Customer's Counter Offer section */}
+                        {selectedRequest.status === 'COUNTER_OFFER_SUBMITTED' && (
                           <>
                             {!bidDeclined && (
                               <div className="rounded-xl border-2 border-orange-200 bg-orange-50/60 p-4 space-y-3">
@@ -2981,8 +3137,8 @@ function SupDeliveries() {
                           </>
                         )}
 
-                        {/* UPDATED_QUOTATION: Show initial quotation + customer's counter offer record + updated quotation */}
-                        {selectedRequest.status === 'UPDATED_QUOTATION' && (
+                        {/* FINAL_QUOTATION_SUBMITTED: Show initial quotation + customer's counter offer record + updated quotation */}
+                        {selectedRequest.status === 'FINAL_QUOTATION_SUBMITTED' && (
                           <>
                             <div className="flex flex-wrap gap-3 border-b border-slate-200 pb-4 mb-4">
                               <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2">
@@ -3140,7 +3296,7 @@ function SupDeliveries() {
                 </div>
               )}
 
-              {hasApproved && quotationSubmitted && ['APPROVED', 'ASSIGNED', 'FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'].includes(selectedRequest.status) && (
+              {hasApproved && quotationSubmitted && ['APPROVED', 'ASSIGNED', 'OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(selectedRequest.status) && (
                 <div
                   className={`rounded-2xl border bg-white bg-gradient-to-b p-4 transition-colors ${
                     selectedRequest.crew?.driver && selectedRequest.crew?.truck?.plateNumber
@@ -3699,15 +3855,14 @@ function SupDeliveries() {
           )}
         </>
       ) : (
-        <div className="flex h-full flex-col gap-4 overflow-hidden">
+        <div className="flex h-full flex-col gap-4 overflow-hidden" style={interFontStyle}>
           {!selectedReportId && !selectedIssue && (
           <>
-            {/* Global toolbar — search + status filter + sort, sits above the tabs.
-                Search styled to mirror CustomerDeliveries.jsx; keeps the supervisor's
+            {/* Global toolbar — search + status filter, styled to mirror
+                CustomerDeliveries.jsx (no card wrapper); keeps the supervisor's
                 slate/sky color scheme and the status-filter dropdown. */}
-            <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <div className="relative flex-1">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="relative flex-1">
                   <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 lg:pl-4">
                     <Search className="h-4 w-4 text-slate-400 lg:h-5 lg:w-5" />
                   </div>
@@ -3732,16 +3887,15 @@ function SupDeliveries() {
                 {(activeModule === 'inbox' || activeModule === 'transit' || activeModule === 'assignment') && (
                   <select
                     value={statusFilter}
-                    onChange={(e) => { setStatusFilter(e.target.value); setPage(1); setAssignPage(1) }}
+                    onChange={(e) => { setStatusFilter(e.target.value); setPage(1); setAssignPage(1); setTransitPage(1) }}
                     className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
                   >
                     <option value="ALL">All Statuses</option>
                     {activeModule === 'inbox' && (
                       <>
-                        <option value="FOR_REVIEW">For Review</option>
-                        <option value="QUOTED">Quoted</option>
-                        <option value="COUNTER_OFFER">Counter Offer</option>
-                        <option value="UPDATED_QUOTATION">Updated Quotation</option>
+                        <option value="PENDING_REQUEST">Pending Request</option>
+                        <option value="PROCESSING">Processing</option>
+                        <option value="ASSIGNED">Assigned</option>
                       </>
                     )}
                     {activeModule === 'assignment' && (
@@ -3752,15 +3906,14 @@ function SupDeliveries() {
                     )}
                     {activeModule === 'transit' && (
                       <>
-                        <option value="FOR_PICKUP">Pickup</option>
-                        <option value="OUT_FOR_DELIVERY">Dropoff</option>
+                        <option value="PICKUP">Pickup</option>
+                        <option value="DROPOFF">Dropoff</option>
                         <option value="DELIVERED">Delivered</option>
                       </>
                     )}
                   </select>
                 )}
               </div>
-            </div>
 
             {/* Module tabs — compact horizontally scrollable underline strip at
                 every breakpoint. Mirrors CustomerDeliveries.jsx. */}
@@ -3815,7 +3968,7 @@ function SupDeliveries() {
                   >
                     <div className="flex justify-center">
                       <span className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[row.status]}`}>
-                        {row.status.replaceAll('_', ' ')}
+                        {statusLabel[row.status] ?? row.status.replaceAll('_', ' ')}
                       </span>
                     </div>
                     <p className="text-sm font-mono font-semibold text-slate-900 text-center">{row.id}</p>
@@ -3868,7 +4021,7 @@ function SupDeliveries() {
                   >
                     <div className="flex justify-center">
                       <span className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[row.status]}`}>
-                        {row.status === 'APPROVED' ? 'APPROVED' : 'ASSIGNED'}
+                        {statusLabel[row.status] ?? row.status.replaceAll('_', ' ')}
                       </span>
                     </div>
                     <p className="text-sm font-mono font-semibold text-slate-900 text-center">{row.id}</p>
@@ -3894,9 +4047,9 @@ function SupDeliveries() {
         )}
 
         {activeModule === 'transit' && (
-          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
-            <div className="grid min-h-0 gap-4 lg:grid-cols-[1.15fr_0.85fr]">
-              <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+            <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto lg:overflow-hidden lg:grid-cols-[1.15fr_0.85fr] lg:grid-rows-[minmax(0,1fr)]">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 <div className="shrink-0 hidden grid-cols-[0.6fr_0.7fr_1.2fr_0.5fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                   <span className="text-center">Status</span>
                   <span className="text-center">Request ID</span>
@@ -3905,11 +4058,11 @@ function SupDeliveries() {
                 </div>
 
                 <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-                  {filteredTransit.length === 0 && (
+                  {paginatedTransit.length === 0 && (
                     <div className="px-5 py-14 text-center text-slate-500">No in-transit deliveries found.</div>
                   )}
 
-                  {filteredTransit.map((delivery) => (
+                  {paginatedTransit.map((delivery) => (
                     <article
                       key={delivery.id}
                       onClick={() => setMonitoredDeliveryId(delivery.id)}
@@ -3919,7 +4072,7 @@ function SupDeliveries() {
                     >
                       <div className="flex justify-center">
                         <span className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[delivery.status]}`}>
-                          {transitStatusLabel[delivery.status] ?? delivery.status.replaceAll('_', ' ')}
+                          {statusLabel[delivery.status] ?? delivery.status.replaceAll('_', ' ')}
                         </span>
                       </div>
                       <p className="text-sm font-mono font-semibold text-slate-900 text-center">{delivery.id}</p>
@@ -3942,25 +4095,25 @@ function SupDeliveries() {
                 </div>
               </div>
 
-              <div className="min-h-0 space-y-4 overflow-y-auto">
-                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                  <div className="border-b border-slate-200 px-4 py-3">
+              <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+                <div className="flex flex-1 flex-col rounded-2xl border border-slate-200 bg-white">
+                  <div className="shrink-0 border-b border-slate-200 px-4 py-3">
                     <h3 className="text-base font-semibold text-slate-900">Real-time Monitoring</h3>
                     <p className="text-xs text-slate-500">
-                      {monitoredDelivery ? `${monitoredDelivery.id} • ${transitStatusLabel[monitoredDelivery.status] ?? monitoredDelivery.status.replaceAll('_', ' ')}` : 'No active truck'}
+                      {monitoredDelivery ? `${monitoredDelivery.id} • ${statusLabel[monitoredDelivery.status] ?? monitoredDelivery.status.replaceAll('_', ' ')}` : 'No active truck'}
                     </p>
                   </div>
                   {monitoredDelivery ? (
-                    <div className="p-4">
+                    <div className="flex min-h-0 flex-1 flex-col p-4">
                       <iframe
                         title="Live Delivery Map"
                         src={toGoogleMapEmbed(monitoringByDelivery[monitoredDelivery.id]?.currentLocation || monitoredDelivery.currentLocation || monitoredDelivery.destinationCoords)}
-                        className="h-56 w-full rounded-xl"
+                        className="min-h-[220px] w-full flex-1 rounded-xl"
                         loading="lazy"
                         referrerPolicy="no-referrer-when-downgrade"
                       />
                       {monitoringByDelivery[monitoredDelivery.id] && (
-                        <div className="mt-4 space-y-3">
+                        <div className="mt-4 shrink-0 space-y-3">
                           <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
                             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
                               {getInitials(monitoringByDelivery[monitoredDelivery.id].driver?.name || '?')}
@@ -3996,7 +4149,7 @@ function SupDeliveries() {
                   )}
                 </div>
 
-                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-white">
                   <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
                     <div>
                       <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
@@ -4174,6 +4327,10 @@ function SupDeliveries() {
                 </div>
               </div>
             </div>
+
+            <div className="shrink-0 rounded-2xl border border-slate-200 bg-white">
+              <PaginationBar page={transitSafePage} setPage={setTransitPage} totalPages={transitTotalPages} />
+            </div>
           </section>
         )}
 
@@ -4227,13 +4384,13 @@ function SupDeliveries() {
                     >
                       <div className="flex justify-center">
                         {delivery.status === 'COMPLETED' ? (
-                          <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-emerald-700 xl:text-[11px]">
+                          <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-green-700 xl:text-[11px]">
                             <CheckCircle2 className="h-3 w-3" />
-                            COMPLETED
+                            Completed
                           </span>
                         ) : (
-                          <span className="inline-flex max-w-full rounded-full bg-amber-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-amber-700 xl:text-[11px]">
-                            ISSUE
+                          <span className="inline-flex max-w-full rounded-full bg-emerald-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-emerald-700 xl:text-[11px]">
+                            Delivered
                           </span>
                         )}
                       </div>
@@ -4407,7 +4564,7 @@ function SupDeliveries() {
                         <div className="flex justify-center">
                           {delivery.cancellation ? (
                             <span className="inline-flex max-w-full rounded-full bg-slate-100 px-2 py-0.5 text-center text-[10px] font-semibold text-slate-600">
-                              {delivery.cancellation.cancelledFromStatus.replaceAll('_', ' ')}
+                              {statusLabel[delivery.cancellation.cancelledFromStatus] ?? delivery.cancellation.cancelledFromStatus.replaceAll('_', ' ')}
                             </span>
                           ) : (
                             <span className="text-sm text-slate-400">—</span>
