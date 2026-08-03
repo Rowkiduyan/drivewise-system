@@ -19,6 +19,16 @@ import {
   Wind,
 } from "lucide-react";
 
+// Utility to format a stored date string (yyyy-MM or yyyy-MM-dd) as "MM/YYYY"
+const formatMonthYear = (dateStr) => {
+  if (!dateStr) return "N/A";
+  const d = new Date(dateStr);
+  if (isNaN(d)) return dateStr;
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const year = d.getFullYear();
+  return `${month}/${year}`;
+};
+
 // ---------------------------------------------------------------------------
 // Dummy trip and maintenance history — frontend only, no backend/API/database.
 // The truck being viewed is passed in via navigation state from the Trucks
@@ -602,7 +612,7 @@ function AdminTruckProfile() {
             Open a profile by selecting a truck from the Trucks list.
           </p>
           <Link
-            to="/supervisor/trucks"
+            to="/admin/trucks"
             className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -618,7 +628,7 @@ function AdminTruckProfile() {
       <div className="flex flex-col gap-4 pb-6">
         <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
           <Link
-            to="/supervisor/trucks"
+            to="/admin/trucks"
             className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -643,11 +653,11 @@ function AdminTruckProfile() {
                   <StatusBadge status={truck.status} />
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  {truck.model} · Acquired {truck.dateAcquired}
+                  {truck.model} · Acquired {formatMonthYear(truck.dateAcquired)}
                 </p>
               </div>
             </div>
-            <TypeTag type={truck.type} />
+            <TypeTag type={truck.truckType} />
           </div>
         </section>
 
@@ -675,7 +685,7 @@ function AdminTruckProfile() {
             <div>
               <InfoRow label="Plate Number" value={truck.plateNumber} />
               <InfoRow label="Model" value={truck.model} />
-              <InfoRow label="Type" value={truck.type} />
+              <InfoRow label="Truck Type" value={truck.truckType} />
               <InfoRow label="Year Model" value={truck.yearModel} />
               <InfoRow
                 label="Odometer"
@@ -686,7 +696,10 @@ function AdminTruckProfile() {
                 label="Assigned Driver"
                 value={truck.assignedDriver || "Unassigned"}
               />
-              <InfoRow label="Date Acquired" value={truck.dateAcquired} />
+              <InfoRow
+                label="Date Acquired"
+                value={formatMonthYear(truck.dateAcquired)}
+              />
             </div>
           </SectionCard>
         )}

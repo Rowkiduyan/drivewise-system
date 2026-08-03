@@ -22,6 +22,12 @@ const adminModules = [
     path: "/admin/analysis",
     description: "Delivery and alert analysis",
   },
+  // New Trucks module – mirrors the supervisor Trucks entry but for admin routes
+  {
+    label: "Trucks",
+    path: "/admin/trucks",
+    description: "Fleet availability",
+  },
   { label: "Profile", path: "/admin/profile", description: "Admin account" },
   {
     label: "System Logs",
@@ -74,6 +80,21 @@ const adminIcons = {
       <path d="M7 16V9" />
       <path d="M12 16V5" />
       <path d="M17 16v-7" />
+    </svg>
+  ),
+  // Trucks icon – identical to supervisor's Trucks icon
+  Trucks: (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      strokeWidth="1.6"
+      className={adminIconClassName}
+      aria-hidden="true"
+    >
+      <path d="M3 15h12l2 3H3z" />
+      <path d="M5 15v-7h8l2 7" />
+      <circle cx="7" cy="18" r="1.5" />
+      <circle cx="15" cy="18" r="1.5" />
     </svg>
   ),
   Profile: (

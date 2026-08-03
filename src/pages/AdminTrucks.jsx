@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import AdminLayout from "../layout/AdminLayout.jsx";
-// import AddTruckModal from "../components/AddTruckModal.jsx";
+import AddTruckModal from "../components/AddTruckModal.jsx";
 import { Search, ChevronRight } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -159,7 +159,15 @@ function buildMockTrucks(count) {
   });
 }
 
-const MOCK_TRUCKS = buildMockTrucks(48);
+// Initialize trucks state with persistence in localStorage
+const getInitialTrucks = () => {
+  try {
+    const stored = localStorage.getItem("adminTrucks");
+    return stored ? JSON.parse(stored) : buildMockTrucks(48);
+  } catch {
+    return buildMockTrucks(48);
+  }
+};
 
 const STATUS_BADGE_CLASSES = {
   Available:
@@ -410,68 +418,92 @@ function AdminTrucks() {
   const [selectedStatus, setSelectedStatus] = useState("All");
   const [selectedType, setSelectedType] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [trucks, setTrucks] = useState(getInitialTrucks);
+  // Toast state: message and type ('success' | 'error')
+  const [toast, setToast] = useState(null);
+
+  // Persist trucks to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem("adminTrucks", JSON.stringify(trucks));
+  }, [trucks]);
 
   const statusCounts = useMemo(
     () => ({
-      All: MOCK_TRUCKS.length,
-      Available: MOCK_TRUCKS.filter((t) => t.status === "Available").length,
-      "On Delivery": MOCK_TRUCKS.filter((t) => t.status === "On Delivery")
-        .length,
-      Maintenance: MOCK_TRUCKS.filter((t) => t.status === "Maintenance").length,
-      Offline: MOCK_TRUCKS.filter((t) => t.status === "Offline").length,
+      All: trucks.length,
+      Available: trucks.filter((t) => t.status === "Available").length,
+      "On Delivery": trucks.filter((t) => t.status === "On Delivery").length,
+      Maintenance: trucks.filter((t) => t.status === "Maintenance").length,
+      Offline: trucks.filter((t) => t.status === "Offline").length,
     }),
-    [],
+    [trucks],
   );
 
   const typeCounts = useMemo(() => {
-    const counts = { All: MOCK_TRUCKS.length };
+    const counts = { All: trucks.length };
     TYPE_OPTIONS.forEach((type) => {
-      counts[type] = MOCK_TRUCKS.filter((t) => t.truckType === type).length;
+      counts[type] = trucks.filter((t) => t.truckType === type).length;
     });
     return counts;
-  }, []);
+  }, [trucks]);
 
   const filteredTrucks = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
-    return MOCK_TRUCKS.filter((truck) => {
-      const matchesSearch = !query
-        ? true
-        : [
-            truck.plateNumber,
-            truck.brand,
-            truck.model,
-            truck.truckType,
-            truck.status,
-            truck.assignedDeviceNo,
-            truck.assignedDriver || "",
-          ]
-            .join(" ")
-            .toLowerCase()
-            .includes(query);
+    return trucks
+      .filter((truck) => {
+        const matchesSearch = !query
+          ? true
+          : [
+              truck.plateNumber,
+              truck.brand,
+              truck.model,
+              truck.truckType,
+              truck.status,
+              truck.assignedDeviceNo,
+              truck.assignedDriver || "",
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(query);
 
-      const matchesStatus =
-        selectedStatus === "All" || truck.status === selectedStatus;
-      const matchesType =
-        selectedType === "All" || truck.truckType === selectedType;
+        const matchesStatus =
+          selectedStatus === "All" || truck.status === selectedStatus;
+        const matchesType =
+          selectedType === "All" || truck.truckType === selectedType;
 
-      return matchesSearch && matchesStatus && matchesType;
-    }).sort((leftTruck, rightTruck) => {
-      const leftStatusOrder =
-        STATUS_SORT_ORDER[leftTruck.status] ?? Number.MAX_SAFE_INTEGER;
-      const rightStatusOrder =
-        STATUS_SORT_ORDER[rightTruck.status] ?? Number.MAX_SAFE_INTEGER;
-      if (leftStatusOrder !== rightStatusOrder)
-        return leftStatusOrder - rightStatusOrder;
-      const leftTypeOrder =
-        TRUCK_TYPE_ORDER[leftTruck.truckType] ?? Number.MAX_SAFE_INTEGER;
-      const rightTypeOrder =
-        TRUCK_TYPE_ORDER[rightTruck.truckType] ?? Number.MAX_SAFE_INTEGER;
-      if (leftTypeOrder !== rightTypeOrder)
-        return leftTypeOrder - rightTypeOrder;
-      return leftTruck.plateNumber.localeCompare(rightTruck.plateNumber);
-    });
+        return matchesSearch && matchesStatus && matchesType;
+      })
+      .sort((leftTruck, rightTruck) => {
+        const leftStatusOrder =
+          STATUS_SORT_ORDER[leftTruck.status] ?? Number.MAX_SAFE_INTEGER;
+        const rightStatusOrder =
+          STATUS_SORT_ORDER[rightTruck.status] ?? Number.MAX_SAFE_INTEGER;
+        if (leftStatusOrder !== rightStatusOrder)
+          return leftStatusOrder - rightStatusOrder;
+        const leftTypeOrder =
+          TRUCK_TYPE_ORDER[leftTruck.truckType] ?? Number.MAX_SAFE_INTEGER;
+        const rightTypeOrder =
+          TRUCK_TYPE_ORDER[rightTruck.truckType] ?? Number.MAX_SAFE_INTEGER;
+        if (leftTypeOrder !== rightTypeOrder)
+          return leftTypeOrder - rightTypeOrder;
+        return leftTruck.plateNumber.localeCompare(rightTruck.plateNumber);
+      });
   }, [searchTerm, selectedStatus, selectedType]);
+  // Handler for adding a new truck from the modal
+  const handleAddTruck = (formData) => {
+    try {
+      const newTruck = {
+        id: `truck-${Date.now()}`,
+        ...formData,
+      };
+      setTrucks((prev) => [newTruck, ...prev]);
+      setIsAddModalOpen(false);
+      setToast({ message: "Truck added successfully", type: "success" });
+    } catch (error) {
+      console.error(error);
+      setToast({ message: "Failed to add truck", type: "error" });
+    }
+  };
 
   const totalPages = Math.max(1, Math.ceil(filteredTrucks.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
@@ -496,6 +528,14 @@ function AdminTrucks() {
   const openProfile = (truck) => {
     navigate("/admin/trucks/profile", { state: { truck } });
   };
+
+  // Auto‑clear toast after 3 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   return (
     <AdminLayout title="Truck Management" background={null} bg="bg-[#F6F7FB]">
@@ -531,23 +571,42 @@ function AdminTrucks() {
               />
               <FilterSelect
                 id="type-filter"
-                label="Type"
+                label="Truck Type"
                 value={selectedType}
                 onChange={updateType}
                 options={TYPE_OPTIONS}
                 counts={typeCounts}
-                allLabel="Type"
+                allLabel="Truck Type"
               />
             </div>
             {/* Add Truck button (rightmost) */}
             <button
-              onClick={() => setShowAddModal(true)}
+              onClick={() => setIsAddModalOpen(true)}
               className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700"
             >
               Add Truck
             </button>
           </div>
         </section>
+        {/* Toast message with slide‑down animation */}
+        {toast && (
+          <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+            <p
+              className={`
+                  px-4 py-2 rounded-md shadow-md text-sm font-medium
+                  transition-transform duration-300 ease-out
+                  ${
+                    toast.type === "success"
+                      ? "bg-green-100 text-green-800 border border-green-300"
+                      : "bg-red-100 text-red-800 border border-red-300"
+                  }
+                  transform translate-y-0 opacity-100
+                `}
+            >
+              {toast.message}
+            </p>
+          </div>
+        )}
 
         {/* Truck List */}
         <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -641,8 +700,12 @@ function AdminTrucks() {
           </div>
         </div>
       </div>
-      {/* Add Truck Modal (temporarily disabled until component is created) */}
-      {/* <AddTruckModal open={showAddModal} onClose={() => setShowAddModal(false)} onSuccess={() => {}} /> */}
+      {/* Add Truck Modal */}
+      <AddTruckModal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
+        onSubmit={handleAddTruck}
+      />
     </AdminLayout>
   );
 }
