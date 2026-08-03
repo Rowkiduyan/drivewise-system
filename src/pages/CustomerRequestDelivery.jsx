@@ -18,6 +18,7 @@ import {
   getScheduleErrors,
   getBudgetError
 } from '../lib/deliveryOptions.js'
+import { supabase } from '../lib/supabaseClient.js'
 
 // Fix default marker icon for Leaflet in React
 delete L.Icon.Default.prototype._getIconUrl
@@ -345,6 +346,8 @@ function CustomerRequestDelivery() {
   const [dropoffTimeError, setDropoffTimeError] = useState('')
   const [budgetError, setBudgetError] = useState('')
   const [truckSelectionError, setTruckSelectionError] = useState('')
+  const [submitError, setSubmitError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
   const minDeliveryDate = getMinDeliveryDate()
   const [formData, setFormData] = useState({
     pickupDate: '',
@@ -409,8 +412,9 @@ function CustomerRequestDelivery() {
     setTruckSelectionError('')
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
+    setSubmitError('')
 
     if (formData.pickupDate < minDeliveryDate) {
       setDateError(`Delivery date must be on or after ${minDeliveryDate}.`)
@@ -435,14 +439,42 @@ function CustomerRequestDelivery() {
       return
     }
 
-    const newRequest = {
-      id: `DR-${Date.now()}`,
-      ...formData,
-      status: 'PENDING_REQUEST',
-      createdAt: new Date().toISOString()
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError || !user) {
+      setSubmitError('You must be signed in to submit a delivery request.')
+      return
     }
 
-    navigate('/customer/deliveries', { state: { newRequest } })
+    const newRequest = {
+      customer_auth_id: user.id,
+      pickup_date: formData.pickupDate,
+      pickup_time: formData.pickupTime,
+      dropoff_date: formData.dropoffDate,
+      dropoff_time: formData.dropoffTime,
+      pickup_location: formData.pickupLocation,
+      dropoff_location: formData.dropoffLocation,
+      truck_type: formData.truckType,
+      item_type: formData.itemType,
+      other_item_type: formData.itemType === 'other' ? formData.otherItemType : null,
+      cargo_weight: formData.cargoWeight,
+      budget_min: formData.budgetMin || null,
+      budget_max: formData.budgetMax || null,
+      notes: formData.notes || null,
+      status: 'PENDING_REQUEST'
+    }
+
+    setSubmitting(true)
+    const { error: insertError } = await supabase
+      .from('delivery_requests')
+      .insert(newRequest)
+    setSubmitting(false)
+
+    if (insertError) {
+      setSubmitError('Something went wrong while submitting your request. Please try again.')
+      return
+    }
+
+    navigate('/customer/deliveries')
   }
 
   return (
@@ -791,20 +823,29 @@ function CustomerRequestDelivery() {
             </div>
 
             {/* Actions */}
-            <div className="flex justify-end gap-3 border-t border-emerald-200/70 pt-4">
-              <button
-                type="button"
-                onClick={goBackToDeliveries}
-                className="rounded-xl border border-emerald-200/70 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-emerald-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
-              >
-                Submit Request
-              </button>
+            <div className="flex flex-col gap-3 border-t border-emerald-200/70 pt-4">
+              {submitError && (
+                <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-xs text-red-700">
+                  {submitError}
+                </p>
+              )}
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={goBackToDeliveries}
+                  disabled={submitting}
+                  className="rounded-xl border border-emerald-200/70 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-emerald-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {submitting ? 'Submitting...' : 'Submit Request'}
+                </button>
+              </div>
             </div>
           </form>
         </div>
