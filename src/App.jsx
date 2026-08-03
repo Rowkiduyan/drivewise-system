@@ -12,6 +12,8 @@ import AdminHome from "./pages/AdminHome.jsx";
 import AdminDeviceManagement from "./pages/AdminDeviceManagement.jsx";
 import AdminAnalysis from "./pages/AdminAnalysis.jsx";
 import AdminProfile from "./pages/AdminProfile.jsx";
+import AdminTrucks from "./pages/AdminTrucks.jsx";
+import AdminTruckProfile from "./pages/AdminTruckProfile.jsx";
 import SupDeliveryCrew from "./pages/SupDeliveryCrew.jsx";
 import SupCrewProfile from "./pages/SupCrewProfile.jsx";
 import SupDeliveries from "./pages/SupDeliveries.jsx";
@@ -33,7 +35,10 @@ function App() {
       />
       <Route path="/customer/home" element={<CustomerHome />} />
       <Route path="/customer/deliveries" element={<CustomerDeliveries />} />
-      <Route path="/customer/deliveries/request" element={<CustomerRequestDelivery />} />
+      <Route
+        path="/customer/deliveries/request"
+        element={<CustomerRequestDelivery />}
+      />
       <Route path="/customer/profile" element={<CustomerProfile />} />
       <Route
         path="/driver"
@@ -73,6 +78,8 @@ function App() {
       <Route path="/admin/analysis" element={<AdminAnalysis />} />
       <Route path="/admin/profile" element={<AdminProfile />} />
       <Route path="/admin/system-logs" element={<SystemLogs />} />
+      <Route path="/admin/trucks" element={<AdminTrucks />} />
+      <Route path="/admin/trucks/profile" element={<AdminTruckProfile />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
