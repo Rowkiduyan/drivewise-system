@@ -1,5 +1,7 @@
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import CustomerLayout from '../layout/CustomerLayout.jsx'
-import { Link } from 'react-router-dom'
+import { supabase } from '../lib/supabaseClient.js'
 import { Truck, Phone, Mail, MapPin, Clock, Shield, Star, Heart, Package, ArrowRight, CheckCircle } from 'lucide-react'
 
 const background = null
@@ -29,9 +31,44 @@ const services = [
 ]
 
 function CustomerHome() {
+  const navigate = useNavigate()
+  const [toast, setToast] = useState(null)
+
+  // Auto-clear toast after 3 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [toast])
+
+  // Notify the user immediately if they're not signed in, instead of
+  // letting them fill out the request form first and failing at submit.
+  const handleRequestDelivery = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      setToast({ message: 'Please log in to request a delivery.', type: 'error' })
+      return
+    }
+    navigate('/customer/deliveries')
+  }
+
   return (
     <CustomerLayout title="Customer Home" background={background}>
       <div className="flex flex-col gap-8 pb-6">
+        {/* Login notification toast */}
+        {toast && (
+          <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+            <p
+              className="px-4 py-2 rounded-md shadow-md text-sm font-medium
+                bg-red-100 text-red-800 border border-red-300
+                transition-transform duration-300 ease-out transform translate-y-0 opacity-100"
+            >
+              {toast.message}
+            </p>
+          </div>
+        )}
+
         {/* Hero Section */}
         <section className="rounded-2xl border border-emerald-200/70 bg-white p-6 shadow-sm md:p-8">
           <p className="text-xs uppercase tracking-[0.28em] text-emerald-700 font-semibold">
@@ -44,13 +81,13 @@ function CustomerHome() {
             Your trusted partner for reliable, safe, and efficient trucking and logistics solutions in the Philippines since 2016.
           </p>
           <div className="mt-6">
-            <Link
-              to="/customer/deliveries"
+            <button
+              onClick={handleRequestDelivery}
               className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
             >
               Request a Delivery Now
               <ArrowRight className="h-4 w-4" />
-            </Link>
+            </button>
           </div>
         </section>
 
@@ -174,13 +211,13 @@ function CustomerHome() {
             Let us handle your delivery needs. Fast, reliable, and safe transportation across the Philippines.
           </p>
           <div className="mt-5">
-            <Link
-              to="/customer/deliveries"
+            <button
+              onClick={handleRequestDelivery}
               className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
             >
               Request a Delivery Now
               <ArrowRight className="h-4 w-4" />
-            </Link>
+            </button>
           </div>
         </section>
 

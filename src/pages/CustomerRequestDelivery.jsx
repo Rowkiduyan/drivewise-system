@@ -30,8 +30,50 @@ L.Icon.Default.mergeOptions({
 
 const background = null
 
-// Map controller — handles view changes, map clicks, and draggable marker
-function MapController({ center, zoom, selectedLocation, onLocationChange }) {
+// Photon (Komoot) geocoding — free, no API key, CORS-enabled, and not rate
+// limited like the public Nominatim endpoint. Search is scoped to the
+// Philippines bounding box to match the app's service area.
+
+const PH_BBOX = '116.9,4.6,126.6,21.1'
+
+// Build a human-readable address from a Photon feature's properties.
+function photonAddress(feature) {
+  const p = feature?.properties || {}
+  const street = p.housenumber ? `${p.housenumber} ${p.street || ''}`.trim() : (p.street || '')
+  return [street || p.name || '', p.locality || p.district || '', p.city || p.county || '', p.state || '', p.country || '']
+    .filter(Boolean)
+    .join(', ')
+}
+
+async function photonSearch(query) {
+  const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&bbox=${PH_BBOX}`)
+  if (!res.ok) throw new Error(`search ${res.status}`)
+  const data = await res.json()
+  return (data?.features || []).map(feature => ({
+    display: photonAddress(feature),
+    lat: feature.geometry.coordinates[1],
+    lon: feature.geometry.coordinates[0]
+  }))
+}
+
+// Reverse-geocode a coordinate to an address, with a small backoff retry in
+// case the endpoint ever rate-limits us.
+async function reverseGeocode(lat, lng, attempt = 0) {
+  const res = await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}`)
+  if (res.status === 429 && attempt < 3) {
+    await new Promise(r => setTimeout(r, 1200 * (attempt + 1)))
+    return reverseGeocode(lat, lng, attempt + 1)
+  }
+  if (!res.ok) return ''
+  const data = await res.json()
+  const feature = data?.features?.[0]
+  return feature ? photonAddress(feature) : ''
+}
+
+// Map controller — handles view changes, map clicks, and draggable marker.
+// Clicking/dragging always resolves the point to a real address via reverse
+// geocoding; the coordinates are shown as an instant fallback only.
+function MapController({ center, zoom, selectedLocation, onLocationChange, onResolvingChange }) {
   const map = useMap()
 
   useEffect(() => {
@@ -40,16 +82,21 @@ function MapController({ center, zoom, selectedLocation, onLocationChange }) {
     }
   }, [center, zoom, map])
 
+  const handlePoint = (lat, lng) => {
+    onLocationChange(`${lat.toFixed(6)}, ${lng.toFixed(6)}`, lat, lng)
+    onResolvingChange(true)
+    reverseGeocode(lat, lng)
+      .then(display => {
+        if (display) onLocationChange(display, lat, lng)
+      })
+      .catch(() => {})
+      .finally(() => onResolvingChange(false))
+  }
+
   useMapEvents({
     click(e) {
       const { lat, lng } = e.latlng
-      onLocationChange(`${lat.toFixed(6)}, ${lng.toFixed(6)}`, lat, lng)
-      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.display_name) onLocationChange(data.display_name, lat, lng)
-        })
-        .catch(() => {})
+      handlePoint(lat, lng)
     }
   })
 
@@ -62,13 +109,7 @@ function MapController({ center, zoom, selectedLocation, onLocationChange }) {
       eventHandlers={{
         dragend(e) {
           const { lat, lng } = e.target.getLatLng()
-          onLocationChange(`${lat.toFixed(6)}, ${lng.toFixed(6)}`, lat, lng)
-          fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`)
-            .then(res => res.json())
-            .then(data => {
-              if (data.display_name) onLocationChange(data.display_name, lat, lng)
-            })
-            .catch(() => {})
+          handlePoint(lat, lng)
         }
       }}
     />
@@ -82,19 +123,13 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
   const [selectedLocation, setSelectedLocation] = useState(null)
   const [mapCenter, setMapCenter] = useState([14.5995, 120.9842])
   const [mapZoom, setMapZoom] = useState(13)
+  const [resolvingAddress, setResolvingAddress] = useState(false)
 
   useEffect(() => {
     if (searchQuery.length > 2) {
       const timer = setTimeout(() => {
-        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&countrycodes=ph&limit=5`)
-          .then(res => res.json())
-          .then(data => {
-            setSuggestions(data.map(item => ({
-              display: item.display_name,
-              lat: parseFloat(item.lat),
-              lon: parseFloat(item.lon)
-            })))
-          })
+        photonSearch(searchQuery)
+          .then(data => setSuggestions(data))
           .catch(() => setSuggestions([]))
       }, 300)
       return () => clearTimeout(timer)
@@ -121,7 +156,6 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
       onClose()
     }
   }
-
   // Lock background scroll while the modal is open. This also keeps the blurred
   // backdrop cheap — the page behind it stays still instead of recomputing on scroll.
   useEffect(() => {
@@ -196,6 +230,7 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
                 zoom={mapZoom}
                 selectedLocation={selectedLocation}
                 onLocationChange={handleLocationChange}
+                onResolvingChange={setResolvingAddress}
               />
             </MapContainer>
           </div>
@@ -207,6 +242,9 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-medium text-emerald-700">Selected Location</p>
                 <p className="text-sm text-emerald-900 mt-0.5 break-words">{selectedLocation.display}</p>
+                {resolvingAddress && (
+                  <p className="text-xs text-emerald-500 mt-0.5 italic">Getting address…</p>
+                )}
                 <p className="text-xs text-emerald-600 mt-0.5 font-mono">
                   {selectedLocation.lat?.toFixed(6)}, {selectedLocation.lon?.toFixed(6)}
                 </p>
@@ -246,27 +284,39 @@ function LocationInput({ id, label, value, onChange, required }) {
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [showMapPicker, setShowMapPicker] = useState(false)
   const inputRef = useRef(null)
+  // Debounce + sequence guard so both pickup AND dropoff autocomplete stay
+  // reliable: rapid keystrokes fire at most one geocoding request, and stale
+  // responses (from a previous keystroke) are ignored.
+  const searchTimer = useRef(null)
+  const searchSeq = useRef(0)
+
+  useEffect(() => () => {
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+  }, [])
 
   const handleInputChange = (e) => {
     const query = e.target.value
     onChange(e)
 
-    if (query.length > 2) {
-      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=ph&limit=5`)
-        .then(res => res.json())
-        .then(data => {
-          setSuggestions(data.map(item => ({
-            display: item.display_name,
-            lat: item.lat,
-            lon: item.lon
-          })))
-          setShowSuggestions(true)
-        })
-        .catch(() => {
-          setSuggestions([])
-          setShowSuggestions(false)
-        })
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+
+    if (query.trim().length > 2) {
+      const seq = ++searchSeq.current
+      searchTimer.current = setTimeout(() => {
+        photonSearch(query)
+          .then(data => {
+            if (seq !== searchSeq.current) return
+            setSuggestions(data)
+            setShowSuggestions(true)
+          })
+          .catch(() => {
+            if (seq !== searchSeq.current) return
+            setSuggestions([])
+            setShowSuggestions(false)
+          })
+      }, 300)
     } else {
+      searchSeq.current++
       setSuggestions([])
       setShowSuggestions(false)
     }
@@ -296,6 +346,12 @@ function LocationInput({ id, label, value, onChange, required }) {
             onChange={handleInputChange}
             onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
             onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && suggestions.length > 0) {
+                e.preventDefault()
+                handleSuggestionClick(suggestions[0])
+              }
+            }}
             placeholder="Enter address or search..."
             required={required}
             className="flex-1 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
