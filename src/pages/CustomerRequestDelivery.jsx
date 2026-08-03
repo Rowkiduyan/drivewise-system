@@ -446,7 +446,7 @@ function CustomerRequestDelivery() {
   }
 
   return (
-    <CustomerLayout title="Request Delivery" background={background}>
+    <CustomerLayout title="Request Delivery" background={background} bg="bg-white md:bg-[#F6F7FB]">
       <div className="flex flex-col gap-6 mb-2">
         {/* Header Section */}
         <header className="space-y-2 md:space-y-3">

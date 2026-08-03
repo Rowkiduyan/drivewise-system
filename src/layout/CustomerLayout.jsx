@@ -58,7 +58,7 @@ const clientIcons = {
   )
 }
 
-function CustomerLayout({ title, background, children }) {
+function CustomerLayout({ title, background, children, bg = "bg-white" }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     if (typeof window === 'undefined') {
       return false
@@ -132,7 +132,7 @@ function CustomerLayout({ title, background, children }) {
 
   return (
     <main
-      className="relative flex h-screen w-screen overflow-hidden bg-white text-slate-900"
+      className={`relative flex h-screen w-screen overflow-hidden ${bg} text-slate-900`}
       style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
     >
       {background}
