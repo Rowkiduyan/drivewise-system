@@ -33,6 +33,7 @@ import {
   Fuel,
   AlertCircle,
   Lock,
+  MessageSquare,
 } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -71,6 +72,7 @@ const statusBadge = {
   FOR_PICKUP: 'bg-cyan-100 text-cyan-700',
   OUT_FOR_DELIVERY: 'bg-blue-100 text-blue-700',
   DELIVERED: 'bg-emerald-100 text-emerald-700',
+  ISSUE: 'bg-amber-100 text-amber-700',
   COMPLETED: 'bg-green-100 text-green-700',
   CANCELLED: 'bg-rose-100 text-rose-700',
   DECLINED: 'bg-rose-100 text-rose-700',
@@ -503,7 +505,106 @@ for (const c of delivery_cancellations) {
   }
 }
 
-const mockRequests = customer_deliveries.map((row) => {
+const CUSTOMER_REPLIES = {
+  'Item damaged': 'Thank you for the update. Please schedule a replacement for the damaged cases.',
+  'Missing item(s)': 'Understood. Kindly confirm the schedule for the delivery of the missing boxes.',
+  'Wrong item delivered': 'Appreciated. Please advise when the correct stock can be exchanged.',
+}
+
+const reportedIssues = [
+  {
+    id: 'DEL-071',
+    customerName: 'Maria Santos',
+    companyName: 'Santos Enterprises',
+    itemType: 'Beverages',
+    truckType: '4T',
+    cargoWeight: '3100',
+    status: 'ISSUE',
+    pickupDate: '2026-07-28',
+    pickupTime: '09:00',
+    dropoffDate: '2026-07-28',
+    dropoffTime: '13:00',
+    pickupAddress: '321 Roxas Boulevard, Pasay',
+    deliveryAddress: '222 BGC, Taguig',
+    createdAt: '2026-07-28T09:00:00',
+    issueCategory: 'Item damaged',
+    issueDescription: 'Two cases of bottles arrived with visible damage. Reported on receipt.',
+    issueReportedAt: 'Jul 28, 2026 14:32',
+    phone: '0917 555 0131',
+    email: 'maria.santos@santosent.example',
+    resolvedAt: null,
+    destinationCoords: { lat: 14.555, lng: 121.051 },
+    currentLocation: { lat: 14.5378, lng: 120.9963 },
+    messages: [
+      { id: 'm1', sender: 'customer', text: 'Two cases of beverages arrived with visible damage on the cartons. Can we request a replacement?', at: 'Jul 28, 2026 14:32' },
+      { id: 'm2', sender: 'supervisor', text: 'We are sorry for the inconvenience. Our team will verify the load-out records and get back to you within the day.', at: 'Jul 28, 2026 15:10' },
+    ],
+    quotation: { amount: 12500 },
+    crew: { driver: { name: 'Ramon Aquino' }, truck: { plateNumber: 'GHI 9012', truckType: '4T' } },
+  },
+  {
+    id: 'DEL-072',
+    customerName: 'Jose Dela Cruz',
+    companyName: 'Dela Cruz Trading',
+    itemType: 'Dry Food',
+    truckType: '6T',
+    cargoWeight: '4800',
+    status: 'ISSUE',
+    pickupDate: '2026-07-30',
+    pickupTime: '08:00',
+    dropoffDate: '2026-07-31',
+    dropoffTime: '12:00',
+    pickupAddress: '789 Quezon Avenue, Quezon City',
+    deliveryAddress: '888 Ortigas Center, Pasig',
+    createdAt: '2026-07-30T10:15:00',
+    issueCategory: 'Missing item(s)',
+    issueDescription: 'Three boxes short on the manifest. Customer asked to verify the count.',
+    issueReportedAt: 'Jul 30, 2026 17:40',
+    phone: '0918 555 0212',
+    email: 'jose.delacruz@delacruztrading.example',
+    resolvedAt: null,
+    destinationCoords: { lat: 14.5855, lng: 121.0586 },
+    currentLocation: { lat: 14.6333, lng: 121.0217 },
+    messages: [
+      { id: 'm1', sender: 'customer', text: 'The manifest shows 48 boxes but we only received 45. Three boxes are missing.', at: 'Jul 30, 2026 17:40' },
+      { id: 'm2', sender: 'supervisor', text: 'We are re-checking the truck inventory and the drop-off checklist right now. Will confirm the count shortly.', at: 'Jul 30, 2026 18:05' },
+      { id: 'm3', sender: 'customer', text: 'Thank you. Please also confirm the scheduled replacement delivery once verified.', at: 'Jul 31, 2026 08:20' },
+    ],
+    quotation: { amount: '9800' },
+    crew: { driver: { name: 'Nestor Villareal' }, truck: { plateNumber: 'DEF 9012', truckType: '6T' } },
+  },
+  {
+    id: 'DEL-073',
+    customerName: 'Ana Reyes',
+    companyName: 'Ana’s Grocery',
+    itemType: 'Fast Food',
+    truckType: '2T',
+    cargoWeight: '1500',
+    status: 'ISSUE',
+    pickupDate: '2026-08-01',
+    pickupTime: '07:00',
+    dropoffDate: '2026-08-01',
+    dropoffTime: '11:00',
+    pickupAddress: '555 Boni Avenue, Mandaluyong',
+    deliveryAddress: '777 Greenbelt, Makati',
+    createdAt: '2026-08-01T08:05:00',
+    issueCategory: 'Wrong item delivered',
+    issueDescription: 'Received saturated goods instead of the ordered stock. Awaiting supervisor reply.',
+    issueReportedAt: 'Aug 1, 2026 13:12',
+    phone: '0919 555 0404',
+    email: 'ana.reyes@anasgrocery.example',
+    resolvedAt: null,
+    destinationCoords: { lat: 14.5531, lng: 121.0231 },
+    currentLocation: { lat: 14.5741, lng: 121.0347 },
+    messages: [
+      { id: 'm1', sender: 'customer', text: 'We received saturated goods instead of the stock we ordered. Kindly advise on the exchange.', at: 'Aug 1, 2026 13:12' },
+    ],
+    quotation: { amount: '7600' },
+    crew: { driver: { name: 'Teodoro Salazar' }, truck: { plateNumber: 'JKL 3456', truckType: '2T' } },
+  },
+]
+
+const mockRequests = [...customer_deliveries.map((row) => {
   const qtns = quotationsByDelivery[row.id] || {}
   return {
     id: row.id,
@@ -530,7 +631,7 @@ const mockRequests = customer_deliveries.map((row) => {
     cancellation: cancellationsByDelivery[row.id] || null,
     ...delivery_supervisor_data[row.id],
   }
-})
+}), ...reportedIssues]
 const mockDrivers = delivery_drivers.map((d) => ({
   id: d.id,
   name: d.name,
@@ -1503,6 +1604,189 @@ function CancelledDeliveryDetails({ delivery }) {
   )
 }
 
+function IssueDetailView({ delivery, onResolve, onSendMessage }) {
+  const [confirmResolve, setConfirmResolve] = useState(false)
+  const [message, setMessage] = useState('')
+  const [reportTab, setReportTab] = useState('details')
+  const isResolved = Boolean(delivery.resolvedAt)
+  const report = completed_delivery_reports[delivery.id]
+  const messages = delivery.messages || []
+
+  const handleSend = () => {
+    if (!message.trim()) return
+    onSendMessage(message.trim())
+    setMessage('')
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 md:px-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${
+            isResolved ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+          }`}>
+            {isResolved ? 'COMPLETED' : 'ISSUE'}
+          </span>
+          <h3 className="text-sm font-semibold text-slate-900">Delivery Report — {delivery.id}</h3>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <Package className="h-3.5 w-3.5" />
+          {delivery.companyName} • {delivery.deliveryAddress}
+        </div>
+      </div>
+
+      {isResolved ? (
+        <div className="flex items-start gap-2 border-b border-emerald-200 bg-emerald-50 px-4 py-3 md:px-5">
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
+          <div>
+            <h3 className="text-sm font-semibold text-emerald-800">Issue Resolved</h3>
+            <p className="mt-1 text-xs text-emerald-700">
+              This issue was resolved on {delivery.resolvedAt}. The delivery status has been automatically updated to Completed.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="border-b border-amber-200 bg-amber-50/70 px-4 py-4 md:px-5">
+          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Reported Issue
+          </p>
+          <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+            <Row label="Issue" value={delivery.issueCategory} />
+            <Row label="Reported at" value={delivery.issueReportedAt} />
+            <div className="sm:col-span-2">
+              <span className="block text-sm text-slate-500">Details</span>
+              <p className="mt-0.5 text-sm font-medium text-slate-900">{delivery.issueDescription}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="border-b border-slate-200 p-4 md:p-5">
+        <div className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <MessageSquare className="h-3.5 w-3.5" />
+          Conversation
+        </div>
+
+        <div className="max-h-72 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+          {messages.length === 0 && (
+            <p className="py-6 text-center text-xs text-slate-400">
+              No messages yet. Start the conversation with the customer.
+            </p>
+          )}
+          {messages.map((m) => {
+            const isSupervisor = m.sender === 'supervisor'
+            return (
+              <div key={m.id} className={`flex ${isSupervisor ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
+                  isSupervisor
+                    ? 'rounded-br-sm bg-slate-900 text-white'
+                    : 'rounded-bl-sm bg-white text-slate-800 ring-1 ring-inset ring-slate-200'
+                }`}>
+                  <p className="whitespace-pre-wrap">{m.text}</p>
+                  <p className={`mt-1 text-[10px] ${isSupervisor ? 'text-slate-300' : 'text-slate-400'}`}>{m.at}</p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {!isResolved && (
+          <div className="mt-3 flex gap-2">
+            <input
+              type="text"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSend() }}
+              placeholder="Type a message to the customer..."
+              className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
+            />
+            <button
+              onClick={handleSend}
+              disabled={!message.trim()}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Send className="h-4 w-4" />
+              Send
+            </button>
+          </div>
+        )}
+      </div>
+
+      {!isResolved && (
+        <div className="border-b border-slate-200 p-4 md:p-5">
+          {confirmResolve ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+              <p className="text-sm text-slate-600">Mark this issue as resolved?</p>
+              <p className="mt-0.5 text-xs text-slate-400">The delivery status will automatically be set to Completed.</p>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                <button
+                  onClick={() => setConfirmResolve(false)}
+                  className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={onResolve}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Confirm Resolve
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmResolve(true)}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              Mark as Resolved
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-2 overflow-x-auto border-b border-slate-200 bg-slate-50 px-4 py-2.5 md:px-5">
+        {REPORT_TABS.map((tab) => {
+          const Icon = tab.icon
+          const isActive = reportTab === tab.id
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setReportTab(tab.id)}
+              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                isActive ? 'bg-slate-900 text-white shadow-sm' : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {tab.label}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="p-4 md:p-5">
+        {!report ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+            No detailed report available for this delivery.
+          </div>
+        ) : reportTab === 'details' ? (
+          <DeliveryRequestDetails request={delivery} />
+        ) : reportTab === 'quotation' ? (
+          <QuotationTab delivery={delivery} />
+        ) : reportTab === 'trip' ? (
+          <TripDetailsTab delivery={delivery} report={report} />
+        ) : reportTab === 'behavior' ? (
+          <DriveWiseAnalysisTab report={report} />
+        ) : (
+          <RouteDeviationTab report={report} />
+        )}
+      </div>
+    </div>
+  )
+}
+
 function toGoogleMapEmbed(coords) {
   if (!coords) return 'https://maps.google.com/maps?q=14.5995,120.9842&z=12&output=embed'
   return `https://maps.google.com/maps?q=${coords.lat},${coords.lng}&z=14&output=embed`
@@ -1521,8 +1805,35 @@ function filterDeliveryList(list, q) {
   )
 }
 
+function sortNewestFirst(list) {
+  return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+function autoCompleteDelivered(list) {
+  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000
+  let changed = false
+  const next = list.map((r) => {
+    if (r.status !== 'DELIVERED') return r
+    const deliveredRef = r.deliveredAt
+      ? new Date(r.deliveredAt)
+      : r.dropoffDate
+        ? new Date(`${r.dropoffDate}T${r.dropoffTime || '12:00:00'}`)
+        : null
+    if (!deliveredRef || isNaN(deliveredRef.getTime())) return r
+    if (Date.now() - deliveredRef.getTime() >= SEVEN_DAYS) {
+      changed = true
+      return {
+        ...r,
+        status: 'COMPLETED',
+        completedAt: new Date().toLocaleString('en-PH', { year: 'numeric', month: 'short', day: '2-digit' }),
+      }
+    }
+    return r
+  })
+  return changed ? next : list
+}
+
 function PaginationBar({ page, setPage, totalPages }) {
-  if (totalPages <= 1) return null
   return (
     <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
       <p className="text-sm text-slate-500">
@@ -1596,14 +1907,11 @@ function PaginationBar({ page, setPage, totalPages }) {
 }
 
 function SupDeliveries() {
-  const [requests, setRequests] = useState(mockRequests)
+  const [requests, setRequests] = useState(() => autoCompleteDelivered(mockRequests))
   const [activeModule, setActiveModule] = useState('inbox')
-  const [transitSearch, setTransitSearch] = useState('')
-  const [transitStatusFilter, setTransitStatusFilter] = useState('ALL')
   const [monitoredDeliveryId, setMonitoredDeliveryId] = useState(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('ALL')
-  const [sortBy, setSortBy] = useState('createdAt_desc')
   const [selectedRequest, setSelectedRequest] = useState(null)
   const defaultQuotationForm = {
     directExpenses: {
@@ -1642,10 +1950,10 @@ function SupDeliveries() {
   const [alertHistoryOpenId, setAlertHistoryOpenId] = useState(null)
   const [page, setPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(() => Math.max(4, Math.floor((window.innerHeight - 280) / 68)))
-  const [completedSearch, setCompletedSearch] = useState('')
   const [completedPage, setCompletedPage] = useState(1)
-  const [cancelledSearch, setCancelledSearch] = useState('')
   const [cancelledPage, setCancelledPage] = useState(1)
+  const [issuesPage, setIssuesPage] = useState(1)
+  const [selectedIssue, setSelectedIssue] = useState(null)
 
   useEffect(() => {
     const handleResize = () => setItemsPerPage(Math.max(4, Math.floor((window.innerHeight - 280) / 68)))
@@ -1659,17 +1967,18 @@ function SupDeliveries() {
   )
 
   const pendingAssignments = useMemo(
-    () => requests.filter((r) => r.status === 'APPROVED'),
+    () => requests.filter((r) => r.status === 'APPROVED' || r.status === 'ASSIGNED'),
     [requests],
   )
 
-  const [assignSearch, setAssignSearch] = useState('')
-  const [assignSortBy, setAssignSortBy] = useState('createdAt_desc')
   const [assignPage, setAssignPage] = useState(1)
 
   const filteredAssign = useMemo(() => {
-    const q = assignSearch.trim().toLowerCase()
+    const q = search.trim().toLowerCase()
     let result = pendingAssignments
+    if (statusFilter !== 'ALL') {
+      result = result.filter((r) => r.status === statusFilter)
+    }
     if (q) {
       result = result.filter(
         (r) =>
@@ -1680,21 +1989,8 @@ function SupDeliveries() {
           r.deliveryAddress.toLowerCase().includes(q),
       )
     }
-    result = [...result].sort((a, b) => {
-      switch (assignSortBy) {
-        case 'createdAt_asc':
-          return a.createdAt.localeCompare(b.createdAt)
-        case 'customerName_asc':
-          return a.customerName.localeCompare(b.customerName)
-        case 'customerName_desc':
-          return b.customerName.localeCompare(a.customerName)
-        case 'createdAt_desc':
-        default:
-          return b.createdAt.localeCompare(a.createdAt)
-      }
-    })
-    return result
-  }, [pendingAssignments, assignSearch, assignSortBy])
+    return sortNewestFirst(result)
+  }, [pendingAssignments, search, statusFilter])
 
   const assignTotalPages = Math.max(1, Math.ceil(filteredAssign.length / itemsPerPage))
   const assignSafePage = Math.min(assignPage, assignTotalPages)
@@ -1716,21 +2012,8 @@ function SupDeliveries() {
           r.deliveryAddress.toLowerCase().includes(q),
       )
     }
-    result = [...result].sort((a, b) => {
-      switch (sortBy) {
-        case 'createdAt_asc':
-          return a.createdAt.localeCompare(b.createdAt)
-        case 'customerName_asc':
-          return a.customerName.localeCompare(b.customerName)
-        case 'customerName_desc':
-          return b.customerName.localeCompare(a.customerName)
-        case 'createdAt_desc':
-        default:
-          return b.createdAt.localeCompare(a.createdAt)
-      }
-    })
-    return result
-  }, [inboxRows, search, statusFilter, sortBy])
+    return sortNewestFirst(result)
+  }, [inboxRows, search, statusFilter])
 
   const totalPages = Math.max(1, Math.ceil(filteredInbox.length / itemsPerPage))
   const safePage = Math.min(page, totalPages)
@@ -1742,10 +2025,10 @@ function SupDeliveries() {
   )
 
   const filteredTransit = useMemo(() => {
-    const q = transitSearch.trim().toLowerCase()
+    const q = search.trim().toLowerCase()
     let result = ongoingDeliveries
-    if (transitStatusFilter !== 'ALL') {
-      result = result.filter((r) => r.status === transitStatusFilter)
+    if (statusFilter !== 'ALL') {
+      result = result.filter((r) => r.status === statusFilter)
     }
     if (q) {
       result = result.filter(
@@ -1757,8 +2040,8 @@ function SupDeliveries() {
           r.deliveryAddress.toLowerCase().includes(q),
       )
     }
-    return [...result].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-  }, [ongoingDeliveries, transitSearch, transitStatusFilter])
+    return sortNewestFirst(result)
+  }, [ongoingDeliveries, search, statusFilter])
 
   const monitoredDelivery = useMemo(() => {
     const preferred = filteredTransit.find((r) => r.id === monitoredDeliveryId)
@@ -1783,26 +2066,110 @@ function SupDeliveries() {
     : null
 
   const filteredCompleted = useMemo(
-    () => filterDeliveryList(completedDeliveries, completedSearch),
-    [completedDeliveries, completedSearch],
+    () => sortNewestFirst(filterDeliveryList(completedDeliveries, search)),
+    [completedDeliveries, search],
   )
   const completedTotalPages = Math.max(1, Math.ceil(filteredCompleted.length / itemsPerPage))
   const completedSafePage = Math.min(completedPage, completedTotalPages)
   const paginatedCompleted = filteredCompleted.slice((completedSafePage - 1) * itemsPerPage, completedSafePage * itemsPerPage)
 
   const filteredCancelled = useMemo(
-    () => filterDeliveryList(cancelledDeliveries, cancelledSearch),
-    [cancelledDeliveries, cancelledSearch],
+    () => sortNewestFirst(filterDeliveryList(cancelledDeliveries, search)),
+    [cancelledDeliveries, search],
   )
   const cancelledTotalPages = Math.max(1, Math.ceil(filteredCancelled.length / itemsPerPage))
   const cancelledSafePage = Math.min(cancelledPage, cancelledTotalPages)
   const paginatedCancelled = filteredCancelled.slice((cancelledSafePage - 1) * itemsPerPage, cancelledSafePage * itemsPerPage)
+
+  const reportedIssuesList = useMemo(
+    () => requests.filter((r) => r.status === 'ISSUE'),
+    [requests],
+  )
+
+  const filteredIssues = useMemo(
+    () => sortNewestFirst(filterDeliveryList(reportedIssuesList, search)),
+    [reportedIssuesList, search],
+  )
+  const issuesTotalPages = Math.max(1, Math.ceil(filteredIssues.length / itemsPerPage))
+  const issuesSafePage = Math.min(issuesPage, issuesTotalPages)
+  const paginatedIssues = filteredIssues.slice((issuesSafePage - 1) * itemsPerPage, issuesSafePage * itemsPerPage)
 
   const selectedDriver = mockDrivers.find((d) => d.id === assignment.driverId)
   const selectedTruck = mockTrucks.find((t) => t.plateNumber === assignment.plateNumber)
   const selectedHelpers = mockHelpers.filter((h) => assignment.helperIds.includes(h.id))
   const canConfirmAssignment = Boolean(selectedDriver && selectedTruck && selectedHelpers.length > 0)
   const isInTransitStatus = ['FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(selectedRequest?.status)
+
+  const moduleTabs = [
+    { id: 'inbox', label: 'Delivery Requests Inbox', mobileLabel: 'Inbox', count: inboxRows.length },
+    { id: 'assignment', label: 'Assign Vehicle', mobileLabel: 'Assign', count: pendingAssignments.length },
+    { id: 'transit', label: 'In Transit Deliveries', mobileLabel: 'In Transit', count: ongoingDeliveries.length },
+    { id: 'issues', label: 'Reported Issues', mobileLabel: 'Issues', count: reportedIssuesList.length },
+    { id: 'completed', label: 'Completed Deliveries', mobileLabel: 'Completed', count: completedDeliveries.length },
+    { id: 'cancelled', label: 'Cancellations', mobileLabel: 'Cancellations', count: cancelledDeliveries.length },
+  ]
+
+  const goToModule = (mod) => {
+    setActiveModule(mod)
+    setStatusFilter('ALL')
+    setPage(1)
+    setAssignPage(1)
+    setCompletedPage(1)
+    setCancelledPage(1)
+    setIssuesPage(1)
+  }
+
+  const onGlobalSearchChange = (value) => {
+    setSearch(value)
+    setPage(1)
+    setAssignPage(1)
+    setCompletedPage(1)
+    setCancelledPage(1)
+    setIssuesPage(1)
+  }
+
+  const resolveIssue = (id) => {
+    const resolvedAt = new Date().toLocaleString('en-PH', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+    setRequests((prev) =>
+      prev.map((issue) => (issue.id === id ? { ...issue, resolvedAt, status: 'COMPLETED' } : issue)),
+    )
+    setSelectedIssue((prev) => (prev && prev.id === id ? { ...prev, resolvedAt, status: 'COMPLETED' } : prev))
+  }
+
+  const sendIssueMessage = (id, text) => {
+    const at = new Date().toLocaleString('en-PH', {
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+    const newMsg = { id: `m-${Date.now()}`, sender: 'supervisor', text, at }
+    setRequests((prev) =>
+      prev.map((issue) => (issue.id === id ? { ...issue, messages: [...(issue.messages || []), newMsg] } : issue)),
+    )
+    setSelectedIssue((prev) =>
+      prev && prev.id === id ? { ...prev, messages: [...(prev.messages || []), newMsg] } : prev,
+    )
+    const issue = requests.find((i) => i.id === id)
+    const replyText =
+      CUSTOMER_REPLIES[issue?.issueCategory] ||
+      'We appreciate your response. Please keep us posted on the resolution.'
+    setTimeout(() => {
+      const reply = { id: `m-${Date.now() + 1}`, sender: 'customer', text: replyText, at }
+      setRequests((prev) =>
+        prev.map((i) => (i.id === id ? { ...i, messages: [...(i.messages || []), reply] } : i)),
+      )
+      setSelectedIssue((prev) =>
+        prev && prev.id === id ? { ...prev, messages: [...(prev.messages || []), reply] } : prev,
+      )
+    }, 1500)
+  }
 
   const openDetails = (request) => {
     setSelectedRequest(request)
@@ -3333,123 +3700,97 @@ function SupDeliveries() {
         </>
       ) : (
         <div className="flex h-full flex-col gap-4 overflow-hidden">
-          {!selectedReportId && (
-          <div className="flex shrink-0 flex-wrap gap-2">
-          <button
-            onClick={() => setActiveModule('inbox')}
-            className={`group inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 ${
-              activeModule === 'inbox'
-                ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
-                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 hover:shadow-sm'
-            }`}
-          >
-            Delivery Requests Inbox
-            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none ${
-              activeModule === 'inbox' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-200'
-            }`}>
-              {inboxRows.length}
-            </span>
-          </button>
-          <button
-            onClick={() => setActiveModule('assignment')}
-            className={`group inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 ${
-              activeModule === 'assignment'
-                ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
-                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 hover:shadow-sm'
-            }`}
-          >
-            Assign Vehicle
-            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none ${
-              activeModule === 'assignment' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-200'
-            }`}>
-              {pendingAssignments.length}
-            </span>
-          </button>
-          <button
-            onClick={() => setActiveModule('transit')}
-            className={`group inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 ${
-              activeModule === 'transit'
-                ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
-                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 hover:shadow-sm'
-            }`}
-          >
-            In Transit Deliveries
-            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none ${
-              activeModule === 'transit' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-200'
-            }`}>
-              {ongoingDeliveries.length}
-            </span>
-          </button>
-          <button
-            onClick={() => setActiveModule('completed')}
-            className={`group inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 ${
-              activeModule === 'completed'
-                ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
-                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 hover:shadow-sm'
-            }`}
-          >
-            Completed Deliveries
-            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none ${
-              activeModule === 'completed' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-200'
-            }`}>
-              {completedDeliveries.length}
-            </span>
-          </button>
-          <button
-            onClick={() => setActiveModule('cancelled')}
-            className={`group inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 ${
-              activeModule === 'cancelled'
-                ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
-                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 hover:shadow-sm'
-            }`}
-          >
-            Cancellations
-            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none ${
-              activeModule === 'cancelled' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-200'
-            }`}>
-              {cancelledDeliveries.length}
-            </span>
-          </button>
-          </div>
+          {!selectedReportId && !selectedIssue && (
+          <>
+            {/* Global toolbar — search + status filter + sort, sits above the tabs.
+                Search styled to mirror CustomerDeliveries.jsx; keeps the supervisor's
+                slate/sky color scheme and the status-filter dropdown. */}
+            <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 lg:pl-4">
+                    <Search className="h-4 w-4 text-slate-400 lg:h-5 lg:w-5" />
+                  </div>
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => onGlobalSearchChange(e.target.value)}
+                    placeholder="Search by ID, customer, company, or address..."
+                    className="w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20 lg:pl-12 lg:pr-4 lg:py-3 lg:text-sm"
+                  />
+                  {search && (
+                    <button
+                      onClick={() => onGlobalSearchChange('')}
+                      className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 transition hover:text-slate-600 lg:pr-4"
+                    >
+                      <svg className="h-4 w-4 lg:h-5 lg:w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+                {(activeModule === 'inbox' || activeModule === 'transit' || activeModule === 'assignment') && (
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => { setStatusFilter(e.target.value); setPage(1); setAssignPage(1) }}
+                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
+                  >
+                    <option value="ALL">All Statuses</option>
+                    {activeModule === 'inbox' && (
+                      <>
+                        <option value="FOR_REVIEW">For Review</option>
+                        <option value="QUOTED">Quoted</option>
+                        <option value="COUNTER_OFFER">Counter Offer</option>
+                        <option value="UPDATED_QUOTATION">Updated Quotation</option>
+                      </>
+                    )}
+                    {activeModule === 'assignment' && (
+                      <>
+                        <option value="APPROVED">Approved</option>
+                        <option value="ASSIGNED">Assigned</option>
+                      </>
+                    )}
+                    {activeModule === 'transit' && (
+                      <>
+                        <option value="FOR_PICKUP">Pickup</option>
+                        <option value="OUT_FOR_DELIVERY">Dropoff</option>
+                        <option value="DELIVERED">Delivered</option>
+                      </>
+                    )}
+                  </select>
+                )}
+              </div>
+            </div>
+
+            {/* Module tabs — compact horizontally scrollable underline strip at
+                every breakpoint. Mirrors CustomerDeliveries.jsx. */}
+            <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-200 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {moduleTabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => goToModule(tab.id)}
+                  className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[14px] font-semibold transition ${
+                    activeModule === tab.id
+                      ? 'border-slate-900 text-slate-900'
+                      : 'border-transparent text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <span className="lg:hidden">{tab.mobileLabel}</span>
+                  <span className="hidden lg:inline">{tab.label}</span>
+                  <span className={`ml-1.5 text-[10px] font-medium ${
+                    activeModule === tab.id ? 'text-slate-400' : 'text-slate-400'
+                  }`}>
+                    ({tab.count})
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
           )}
 
         {activeModule === 'inbox' && (
           <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-            <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <div className="relative flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    value={search}
-                    onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-                    placeholder="Search by ID, customer, company, or address..."
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
-                  />
-                </div>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="PENDING">For Review</option>
-                  <option value="QUOTED">Quoted</option>
-                  <option value="COUNTER_OFFER">Counter Offer</option>
-                  <option value="UPDATED_QUOTATION">Updated Quotation</option>
-                </select>
-                <select
-                  value={sortBy}
-                  onChange={(e) => { setSortBy(e.target.value); setPage(1) }}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
-                >
-                  <option value="createdAt_desc">Newest First</option>
-                  <option value="createdAt_asc">Oldest First</option>
-                  <option value="customerName_asc">Customer A–Z</option>
-                  <option value="customerName_desc">Customer Z–A</option>
-                </select>
-              </div>
-            </div>
-
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
               <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.55fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                 <span className="text-center">Status</span>
@@ -3499,36 +3840,6 @@ function SupDeliveries() {
 
         {activeModule === 'assignment' && (
           <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-            <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <div className="relative flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    value={assignSearch}
-                    onChange={(e) => {
-                      setAssignSearch(e.target.value)
-                      setAssignPage(1)
-                    }}
-                    placeholder="Search by ID, customer, company, or address..."
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
-                  />
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-sm text-slate-500 whitespace-nowrap">{pendingAssignments.length} request{pendingAssignments.length !== 1 ? 's' : ''}</span>
-                  <select
-                    value={assignSortBy}
-                    onChange={(e) => { setAssignSortBy(e.target.value); setAssignPage(1) }}
-                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
-                  >
-                    <option value="createdAt_desc">Newest First</option>
-                    <option value="createdAt_asc">Oldest First</option>
-                    <option value="customerName_asc">Customer A–Z</option>
-                    <option value="customerName_desc">Customer Z–A</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
               <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                 <span className="text-center">Status</span>
@@ -3556,8 +3867,8 @@ function SupDeliveries() {
                     className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] lg:items-center"
                   >
                     <div className="flex justify-center">
-                      <span className="inline-flex max-w-full rounded-full bg-indigo-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] text-indigo-700">
-                        APPROVED
+                      <span className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[row.status]}`}>
+                        {row.status === 'APPROVED' ? 'APPROVED' : 'ASSIGNED'}
                       </span>
                     </div>
                     <p className="text-sm font-mono font-semibold text-slate-900 text-center">{row.id}</p>
@@ -3584,30 +3895,6 @@ function SupDeliveries() {
 
         {activeModule === 'transit' && (
           <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
-            <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <div className="relative flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    value={transitSearch}
-                    onChange={(e) => setTransitSearch(e.target.value)}
-                    placeholder="Search by ID, customer, company, or address..."
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
-                  />
-                </div>
-                <select
-                  value={transitStatusFilter}
-                  onChange={(e) => setTransitStatusFilter(e.target.value)}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="FOR_PICKUP">PICKUP</option>
-                  <option value="OUT_FOR_DELIVERY">DROPOFF</option>
-                  <option value="DELIVERED">Delivered</option>
-                </select>
-              </div>
-            </div>
-
             <div className="grid min-h-0 gap-4 lg:grid-cols-[1.15fr_0.85fr]">
               <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 <div className="shrink-0 hidden grid-cols-[0.6fr_0.7fr_1.2fr_0.5fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
@@ -3890,6 +4177,91 @@ function SupDeliveries() {
           </section>
         )}
 
+        {activeModule === 'issues' && (
+          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+            {selectedIssue ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
+                  <button
+                    onClick={() => setSelectedIssue(null)}
+                    className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    Back
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+                  <IssueDetailView
+                    delivery={selectedIssue}
+                    onResolve={() => resolveIssue(selectedIssue.id)}
+                    onSendMessage={(text) => sendIssueMessage(selectedIssue.id, text)}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="shrink-0 hidden grid-cols-[0.6fr_0.7fr_1.1fr_1.3fr_1.3fr_1.5fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                  <span className="text-center">Status</span>
+                  <span className="text-center">Request ID</span>
+                  <span className="text-left">Customer</span>
+                  <span className="text-left">Pick-up</span>
+                  <span className="text-left">Drop-off</span>
+                  <span className="text-left">Reported Issue</span>
+                  <span></span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                  {paginatedIssues.length === 0 && (
+                    <div className="flex flex-col items-center justify-center px-5 py-16 text-center">
+                      <AlertTriangle className="h-10 w-10 text-amber-300 mb-3" />
+                      <p className="text-sm font-medium text-slate-900">No reported issues found</p>
+                      <p className="mt-1 text-xs text-slate-500">Adjust your search or check back later.</p>
+                    </div>
+                  )}
+
+                  {paginatedIssues.map((delivery) => (
+                    <article
+                      key={delivery.id}
+                      onClick={() => setSelectedIssue(delivery)}
+                      className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.6fr_0.7fr_1.1fr_1.3fr_1.3fr_1.5fr_0.3fr] lg:items-center hover:bg-slate-50"
+                    >
+                      <div className="flex justify-center">
+                        {delivery.status === 'COMPLETED' ? (
+                          <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-emerald-700 xl:text-[11px]">
+                            <CheckCircle2 className="h-3 w-3" />
+                            COMPLETED
+                          </span>
+                        ) : (
+                          <span className="inline-flex max-w-full rounded-full bg-amber-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-amber-700 xl:text-[11px]">
+                            ISSUE
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm font-mono font-semibold text-slate-900 text-center">{delivery.id}</p>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{delivery.customerName}</p>
+                        <p className="text-xs text-slate-500">{delivery.companyName}</p>
+                      </div>
+                      <p className="text-sm text-slate-700 line-clamp-2">{delivery.pickupAddress}</p>
+                      <p className="text-sm text-slate-700 line-clamp-2">{delivery.deliveryAddress}</p>
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-amber-700">{delivery.issueCategory}</p>
+                        <p className="mt-0.5 text-xs text-slate-500 line-clamp-2">{delivery.issueDescription}</p>
+                        <p className="mt-0.5 text-[10px] text-slate-400">Reported {delivery.issueReportedAt}</p>
+                      </div>
+                      <div className="flex justify-center">
+                        <ChevronRight className="h-4 w-4 text-slate-400" />
+                      </div>
+                    </article>
+                  ))}
+                </div>
+
+                <PaginationBar page={issuesSafePage} setPage={setIssuesPage} totalPages={issuesTotalPages} />
+              </div>
+            )}
+          </section>
+        )}
+
         {activeModule === 'completed' && (
           <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
             {selectedCompletedReport ? (
@@ -3909,23 +4281,6 @@ function SupDeliveries() {
               </div>
             ) : (
               <>
-                <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                    <div className="relative flex-1">
-                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                      <input
-                        value={completedSearch}
-                        onChange={(e) => { setCompletedSearch(e.target.value); setCompletedPage(1) }}
-                        placeholder="Search by ID, customer, company, or address..."
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
-                      />
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="whitespace-nowrap text-sm text-slate-500">{completedDeliveries.length} deliveries completed</span>
-                    </div>
-                  </div>
-                </div>
-
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
                   <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.8fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                     <span className="text-center">Status</span>
@@ -4011,23 +4366,6 @@ function SupDeliveries() {
               </div>
             ) : (
               <>
-                <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                    <div className="relative flex-1">
-                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                      <input
-                        value={cancelledSearch}
-                        onChange={(e) => { setCancelledSearch(e.target.value); setCancelledPage(1) }}
-                        placeholder="Search by ID, customer, company, or address..."
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
-                      />
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="whitespace-nowrap text-sm text-slate-500">{cancelledDeliveries.length} request{cancelledDeliveries.length === 1 ? '' : 's'} cancelled</span>
-                    </div>
-                  </div>
-                </div>
-
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
                   <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.9fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                     <span className="text-center">Status</span>
