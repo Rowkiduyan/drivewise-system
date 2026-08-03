@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import {
   AlertTriangle, ArrowLeft, Calendar, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardList, Clock, FileText, MapPin, Package, Search, Send, Truck, Users, X
 } from 'lucide-react'
 import CustomerLayout from '../layout/CustomerLayout.jsx'
 import { truckTypes, itemTypes } from '../lib/deliveryOptions.js'
+import { supabase } from '../lib/supabaseClient.js'
 
 const background = null
 
@@ -2242,13 +2243,33 @@ function MonitoringRequestRow({ request, isMonitored, onSelect, onViewDetails })
   )
 }
 
+// Map a snake_case `delivery_requests` row to the camelCase shape the rest of
+// this page expects (detail view, timeline, cards, status helpers).
+function mapDeliveryRow(row) {
+  return {
+    id: row.id,
+    pickupDate: row.pickup_date,
+    pickupTime: row.pickup_time,
+    dropoffDate: row.dropoff_date,
+    dropoffTime: row.dropoff_time,
+    pickupLocation: row.pickup_location,
+    dropoffLocation: row.dropoff_location,
+    truckType: row.truck_type,
+    itemType: row.item_type,
+    otherItemType: row.other_item_type || '',
+    cargoWeight: row.cargo_weight,
+    budgetMin: row.budget_min,
+    budgetMax: row.budget_max,
+    notes: row.notes || '',
+    status: row.status,
+    createdAt: row.created_at
+  }
+}
+
 function CustomerDeliveries() {
-  const location = useLocation()
-  const navigate = useNavigate()
   const [selectedRequest, setSelectedRequest] = useState(null)
   const [activeTab, setActiveTab] = useState('all')
-  const [searchQuery, setSearchQuery] = useState('')
-  // Desktop (md+) only — which request is selected for the Real-time
+  const [searchQuery, setSearchQuery] = useState('')  // Desktop (md+) only — which request is selected for the Real-time
   // Monitoring panel on the FOR_PICKUP/OUT_FOR_DELIVERY tabs, matching the
   // Supervisor's In Transit Deliveries tab (`monitoredDeliveryId`).
   const [monitoredRequestId, setMonitoredRequestId] = useState(null)
@@ -2263,294 +2284,46 @@ function CustomerDeliveries() {
   // -1 = to the left — mirrors how a mobile app's screen stack usually feels.
   const [tabDirection, setTabDirection] = useState(1)
 
-  // Sample delivery requests with different statuses for demo, seeded with any
-  // request just submitted from the Request Delivery page (handed back via navigation state)
-  const [deliveryRequests, setDeliveryRequests] = useState(() => {
-    const sampleRequests = [
-    {
-      id: 'DR-2024-001',
-      pickupDate: '2026-08-05',
-      pickupTime: '09:00',
-      dropoffDate: '2026-08-05',
-      dropoffTime: '14:00',
-      pickupLocation: '123 Taft Avenue, Manila, Metro Manila',
-      dropoffLocation: '456 Quezon Avenue, Quezon City, Metro Manila',
-      truckType: '4T',
-      itemType: 'appliances',
-      otherItemType: '',
-      cargoWeight: '850',
-      budgetMin: '4000',
-      budgetMax: '7000',
-      notes: 'Fragile items - handle with care',
-      status: 'PENDING_REQUEST',
-      createdAt: '2026-07-29T10:30:00'
-    },
-    {
-      id: 'DR-2024-002',
-      pickupDate: '2026-08-07',
-      pickupTime: '08:00',
-      dropoffDate: '2026-08-07',
-      dropoffTime: '16:00',
-      pickupLocation: '789 EDSA, Makati, Metro Manila',
-      dropoffLocation: '321 Roxas Boulevard, Pasay, Metro Manila',
-      truckType: '10T',
-      itemType: 'dry_food',
-      otherItemType: '',
-      cargoWeight: '9200',
-      budgetMin: '12000',
-      budgetMax: '16000',
-      notes: '',
-      status: 'PROCESSING',
-      quotation: {
-        amount: 14042,
-        breakdown: {
-          directExpenses: {
-            depreciation: 1600, dieselRate: 70,
-            repairsAndMaintenance: { batteries: 450, tires: 550 },
-            salariesAndWages: { driver: 2400, helper1: 1200, helper2: '' },
-            tripAllowance: 600, lodgingAllowance: 350, tollParking: 300
-          },
-          indirectExpenses: { adminFees: 600, insurance: 700, motorVehicleReg: 350, garageRental: 450 },
-          calculated: { distanceKm: 38, totalDays: 1, dieselTotal: 2660, directTotal: 10110, indirectTotal: 2100, operatingTotal: 12210, income: 1831.5, proposedRate: 14041.5 }
-        },
-        notes: '', validUntil: ''
-      },
-      createdAt: '2026-07-28T09:00:00'
-    },
-    {
-      id: 'DR-2024-007',
-      pickupDate: '2026-08-06',
-      pickupTime: '09:00',
-      dropoffDate: '2026-08-06',
-      dropoffTime: '15:00',
-      pickupLocation: '99 Marcos Highway, Marikina, Metro Manila',
-      dropoffLocation: '210 Commonwealth Avenue, Quezon City, Metro Manila',
-      truckType: '6T',
-      itemType: 'furniture',
-      otherItemType: '',
-      cargoWeight: '3800',
-      budgetMin: '7000',
-      budgetMax: '10000',
-      notes: '',
-      status: 'PROCESSING',
-      quotationRejected: true,
-      priceRange: { min: '8500', max: '10000' },
-      previousQuotation: {
-        amount: 12949,
-        breakdown: {
-          directExpenses: {
-            depreciation: 1600, dieselRate: 80,
-            repairsAndMaintenance: { batteries: 450, tires: 550 },
-            salariesAndWages: { driver: 2400, helper1: 1200, helper2: 600 },
-            tripAllowance: 550, lodgingAllowance: 0, tollParking: 250
-          },
-          indirectExpenses: { adminFees: 550, insurance: 650, motorVehicleReg: 300, garageRental: 400 },
-          calculated: { distanceKm: 22, totalDays: 1, dieselTotal: 1760, directTotal: 9360, indirectTotal: 1900, operatingTotal: 11260, income: 1689, proposedRate: 12949 }
-        },
-        notes: 'Includes 2-helper crew for large furniture pieces', validUntil: ''
-      },
-      quotation: {
-        amount: 9683,
-        breakdown: {
-          directExpenses: {
-            depreciation: 1200, dieselRate: 60,
-            repairsAndMaintenance: { batteries: 350, tires: 420 },
-            salariesAndWages: { driver: 1800, helper1: 900, helper2: 450 },
-            tripAllowance: 400, lodgingAllowance: 0, tollParking: 180
-          },
-          indirectExpenses: { adminFees: 400, insurance: 480, motorVehicleReg: 220, garageRental: 300 },
-          calculated: { distanceKm: 22, totalDays: 1, dieselTotal: 1320, directTotal: 7020, indirectTotal: 1400, operatingTotal: 8420, income: 1263, proposedRate: 9683 }
-        },
-        notes: 'Revised per your requested price range', validUntil: ''
-      },
-      createdAt: '2026-07-29T13:00:00'
-    },
-    {
-      id: 'DR-2024-003',
-      pickupDate: '2026-08-03',
-      pickupTime: '10:00',
-      dropoffDate: '2026-08-03',
-      dropoffTime: '15:00',
-      pickupLocation: '555 Boni Avenue, Mandaluyong, Metro Manila',
-      dropoffLocation: '888 Ortigas Center, Pasig, Metro Manila',
-      truckType: '2T',
-      itemType: 'frozen',
-      otherItemType: '',
-      cargoWeight: '1500',
-      budgetMin: '6000',
-      budgetMax: '9000',
-      notes: 'Maintain refrigeration temperature',
-      status: 'FOR_PICKUP',
-      confirmedPickupDate: '2026-08-04',
-      confirmedPickupTime: '10:00',
-      quotation: {
-        amount: 7383,
-        breakdown: {
-          directExpenses: {
-            depreciation: 900, dieselRate: 55,
-            repairsAndMaintenance: { batteries: 300, tires: 380 },
-            salariesAndWages: { driver: 1600, helper1: 800, helper2: '' },
-            tripAllowance: 350, lodgingAllowance: 0, tollParking: 180
-          },
-          indirectExpenses: { adminFees: 350, insurance: 420, motorVehicleReg: 200, garageRental: 280 },
-          calculated: { distanceKm: 12, totalDays: 1, dieselTotal: 660, directTotal: 5170, indirectTotal: 1250, operatingTotal: 6420, income: 963, proposedRate: 7383 }
-        },
-        notes: '', validUntil: ''
-      },
-      quotationApproved: true,
-      crew: {
-        driver: { id: 'DRV-003', name: 'Nestor Villareal' },
-        helpers: [{ id: 'HLP-003', name: 'Jomar Cruz' }],
-        truck: { plateNumber: 'DEF 9012', truckType: '2T' }
-      },
-      createdAt: '2026-07-25T14:00:00'
-    },
-    {
-      id: 'DR-2024-004',
-      pickupDate: '2026-07-30',
-      pickupTime: '07:00',
-      dropoffDate: '2026-07-31',
-      dropoffTime: '12:00',
-      pickupLocation: '111 Shaw Boulevard, Pasig, Metro Manila',
-      dropoffLocation: '222 BGC, Taguig, Metro Manila',
-      truckType: '6T',
-      itemType: 'furniture',
-      otherItemType: '',
-      cargoWeight: '4800',
-      budgetMin: '9000',
-      budgetMax: '13000',
-      notes: '',
-      status: 'OUT_FOR_DELIVERY',
-      quotation: {
-        amount: 11447,
-        breakdown: {
-          directExpenses: {
-            depreciation: 1300, dieselRate: 60,
-            repairsAndMaintenance: { batteries: 380, tires: 460 },
-            salariesAndWages: { driver: 2600, helper1: 1300, helper2: 550 },
-            tripAllowance: 450, lodgingAllowance: 0, tollParking: 220
-          },
-          indirectExpenses: { adminFees: 450, insurance: 540, motorVehicleReg: 260, garageRental: 340 },
-          calculated: { distanceKm: 18.4, totalDays: 1, dieselTotal: 1104, directTotal: 8364, indirectTotal: 1590, operatingTotal: 9954, income: 1493.1, proposedRate: 11447.1 }
-        },
-        notes: '', validUntil: ''
-      },
-      quotationApproved: true,
-      crew: {
-        driver: { id: 'DRV-004', name: 'Ramon Aquino' },
-        helpers: [{ id: 'HLP-004', name: 'Edwin Bautista' }, { id: 'HLP-005', name: 'Marco Reyes' }],
-        truck: { plateNumber: 'GHI 9012', truckType: '6T' }
-      },
-      trip: {
-        distance: '18.4 km',
-        actualPickup: 'July 30, 7:12 AM',
-        scheduledDropoff: 'July 31, 12:00 PM'
-      },
-      liveTracking: { lat: 14.5657, lng: 121.0644, speedKmh: 42, lastUpdate: 'Just now' },
-      createdAt: '2026-07-27T08:00:00'
-    },
-    {
-      id: 'DR-2024-005',
-      pickupDate: '2026-07-28',
-      pickupTime: '09:00',
-      dropoffDate: '2026-07-28',
-      dropoffTime: '13:00',
-      pickupLocation: '333 Alabang Town Center, Muntinlupa',
-      dropoffLocation: '444 SM Mall of Asia, Pasay',
-      truckType: '4T',
-      itemType: 'beverages',
-      otherItemType: '',
-      cargoWeight: '3100',
-      budgetMin: '5000',
-      budgetMax: '8000',
-      notes: '',
-      status: 'DELIVERED',
-      quotation: {
-        amount: 6714,
-        breakdown: {
-          directExpenses: {
-            depreciation: 700, dieselRate: 55,
-            repairsAndMaintenance: { batteries: 250, tires: 320 },
-            salariesAndWages: { driver: 1650, helper1: 820, helper2: '' },
-            tripAllowance: 300, lodgingAllowance: 0, tollParking: 150
-          },
-          indirectExpenses: { adminFees: 320, insurance: 380, motorVehicleReg: 180, garageRental: 240 },
-          calculated: { distanceKm: 9.6, totalDays: 1, dieselTotal: 528, directTotal: 4718, indirectTotal: 1120, operatingTotal: 5838, income: 875.7, proposedRate: 6713.7 }
-        },
-        notes: '', validUntil: ''
-      },
-      quotationApproved: true,
-      crew: {
-        driver: { id: 'DRV-005', name: 'Teodoro Salazar' },
-        helpers: [{ id: 'HLP-006', name: 'Vince Alonzo' }],
-        truck: { plateNumber: 'JKL 3456', truckType: '4T' }
-      },
-      trip: {
-        distance: '9.6 km',
-        actualPickup: 'July 28, 9:05 AM',
-        scheduledDropoff: 'July 28, 1:00 PM',
-        actualDropoff: 'July 28, 12:48 PM',
-        onTime: true
-      },
-      createdAt: '2026-07-24T11:00:00'
-    },
-    {
-      id: 'DR-2024-006',
-      pickupDate: '2026-07-24',
-      pickupTime: '08:00',
-      dropoffDate: '2026-07-24',
-      dropoffTime: '14:00',
-      pickupLocation: '666 Glorietta, Makati',
-      dropoffLocation: '777 Greenbelt, Makati',
-      truckType: '2T',
-      itemType: 'clothing',
-      otherItemType: '',
-      cargoWeight: '1200',
-      budgetMin: '3500',
-      budgetMax: '6000',
-      notes: '',
-      status: 'DELIVERY_COMPLETED',
-      quotation: {
-        amount: 4727,
-        breakdown: {
-          directExpenses: {
-            depreciation: 500, dieselRate: 50,
-            repairsAndMaintenance: { batteries: 180, tires: 230 },
-            salariesAndWages: { driver: 1250, helper1: 620, helper2: '' },
-            tripAllowance: 200, lodgingAllowance: 0, tollParking: 100
-          },
-          indirectExpenses: { adminFees: 220, insurance: 260, motorVehicleReg: 130, garageRental: 160 },
-          calculated: { distanceKm: 5.2, totalDays: 1, dieselTotal: 260, directTotal: 3340, indirectTotal: 770, operatingTotal: 4110, income: 616.5, proposedRate: 4726.5 }
-        },
-        notes: '', validUntil: ''
-      },
-      quotationApproved: true,
-      crew: {
-        driver: { id: 'DRV-006', name: 'Antonio Reyes' },
-        helpers: [{ id: 'HLP-007', name: 'Julius Manalo' }],
-        truck: { plateNumber: 'ABC 1234', truckType: '2T' }
-      },
-      trip: {
-        distance: '5.2 km',
-        actualPickup: 'July 24, 8:10 AM',
-        scheduledDropoff: 'July 24, 2:00 PM',
-        actualDropoff: 'July 24, 2:20 PM',
-        onTime: false,
-        lateMinutes: 20
-      },
-      createdAt: '2026-07-20T10:00:00'
-    }
-    ]
+  const [deliveryRequests, setDeliveryRequests] = useState([])
+  const [loadError, setLoadError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
 
-    return location.state?.newRequest ? [location.state.newRequest, ...sampleRequests] : sampleRequests
-  })
-
-  // Clear the navigation state once consumed so a refresh or back/forward nav doesn't re-add the request
+  // Load the signed-in customer's own delivery requests from the database.
+  // DB rows are snake_case; the rest of this page (detail view, timeline,
+  // cards) expects camelCase, so each row is mapped through mapDeliveryRow.
   useEffect(() => {
-    if (location.state?.newRequest) {
-      navigate(location.pathname, { replace: true, state: null })
+    let isMounted = true
+
+    async function loadDeliveries() {
+      setLoadError('')
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!isMounted) return
+      if (!user) {
+        setDeliveryRequests([])
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('delivery_requests')
+        .select('*')
+        .eq('customer_auth_id', user.id)
+        .order('created_at', { ascending: false })
+
+      if (!isMounted) return
+      if (error) {
+        setLoadError('Failed to load your delivery requests. Please try again.')
+        return
+      }
+      setDeliveryRequests((data || []).map(mapDeliveryRow))
     }
-  }, [location.state, location.pathname, navigate])
+
+    loadDeliveries()
+
+    return () => {
+      isMounted = false
+    }
+  }, [reloadKey])
+
 
   const handleUpdateRequest = (id, updates) => {
     setDeliveryRequests(prev => prev.map(req =>
@@ -2730,7 +2503,20 @@ function CustomerDeliveries() {
               <span></span>
             </div>
 
-            {filteredRequests.length === 0 ? (
+            {loadError ? (
+              <div className="flex flex-col items-center gap-3 py-14 text-center">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-50 text-red-500">
+                  <AlertTriangle className="h-6 w-6" />
+                </div>
+                <p className="text-sm font-semibold text-slate-700">{loadError}</p>
+                <button
+                  onClick={() => setReloadKey((k) => k + 1)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : filteredRequests.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-14 text-center">
                 <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                   <Package className="h-6 w-6" />
