@@ -3,59 +3,7 @@ import { useNavigate } from "react-router-dom";
 import AdminLayout from "../layout/AdminLayout.jsx";
 import AddTruckModal from "../components/AddTruckModal.jsx";
 import { Search, ChevronRight } from "lucide-react";
-
-// ---------------------------------------------------------------------------
-// Dummy fleet roster — frontend only, no backend/API/database.
-// ---------------------------------------------------------------------------
-
-const DRIVER_FIRST_NAMES = [
-  "Juan",
-  "Maria",
-  "Jose",
-  "Ana",
-  "Pedro",
-  "Rosa",
-  "Carlos",
-  "Elena",
-  "Miguel",
-  "Carmen",
-  "Antonio",
-  "Teresa",
-  "Francisco",
-  "Luz",
-  "Manuel",
-  "Corazon",
-  "Ricardo",
-  "Josefina",
-  "Eduardo",
-  "Remedios",
-  "Fernando",
-];
-
-const DRIVER_LAST_NAMES = [
-  "Santos",
-  "Reyes",
-  "Cruz",
-  "Bautista",
-  "Ocampo",
-  "Garcia",
-  "Torres",
-  "Flores",
-  "Ramos",
-  "Mendoza",
-  "Castillo",
-  "Villanueva",
-  "Aquino",
-  "Del Rosario",
-  "Gonzales",
-  "Fernandez",
-  "Domingo",
-  "Pascual",
-  "Salazar",
-];
-
-const DRIVER_MIDDLE_INITIALS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-
+// Truck type options are defined directly here as mockTrucks.js has been removed.
 const TRUCK_TYPES = [
   "L300",
   "AUV",
@@ -66,116 +14,9 @@ const TRUCK_TYPES = [
   "4T DRY",
   "4T REF",
 ];
+import { supabase } from "../lib/supabaseClient.js";
 
-const TRUCK_SPECS = [
-  { brand: "Mitsubishi", model: "L300 FB", truckType: "L300" },
-  { brand: "Toyota", model: "Innova", truckType: "AUV" },
-  { brand: "Isuzu", model: "NHR 55", truckType: "1T DRY" },
-  { brand: "Isuzu", model: "NKR 71", truckType: "2T DRY" },
-  { brand: "Fuso", model: "Canter FE71", truckType: "1T REF" },
-  { brand: "Hino", model: "300 Series 714", truckType: "2T REF" },
-  { brand: "Isuzu", model: "Forward FRR90", truckType: "4T DRY" },
-  { brand: "Hino", model: "500 Series FG8J", truckType: "4T REF" },
-];
-
-const PLATE_PREFIXES = [
-  "NGP",
-  "NDW",
-  "NBW",
-  "NGK",
-  "NAP",
-  "NDT",
-  "NEQ",
-  "NFY",
-  "NHC",
-  "NJB",
-];
-const STATUS_SEQUENCE = [
-  "Available",
-  "Available",
-  "On Delivery",
-  "On Delivery",
-  "Maintenance",
-  "Offline",
-];
-const ACQUIRE_MONTHS = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-
-function buildPlateNumber(i) {
-  const prefix = PLATE_PREFIXES[i % PLATE_PREFIXES.length];
-  const number = String(1000 + ((i * 137) % 9000));
-  return `${prefix} ${number}`;
-}
-
-function buildMockTrucks(count) {
-  return Array.from({ length: count }, (_, i) => {
-    const { brand, model, truckType } = TRUCK_SPECS[i % TRUCK_SPECS.length];
-    const status = STATUS_SEQUENCE[(i * 11) % STATUS_SEQUENCE.length];
-    const deviceStatus = i % 7 === 0 ? "Offline" : "Online";
-    const hasDriver = status === "Available" || status === "On Delivery";
-    const driverFirst = DRIVER_FIRST_NAMES[i % DRIVER_FIRST_NAMES.length];
-    const driverLast =
-      DRIVER_LAST_NAMES[(i * 7 + 3) % DRIVER_LAST_NAMES.length];
-    const driverMiddle =
-      DRIVER_MIDDLE_INITIALS[(i * 3) % DRIVER_MIDDLE_INITIALS.length];
-    const assignedDriver = hasDriver
-      ? `${driverLast}, ${driverFirst} ${driverMiddle}.`
-      : null;
-
-    const plateNumber = buildPlateNumber(i);
-    const assignedDeviceNo = `DWD-${String(1001 + i).padStart(4, "0")}`;
-    const yearModel = 2016 + (i % 9);
-    const odometer = 12000 + ((i * 3187) % 148000);
-    const fuelLevel = 20 + ((i * 13) % 80);
-    const dateAcquired = `${ACQUIRE_MONTHS[(i * 5) % ACQUIRE_MONTHS.length]} ${2026 - (i % 6)}`;
-
-    return {
-      id: `truck-${i + 1}`,
-      plateNumber,
-      brand,
-      model,
-      truckType,
-      status,
-      deviceStatus,
-      assignedDriver,
-      assignedDeviceNo,
-      yearModel,
-      odometer,
-      fuelLevel,
-      dateAcquired,
-    };
-  });
-}
-
-// Initialize trucks state with persistence in localStorage
-const getInitialTrucks = () => {
-  try {
-    const stored = localStorage.getItem("adminTrucks");
-    return stored ? JSON.parse(stored) : buildMockTrucks(48);
-  } catch {
-    return buildMockTrucks(48);
-  }
-};
-
-const STATUS_BADGE_CLASSES = {
-  Available:
-    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  "On Delivery": "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
-  Maintenance: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
-  Offline: "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
-};
+// STATUS_BADGE_CLASSES removed as status field is no longer used.
 
 const TRUCK_TYPE_TAG_CLASSES = {
   L300: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
@@ -188,17 +29,7 @@ const TRUCK_TYPE_TAG_CLASSES = {
   "4T REF": "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200",
 };
 
-function StatusBadge({ status }) {
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${
-        STATUS_BADGE_CLASSES[status] || STATUS_BADGE_CLASSES.Offline
-      }`}
-    >
-      {status}
-    </span>
-  );
-}
+// StatusBadge component removed as status field is no longer used.
 
 function TypeTag({ type }) {
   return (
@@ -209,21 +40,6 @@ function TypeTag({ type }) {
       }`}
     >
       {type}
-    </span>
-  );
-}
-
-function DeviceStatusBadge({ status }) {
-  const isOnline = status === "Online";
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${
-        isOnline
-          ? "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200"
-          : "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200"
-      }`}
-    >
-      {status}
     </span>
   );
 }
@@ -391,21 +207,7 @@ function PaginationBar({ page, setPage, totalPages }) {
   );
 }
 
-const STATUS_OPTIONS = ["Available", "On Delivery", "Maintenance", "Offline"];
 const TYPE_OPTIONS = TRUCK_TYPES;
-const STATUS_SORT_SEQUENCE = [
-  "On Delivery",
-  "Available",
-  "Maintenance",
-  "Offline",
-];
-const STATUS_SORT_ORDER = STATUS_SORT_SEQUENCE.reduce(
-  (order, status, index) => {
-    order[status] = index;
-    return order;
-  },
-  {},
-);
 const TRUCK_TYPE_ORDER = TRUCK_TYPES.reduce((order, type, index) => {
   order[type] = index;
   return order;
@@ -415,29 +217,53 @@ const PAGE_SIZE = 10;
 function AdminTrucks() {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedStatus, setSelectedStatus] = useState("All");
   const [selectedType, setSelectedType] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [trucks, setTrucks] = useState(getInitialTrucks);
+  // Load trucks from Supabase on component mount. Fallback to empty array if fetch fails.
+  const [trucks, setTrucks] = useState([]);
   // Toast state: message and type ('success' | 'error')
   const [toast, setToast] = useState(null);
 
-  // Persist trucks to localStorage whenever they change
+  // Loading state for initial data fetch
+  const [loading, setLoading] = useState(true);
+
+  // Persist trucks to localStorage for offline fallback (optional)
   useEffect(() => {
     localStorage.setItem("adminTrucks", JSON.stringify(trucks));
   }, [trucks]);
 
-  const statusCounts = useMemo(
-    () => ({
-      All: trucks.length,
-      Available: trucks.filter((t) => t.status === "Available").length,
-      "On Delivery": trucks.filter((t) => t.status === "On Delivery").length,
-      Maintenance: trucks.filter((t) => t.status === "Maintenance").length,
-      Offline: trucks.filter((t) => t.status === "Offline").length,
-    }),
-    [trucks],
-  );
+  // Load trucks from localStorage on mount as an immediate fallback before the async fetch.
+  useEffect(() => {
+    const stored = localStorage.getItem("adminTrucks");
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setTrucks(parsed);
+          setLoading(false);
+        }
+      } catch (e) {
+        console.error("Failed to parse stored trucks", e);
+      }
+    }
+  }, []);
+
+  // Fetch initial truck data from Supabase
+  useEffect(() => {
+    async function loadTrucks() {
+      const { data, error } = await supabase.from("trucks").select("*");
+      if (error) {
+        console.error("Failed to fetch trucks from Supabase:", error);
+        // No fallback – keep current state (empty) if fetch fails.
+        setLoading(false);
+        return;
+      }
+      setTrucks(data);
+      setLoading(false);
+    }
+    loadTrucks();
+  }, []);
 
   const typeCounts = useMemo(() => {
     const counts = { All: trucks.length };
@@ -447,6 +273,7 @@ function AdminTrucks() {
     return counts;
   }, [trucks]);
 
+  // Filter trucks based on search term and selected type, then sort by type order and plate number.
   const filteredTrucks = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
     return trucks
@@ -458,7 +285,6 @@ function AdminTrucks() {
               truck.brand,
               truck.model,
               truck.truckType,
-              truck.status,
               truck.assignedDeviceNo,
               truck.assignedDriver || "",
             ]
@@ -466,42 +292,46 @@ function AdminTrucks() {
               .toLowerCase()
               .includes(query);
 
-        const matchesStatus =
-          selectedStatus === "All" || truck.status === selectedStatus;
         const matchesType =
           selectedType === "All" || truck.truckType === selectedType;
 
-        return matchesSearch && matchesStatus && matchesType;
+        return matchesSearch && matchesType;
       })
       .sort((leftTruck, rightTruck) => {
-        const leftStatusOrder =
-          STATUS_SORT_ORDER[leftTruck.status] ?? Number.MAX_SAFE_INTEGER;
-        const rightStatusOrder =
-          STATUS_SORT_ORDER[rightTruck.status] ?? Number.MAX_SAFE_INTEGER;
-        if (leftStatusOrder !== rightStatusOrder)
-          return leftStatusOrder - rightStatusOrder;
-        const leftTypeOrder =
+        const leftOrder =
           TRUCK_TYPE_ORDER[leftTruck.truckType] ?? Number.MAX_SAFE_INTEGER;
-        const rightTypeOrder =
+        const rightOrder =
           TRUCK_TYPE_ORDER[rightTruck.truckType] ?? Number.MAX_SAFE_INTEGER;
-        if (leftTypeOrder !== rightTypeOrder)
-          return leftTypeOrder - rightTypeOrder;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
         return leftTruck.plateNumber.localeCompare(rightTruck.plateNumber);
       });
-  }, [searchTerm, selectedStatus, selectedType]);
+  }, [searchTerm, selectedType, trucks]);
   // Handler for adding a new truck from the modal
-  const handleAddTruck = (formData) => {
+  // Add a new truck entry – now persists to Supabase and updates local state.
+  // Insert a new truck via Supabase and update UI state.
+  const handleAddTruck = async (formData) => {
     try {
-      const newTruck = {
-        id: `truck-${Date.now()}`,
-        ...formData,
-      };
-      setTrucks((prev) => [newTruck, ...prev]);
+      // Insert the form data; let Supabase generate the UUID and return the new row.
+      const { data, error } = await supabase
+        .from("trucks")
+        .insert([formData])
+        .select();
+      if (error) throw error;
+
+      // If a row is returned, prepend it to the trucks list.
+      if (data && data.length > 0) {
+        setTrucks((prev) => [data[0], ...prev]);
+      }
+
+      // Close modal and show success toast.
       setIsAddModalOpen(false);
       setToast({ message: "Truck added successfully", type: "success" });
-    } catch (error) {
-      console.error(error);
-      setToast({ message: "Failed to add truck", type: "error" });
+    } catch (err) {
+      console.error("Failed to add truck:", err.message);
+      setToast({
+        message: "Failed to add truck: " + err.message,
+        type: "error",
+      });
     }
   };
 
@@ -515,10 +345,7 @@ function AdminTrucks() {
     setCurrentPage(1);
   };
 
-  const updateStatus = (value) => {
-    setSelectedStatus(value);
-    setCurrentPage(1);
-  };
+  // Status update removed as status field is no longer used.
 
   const updateType = (value) => {
     setSelectedType(value);
@@ -560,15 +387,7 @@ function AdminTrucks() {
             </div>
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-2 sm:flex-none sm:justify-end">
-              <FilterSelect
-                id="status-filter"
-                label="Status"
-                value={selectedStatus}
-                onChange={updateStatus}
-                options={STATUS_OPTIONS}
-                counts={statusCounts}
-                allLabel="Status"
-              />
+              {/* Status filter removed as status field is no longer used */}
               <FilterSelect
                 id="type-filter"
                 label="Truck Type"
@@ -612,7 +431,11 @@ function AdminTrucks() {
         <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex h-full min-h-0 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto">
-              {filteredTrucks.length === 0 ? (
+              {loading ? (
+                <div className="flex h-full items-center justify-center px-4 py-6 text-center text-sm text-slate-500">
+                  Loading trucks…
+                </div>
+              ) : filteredTrucks.length === 0 ? (
                 <div className="flex h-full items-center justify-center px-4 py-6 text-center text-sm text-slate-500">
                   No truck records match your search. Try adjusting your
                   filters.
@@ -632,15 +455,6 @@ function AdminTrucks() {
                       </th>
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Truck Type
-                      </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-                        Device No.
-                      </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-                        Device Status
-                      </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-                        Status
                       </th>
                       <th className="sticky top-0 z-10 bg-slate-50 py-3 pl-2 pr-5 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         &nbsp;
@@ -673,15 +487,7 @@ function AdminTrucks() {
                         <td className="px-5 py-2.5">
                           <TypeTag type={truck.truckType} />
                         </td>
-                        <td className="px-5 py-2.5 text-slate-700">
-                          {truck.assignedDeviceNo}
-                        </td>
-                        <td className="px-5 py-2.5">
-                          <DeviceStatusBadge status={truck.deviceStatus} />
-                        </td>
-                        <td className="px-5 py-2.5">
-                          <StatusBadge status={truck.status} />
-                        </td>
+                        {/* Device Status column removed */}
                         <td className="py-2.5 pl-2 pr-5 text-right">
                           <ChevronRight className="ml-auto h-4 w-4 text-slate-400" />
                         </td>

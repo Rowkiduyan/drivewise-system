@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { mockDevices } from "../lib/deviceData.js";
+// Real device data will be fetched from Supabase instead of using mock data.
+import { supabase } from "../lib/supabaseClient.js";
 import { X } from "lucide-react";
 
 // Duplicate options to avoid circular imports
@@ -13,8 +14,7 @@ const TRUCK_TYPES = [
   "4T DRY",
   "4T REF",
 ];
-const STATUS_OPTIONS = ["Available", "On Delivery", "Maintenance", "Offline"];
-const DEVICE_STATUS_OPTIONS = ["Online", "Offline"];
+// Device status is now managed by the devices table; no separate status dropdown needed.
 // Brand and model suggestions based on existing mock data
 // Brand and model options – will be extended with custom entries
 const INITIAL_BRAND_OPTIONS = ["Mitsubishi", "Toyota", "Isuzu", "Fuso", "Hino"];
@@ -63,47 +63,73 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
     customModel: "",
     truckType: TRUCK_TYPES[0],
     customTruckType: "",
-    status: STATUS_OPTIONS[0],
-    deviceStatus: DEVICE_STATUS_OPTIONS[0],
-    assignedDriver: "",
+    // deviceStatus removed – managed via devices table
     deviceId: "",
     yearModel: 2026,
     // New fields
-    maximumCapacity: "",
-    dimensionsWidth: "",
-    dimensionsHeight: "",
-    vehicleLength: "",
+    maxCapacity: "",
+    containerWidth: "",
+    containerHeight: "",
+    containerLength: "",
     currentMileage: "",
     maintenanceInterval: "",
     maintenanceMileageInterval: "",
-    odometer: "",
-    fuelLevel: "",
     dateAcquired: "",
   });
 
+  // Store list of unassigned devices fetched from the database.
+  const [availableDevices, setAvailableDevices] = useState([]);
+  // Local toast for validation errors (e.g., duplicate plate number)
+  const [validationToast, setValidationToast] = useState(null);
+  // Auto‑clear validation toast after a short period
+  useEffect(() => {
+    if (validationToast) {
+      const timer = setTimeout(() => setValidationToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [validationToast]);
+
   // Reset form when modal opens
-  const [resultMessage, setResultMessage] = useState("");
 
   useEffect(() => {
     if (isOpen) {
+      // Reset form fields
+      // Reset all form fields to their initial empty values to keep inputs controlled
       setFormData({
         plateNumber: "",
-        maximumCapacity: "2000",
+        brand: "",
         customBrand: "",
         model: "",
         customModel: "",
         truckType: TRUCK_TYPES[0],
         customTruckType: "",
-        status: STATUS_OPTIONS[0],
-        deviceStatus: DEVICE_STATUS_OPTIONS[0],
-        assignedDriver: "",
         deviceId: "",
         yearModel: 2026,
-        odometer: "",
-        fuelLevel: "",
         dateAcquired: "",
+        // New numeric fields default to empty strings (controlled inputs)
+        maxCapacity: "",
+        containerHeight: "",
+        containerWidth: "",
+        containerLength: "",
+        currentMileage: "",
+        maintenanceInterval: "",
+        maintenanceMileageInterval: "",
       });
-      setResultMessage("");
+
+      // Fetch unassigned devices from Supabase (devices with null plateNumber)
+      const fetchDevices = async () => {
+        const { data, error } = await supabase
+          .from("devices")
+          .select("deviceId, deviceStatus, plateNumber");
+        if (error) {
+          console.error("Failed to fetch devices:", error);
+          setAvailableDevices([]);
+        } else {
+          // The returned objects may have keys deviceId, deviceStatus, plateNumber
+          setAvailableDevices(data || []);
+        }
+      };
+      fetchDevices();
     }
   }, [isOpen]);
 
@@ -127,44 +153,75 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
     setFormData((prev) => ({ ...prev, [name]: newValue }));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    // Convert numeric fields
-    // Resolve custom entries before persisting
+    // Convert numeric fields and resolve custom entries before persisting
     const finalBrand =
       formData.brand === "Custom" ? formData.customBrand : formData.brand;
     const finalModel =
       formData.model === "Custom" ? formData.customModel : formData.model;
-
     const finalTruckType =
       formData.truckType === "Custom"
         ? formData.customTruckType
         : formData.truckType;
-    const processed = {
+    // Prepare truck data according to new schema (only plateNumber, brand, model)
+    // Build the payload with all fields that exist in the `trucks` table.
+    // Empty strings are acceptable for optional columns; numeric fields are kept as strings
+    // because Supabase will coerce them appropriately.
+    const truckData = {
       plateNumber: formData.plateNumber,
       brand: finalBrand,
       model: finalModel,
       truckType: finalTruckType,
-      deviceStatus: formData.deviceStatus,
-      deviceId: formData.deviceId,
-      yearModel: Number(formData.yearModel),
-      dateAcquired: formData.dateAcquired,
-      // New fields (numeric where appropriate)
-      maximumCapacity: Number(formData.maximumCapacity),
-      dimensionsWidth: Number(formData.dimensionsWidth),
-      dimensionsHeight: Number(formData.dimensionsHeight),
-      vehicleLength: Number(formData.vehicleLength),
-      currentMileage: Number(formData.currentMileage),
-      maintenanceInterval: formData.maintenanceInterval,
-      maintenanceMileageInterval: Number(formData.maintenanceMileageInterval),
-      // Retain old fields if still needed elsewhere
-      odometer: Number(formData.odometer),
-      fuelLevel: Number(formData.fuelLevel),
+      // Optional fields – include them even if empty to avoid NULL defaults
+      dateAcquired: formData.dateAcquired || null,
+      yearModel: formData.yearModel || null,
+      containerHeight: formData.containerHeight || null,
+      containerWidth: formData.containerWidth || null,
+      containerLength: formData.containerLength || null,
+      maxCapacity: formData.maxCapacity || null,
+      currentMileage: formData.currentMileage || null,
+      maintenanceMileageInterval: formData.maintenanceMileageInterval || null,
+      maintenanceInterval: formData.maintenanceInterval || null,
     };
     try {
-      onSubmit(processed);
-      setResultMessage("Truck added successfully!");
-      // Persist new custom entries
+      // ---- Duplicate plate‑number check ----
+      const { data: existing, error: dupError } = await supabase
+        .from("trucks")
+        .select("plateNumber")
+        .eq("plateNumber", formData.plateNumber)
+        .limit(1);
+      if (dupError) {
+        // Supabase error while checking – treat as fatal
+        throw dupError;
+      }
+      if (existing && existing.length > 0) {
+        // Plate number already exists – show toast and abort submission
+        setValidationToast({
+          message: `Plate number ${formData.plateNumber} already exists`,
+          type: "error",
+        });
+        return; // Do not close modal, do not call onSubmit
+      }
+
+      // If a device was selected, associate it with the new truck by updating its plateNumber
+      if (formData.deviceId) {
+        const { error: deviceError } = await supabase
+          .from("devices")
+          .update({ plateNumber: formData.plateNumber })
+          .eq("deviceId", formData.deviceId);
+        if (deviceError) {
+          throw deviceError;
+        }
+      }
+      // Notify parent component (AdminTrucks) that a new truck was added.
+      // The parent will handle the actual insertion and toast display.
+      if (onSubmit) {
+        onSubmit(truckData);
+      }
+      // Close the modal on success
+      onClose();
+      // Persist new custom entries for future selections
       if (
         formData.brand === "Custom" &&
         finalBrand &&
@@ -188,7 +245,7 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
       }
     } catch (err) {
       console.error(err);
-      setResultMessage("Failed to add truck.");
+      // Errors are handled by the parent via toast; no inline message needed
     }
   };
 
@@ -221,7 +278,6 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               value={formData.plateNumber}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-              required
             />
           </div>
           {/* Row: Date Acquired – calendar picker */}
@@ -235,7 +291,6 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               value={formData.dateAcquired}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-              required
             />
           </div>
           {/* Row 2: Brand | Model */}
@@ -248,7 +303,6 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               value={formData.brand}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-              required
             >
               <option value="" disabled>
                 Select brand
@@ -280,7 +334,6 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               value={formData.model}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-              required
             >
               <option value="" disabled>
                 Select model
@@ -313,7 +366,6 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               value={formData.truckType}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-              required
             >
               {truckTypeOptions.map((type) => (
                 <option key={type} value={type}>
@@ -343,10 +395,9 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               value={formData.yearModel}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-              required
             />
           </div>
-          {/* Row 4: Device No. | Device Status */}
+          {/* Row 4: Device ID */}
           <div>
             <label className="block text-sm font-medium text-slate-700">
               Device ID
@@ -356,34 +407,17 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               value={formData.deviceId}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-              required
             >
               <option value="" disabled>
                 Select device
               </option>
-              {mockDevices.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.id}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Device Status
-            </label>
-            <select
-              name="deviceStatus"
-              value={formData.deviceStatus}
-              onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-              required
-            >
-              {DEVICE_STATUS_OPTIONS.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
+              {availableDevices
+                .filter((d) => d.deviceId) // Ensure deviceId is defined
+                .map((d) => (
+                  <option key={d.deviceId} value={d.deviceId}>
+                    {d.deviceId} ({d.deviceStatus})
+                  </option>
+                ))}
             </select>
           </div>
           {/* New fields: Vehicle Height (m) */}
@@ -392,14 +426,14 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               Container Height (m)
             </label>
             <input
-              name="dimensionsHeight"
+              name="containerHeight"
               type="number"
-              step="1"
+              step="0.01"
+              min="0"
               placeholder="1.8"
-              value={formData.dimensionsHeight}
+              value={formData.containerHeight}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-              required
             />
           </div>
           {/* New fields: Vehicle Width (m) */}
@@ -408,14 +442,14 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               Container Width (m)
             </label>
             <input
-              name="dimensionsWidth"
+              name="containerWidth"
               type="number"
-              step="1"
+              step="0.01"
+              min="0"
               placeholder="2.5"
-              value={formData.dimensionsWidth}
+              value={formData.containerWidth}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-              required
             />
           </div>
           {/* New field: Vehicle Length (m) */}
@@ -424,11 +458,12 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               Container Length (m)
             </label>
             <input
-              name="vehicleLength"
+              name="containerLength"
               type="number"
-              step="1"
+              step="0.01"
+              min="0"
               placeholder="5.0"
-              value={formData.vehicleLength}
+              value={formData.containerLength}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
               required
@@ -440,14 +475,14 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               Maximum Capacity (kg)
             </label>
             <input
-              name="maximumCapacity"
+              name="maxCapacity"
               type="number"
               step="1"
+              min="0"
               placeholder="2000"
-              value={formData.maximumCapacity}
+              value={formData.maxCapacity}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-              required
             />
           </div>
           {/* Current Mileage */}
@@ -459,11 +494,11 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               name="currentMileage"
               type="number"
               step="1"
+              min="0"
               placeholder="12000"
               value={formData.currentMileage}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-              required
             />
           </div>
           {/* Maintenance Mileage Interval */}
@@ -475,11 +510,11 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               name="maintenanceMileageInterval"
               type="number"
               step="1"
+              min="0"
               placeholder="5000"
               value={formData.maintenanceMileageInterval}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-              required
             />
           </div>
           {/* Maintenance Interval */}
@@ -491,11 +526,11 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               name="maintenanceInterval"
               type="number"
               step="1"
+              min="0"
               placeholder="6"
               value={formData.maintenanceInterval}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-              required
             />
           </div>
           {/* Action buttons */}
@@ -514,12 +549,27 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               Add Truck
             </button>
           </div>
-          {resultMessage && (
-            <p className="sm:col-span-2 mt-2 text-sm text-green-600">
-              {resultMessage}
-            </p>
-          )}
+          {/* Success or error messages are now handled via toast in the parent component */}
         </form>
+        {/* Validation toast (e.g., duplicate plate number) */}
+        {validationToast && (
+          <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+            <p
+              className={`
+                px-4 py-2 rounded-md shadow-md text-sm font-medium
+                transition-transform duration-300 ease-out
+                ${
+                  validationToast.type === "success"
+                    ? "bg-green-100 text-green-800 border border-green-300"
+                    : "bg-red-100 text-red-800 border border-red-300"
+                }
+                transform translate-y-0 opacity-100
+              `}
+            >
+              {validationToast.message}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );
