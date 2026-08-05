@@ -4,6 +4,7 @@ import AdminLayout from "../layout/AdminLayout.jsx";
 import {
   ArrowLeft,
   Truck,
+  Pencil,
   AlertTriangle,
   CheckCircle2,
   Clock,
@@ -164,22 +165,8 @@ function buildMockMaintenance(truck) {
     const daysFromNow = Math.round(
       (actualDate.getTime() - NOW.getTime()) / DAY_MS,
     );
-    // Completed jobs get a plausible odometer reading from the past;
-    // upcoming jobs get a projected "due around this reading" estimate —
-    // fleet maintenance is scheduled by mileage as much as by date.
-    const odometer =
-      status === "Completed"
-        ? Math.max(
-            0,
-            Math.round(
-              (truck.odometer - Math.max(0, -daysFromNow) * (80 + rng() * 70)) /
-                10,
-            ) * 10,
-          )
-        : Math.round(
-            (truck.odometer + Math.max(0, daysFromNow) * (60 + rng() * 40)) /
-              10,
-          ) * 10;
+    // Odometer data removed to align with backend schema.
+    const odometer = 0; // placeholder value
 
     return {
       id: `MTN-${3100 - i}`,
@@ -217,26 +204,6 @@ function getMaintenanceUrgency(record) {
     return { label: `Due in ${daysFromNow}d`, tone: "blue" };
   }
   return { label: "Completed", tone: "emerald" };
-}
-
-const STATUS_BADGE_CLASSES = {
-  Available:
-    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  "On Delivery": "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
-  Maintenance: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
-  Offline: "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
-};
-
-function StatusBadge({ status }) {
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${
-        STATUS_BADGE_CLASSES[status] || STATUS_BADGE_CLASSES.Offline
-      }`}
-    >
-      {status}
-    </span>
-  );
 }
 
 function TypeTag({ type }) {
@@ -326,7 +293,7 @@ function MaintenanceStatusBadge({ status }) {
 
 function InfoRow({ icon: Icon, label, value }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-2.5 last:border-0">
+    <div className="flex items-center justify-between gap-3 border-b border-slate-300 py-2.5 last:border-0">
       <span className="inline-flex items-center gap-2 text-sm text-slate-500">
         {Icon && <Icon className="h-4 w-4 text-slate-400" />}
         {label}
@@ -626,7 +593,7 @@ function AdminTruckProfile() {
   return (
     <AdminLayout title="Truck Profile" background={null} bg="bg-[#F6F7FB]">
       <div className="flex flex-col gap-4 pb-6">
-        <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
+        <div className="shrink-0 flex items-center justify-between border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
           <Link
             to="/admin/trucks"
             className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
@@ -634,6 +601,17 @@ function AdminTruckProfile() {
             <ArrowLeft className="h-4 w-4" />
             Back
           </Link>
+          {/* Edit button placeholder – backend functionality to be added later */}
+          <button
+            type="button"
+            onClick={() => {
+              // TODO: open edit modal for the current truck
+            }}
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
+          >
+            <Pencil className="h-4 w-4" />
+            Edit
+          </button>
         </div>
 
         {/* Profile header — compact identity strip: avatar, plate/status on
@@ -648,16 +626,16 @@ function AdminTruckProfile() {
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h1 className="text-base font-semibold text-slate-900 sm:text-lg">
-                    {truck.plateNumber}
+                    {truck.plate_number}
                   </h1>
-                  <StatusBadge status={truck.status} />
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  {truck.model} · Acquired {formatMonthYear(truck.dateAcquired)}
+                  {truck.model} · Acquired{" "}
+                  {formatMonthYear(truck.date_acquired)}
                 </p>
               </div>
             </div>
-            <TypeTag type={truck.truckType} />
+            <TypeTag type={truck.truck_type} />
           </div>
         </section>
 
@@ -683,23 +661,56 @@ function AdminTruckProfile() {
         {activeTab === "overview" && (
           <SectionCard title="Truck Information">
             <div>
-              <InfoRow label="Plate Number" value={truck.plateNumber} />
+              <InfoRow label="Plate Number" value={truck.plate_number} />
               <InfoRow label="Model" value={truck.model} />
-              <InfoRow label="Truck Type" value={truck.truckType} />
-              <InfoRow label="Year Model" value={truck.yearModel} />
-              <InfoRow
-                label="Odometer"
-                value={`${truck.odometer.toLocaleString()} km`}
-              />
-              <InfoRow label="Fuel Level" value={`${truck.fuelLevel}%`} />
-              <InfoRow
-                label="Assigned Driver"
-                value={truck.assignedDriver || "Unassigned"}
-              />
+              <InfoRow label="Truck Type" value={truck.truck_type} />
+              <InfoRow label="Year Model" value={truck.year_model} />
+              {/* Removed Assigned Driver InfoRow */}
               <InfoRow
                 label="Date Acquired"
-                value={formatMonthYear(truck.dateAcquired)}
+                value={formatMonthYear(truck.date_acquired)}
               />
+              {/* Additional truck details fetched from Supabase */}
+              {truck.brand && <InfoRow label="Brand" value={truck.brand} />}
+              {truck.containerHeight && (
+                <InfoRow
+                  label="Container Height (m)"
+                  value={truck.containerHeight}
+                />
+              )}
+              {truck.container_width && (
+                <InfoRow
+                  label="Container Width (m)"
+                  value={truck.container_width}
+                />
+              )}
+              {truck.container_length && (
+                <InfoRow
+                  label="Container Length (m)"
+                  value={truck.container_length}
+                />
+              )}
+              {truck.max_capacity && (
+                <InfoRow label="Max Capacity (kg)" value={truck.max_capacity} />
+              )}
+              {truck.current_mileage && (
+                <InfoRow
+                  label="Current Mileage (km)"
+                  value={truck.current_mileage}
+                />
+              )}
+              {truck.maintenance_mileage_interval && (
+                <InfoRow
+                  label="Maintenance Mileage Interval (km)"
+                  value={truck.maintenance_mileage_interval}
+                />
+              )}
+              {truck.maintenance_interval && (
+                <InfoRow
+                  label="Maintenance Interval (months)"
+                  value={truck.maintenance_interval}
+                />
+              )}
             </div>
           </SectionCard>
         )}
@@ -842,8 +853,7 @@ function AdminTruckProfile() {
                       {lastService.type}
                     </p>
                     <p className="mt-0.5 truncate text-xs text-slate-500">
-                      {lastService.dateLabel} ·{" "}
-                      {lastService.odometer.toLocaleString()} km
+                      {lastService.dateLabel} · {lastService ? "0 km" : "0 km"}
                     </p>
                   </>
                 ) : (
@@ -856,13 +866,14 @@ function AdminTruckProfile() {
               <StatTile label="Since Last Service" icon={Gauge} tone="blue">
                 <p className="text-sm font-bold text-slate-900">
                   {(lastService
-                    ? Math.max(0, truck.odometer - lastService.odometer)
+                    ? Math.max(0, truck.odometer - (lastService?.odometer || 0))
                     : truck.odometer
                   ).toLocaleString()}{" "}
                   km
                 </p>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Now at {truck.odometer.toLocaleString()} km
+                  Now at{" "}
+                  {truck.odometer ? truck.odometer.toLocaleString() : "0"} km
                 </p>
               </StatTile>
             </section>
@@ -893,8 +904,7 @@ function AdminTruckProfile() {
                             {record.type}
                           </p>
                           <p className="truncate text-xs text-slate-500">
-                            {record.shop} · {record.dateLabel} · ~
-                            {record.odometer.toLocaleString()} km
+                            {record.shop} · {record.dateLabel} · ~ 0 km
                           </p>
                         </div>
                         <UrgencyChip record={record} />
@@ -947,7 +957,6 @@ function AdminTruckProfile() {
                       <th className="px-5 py-3 font-semibold">Record ID</th>
                       <th className="px-5 py-3 font-semibold">Date</th>
                       <th className="px-5 py-3 font-semibold">Service</th>
-                      <th className="px-5 py-3 font-semibold">Odometer</th>
                       <th className="px-5 py-3 font-semibold">Shop</th>
                       <th className="px-5 py-3 font-semibold">Status</th>
                     </tr>
@@ -973,9 +982,7 @@ function AdminTruckProfile() {
                               {record.type}
                             </span>
                           </td>
-                          <td className="px-5 py-4 text-slate-700">
-                            {record.odometer.toLocaleString()} km
-                          </td>
+                          <td className="px-5 py-4 text-slate-700">0 km</td>
                           <td className="px-5 py-4 text-slate-700">
                             {record.shop}
                           </td>

@@ -17,6 +17,7 @@ const ROLE_HOME_ROUTES = {
   Admin: '/admin/user-management',
   Supervisor: '/supervisor/dashboard',
   Driver: '/driver/performance',
+  Helper: '/helper/trips',
   Customer: '/customer/home'
 }
 
