@@ -48,7 +48,14 @@ const YEAR_OPTIONS = Array.from({ length: 2027 - 2000 }, (_, i) =>
   (2000 + i).toString(),
 );
 
-export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
+export default function AddTruckModal({
+  isOpen,
+  onClose,
+  mode = "add", // 'add' | 'edit'
+  initialData = null,
+  onSubmit,
+  onSuccess,
+}) {
   // Dynamic option lists that can be extended with custom entries
   const [brandOptions, setBrandOptions] = useState(INITIAL_BRAND_OPTIONS);
   const [modelOptions, setModelOptions] = useState(INITIAL_MODEL_OPTIONS);
@@ -62,10 +69,9 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
     customModel: "",
     truck_type: TRUCK_TYPES[0],
     customtruck_type: "",
-    // device_status removed – managed via devices table
     device_id: "",
     year_model: 2026,
-    // New fields
+    date_acquired: "",
     max_capacity: "",
     container_width: "",
     container_height: "",
@@ -73,8 +79,12 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
     current_mileage: "",
     maintenance_interval: "",
     maintenance_mileage_interval: "",
-    date_acquired: "",
   });
+
+  // New state for edit mode handling
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [originalDeviceId, setOriginalDeviceId] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Store list of unassigned devices fetched from the database.
   const [availableDevices, setAvailableDevices] = useState([]);
@@ -91,9 +101,52 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
   // Reset form when modal opens
 
   useEffect(() => {
-    if (isOpen) {
-      // Reset form fields
-      // Reset all form fields to their initial empty values to keep inputs controlled
+    if (!isOpen) {
+      setShowConfirmModal(false);
+      return;
+    }
+
+    if (mode === "edit" && initialData) {
+      // Populate form with existing truck data
+      setFormData({
+        plate_number: initialData.plate_number || "",
+        brand: initialData.brand || "",
+        customBrand: "",
+        model: initialData.model || "",
+        customModel: "",
+        truck_type: initialData.truck_type || TRUCK_TYPES[0],
+        customtruck_type: "",
+        device_id: initialData.device_id || "",
+        year_model: initialData.year_model || 2026,
+        date_acquired: initialData.date_acquired || "",
+        max_capacity: initialData.max_capacity || "",
+        container_width: initialData.container_width || "",
+        container_height: initialData.container_height || "",
+        container_length: initialData.container_length || "",
+        current_mileage: initialData.current_mileage || "",
+        maintenance_interval: initialData.maintenance_interval || "",
+        maintenance_mileage_interval:
+          initialData.maintenance_mileage_interval || "",
+      });
+      setOriginalDeviceId(initialData.device_id || null);
+
+      // Fetch devices: unassigned + currently assigned device
+      const fetchDevices = async () => {
+        const currentId = initialData.device_id || "";
+        const { data, error } = await supabase
+          .from("devices")
+          .select("device_id, device_status, plate_number")
+          .or(`plate_number.is.null,device_id.eq.${currentId}`);
+        if (error) {
+          console.error("Failed to fetch devices:", error);
+          setAvailableDevices([]);
+        } else {
+          setAvailableDevices(data || []);
+        }
+      };
+      fetchDevices();
+    } else {
+      // Add mode – reset to defaults and fetch only unassigned devices
       setFormData({
         plate_number: "",
         brand: "",
@@ -105,32 +158,30 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
         device_id: "",
         year_model: 2026,
         date_acquired: "",
-        // New numeric fields default to empty strings (controlled inputs)
         max_capacity: "",
-        container_height: "",
         container_width: "",
+        container_height: "",
         container_length: "",
         current_mileage: "",
         maintenance_interval: "",
         maintenance_mileage_interval: "",
       });
-
-      // Fetch unassigned devices from Supabase (devices with null plate_number)
+      setOriginalDeviceId(null);
       const fetchDevices = async () => {
         const { data, error } = await supabase
           .from("devices")
-          .select("device_id, device_status, plate_number");
+          .select("device_id, device_status, plate_number")
+          .eq("plate_number", null);
         if (error) {
           console.error("Failed to fetch devices:", error);
           setAvailableDevices([]);
         } else {
-          // The returned objects may have keys device_id, device_status, plate_number
           setAvailableDevices(data || []);
         }
       };
       fetchDevices();
     }
-  }, [isOpen]);
+  }, [isOpen, mode, initialData]);
   if (!isOpen) return null;
 
   const handleChange = (e) => {
@@ -153,9 +204,9 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
     setFormData((prev) => ({ ...prev, [name]: newValue }));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    // Convert numeric fields and resolve custom entries before persisting
+  // Separate handlers for add and edit flows
+  const executeCreateTruck = async () => {
+    // Same logic as previous handleSubmit (add mode)
     const finalBrand =
       formData.brand === "Custom" ? formData.customBrand : formData.brand;
     const finalModel =
@@ -164,16 +215,11 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
       formData.truck_type === "Custom"
         ? formData.customtruck_type
         : formData.truck_type;
-    // Prepare truck data according to new schema (only plate_number, brand, model)
-    // Build the payload with all fields that exist in the `trucks` table.
-    // Empty strings are acceptable for optional columns; numeric fields are kept as strings
-    // because Supabase will coerce them appropriately.
     const truckData = {
       plate_number: formData.plate_number,
       brand: finalBrand,
       model: finalModel,
       truck_type: finaltruck_type,
-      // Optional fields – include them even if empty to avoid NULL defaults
       date_acquired: formData.date_acquired || null,
       year_model: formData.year_model || null,
       container_height: formData.container_height || null,
@@ -186,43 +232,29 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
       maintenance_interval: formData.maintenance_interval || null,
     };
     try {
-      // ---- Duplicate plate‑number check ----
       const { data: existing, error: dupError } = await supabase
         .from("trucks")
         .select("plate_number")
         .eq("plate_number", formData.plate_number)
         .limit(1);
-      if (dupError) {
-        // Supabase error while checking – treat as fatal
-        throw dupError;
-      }
+      if (dupError) throw dupError;
       if (existing && existing.length > 0) {
-        // Plate number already exists – show toast and abort submission
         setValidationToast({
           message: `Plate number ${formData.plate_number} already exists`,
           type: "error",
         });
-        return; // Do not close modal, do not call onSubmit
+        return;
       }
-
-      // If a device was selected, associate it with the new truck by updating its plate_number
       if (formData.device_id) {
         const { error: deviceError } = await supabase
           .from("devices")
           .update({ plate_number: formData.plate_number })
           .eq("device_id", formData.device_id);
-        if (deviceError) {
-          throw deviceError;
-        }
+        if (deviceError) throw deviceError;
       }
-      // Notify parent component (AdminTrucks) that a new truck was added.
-      // The parent will handle the actual insertion and toast display.
-      if (onSubmit) {
-        onSubmit(truckData);
-      }
-      // Close the modal on success
+      if (onSubmit) onSubmit(truckData);
       onClose();
-      // Persist new custom entries for future selections
+      // Add custom options if needed
       if (
         formData.brand === "Custom" &&
         finalBrand &&
@@ -246,7 +278,86 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
       }
     } catch (err) {
       console.error(err);
-      // Errors are handled by the parent via toast; no inline message needed
+    }
+  };
+
+  const executeUpdateTruck = async () => {
+    try {
+      setIsSubmitting(true);
+      // Update truck fields (excluding primary key)
+      const { error: truckError } = await supabase
+        .from("trucks")
+        .update({
+          brand: formData.brand,
+          model: formData.model,
+          truck_type: formData.truck_type,
+          year_model: formData.year_model,
+          date_acquired: formData.date_acquired || null,
+          max_capacity: formData.max_capacity || null,
+          container_height: formData.container_height || null,
+          container_width: formData.container_width || null,
+          container_length: formData.container_length || null,
+          current_mileage: formData.current_mileage || null,
+          maintenance_interval: formData.maintenance_interval || null,
+          maintenance_mileage_interval:
+            formData.maintenance_mileage_interval || null,
+        })
+        .eq("plate_number", formData.plate_number);
+      if (truckError) throw truckError;
+
+      const newDeviceId = formData.device_id || null;
+      // Validate that the selected device is not already linked to a different truck
+      if (originalDeviceId !== newDeviceId) {
+        if (newDeviceId) {
+          const { data: devData, error: devErr } = await supabase
+            .from("devices")
+            .select("plate_number")
+            .eq("device_id", newDeviceId)
+            .single();
+          if (devErr) throw devErr;
+          // If the device already has a plate_number that belongs to another truck, block it
+          if (
+            devData &&
+            devData.plate_number &&
+            devData.plate_number !== formData.plate_number
+          ) {
+            setValidationToast({
+              message: `Device ${newDeviceId} is already assigned to another truck`,
+              type: "error",
+            });
+            return;
+          }
+        }
+        if (originalDeviceId) {
+          await supabase
+            .from("devices")
+            .update({ plate_number: null })
+            .eq("device_id", originalDeviceId);
+        }
+        if (newDeviceId) {
+          await supabase
+            .from("devices")
+            .update({ plate_number: formData.plate_number })
+            .eq("device_id", newDeviceId);
+        }
+      }
+      setShowConfirmModal(false);
+      onClose();
+      if (onSuccess) onSuccess();
+    } catch (err) {
+      console.error("Error updating truck:", err);
+      setValidationToast({ message: err.message, type: "error" });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleFormSubmit = (e) => {
+    e.preventDefault();
+    if (mode === "edit") {
+      setShowConfirmModal(true);
+    } else {
+      executeCreateTruck();
     }
   };
 
@@ -261,11 +372,11 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
           <X size={20} />
         </button>
         <h2 className="mb-4 text-xl font-semibold text-slate-800">
-          Add New Truck
+          {mode === "edit" ? "Edit Truck" : "Add New Truck"}
         </h2>
         {/* Removed datalists – using select dropdowns for Brand and Model */}
         <form
-          onSubmit={handleSubmit}
+          onSubmit={handleFormSubmit}
           className="grid grid-cols-1 gap-2 sm:grid-cols-2 text-xs"
         >
           {/* Row 1: Plate Number | Date Acquired */}
@@ -278,7 +389,8 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
               placeholder="NGP 1234"
               value={formData.plate_number}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              disabled={mode === "edit"}
+              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm bg-gray-100 cursor-not-allowed"
             />
           </div>
           {/* Row: Date Acquired – calendar picker */}
@@ -546,12 +658,47 @@ export default function AddTruckModal({ isOpen, onClose, onSubmit }) {
             <button
               type="submit"
               className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700"
+              disabled={isSubmitting}
             >
-              Add Truck
+              {mode === "edit"
+                ? isSubmitting
+                  ? "Saving..."
+                  : "Save Changes"
+                : "Add Truck"}
             </button>
           </div>
           {/* Success or error messages are now handled via toast in the parent component */}
         </form>
+        {/* Confirmation overlay for edit mode */}
+        {showConfirmModal && (
+          <div className="fixed inset-0 flex items-center justify-center bg-black/40">
+            <div className="bg-white rounded-lg p-6 max-w-sm w-full shadow-lg">
+              <h3 className="mb-4 text-lg font-medium text-gray-800">
+                Confirm Changes
+              </h3>
+              <p className="mb-4 text-sm text-gray-600">
+                Are you sure you want to save the changes to this truck?
+              </p>
+              <div className="flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmModal(false)}
+                  className="rounded bg-gray-200 px-4 py-2 text-sm text-gray-800 hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={executeUpdateTruck}
+                  className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? "Saving..." : "Confirm"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {/* Validation toast (e.g., duplicate plate number) */}
         {validationToast && (
           <div className="fixed inset-x-0 top-4 flex justify-center z-50">

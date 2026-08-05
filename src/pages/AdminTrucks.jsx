@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import AdminLayout from "../layout/AdminLayout.jsx";
 import AddTruckModal from "../components/AddTruckModal.jsx";
-import { Search, ChevronRight } from "lucide-react";
+import { Search, ChevronRight, Trash2 } from "lucide-react";
 // Truck type options are defined directly here as mockTrucks.js has been removed.
 const TRUCK_TYPES = [
   "L300",
@@ -225,6 +225,10 @@ function AdminTrucks() {
   // Toast state: message and type ('success' | 'error')
   const [toast, setToast] = useState(null);
 
+  // Delete modal state
+  const [truckToDelete, setTruckToDelete] = useState(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+
   // Loading state for initial data fetch
   const [loading, setLoading] = useState(true);
 
@@ -354,6 +358,40 @@ function AdminTrucks() {
 
   const openProfile = (truck) => {
     navigate("/admin/trucks/profile", { state: { truck } });
+  };
+
+  // Delete handler
+  const handleDeleteTruck = async (truck) => {
+    try {
+      // Delete truck record
+      const { error: deleteError } = await supabase
+        .from("trucks")
+        .delete()
+        .eq("id", truck.id);
+      if (deleteError) throw deleteError;
+
+      // If the truck had an assigned device, clear its plate_number reference
+      if (truck.assignedDeviceNo) {
+        const { error: deviceError } = await supabase
+          .from("devices")
+          .update({ plate_number: null })
+          .eq("device_id", truck.assignedDeviceNo);
+        if (deviceError) throw deviceError;
+      }
+
+      // Update UI state
+      setTrucks((prev) => prev.filter((t) => t.id !== truck.id));
+      setToast({ message: "Truck deleted successfully", type: "success" });
+    } catch (err) {
+      console.error("Failed to delete truck:", err.message);
+      setToast({
+        message: "Failed to delete truck: " + err.message,
+        type: "error",
+      });
+    } finally {
+      setIsDeleteModalOpen(false);
+      setTruckToDelete(null);
+    }
   };
 
   // Auto‑clear toast after 3 seconds
@@ -488,8 +526,21 @@ function AdminTrucks() {
                           <TypeTag type={truck.truck_type} />
                         </td>
                         {/* Device Status column removed */}
-                        <td className="py-2.5 pl-2 pr-5 text-right">
-                          <ChevronRight className="ml-auto h-4 w-4 text-slate-400" />
+                        <td className="py-2.5 pl-2 pr-5 text-right flex items-center justify-end space-x-2">
+                          {/* Delete button */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setTruckToDelete(truck);
+                              setIsDeleteModalOpen(true);
+                            }}
+                            className="text-red-600 hover:text-red-800"
+                            title="Delete truck"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                          {/* Navigation chevron */}
+                          <ChevronRight className="ml-1 h-4 w-4 text-slate-400" />
                         </td>
                       </tr>
                     ))}
@@ -512,6 +563,35 @@ function AdminTrucks() {
         onClose={() => setIsAddModalOpen(false)}
         onSubmit={handleAddTruck}
       />
+      {/* Delete Confirmation Modal */}
+      {isDeleteModalOpen && truckToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-30">
+          <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6">
+            <h2 className="text-lg font-semibold mb-4">Confirm Delete</h2>
+            <p className="mb-6">
+              Are you sure you want to delete truck{" "}
+              <span className="font-medium">{truckToDelete.plate_number}</span>?
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setTruckToDelete(null);
+                }}
+                className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDeleteTruck(truckToDelete)}
+                className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AdminLayout>
   );
 }
