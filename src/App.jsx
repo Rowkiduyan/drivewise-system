@@ -6,6 +6,8 @@ import CustomerProfile from "./pages/CustomerProfile.jsx";
 import DriverDeliveries from "./pages/DriverDeliveries.jsx";
 import DriverPerformance from "./pages/DriverPerformance.jsx";
 import DriverProfile from "./pages/DriverProfile.jsx";
+import HelperDeliveries from "./pages/HelperDeliveries.jsx";
+import HelperProfile from "./pages/HelperProfile.jsx";
 import LandingPage from "./pages/LandingPage.jsx";
 import Login from "./pages/Login.jsx";
 import AdminHome from "./pages/AdminHome.jsx";
@@ -47,6 +49,12 @@ function App() {
       <Route path="/driver/performance" element={<DriverPerformance />} />
       <Route path="/driver/trips" element={<DriverDeliveries />} />
       <Route path="/driver/profile" element={<DriverProfile />} />
+      <Route
+        path="/helper"
+        element={<Navigate to="/helper/trips" replace />}
+      />
+      <Route path="/helper/trips" element={<HelperDeliveries />} />
+      <Route path="/helper/profile" element={<HelperProfile />} />
       <Route
         path="/supervisor"
         element={<Navigate to="/supervisor/dashboard" replace />}
