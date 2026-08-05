@@ -626,15 +626,16 @@ function AdminTruckProfile() {
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h1 className="text-base font-semibold text-slate-900 sm:text-lg">
-                    {truck.plateNumber}
+                    {truck.plate_number}
                   </h1>
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  {truck.model} · Acquired {formatMonthYear(truck.dateAcquired)}
+                  {truck.model} · Acquired{" "}
+                  {formatMonthYear(truck.date_acquired)}
                 </p>
               </div>
             </div>
-            <TypeTag type={truck.truckType} />
+            <TypeTag type={truck.truck_type} />
           </div>
         </section>
 
@@ -660,14 +661,14 @@ function AdminTruckProfile() {
         {activeTab === "overview" && (
           <SectionCard title="Truck Information">
             <div>
-              <InfoRow label="Plate Number" value={truck.plateNumber} />
+              <InfoRow label="Plate Number" value={truck.plate_number} />
               <InfoRow label="Model" value={truck.model} />
-              <InfoRow label="Truck Type" value={truck.truckType} />
-              <InfoRow label="Year Model" value={truck.yearModel} />
+              <InfoRow label="Truck Type" value={truck.truck_type} />
+              <InfoRow label="Year Model" value={truck.year_model} />
               {/* Removed Assigned Driver InfoRow */}
               <InfoRow
                 label="Date Acquired"
-                value={formatMonthYear(truck.dateAcquired)}
+                value={formatMonthYear(truck.date_acquired)}
               />
               {/* Additional truck details fetched from Supabase */}
               {truck.brand && <InfoRow label="Brand" value={truck.brand} />}
@@ -677,37 +678,37 @@ function AdminTruckProfile() {
                   value={truck.containerHeight}
                 />
               )}
-              {truck.containerWidth && (
+              {truck.container_width && (
                 <InfoRow
                   label="Container Width (m)"
-                  value={truck.containerWidth}
+                  value={truck.container_width}
                 />
               )}
-              {truck.containerLength && (
+              {truck.container_length && (
                 <InfoRow
                   label="Container Length (m)"
-                  value={truck.containerLength}
+                  value={truck.container_length}
                 />
               )}
-              {truck.maxCapacity && (
-                <InfoRow label="Max Capacity (kg)" value={truck.maxCapacity} />
+              {truck.max_capacity && (
+                <InfoRow label="Max Capacity (kg)" value={truck.max_capacity} />
               )}
-              {truck.currentMileage && (
+              {truck.current_mileage && (
                 <InfoRow
                   label="Current Mileage (km)"
-                  value={truck.currentMileage}
+                  value={truck.current_mileage}
                 />
               )}
-              {truck.maintenanceMileageInterval && (
+              {truck.maintenance_mileage_interval && (
                 <InfoRow
                   label="Maintenance Mileage Interval (km)"
-                  value={truck.maintenanceMileageInterval}
+                  value={truck.maintenance_mileage_interval}
                 />
               )}
-              {truck.maintenanceInterval && (
+              {truck.maintenance_interval && (
                 <InfoRow
                   label="Maintenance Interval (months)"
-                  value={truck.maintenanceInterval}
+                  value={truck.maintenance_interval}
                 />
               )}
             </div>

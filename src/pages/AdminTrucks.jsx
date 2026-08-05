@@ -268,7 +268,7 @@ function AdminTrucks() {
   const typeCounts = useMemo(() => {
     const counts = { All: trucks.length };
     TYPE_OPTIONS.forEach((type) => {
-      counts[type] = trucks.filter((t) => t.truckType === type).length;
+      counts[type] = trucks.filter((t) => t.truck_type === type).length;
     });
     return counts;
   }, [trucks]);
@@ -281,10 +281,10 @@ function AdminTrucks() {
         const matchesSearch = !query
           ? true
           : [
-              truck.plateNumber,
+              truck.plate_number,
               truck.brand,
               truck.model,
-              truck.truckType,
+              truck.truck_type,
               truck.assignedDeviceNo,
               truck.assignedDriver || "",
             ]
@@ -293,17 +293,17 @@ function AdminTrucks() {
               .includes(query);
 
         const matchesType =
-          selectedType === "All" || truck.truckType === selectedType;
+          selectedType === "All" || truck.truck_type === selectedType;
 
         return matchesSearch && matchesType;
       })
       .sort((leftTruck, rightTruck) => {
         const leftOrder =
-          TRUCK_TYPE_ORDER[leftTruck.truckType] ?? Number.MAX_SAFE_INTEGER;
+          TRUCK_TYPE_ORDER[leftTruck.truck_type] ?? Number.MAX_SAFE_INTEGER;
         const rightOrder =
-          TRUCK_TYPE_ORDER[rightTruck.truckType] ?? Number.MAX_SAFE_INTEGER;
+          TRUCK_TYPE_ORDER[rightTruck.truck_type] ?? Number.MAX_SAFE_INTEGER;
         if (leftOrder !== rightOrder) return leftOrder - rightOrder;
-        return leftTruck.plateNumber.localeCompare(rightTruck.plateNumber);
+        return leftTruck.plate_number.localeCompare(rightTruck.plate_number);
       });
   }, [searchTerm, selectedType, trucks]);
   // Handler for adding a new truck from the modal
@@ -471,10 +471,10 @@ function AdminTrucks() {
                         <td className="px-5 py-2.5">
                           <div className="min-w-0">
                             <p className="truncate text-sm font-semibold text-slate-900">
-                              {truck.plateNumber}
+                              {truck.plate_number}
                             </p>
                             <p className="truncate text-xs text-slate-500">
-                              {truck.yearModel}
+                              {truck.year_model}
                             </p>
                           </div>
                         </td>
@@ -485,7 +485,7 @@ function AdminTrucks() {
                           {truck.model}
                         </td>
                         <td className="px-5 py-2.5">
-                          <TypeTag type={truck.truckType} />
+                          <TypeTag type={truck.truck_type} />
                         </td>
                         {/* Device Status column removed */}
                         <td className="py-2.5 pl-2 pr-5 text-right">
