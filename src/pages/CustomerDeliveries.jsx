@@ -13,24 +13,20 @@ const background = null
 // own font stack instead of relying solely on inherited font-family.
 const interFontStyle = { fontFamily: 'Inter, system-ui, sans-serif' }
 
-// "2026-08-05" -> "August 5, 2026" — human-readable date for the mobile list row.
-function formatDisplayDate(isoDate) {
-  if (!isoDate) return ''
-  const [year, month, day] = isoDate.split('-').map(Number)
-  return new Date(year, month - 1, day).toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric'
-  })
-}
-
-// "14:30" -> "2:30 PM"
-function formatDisplayTime(time24) {
-  if (!time24) return ''
-  const [hour, minute] = time24.split(':').map(Number)
+// "2026-08-05" + "11:04:00" -> "Aug 5, 2026, 11:04 AM" — human-readable
+// pickup/drop-off datetime, matching the supervisor's deliveries page.
+function formatDisplayDateTime(dateStr, timeStr) {
+  if (!dateStr) return 'TBD'
+  const parts = dateStr.split('-')
+  if (parts.length !== 3) return dateStr
+  const [year, month, day] = parts.map(Number)
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const monthLabel = months[month - 1] || ''
+  if (!timeStr) return `${monthLabel} ${day}, ${year}`
+  const [hour, minute] = timeStr.split(':').map(Number)
   const period = hour >= 12 ? 'PM' : 'AM'
   const hour12 = hour % 12 === 0 ? 12 : hour % 12
-  return `${hour12}:${String(minute).padStart(2, '0')} ${period}`
+  return `${monthLabel} ${day}, ${year}, ${hour12}:${String(minute).padStart(2, '0')} ${period}`
 }
 
 // Status configuration
@@ -47,6 +43,34 @@ const statusConfig = {
 // Statuses where cancellation is still possible — once a delivery is out for
 // delivery, delivered, completed, or already cancelled, there's nothing left to cancel.
 const CANCELLABLE_STATUSES = ['PENDING_REQUEST', 'PROCESSING', 'FOR_PICKUP']
+
+// Map the database's status vocabulary to the customer page's labels. The
+// customer page has its own set (PROCESSING, FOR_PICKUP, OUT_FOR_DELIVERY,
+// DELIVERED, DELIVERY_COMPLETED) while the backend uses finer-grained statuses
+// (QUOTATION_SUBMITTED, COUNTER_OFFER_SUBMITTED, APPROVED, ASSIGNED,
+// OUT_FOR_PICKUP, ...). The raw DB status is kept on the row as `dbStatus`.
+const CUSTOMER_STATUS_MAP = {
+  PENDING_REQUEST: 'PENDING_REQUEST',
+  QUOTATION_SUBMITTED: 'PROCESSING',
+  COUNTER_OFFER_SUBMITTED: 'PROCESSING',
+  FINAL_QUOTATION_SUBMITTED: 'PROCESSING',
+  APPROVED: 'FOR_PICKUP',
+  ASSIGNED: 'FOR_PICKUP',
+  OUT_FOR_PICKUP: 'FOR_PICKUP',
+  ARRIVED_PICKUP: 'FOR_PICKUP',
+  OUT_FOR_DROPOFF: 'OUT_FOR_DELIVERY',
+  ARRIVED_DROPOFF: 'OUT_FOR_DELIVERY',
+  DELIVERED: 'DELIVERED',
+  COMPLETED: 'DELIVERY_COMPLETED',
+  CANCELLED: 'CANCELLED',
+}
+
+// Statuses at or past quotation approval — used to reconstruct
+// `quotationApproved` on reload (the flag itself is only kept in local state).
+const APPROVED_STATUSES = [
+  'APPROVED', 'ASSIGNED', 'OUT_FOR_PICKUP', 'ARRIVED_PICKUP',
+  'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED',
+]
 
 const cancellationReasons = [
   'Change of schedule',
@@ -686,7 +710,7 @@ function MobileDetailCard({ children }) {
 // to read inside a small dialog, especially on a phone. Everything the old
 // modal showed is still here, just laid out as page sections with a Back
 // action instead of dialog chrome.
-function RequestDetailView({ request, onBack, onUpdate }) {
+function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onCancellation }) {
   const [showQuotationResponse, setShowQuotationResponse] = useState(false)
   const [quotationAction, setQuotationAction] = useState(null)
   const [priceRange, setPriceRange] = useState({ min: '', max: '' })
@@ -764,6 +788,7 @@ function RequestDetailView({ request, onBack, onUpdate }) {
         // entry — same pattern as receivedConfirmedAt/issueReportedAt below.
         quotationRespondedAt: new Date().toISOString()
       })
+      onQuotationResponse?.(request.id, 'approve', {})
     } else if (quotationAction === 'reject') {
       onUpdate(request.id, {
         status: 'PROCESSING',
@@ -778,6 +803,7 @@ function RequestDetailView({ request, onBack, onUpdate }) {
         quotation: null,
         quotationRespondedAt: new Date().toISOString()
       })
+      onQuotationResponse?.(request.id, 'reject', { priceRange })
     }
     setShowQuotationResponse(false)
     setQuotationAction(null)
@@ -813,12 +839,14 @@ function RequestDetailView({ request, onBack, onUpdate }) {
         cancellationRequestedAt: new Date().toISOString()
       })
     } else {
+      const cancelledAt = new Date().toISOString()
       onUpdate(request.id, {
         status: 'CANCELLED',
         cancelReason: reason,
         cancelledBy: 'customer',
-        cancelledAt: new Date().toISOString()
+        cancelledAt
       })
+      onCancellation?.(request.id, { cancelledBy: 'customer', cancelReason: reason, cancelledAt })
     }
 
     setShowCancelForm(false)
@@ -947,7 +975,7 @@ function RequestDetailView({ request, onBack, onUpdate }) {
                 <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[10px] font-bold text-blue-600">P</span>
                 <div className="min-w-0 flex-1">
                   <p className="text-slate-900">
-                    <span className="font-medium">{request.pickupDate} at {request.pickupTime}</span>
+                    <span className="font-medium">{formatDisplayDateTime(request.pickupDate, request.pickupTime)}</span>
                   </p>
                   <p className="mt-0.5 text-slate-500">{request.pickupLocation}</p>
                 </div>
@@ -956,7 +984,7 @@ function RequestDetailView({ request, onBack, onUpdate }) {
                 <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100 text-[10px] font-bold text-rose-600">D</span>
                 <div className="min-w-0 flex-1">
                   <p className="text-slate-900">
-                    <span className="font-medium">{request.dropoffDate} at {request.dropoffTime}</span>
+                    <span className="font-medium">{formatDisplayDateTime(request.dropoffDate, request.dropoffTime)}</span>
                   </p>
                   <p className="mt-0.5 text-slate-500">{request.dropoffLocation}</p>
                 </div>
@@ -969,14 +997,14 @@ function RequestDetailView({ request, onBack, onUpdate }) {
                 <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0 md:h-4 md:w-4" />
                 <div>
                   <p className="text-[10px] text-slate-500 md:text-xs">Pickup</p>
-                  <p className="font-medium text-slate-900">{request.pickupDate} at {request.pickupTime}</p>
+                  <p className="font-medium text-slate-900">{formatDisplayDateTime(request.pickupDate, request.pickupTime)}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0 md:h-4 md:w-4" />
                 <div>
                   <p className="text-[10px] text-slate-500 md:text-xs">Drop-off</p>
-                  <p className="font-medium text-slate-900">{request.dropoffDate} at {request.dropoffTime}</p>
+                  <p className="font-medium text-slate-900">{formatDisplayDateTime(request.dropoffDate, request.dropoffTime)}</p>
                 </div>
               </div>
               <div className="flex items-start gap-2">
@@ -1171,8 +1199,8 @@ function RequestDetailView({ request, onBack, onUpdate }) {
                       Delivery Overview
                     </h4>
                     <div className="space-y-1.5">
-                      <Row label="Pickup" value={`${request.pickupDate} at ${request.pickupTime}`} />
-                      <Row label="Drop-off" value={`${request.dropoffDate} at ${request.dropoffTime}`} />
+                      <Row label="Pickup" value={formatDisplayDateTime(request.pickupDate, request.pickupTime)} />
+                      <Row label="Drop-off" value={formatDisplayDateTime(request.dropoffDate, request.dropoffTime)} />
                     </div>
                   </div>
 
@@ -2078,7 +2106,7 @@ function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue,
             <p className="mt-0.5 truncate text-xs text-slate-500">{itemLabel}</p>
 
             <p className="mt-2 text-[10px] leading-snug text-slate-400">
-              Drop-off &middot; {formatDisplayDate(request.dropoffDate)} at {formatDisplayTime(request.dropoffTime)}
+              Drop-off &middot; {formatDisplayDateTime(request.dropoffDate, request.dropoffTime)}
             </p>
 
             {(quotationInfo || cancellationPending) && (
@@ -2244,7 +2272,9 @@ function MonitoringRequestRow({ request, isMonitored, onSelect, onViewDetails })
 }
 
 // Map a snake_case `delivery_requests` row to the camelCase shape the rest of
-// this page expects (detail view, timeline, cards, status helpers).
+// this page expects (detail view, timeline, cards, status helpers). `status`
+// is translated to this page's vocabulary (see CUSTOMER_STATUS_MAP); the raw
+// DB status is kept as `dbStatus` so writes always send the backend's values.
 function mapDeliveryRow(row) {
   return {
     id: row.id,
@@ -2261,8 +2291,69 @@ function mapDeliveryRow(row) {
     budgetMin: row.budget_min,
     budgetMax: row.budget_max,
     notes: row.notes || '',
-    status: row.status,
+    status: CUSTOMER_STATUS_MAP[row.status] || row.status,
+    dbStatus: row.status,
+    customerCounterMin: row.customer_counter_min,
+    customerCounterMax: row.customer_counter_max,
+    cancelledBy: row.cancelled_by,
+    cancelReason: row.cancel_reason,
+    cancelledAt: row.cancelled_at,
     createdAt: row.created_at
+  }
+}
+
+// Reconstruct the customer-visible quotation state from the delivery row plus
+// its saved `delivery_quotations` (initial/updated rounds) and counter-offer
+// columns. The detail view and timeline only know the local shape
+// (`quotation`, `previousQuotation`, `priceRange`, `quotationRejected`,
+// `quotationApproved`), none of which is persisted verbatim.
+function attachQuotationState(row, qtnsByType) {
+  const initial = qtnsByType.initial ? { amount: qtnsByType.initial.amount, breakdown: qtnsByType.initial.breakdown } : null
+  const updated = qtnsByType.updated ? { amount: qtnsByType.updated.amount, breakdown: qtnsByType.updated.breakdown } : null
+  const range = (row.customerCounterMin != null && row.customerCounterMax != null)
+    ? { min: row.customerCounterMin, max: row.customerCounterMax }
+    : null
+
+  if (row.dbStatus === 'COUNTER_OFFER_SUBMITTED') {
+    // The customer rejected the initial offer and is awaiting a revised one.
+    return {
+      ...row,
+      quotation: null,
+      previousQuotation: initial,
+      quotationRejected: true,
+      priceRange: range,
+      quotationApproved: false,
+    }
+  }
+  if (updated) {
+    // A revised quotation exists (FINAL_QUOTATION_SUBMITTED or later).
+    return {
+      ...row,
+      quotation: updated,
+      previousQuotation: initial,
+      priceRange: range,
+      quotationRejected: false,
+      quotationApproved: APPROVED_STATUSES.includes(row.dbStatus),
+    }
+  }
+  if (initial) {
+    // Initial quotation only.
+    return {
+      ...row,
+      quotation: initial,
+      previousQuotation: null,
+      priceRange: range,
+      quotationRejected: false,
+      quotationApproved: APPROVED_STATUSES.includes(row.dbStatus),
+    }
+  }
+  return {
+    ...row,
+    quotation: null,
+    previousQuotation: null,
+    priceRange: range,
+    quotationRejected: false,
+    quotationApproved: APPROVED_STATUSES.includes(row.dbStatus),
   }
 }
 
@@ -2314,7 +2405,27 @@ function CustomerDeliveries() {
         setLoadError('Failed to load your delivery requests. Please try again.')
         return
       }
-      setDeliveryRequests((data || []).map(mapDeliveryRow))
+
+      let rows = (data || []).map(mapDeliveryRow)
+      const ids = rows.map((r) => r.id)
+
+      if (ids.length > 0) {
+        const { data: qtns, error: qError } = await supabase
+          .from('delivery_quotations')
+          .select('*')
+          .in('delivery_id', ids)
+        if (!isMounted) return
+        if (!qError) {
+          const qtnsByDelivery = {}
+          for (const q of qtns || []) {
+            if (!qtnsByDelivery[q.delivery_id]) qtnsByDelivery[q.delivery_id] = {}
+            qtnsByDelivery[q.delivery_id][q.quotation_type] = q
+          }
+          rows = rows.map((row) => attachQuotationState(row, qtnsByDelivery[row.id] || {}))
+        }
+      }
+
+      if (isMounted) setDeliveryRequests(rows)
     }
 
     loadDeliveries()
@@ -2332,6 +2443,56 @@ function CustomerDeliveries() {
     // Update selected request if the detail view is open
     if (selectedRequest && selectedRequest.id === id) {
       setSelectedRequest(prev => ({ ...prev, ...updates }))
+    }
+  }
+
+  // Persist the customer's quotation response (approve/reject) to the backend.
+  // Local state is updated optimistically by handleUpdateRequest; this write
+  // makes it stick across reloads. Approve advances to APPROVED (the customer
+  // side shows that as FOR_PICKUP); reject records the requested price range
+  // and moves the request to COUNTER_OFFER_SUBMITTED so the supervisor can
+  // read it back from the Customer's Counter Offer card.
+  const persistQuotationResponse = async (id, action, payload) => {
+    try {
+      if (action === 'approve') {
+        await supabase
+          .from('delivery_requests')
+          .update({ status: 'APPROVED' })
+          .eq('id', id)
+      } else if (action === 'reject') {
+        await supabase
+          .from('delivery_requests')
+          .update({
+            status: 'COUNTER_OFFER_SUBMITTED',
+            customer_counter_min: payload?.priceRange?.min ? Number(payload.priceRange.min) : null,
+            customer_counter_max: payload?.priceRange?.max ? Number(payload.priceRange.max) : null,
+          })
+          .eq('id', id)
+      }
+    } catch {
+      // Optimistic local state already applied; a failed write just means the
+      // response won't survive a reload — surfaced silently like the other
+      // one-way writes on this page.
+    }
+  }
+
+  // Persist a direct cancellation to the backend. Local state is updated
+  // optimistically by handleUpdateRequest; this write keeps the CANCELLED
+  // status (and the entered reason) across reloads for both the customer and
+  // the supervisor's Cancellations module.
+  const persistCancellation = async (id, payload) => {
+    try {
+      await supabase
+        .from('delivery_requests')
+        .update({
+          status: 'CANCELLED',
+          cancelled_by: payload?.cancelledBy || null,
+          cancel_reason: payload?.cancelReason || null,
+          cancelled_at: payload?.cancelledAt || null,
+        })
+        .eq('id', id)
+    } catch {
+      // Optimistic local state already applied.
     }
   }
 
@@ -2392,6 +2553,8 @@ function CustomerDeliveries() {
           request={selectedRequest}
           onBack={() => setSelectedRequest(null)}
           onUpdate={handleUpdateRequest}
+          onQuotationResponse={persistQuotationResponse}
+          onCancellation={persistCancellation}
         />
       </CustomerLayout>
     )

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   Check,
@@ -39,6 +39,7 @@ import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import SupLayout from '../layout/SupLayout.jsx'
+import { supabase } from '../lib/supabaseClient.js'
 import { customer_deliveries, delivery_drivers, delivery_helpers, delivery_trucks, delivery_quotations, delivery_cancellations, delivery_monitoring, delivery_alert_monitoring, delivery_supervisor_data, completed_delivery_reports } from '../lib/mockDeliveriesData.js'
 
 delete L.Icon.Default.prototype._getIconUrl
@@ -116,7 +117,7 @@ const statusBadge = {
 
 function formatDateTime(dateStr, timeStr) {
   if (!dateStr) return 'TBD'
-  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const parts = dateStr.split('-')
   if (parts.length !== 3) return dateStr
   const [y, m, d] = parts.map(Number)
@@ -128,17 +129,31 @@ function formatDateTime(dateStr, timeStr) {
     const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
     formattedTime = `${hour12}:${String(min).padStart(2, '0')} ${suffix}`
   }
-  return formattedTime ? `${monthLabel} ${d}, ${y} at ${formattedTime}` : `${monthLabel} ${d}, ${y}`
+  return formattedTime ? `${monthLabel} ${d}, ${y}, ${formattedTime}` : `${monthLabel} ${d}, ${y}`
+}
+
+// Formats a full ISO timestamp (delivery_requests.created_at) into the same
+// "Aug 3, 2026, 11:02 PM" style used for pickup/drop-off dates.
+function formatIsoDateTime(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const h = d.getHours()
+  const suffix = h >= 12 ? 'PM' : 'AM'
+  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+  return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}, ${hour12}:${String(d.getMinutes()).padStart(2, '0')} ${suffix}`
 }
 
 function getTruckType(r) {
-  return r.crew?.truck?.truckType || 'AUV'
+  return r.crew?.truck?.truckType || r.truckType || 'AUV'
 }
 function getTruckCapacity(r) {
   return r.crew?.truck?.capacity || '1.2 tons'
 }
 function getCommodityType(itemType) {
-  return ['Frozen Goods', 'Pharmaceuticals'].includes(itemType) ? 'Chilled' : 'Ordinary'
+  const t = String(itemType || '').toLowerCase()
+  return ['frozen goods', 'pharmaceuticals'].includes(t) ? 'Chilled' : 'Ordinary'
 }
 function isLargeTruck(r) {
   const cap = parseFloat(getTruckCapacity(r))
@@ -147,6 +162,18 @@ function isLargeTruck(r) {
 function getEstimatedWeight(itemType) {
   const w = { 'Dry Food': '850 kg', 'Frozen Goods': '1.2 tons', 'Fast Food': '450 kg', 'Beverages': '1.5 tons', 'Pharmaceuticals': '300 kg' }
   return w[itemType] || '500 kg'
+}
+// Real cargo weight lives on the request (delivery_requests.cargo_weight);
+// only fall back to the type-based estimate when it isn't set.
+function getTotalWeight(r) {
+  if (r.cargoWeight != null && r.cargoWeight !== '') return `${r.cargoWeight} kg`
+  return getEstimatedWeight(r.itemType)
+}
+function getPriceRangeBid(r) {
+  if (r.budgetMin != null && r.budgetMax != null) {
+    return `₱${Number(r.budgetMin).toLocaleString()} – ₱${Number(r.budgetMax).toLocaleString()}`
+  }
+  return 'less than PHP 10,000.00'
 }
 function getTotalDistance(r) {
   if (!r.currentLocation || !r.destinationCoords) return '24.5 km'
@@ -164,7 +191,9 @@ function getTotalDays(r) {
   return Math.max(1, diff)
 }
 function getPickupCoords(r) {
-  return r.currentLocation || { lat: r.destinationCoords.lat + 0.01, lng: r.destinationCoords.lng - 0.01 }
+  if (r.currentLocation) return r.currentLocation
+  if (r.destinationCoords) return { lat: r.destinationCoords.lat + 0.01, lng: r.destinationCoords.lng - 0.01 }
+  return null
 }
 function Row({ label, value }) {
   return (
@@ -489,7 +518,7 @@ const stageStatus = {
  */
 function buildProgressData(request) {
   const idx = stageStatus[request.status] ?? 0
-  const registeredAt = request.createdAt
+  const registeredAt = formatIsoDateTime(request.createdAt)
   const now = new Date().toLocaleString('en-PH', { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 
   const isCancelled = request.status === 'CANCELLED'
@@ -505,7 +534,7 @@ function buildProgressData(request) {
 
   const processingSubsteps = [
     { label: 'Quotation Submitted', detail: request.quotation ? `by Supervisor · ${registeredAt}` : null },
-    { label: 'Counter Offer Submitted', detail: request.customerWants ? `by Customer · ${registeredAt}` : null },
+    { label: 'Counter Offer Submitted', detail: (request.customerWants != null || request.customerCounterMin != null) ? `by Customer · ${registeredAt}` : null },
     { label: 'Final Quotation Submitted', detail: request.updatedQuotation ? `by Supervisor · ${registeredAt}` : null },
   ]
   if (isApprovedOrLater) {
@@ -561,8 +590,8 @@ function buildProgressData(request) {
       label: 'Pickup',
       completedLabel: 'Pickup Completed',
       substeps: [
-        { label: 'Delivery crew is out to pick up the items', detail: pickupOutDone ? `· ${request.pickupDate || registeredAt}` : null },
-        { label: 'Delivery crew arrived at the pickup location', detail: pickupArrivedDone ? `· ${request.pickupDate || registeredAt}` : null },
+        { label: 'Delivery crew is out to pick up the items', detail: pickupOutDone ? `· ${request.pickupDate ? formatDateTime(request.pickupDate) : registeredAt}` : null },
+        { label: 'Delivery crew arrived at the pickup location', detail: pickupArrivedDone ? `· ${request.pickupDate ? formatDateTime(request.pickupDate) : registeredAt}` : null },
       ],
     },
     {
@@ -570,8 +599,8 @@ function buildProgressData(request) {
       label: 'Dropoff',
       completedLabel: 'Dropoff Completed',
       substeps: [
-        { label: 'Delivery crew is out to deliver the items', detail: dropoffOutDone ? `· ${request.dropoffDate || registeredAt}` : null },
-        { label: 'Delivery crew arrived at the dropoff location', detail: dropoffArrivedDone ? `· ${request.dropoffDate || registeredAt}` : null },
+        { label: 'Delivery crew is out to deliver the items', detail: dropoffOutDone ? `· ${request.dropoffDate ? formatDateTime(request.dropoffDate) : registeredAt}` : null },
+        { label: 'Delivery crew arrived at the dropoff location', detail: dropoffArrivedDone ? `· ${request.dropoffDate ? formatDateTime(request.dropoffDate) : registeredAt}` : null },
       ],
     },
     {
@@ -1017,14 +1046,14 @@ function DeliveryRequestDetails({ request }) {
           </h4>
           <div className="space-y-1.5">
             <Row label="Item Type" value={request.itemType} />
-            <Row label="Est. Total Weight" value={getEstimatedWeight(request.itemType)} />
+            <Row label="Est. Total Weight" value={getTotalWeight(request)} />
           </div>
         </div>
 
         <div className="col-span-2">
           <div className="flex items-center justify-between rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50/50 border border-blue-100 px-4 py-3">
             <span className="text-sm font-semibold text-slate-600">Price Range Bid</span>
-            <span className="text-sm font-bold text-blue-700">less than PHP 10,000.00</span>
+            <span className="text-sm font-bold text-blue-700">{getPriceRangeBid(request)}</span>
           </div>
         </div>
 
@@ -1698,7 +1727,14 @@ function CompletedDeliveryReport({ delivery }) {
 }
 
 function CancelledDeliveryDetails({ delivery }) {
-  const cancellation = delivery.cancellation || {}
+  // Real delivery_requests rows carry the cancellation fields directly
+  // (cancelledBy/cancelReason/cancelledAt) rather than the mock
+  // `cancellation` envelope — prefer those when the envelope is absent.
+  const cancellation = delivery.cancellation || {
+    cancellationReason: delivery.cancelReason,
+    cancelledBy: delivery.cancelledBy,
+    cancelledAt: delivery.cancelledAt,
+  }
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
@@ -2049,8 +2085,104 @@ function PaginationBar({ page, setPage, totalPages }) {
   )
 }
 
+// DB rows are snake_case; the inbox (and the detail view it feeds) expects the
+// camelCase shape used by the rest of this page, so each delivery_requests row
+// is mapped here. customer_records isn't client-readable (SUPABASE_GOTCHAS.md
+// #7), so the display name comes from the admin-users Edge Function's
+// list-clients action instead.
+// Map a real `trucks` row to the assignment picker shape. Real trucks have no
+// availability status, commodity type, or default-driver mapping (those only
+// exist on the mock fleet), so only the fields real data provides are kept.
+function mapFleetTruck(t) {
+  return {
+    id: t.id,
+    plateNumber: t.plate_number,
+    truckType: t.truck_type,
+    brand: t.brand,
+    model: t.model,
+    capacity: t.max_capacity != null ? `${Number(t.max_capacity).toLocaleString()} kg` : null,
+    capacityKg: t.max_capacity,
+  }
+}
+
+// Map one `list-crew` member (Driver/Helper user merged with their *_records
+// row) to the assignment picker shape. `id` is the crew record id (D001/H001)
+// — what assignCrew persists as assigned_driver_id / assigned_helper_ids.
+function mapFleetCrewMember(m) {
+  return {
+    id: (m.record_id || '').trim(),
+    authId: m.id,
+    name: [m.first_name, m.middle_name, m.last_name].filter(Boolean).join(' ').trim(),
+    position: m.position || '',
+    role: m.role,
+  }
+}
+
+// Rebuild the assigned crew (driver/helpers/truck) from the persisted
+// assignment columns using the real fleet loaded for the pickers.
+function buildAssignedCrew(row, fleet) {
+  if (!row.assigned_driver_id) return null
+  return {
+    driver: fleet.drivers.find((d) => d.id === row.assigned_driver_id) || null,
+    helpers: (row.assigned_helper_ids || []).map((id) => fleet.helpers.find((h) => h.id === id)).filter(Boolean),
+    truck: row.assigned_truck_plate ? fleet.trucks.find((t) => t.plateNumber === row.assigned_truck_plate) || null : null,
+  }
+}
+
+function mapDbRequest(row, clientName, fleet) {
+  const name = clientName || 'Client'
+  return {
+    id: row.id,
+    customerName: name,
+    companyName: name,
+    itemType: row.item_type ? row.item_type.charAt(0).toUpperCase() + row.item_type.slice(1) : row.item_type,
+    otherItemType: row.other_item_type,
+    truckType: row.truck_type,
+    cargoWeight: row.cargo_weight,
+    pickupDate: row.pickup_date,
+    pickupTime: row.pickup_time,
+    dropoffDate: row.dropoff_date,
+    dropoffTime: row.dropoff_time,
+    pickupAddress: row.pickup_location,
+    deliveryAddress: row.dropoff_location,
+    budgetMin: row.budget_min,
+    budgetMax: row.budget_max,
+    notes: row.notes,
+    status: row.status,
+    createdAt: row.created_at,
+    quotation: null,
+    updatedQuotation: null,
+    customerCounterMin: row.customer_counter_min,
+    customerCounterMax: row.customer_counter_max,
+    cancelledBy: row.cancelled_by,
+    cancelReason: row.cancel_reason,
+    cancelledAt: row.cancelled_at ? formatIsoDateTime(row.cancelled_at) : null,
+    // Rebuild the assigned crew (same shape the assignment pickers produce)
+    // from the persisted columns so an assigned request still shows its
+    // driver/helpers/truck after a reload.
+    crew: row.assigned_driver_id ? buildAssignedCrew(row, fleet || { drivers: [], helpers: [], trucks: [] }) : null,
+    assignedAt: row.assigned_at ? formatIsoDateTime(row.assigned_at) : null,
+  }
+}
+
+// The customer's counter-offer range, read from the delivery_requests counter
+// columns (real data) with a fallback to the legacy single-amount mock shape.
+function getCounterOfferRange(r) {
+  if (r.customerCounterMin != null && r.customerCounterMax != null) {
+    return `₱${Number(r.customerCounterMin).toLocaleString()} – ₱${Number(r.customerCounterMax).toLocaleString()}`
+  }
+  if (r.customerWants != null) return `Less than PHP ${Number(r.customerWants).toLocaleString()}`
+  return null
+}
+
 function SupDeliveries() {
   const [requests, setRequests] = useState(() => autoCompleteDelivered(mockRequests))
+  const [dbRequests, setDbRequests] = useState([])
+  // Real fleet for the Assign Vehicle pickers — trucks (from the RLS-open
+  // `trucks` table) and crew (drivers/helpers via admin-users list-crew).
+  const [fleet, setFleet] = useState({ drivers: [], helpers: [], trucks: [] })
+  const [loadError, setLoadError] = useState('')
+  const [isLoading, setIsLoading] = useState(true)
   const [activeModule, setActiveModule] = useState('inbox')
   const [monitoredDeliveryId, setMonitoredDeliveryId] = useState(null)
   const [search, setSearch] = useState('')
@@ -2098,6 +2230,7 @@ function SupDeliveries() {
   const [issuesPage, setIssuesPage] = useState(1)
   const [transitPage, setTransitPage] = useState(1)
   const [selectedIssue, setSelectedIssue] = useState(null)
+  const quotationSectionRef = useRef(null)
 
   useEffect(() => {
     const handleResize = () => setItemsPerPage(Math.max(4, Math.floor((window.innerHeight - 280) / 68)))
@@ -2105,14 +2238,110 @@ function SupDeliveries() {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  // Load the real inbox: all delivery_requests (Supervisor read policy) plus
+  // the customer display names via the admin-users Edge Function (the client
+  // can't read customer_records directly), then attach any existing quotations.
+  // Only the inbox is DB-backed for now; the other modules still use mock data.
+  useEffect(() => {
+    let isMounted = true
+
+    async function loadInbox() {
+      setIsLoading(true)
+      setLoadError('')
+      try {
+        const clientNameById = {}
+        const { data: clientsData, error: clientsError } = await supabase.functions.invoke('admin-users', {
+          body: { action: 'list-clients' },
+        })
+        if (!clientsError && Array.isArray(clientsData?.clients)) {
+          for (const client of clientsData.clients) {
+            clientNameById[client.id] = client.name
+          }
+        }
+
+        // Real fleet for the Assign Vehicle pickers: trucks from the `trucks`
+        // table (RLS-open, so the supervisor can query directly) and crew from
+        // the admin-users list-crew action (drivers/helpers + *_records rows).
+        const fleet = { drivers: [], helpers: [], trucks: [] }
+        const { data: trucksData, error: trucksError } = await supabase.from('trucks').select('*')
+        if (!trucksError) {
+          fleet.trucks = (trucksData || []).map(mapFleetTruck)
+        }
+        const { data: crewData, error: crewError } = await supabase.functions.invoke('admin-users', {
+          body: { action: 'list-crew' },
+        })
+        if (!crewError && Array.isArray(crewData?.crew)) {
+          for (const m of crewData.crew) {
+            if (m.deactivated_at || !m.record_id) continue
+            const mapped = mapFleetCrewMember(m)
+            if (m.role === 'Driver') fleet.drivers.push(mapped)
+            else if (m.role === 'Helper') fleet.helpers.push(mapped)
+          }
+        }
+        if (isMounted) setFleet(fleet)
+
+        const { data, error } = await supabase
+          .from('delivery_requests')
+          .select('*')
+          .order('created_at', { ascending: false })
+        if (!isMounted) return
+        if (error) {
+          setLoadError('Failed to load delivery requests. Please try again.')
+          setDbRequests([])
+          return
+        }
+
+        let rows = (data || []).map((row) => mapDbRequest(row, clientNameById[row.customer_auth_id], fleet))
+        const ids = rows.map((r) => r.id)
+
+        if (ids.length > 0) {
+          const { data: qtns, error: qError } = await supabase
+            .from('delivery_quotations')
+            .select('*')
+            .in('delivery_id', ids)
+          if (!isMounted) return
+          if (!qError) {
+            const qtnsByDelivery = {}
+            for (const q of qtns || []) {
+              if (!qtnsByDelivery[q.delivery_id]) qtnsByDelivery[q.delivery_id] = {}
+              qtnsByDelivery[q.delivery_id][q.quotation_type] = q
+            }
+            rows = rows.map((row) => {
+              const qmap = qtnsByDelivery[row.id] || {}
+              return {
+                ...row,
+                quotation: qmap.initial ? { amount: qmap.initial.amount, breakdown: qmap.initial.breakdown, notes: qmap.initial.notes, validUntil: qmap.initial.valid_until } : null,
+                updatedQuotation: qmap.updated ? { amount: qmap.updated.amount, breakdown: qmap.updated.breakdown, notes: qmap.updated.notes, validUntil: qmap.updated.valid_until } : null,
+              }
+            })
+          }
+        }
+
+        if (isMounted) setDbRequests(rows)
+      } catch {
+        if (isMounted) setLoadError('Failed to load delivery requests. Please try again.')
+      } finally {
+        if (isMounted) setIsLoading(false)
+      }
+    }
+
+    loadInbox()
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
   const inboxRows = useMemo(
-    () => requests.filter((r) => ['PENDING_REQUEST', 'QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED', 'ASSIGNED'].includes(r.status)),
-    [requests],
+    () => dbRequests.filter((r) => ['PENDING_REQUEST', 'QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED', 'ASSIGNED'].includes(r.status)),
+    [dbRequests],
   )
 
+  // Real approved/assigned requests awaiting (or carrying) a vehicle+crew
+  // assignment — read from dbRequests (not the mock array) so a request the
+  // customer has approved shows up here once it leaves the inbox.
   const pendingAssignments = useMemo(
-    () => requests.filter((r) => r.status === 'APPROVED' || r.status === 'ASSIGNED'),
-    [requests],
+    () => dbRequests.filter((r) => r.status === 'APPROVED' || r.status === 'ASSIGNED'),
+    [dbRequests],
   )
 
   const [assignPage, setAssignPage] = useState(1)
@@ -2201,9 +2430,11 @@ function SupDeliveries() {
     [requests],
   )
 
+  // Declined/cancelled requests from the real data — read from dbRequests so
+  // a supervisor decline (status CANCELLED) shows up here instead of vanishing.
   const cancelledDeliveries = useMemo(
-    () => requests.filter((r) => r.status === 'CANCELLED'),
-    [requests],
+    () => dbRequests.filter((r) => r.status === 'CANCELLED'),
+    [dbRequests],
   )
 
   const selectedCompletedReport = selectedReportId && !selectedReportId.startsWith('cancel-')
@@ -2242,9 +2473,9 @@ function SupDeliveries() {
   const issuesSafePage = Math.min(issuesPage, issuesTotalPages)
   const paginatedIssues = filteredIssues.slice((issuesSafePage - 1) * itemsPerPage, issuesSafePage * itemsPerPage)
 
-  const selectedDriver = mockDrivers.find((d) => d.id === assignment.driverId)
-  const selectedTruck = mockTrucks.find((t) => t.plateNumber === assignment.plateNumber)
-  const selectedHelpers = mockHelpers.filter((h) => assignment.helperIds.includes(h.id))
+  const selectedDriver = fleet.drivers.find((d) => d.id === assignment.driverId)
+  const selectedTruck = fleet.trucks.find((t) => t.plateNumber === assignment.plateNumber)
+  const selectedHelpers = fleet.helpers.filter((h) => assignment.helperIds.includes(h.id))
   const canConfirmAssignment = Boolean(selectedDriver && selectedTruck && selectedHelpers.length > 0)
   const isInTransitStatus = ['OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED'].includes(selectedRequest?.status)
 
@@ -2347,6 +2578,7 @@ function SupDeliveries() {
 
   const updateRequest = (id, patch) => {
     setRequests((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)))
+    setDbRequests((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)))
     setSelectedRequest((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev))
   }
 
@@ -2381,31 +2613,48 @@ function SupDeliveries() {
     setShowDetails(false)
     setShowQuotationConfirmDialog(true)
   }
-  const confirmQuotation = () => {
+  const confirmQuotation = async () => {
     if (!selectedRequest) return
     const proposed = getProposedRate()
     if (proposed <= 0) return alert('Fill in at least one expense amount before submitting.')
     const distKm = selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0
-    updateRequest(selectedRequest.id, {
-      quotation: {
-        amount: proposed,
-        breakdown: {
-          directExpenses: quotationForm.directExpenses,
-          indirectExpenses: quotationForm.indirectExpenses,
-          calculated: {
-            distanceKm: distKm,
-            totalDays: getTotalDays(selectedRequest),
-            dieselTotal: parseMoney(quotationForm.directExpenses.dieselRate) * distKm,
-            directTotal: getDirectTotal(),
-            indirectTotal: getIndirectTotal(),
-            operatingTotal: getOperatingTotal(),
-            income: getIncome(),
-            proposedRate: proposed,
-          },
-        },
+    const breakdown = {
+      directExpenses: quotationForm.directExpenses,
+      indirectExpenses: quotationForm.indirectExpenses,
+      calculated: {
+        distanceKm: distKm,
+        totalDays: getTotalDays(selectedRequest),
+        dieselTotal: parseMoney(quotationForm.directExpenses.dieselRate) * distKm,
+        directTotal: getDirectTotal(),
+        indirectTotal: getIndirectTotal(),
+        operatingTotal: getOperatingTotal(),
+        income: getIncome(),
+        proposedRate: proposed,
       },
-      status: 'QUOTATION_SUBMITTED',
-    })
+    }
+    const { data: { user } } = await supabase.auth.getUser()
+    const { error: insertError } = await supabase
+      .from('delivery_quotations')
+      .insert({
+        delivery_id: selectedRequest.id,
+        quotation_type: 'initial',
+        amount: proposed,
+        breakdown,
+        notes: null,
+        valid_until: null,
+        submitted_by: user?.id ?? null,
+      })
+    if (insertError) {
+      return alert('Failed to save the quotation. Please try again.')
+    }
+    const { error: updateError } = await supabase
+      .from('delivery_requests')
+      .update({ status: 'QUOTATION_SUBMITTED' })
+      .eq('id', selectedRequest.id)
+    if (updateError) {
+      return alert('Quotation saved, but failed to update the request status. Please try again.')
+    }
+    updateRequest(selectedRequest.id, { quotation: { amount: proposed, breakdown }, status: 'QUOTATION_SUBMITTED' })
     setQuotationSubmitted(true)
     setShowQuotationConfirmDialog(false)
   }
@@ -2442,8 +2691,15 @@ function SupDeliveries() {
     if (!selectedRequest) return
     setShowDeclineDialog(true)
   }
-  const confirmDecline = () => {
+  const confirmDecline = async () => {
     if (!selectedRequest) return
+    const { error } = await supabase
+      .from('delivery_requests')
+      .update({ status: 'CANCELLED' })
+      .eq('id', selectedRequest.id)
+    if (error) {
+      return alert('Failed to decline the request. Please try again.')
+    }
     updateRequest(selectedRequest.id, { status: 'CANCELLED' })
     setShowDeclineDialog(false)
     setSelectedRequest(null)
@@ -2475,31 +2731,48 @@ function SupDeliveries() {
     setShowUpdateQuotationDialog(false)
   }
 
-  const handleSubmitUpdatedQuotation = () => {
+  const handleSubmitUpdatedQuotation = async () => {
     if (!selectedRequest) return
     const proposed = getProposedRate()
     if (proposed <= 0) return alert('Fill in at least one expense amount before submitting.')
     const distKm = selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0
-    updateRequest(selectedRequest.id, {
-      updatedQuotation: {
-        amount: proposed,
-        breakdown: {
-          directExpenses: quotationForm.directExpenses,
-          indirectExpenses: quotationForm.indirectExpenses,
-          calculated: {
-            distanceKm: distKm,
-            totalDays: getTotalDays(selectedRequest),
-            dieselTotal: parseMoney(quotationForm.directExpenses.dieselRate) * distKm,
-            directTotal: getDirectTotal(),
-            indirectTotal: getIndirectTotal(),
-            operatingTotal: getOperatingTotal(),
-            income: getIncome(),
-            proposedRate: proposed,
-          },
-        },
+    const breakdown = {
+      directExpenses: quotationForm.directExpenses,
+      indirectExpenses: quotationForm.indirectExpenses,
+      calculated: {
+        distanceKm: distKm,
+        totalDays: getTotalDays(selectedRequest),
+        dieselTotal: parseMoney(quotationForm.directExpenses.dieselRate) * distKm,
+        directTotal: getDirectTotal(),
+        indirectTotal: getIndirectTotal(),
+        operatingTotal: getOperatingTotal(),
+        income: getIncome(),
+        proposedRate: proposed,
       },
-      status: 'FINAL_QUOTATION_SUBMITTED',
-    })
+    }
+    const { data: { user } } = await supabase.auth.getUser()
+    const { error: insertError } = await supabase
+      .from('delivery_quotations')
+      .insert({
+        delivery_id: selectedRequest.id,
+        quotation_type: 'updated',
+        amount: proposed,
+        breakdown,
+        notes: null,
+        valid_until: null,
+        submitted_by: user?.id ?? null,
+      })
+    if (insertError) {
+      return alert('Failed to save the updated quotation. Please try again.')
+    }
+    const { error: updateError } = await supabase
+      .from('delivery_requests')
+      .update({ status: 'FINAL_QUOTATION_SUBMITTED' })
+      .eq('id', selectedRequest.id)
+    if (updateError) {
+      return alert('Quotation saved, but failed to update the request status. Please try again.')
+    }
+    updateRequest(selectedRequest.id, { updatedQuotation: { amount: proposed, breakdown }, status: 'FINAL_QUOTATION_SUBMITTED' })
     setAdjustingQuotation(false)
     setBidDeclined(false)
   }
@@ -2514,9 +2787,10 @@ function SupDeliveries() {
     })
   }
 
-  const assignCrew = () => {
+  const assignCrew = async () => {
     if (!selectedRequest || !canConfirmAssignment) return
 
+    const assignedAtIso = new Date().toISOString()
     const assignedAt = new Date().toLocaleString('en-PH', {
       year: 'numeric',
       month: 'short',
@@ -2524,6 +2798,20 @@ function SupDeliveries() {
       hour: '2-digit',
       minute: '2-digit',
     })
+
+    const { error } = await supabase
+      .from('delivery_requests')
+      .update({
+        status: 'ASSIGNED',
+        assigned_driver_id: selectedDriver.id,
+        assigned_helper_ids: selectedHelpers.map((h) => h.id),
+        assigned_truck_plate: selectedTruck.plateNumber,
+        assigned_at: assignedAtIso,
+      })
+      .eq('id', selectedRequest.id)
+    if (error) {
+      return alert('Failed to save the vehicle assignment. Please try again.')
+    }
 
     updateRequest(selectedRequest.id, {
       status: 'ASSIGNED',
@@ -2754,7 +3042,7 @@ function SupDeliveries() {
                       </h4>
                       <div className="space-y-1.5">
                         <Row label="Item Type" value={selectedRequest.itemType} />
-                        <Row label="Est. Total Weight" value={getEstimatedWeight(selectedRequest.itemType)} />
+                        <Row label="Est. Total Weight" value={getTotalWeight(selectedRequest)} />
                       </div>
                     </div>
 
@@ -2762,7 +3050,7 @@ function SupDeliveries() {
                     <div className="col-span-2">
                       <div className="flex items-center justify-between rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50/50 border border-blue-100 px-4 py-3">
                         <span className="text-sm font-semibold text-slate-600">Price Range Bid</span>
-                        <span className="text-sm font-bold text-blue-700">less than PHP 10,000.00</span>
+                        <span className="text-sm font-bold text-blue-700">{getPriceRangeBid(selectedRequest)}</span>
                       </div>
                     </div>
 
@@ -2831,7 +3119,7 @@ function SupDeliveries() {
 
               {/* Quotation Form — appears below details */}
               {hasApproved && (
-                <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div ref={quotationSectionRef} className="rounded-2xl border border-slate-200 bg-white shadow-sm scroll-mt-20">
                   <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
                     <button
                       onClick={() => setShowQuotation((s) => !s)}
@@ -2893,7 +3181,7 @@ function SupDeliveries() {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Customer Price Range Bid</p>
-                        <p className="text-sm font-semibold text-slate-800">less than PHP 10,000.00</p>
+                        <p className="text-sm font-semibold text-slate-800">{getPriceRangeBid(selectedRequest)}</p>
                       </div>
                       <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Total Distance (KM)</p>
@@ -3108,7 +3396,7 @@ function SupDeliveries() {
                                 </div>
                                 <div className="flex items-center justify-between py-2 border-t border-orange-200">
                                   <span className="text-sm font-medium text-slate-700">Customer's Counter Offer</span>
-                                  <span className="text-base font-bold text-orange-700">Less than PHP {Number(selectedRequest.customerWants).toLocaleString()}</span>
+                                  <span className="text-base font-bold text-orange-700">{getCounterOfferRange(selectedRequest)}</span>
                                 </div>
                                 <div className="flex gap-3 pt-2">
                                   <button
@@ -3159,7 +3447,7 @@ function SupDeliveries() {
                               </div>
                               <div className="flex items-center justify-between py-2 border-t border-orange-200">
                                 <span className="text-sm font-medium text-slate-700">Customer's Counter Offer</span>
-                                <span className="text-base font-bold text-orange-700">Less than PHP {Number(selectedRequest.customerWants).toLocaleString()}</span>
+                                <span className="text-base font-bold text-orange-700">{getCounterOfferRange(selectedRequest)}</span>
                               </div>
                             </div>
 
@@ -3314,7 +3602,7 @@ function SupDeliveries() {
                         The crew is locked once the delivery is in transit. Changes can no longer be made.
                       </p>
                     ) : (
-                      <p className="mt-1 text-xs text-slate-600">Pick a vehicle — its default driver and helper are pre-filled. You can override them before confirming.</p>
+                      <p className="mt-1 text-xs text-slate-600">Select a vehicle, then choose the driver and helpers to confirm the assignment.</p>
                     )}
                   </div>
 
@@ -3341,7 +3629,7 @@ function SupDeliveries() {
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold text-slate-900">{selectedRequest.crew.truck.plateNumber}</p>
                             <p className="text-xs text-slate-500">
-                              {selectedRequest.crew.truck.truckType} • {selectedRequest.crew.truck.commodityType} • {selectedRequest.crew.truck.capacity}
+                              {selectedRequest.crew.truck.truckType} • {selectedRequest.crew.truck.capacity}
                             </p>
                           </div>
                         </div>
@@ -3354,7 +3642,7 @@ function SupDeliveries() {
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold text-slate-900">{selectedRequest.crew.driver.name}</p>
                             <p className="text-xs text-slate-500">
-                              {selectedRequest.crew.driver.id} • ★ {selectedRequest.crew.driver.rating} • {selectedRequest.crew.driver.trips} trips
+                              {selectedRequest.crew.driver.id} • {selectedRequest.crew.driver.position}
                             </p>
                           </div>
                         </div>
@@ -3393,10 +3681,7 @@ function SupDeliveries() {
                             <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-center text-[10px] font-bold leading-tight text-indigo-700">{selectedTruck.truckType}</span>
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-sm font-semibold text-slate-900">{selectedTruck.plateNumber}</p>
-                              <p className="text-xs text-slate-500">{selectedTruck.truckType} • {selectedTruck.commodityType} • {selectedTruck.capacity}</p>
-                              {selectedDriver && (
-                                <p className="mt-0.5 truncate text-[10px] font-medium text-indigo-600">Default driver: {selectedDriver.name}</p>
-                              )}
+                              <p className="text-xs text-slate-500">{selectedTruck.truckType} • {selectedTruck.capacity}</p>
                             </div>
                           </div>
                         ) : (
@@ -3408,7 +3693,7 @@ function SupDeliveries() {
                       </button>
                       {assignment._showTrucks && (
                         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {mockTrucks.filter(t => t.status === 'available' || t.plateNumber === assignment.plateNumber).map(truck => {
+                          {fleet.trucks.map(truck => {
                             const defaultDriver = getDefaultDriverForTruck(truck)
                             return (
                               <button
@@ -3431,7 +3716,7 @@ function SupDeliveries() {
                                 <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-center text-[10px] font-bold leading-tight text-slate-600">{truck.truckType}</span>
                                 <div className="min-w-0 flex-1">
                                   <p className="truncate text-sm font-semibold text-slate-900">{truck.plateNumber}</p>
-                                  <p className="text-xs text-slate-500">{truck.truckType} • {truck.commodityType} • {truck.capacity}</p>
+                                  <p className="text-xs text-slate-500">{truck.truckType} • {truck.capacity}</p>
                                   {defaultDriver && (
                                     <p className="mt-0.5 text-[10px] text-slate-400">Default driver: {defaultDriver.name}</p>
                                   )}
@@ -3465,7 +3750,7 @@ function SupDeliveries() {
                             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">{getInitials(selectedDriver.name)}</span>
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-sm font-semibold text-slate-900">{selectedDriver.name}</p>
-                              <p className="text-xs text-slate-500">{selectedDriver.id} • ★ {selectedDriver.rating} • {selectedDriver.trips} trips</p>
+                              <p className="text-xs text-slate-500">{selectedDriver.id} • {selectedDriver.position}</p>
                             </div>
                           </>
                         ) : (
@@ -3477,7 +3762,7 @@ function SupDeliveries() {
                       </button>
                       {assignment._showDrivers && (
                         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {mockDrivers.filter(d => d.status === 'available' || d.id === assignment.driverId).map(driver => (
+                          {fleet.drivers.map(driver => (
                             <button
                               key={driver.id}
                               type="button"
@@ -3496,7 +3781,7 @@ function SupDeliveries() {
                               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(driver.name)}</span>
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-semibold text-slate-900">{driver.name}</p>
-                                <p className="text-xs text-slate-500">{driver.trips} trips • ★ {driver.rating}</p>
+                                <p className="text-xs text-slate-500">{driver.position}</p>
                               </div>
                               {assignment.driverId === driver.id && (
                                 <svg className="h-5 w-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3538,7 +3823,7 @@ function SupDeliveries() {
                       </button>
                       {assignment._showHelpers && (
                         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {mockHelpers.filter(h => h.status === 'available' || assignment.helperIds.includes(h.id)).map(helper => {
+                          {fleet.helpers.map(helper => {
                             const isSelected = assignment.helperIds.includes(helper.id)
                             const disabled = !isSelected && assignment.helperIds.length >= 2
                             return (
@@ -3554,7 +3839,7 @@ function SupDeliveries() {
                                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(helper.name)}</span>
                                 <div className="min-w-0 flex-1">
                                   <p className={`truncate text-sm font-semibold ${isSelected ? 'text-indigo-900' : 'text-slate-900'}`}>{helper.name}</p>
-                                  <p className="text-xs text-slate-500">{helper.id} • Loading Team</p>
+                                  <p className="text-xs text-slate-500">{helper.id} • {helper.position}</p>
                                 </div>
                                 <span className={`flex h-5 w-5 items-center justify-center rounded border-2 ${
                                   isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
@@ -3729,6 +4014,9 @@ function SupDeliveries() {
                       onClick={() => {
                         setShowProceedQuotationDialog(false)
                         startQuotation()
+                        setTimeout(() => {
+                          quotationSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                        }, 100)
                       }}
                       className="flex-1 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 transition cursor-pointer"
                     >
@@ -3942,6 +4230,12 @@ function SupDeliveries() {
           </>
           )}
 
+          {loadError && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {loadError}
+            </div>
+          )}
+
         {activeModule === 'inbox' && (
           <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -3957,7 +4251,9 @@ function SupDeliveries() {
 
               <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
                 {paginatedInbox.length === 0 && (
-                  <div className="px-5 py-14 text-center text-slate-500">No requests found in the inbox.</div>
+                  <div className="px-5 py-14 text-center text-slate-500">
+                    {isLoading ? 'Loading delivery requests...' : 'No requests found in the inbox.'}
+                  </div>
                 )}
 
                 {paginatedInbox.map((row) => (
