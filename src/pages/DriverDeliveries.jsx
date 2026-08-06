@@ -22,11 +22,13 @@ import {
   Truck,
   Wallet,
   Activity,
+  X,
 } from 'lucide-react'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
 import DriverLayout from '../layout/DriverLayout.jsx'
+import { supabase } from '../lib/supabaseClient.js'
 
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -700,188 +702,84 @@ function CompletedDeliveryReport({ report }) {
   )
 }
 
-const mockTruck = {
-  plateNumber: 'ABC 1234',
-  truckType: 'AUV',
-  capacity: '1.2 tons',
-  imageUrl: 'https://images.unsplash.com/photo-1556122071-e404eaedb77f?auto=format&fit=crop&w=600&q=80',
+// ---- Backend-backed delivery loading ------------------------------------
+// The driver's deliveries come from the admin-users Edge Function's
+// get-driver-deliveries action (the client can't read delivery_requests or
+// the *_records tables directly — see DATABASE.md / SUPABASE_GOTCHAS #8).
+// Statuses are mapped between the driver UI's simplified flow
+// (ASSIGNED -> FOR_PICKUP -> OUT_FOR_DELIVERY -> DELIVERED) and the
+// delivery_requests.status values the supervisor timeline uses.
+
+const DB_TO_DRIVER_STATUS = {
+  ASSIGNED: 'ASSIGNED',
+  OUT_FOR_PICKUP: 'FOR_PICKUP',
+  ARRIVED_PICKUP: 'OUT_FOR_DELIVERY',
+  OUT_FOR_DROPOFF: 'OUT_FOR_DELIVERY',
+  ARRIVED_DROPOFF: 'OUT_FOR_DELIVERY',
+  DELIVERED: 'DELIVERED',
+  COMPLETED: 'COMPLETED',
 }
 
-const mockDriver = {
-  id: 'DRV-001',
-  name: 'Carlos Mendoza',
-  phone: '+63 912 311 1222',
+// Driver internal next-stage -> delivery_requests.status to write back.
+const DRIVER_STATUS_TO_DB = {
+  FOR_PICKUP: 'OUT_FOR_PICKUP',
+  OUT_FOR_DELIVERY: 'OUT_FOR_DROPOFF',
+  DELIVERED: 'DELIVERED',
 }
 
-const mockHelpers = [
-  { id: 'HLP-001', name: 'Pedro Garcia' },
-  { id: 'HLP-002', name: 'Luis Torres' },
-]
+// Some pickup/dropoff locations are stored as a "lat, lng" coordinate pair
+// rather than a street address — parse those back into coords for the maps.
+function parseCoords(value) {
+  if (!value) return null
+  const m = String(value).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/)
+  if (!m) return null
+  const lat = parseFloat(m[1])
+  const lng = parseFloat(m[2])
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null
+  return { lat, lng }
+}
 
-function buildInitialState() {
-  const now = new Date()
-  const today = now.toISOString().slice(0, 10)
-  const fmtTime = (h, m) => `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
-  const addDays = (n) => {
-    const d = new Date(now)
-    d.setDate(d.getDate() + n)
-    return d.toISOString().slice(0, 10)
-  }
+function formatAssignedAt(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString('en-PH', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
+// Shape the Edge Function payload into the shape the rest of this page
+// renders (the same one the old mock data used to provide). A delivery may
+// have no quotation yet (supervisor hasn't priced it), so quotation is null
+// and every render site below guards on it.
+function mapDelivery(d) {
+  const str = (v) => (v == null ? '' : String(v))
   return {
-    active: {
-      id: 'DEL-008',
-      customerName: 'Jose Rizal',
-      companyName: 'Jollibee',
-      pickupAddress: '321 Warehouse District, Brgy. Valenzuela, Caloocan',
-      deliveryAddress: '654 Business Park, Brgy. Bicutan, Parañaque',
-      itemType: 'Fast Food',
-      pickupDate: today,
-      pickupTime: fmtTime(now.getHours(), (now.getMinutes() + 15) % 60),
-      status: 'ASSIGNED',
-      createdAt: '2026-07-25 14:00',
-      pickupCoords: { lat: 14.6572, lng: 120.9802 },
-      destinationCoords: { lat: 14.4934, lng: 121.0405 },
-      quotation: {
-        amount: 5500,
-        breakdown: [
-          { label: 'Base Delivery Fee', amount: 2000 },
-          { label: 'Distance Fee', amount: 1200 },
-          { label: 'Truck Type Surcharge', amount: 800 },
-          { label: 'Fuel Surcharge', amount: 600 },
-          { label: 'Loading/Unloading Fee', amount: 900 },
-        ],
-        notes: 'Standard delivery rate',
-      },
-      crew: {
-        driver: mockDriver,
-        helpers: mockHelpers,
-        truck: mockTruck,
-      },
-      assignedAt: 'Jul 26, 2026, 08:00 AM',
+    id: str(d.id),
+    customerName: str(d.customerName) || 'Customer',
+    companyName: str(d.companyName),
+    itemType: str(d.itemType),
+    pickupDate: str(d.pickupDate),
+    pickupTime: str(d.pickupTime),
+    pickupAddress: str(d.pickupAddress),
+    deliveryAddress: str(d.deliveryAddress),
+    status: DB_TO_DRIVER_STATUS[d.status] || str(d.status),
+    assignedAt: formatAssignedAt(d.assignedAt),
+    quotation: d.quotation ? { amount: Number(d.quotation.amount), breakdown: null } : null,
+    crew: {
+      driver: d.driver ? { id: str(d.driver.id), name: str(d.driver.name), phone: str(d.driver.phone) } : { id: '', name: 'You', phone: '' },
+      helpers: d.helpers || [],
+      truck: d.truck
+        ? { plateNumber: str(d.truck.plateNumber), truckType: str(d.truck.truckType), capacity: str(d.truck.capacity || '') }
+        : { plateNumber: '—', truckType: '', capacity: '' },
     },
-    upcoming: [
-      {
-        id: 'DEL-009',
-        customerName: 'Maria Santos',
-        companyName: 'Mang Inasal',
-        pickupAddress: 'Quezon City Hub, Brgy. Kamuning, Quezon City',
-        deliveryAddress: 'Eastwood Mall, Brgy. Bagumbayan, Quezon City',
-        itemType: 'Fast Food',
-        pickupDate: addDays(1),
-        pickupTime: '09:00',
-        status: 'ASSIGNED',
-        pickupCoords: { lat: 14.6360, lng: 121.0350 },
-        destinationCoords: { lat: 14.6091, lng: 121.0797 },
-        quotation: {
-          amount: 3200,
-          breakdown: [
-            { label: 'Base Delivery Fee', amount: 1500 },
-            { label: 'Distance Fee', amount: 700 },
-            { label: 'Truck Type Surcharge', amount: 500 },
-            { label: 'Fuel Surcharge', amount: 500 },
-          ],
-          notes: 'Morning delivery',
-        },
-        crew: {
-          driver: mockDriver,
-          helpers: [mockHelpers[0]],
-          truck: mockTruck,
-        },
-        assignedAt: 'Jul 29, 2026, 09:00 AM',
-      },
-      {
-        id: 'DEL-010',
-        customerName: 'Ferdinand Cruz',
-        companyName: 'Red Ribbon',
-        pickupAddress: 'Makati Depot, Brgy. Poblacion, Makati',
-        deliveryAddress: 'Ortigas Center, Brgy. San Antonio, Pasig',
-        itemType: 'Bakery Goods',
-        pickupDate: addDays(3),
-        pickupTime: '10:30',
-        status: 'ASSIGNED',
-        pickupCoords: { lat: 14.5547, lng: 121.0244 },
-        destinationCoords: { lat: 14.5870, lng: 121.0614 },
-        quotation: {
-          amount: 2800,
-          breakdown: [
-            { label: 'Base Delivery Fee', amount: 1300 },
-            { label: 'Distance Fee', amount: 600 },
-            { label: 'Truck Type Surcharge', amount: 400 },
-            { label: 'Fuel Surcharge', amount: 500 },
-          ],
-          notes: 'Standard delivery',
-        },
-        crew: {
-          driver: mockDriver,
-          helpers: mockHelpers,
-          truck: { plateNumber: 'DEF 9012', truckType: 'AUV', capacity: '1.2 tons' },
-        },
-        assignedAt: 'Jul 28, 2026, 03:00 PM',
-      },
-    ],
-    completed: [
-      {
-        id: 'DEL-004',
-        customerName: 'Ana Ramirez',
-        companyName: "McDonald's",
-        pickupAddress: 'Pasig Hub, Brgy. San Joaquin, Pasig',
-        deliveryAddress: 'BGC Branch, Brgy. Fort Bonifacio, Taguig',
-        itemType: 'Frozen Goods',
-        pickupDate: '2026-07-20',
-        pickupTime: '08:30',
-        status: 'COMPLETED',
-        pickupCoords: { lat: 14.5600, lng: 121.0700 },
-        destinationCoords: { lat: 14.5506, lng: 121.0471 },
-        quotation: {
-          amount: 4200,
-          breakdown: [
-            { label: 'Base Delivery Fee', amount: 1500 },
-            { label: 'Distance Fee', amount: 800 },
-            { label: 'Truck Type Surcharge', amount: 600 },
-            { label: 'Fuel Surcharge', amount: 500 },
-            { label: 'Loading/Unloading Fee', amount: 800 },
-          ],
-          notes: 'Standard delivery',
-        },
-        crew: {
-          driver: mockDriver,
-          helpers: [{ id: 'HLP-001', name: 'Pedro Garcia' }],
-          truck: { plateNumber: 'ABC 1234', truckType: 'AUV', capacity: '1.2 tons' },
-        },
-        assignedAt: 'Jul 19, 2026, 08:00 AM',
-      },
-      {
-        id: 'DEL-005',
-        customerName: 'Roberto Dimagiba',
-        companyName: 'Chowking',
-        pickupAddress: 'Cavite Depot, Brgy. San Antonio, Cavite',
-        deliveryAddress: 'Alabang Branch, Brgy. Alabang, Muntinlupa',
-        itemType: 'Dry Food',
-        pickupDate: '2026-07-19',
-        pickupTime: '06:00',
-        status: 'COMPLETED',
-        pickupCoords: { lat: 14.3000, lng: 120.9600 },
-        destinationCoords: { lat: 14.4201, lng: 121.0312 },
-        quotation: {
-          amount: 3800,
-          breakdown: [
-            { label: 'Base Delivery Fee', amount: 1200 },
-            { label: 'Distance Fee', amount: 600 },
-            { label: 'Truck Type Surcharge', amount: 500 },
-            { label: 'Fuel Surcharge', amount: 400 },
-            { label: 'Loading/Unloading Fee', amount: 1100 },
-          ],
-          notes: 'Early morning delivery',
-        },
-        crew: {
-          driver: mockDriver,
-          helpers: [{ id: 'HLP-002', name: 'Luis Torres' }],
-          truck: { plateNumber: 'XYZ 5678', truckType: '2T_REF', capacity: '2.0 tons' },
-        },
-        assignedAt: 'Jul 18, 2026, 10:00 AM',
-      },
-    ],
+    pickupCoords: parseCoords(d.pickupAddress),
+    destinationCoords: parseCoords(d.deliveryAddress),
   }
 }
 
@@ -1322,7 +1220,9 @@ function TabButton({ label, count, isActive, onClick }) {
 }
 
 function DriverDeliveries() {
-  const [data, setData] = useState(() => buildInitialState())
+  const [data, setData] = useState({ active: null, upcoming: [], completed: [] })
+  const [isLoadingDeliveries, setIsLoadingDeliveries] = useState(true)
+  const [deliveriesError, setDeliveriesError] = useState('')
   const [selectedDelivery, setSelectedDelivery] = useState(null)
   const [search, setSearch] = useState('')
   const [expandedReport, setExpandedReport] = useState(null)
@@ -1330,6 +1230,7 @@ function DriverDeliveries() {
   const [confirmingStageAdvance, setConfirmingStageAdvance] = useState(false)
   const [liveAlerts, setLiveAlerts] = useState([])
   const [isAlertHistoryExpanded, setIsAlertHistoryExpanded] = useState(false)
+  const [completionNotice, setCompletionNotice] = useState(null)
 
   const active = data.active
   const statusCfg = active ? statusConfig[active.status] : null
@@ -1350,6 +1251,48 @@ function DriverDeliveries() {
   const isMonitoring = Boolean(active) && (active.status === 'FOR_PICKUP' || active.status === 'OUT_FOR_DELIVERY')
 
   useEffect(() => {
+    let isMounted = true
+
+    async function loadDeliveries() {
+      setIsLoadingDeliveries(true)
+      setDeliveriesError('')
+      const { data: result, error } = await supabase.functions.invoke('admin-users', {
+        body: { action: 'get-driver-deliveries' },
+      })
+      if (!isMounted) return
+      if (error) {
+        setDeliveriesError('Failed to load your deliveries. Please try again.')
+        setData({ active: null, upcoming: [], completed: [] })
+        setIsLoadingDeliveries(false)
+        return
+      }
+      const mapped = (result?.deliveries || []).map(mapDelivery)
+      const today = new Date().toISOString().slice(0, 10)
+      const nonArchived = mapped
+        .filter((d) => d.status !== 'DELIVERED' && d.status !== 'COMPLETED')
+        .sort((a, b) => String(a.pickupDate || '').localeCompare(String(b.pickupDate || '')))
+      const activeDelivery = nonArchived.find((d) => d.pickupDate === today) || null
+      setData({
+        active: activeDelivery,
+        upcoming: nonArchived.filter((d) => d.id !== (activeDelivery && activeDelivery.id)),
+        completed: mapped.filter((d) => d.status === 'DELIVERED' || d.status === 'COMPLETED'),
+      })
+      setIsLoadingDeliveries(false)
+    }
+
+    loadDeliveries()
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!completionNotice) return undefined
+    const timer = setTimeout(() => setCompletionNotice(null), 5000)
+    return () => clearTimeout(timer)
+  }, [completionNotice])
+
+  useEffect(() => {
     if (!isMonitoring) return undefined
     const interval = setInterval(() => {
       if (Math.random() >= LIVE_ALERT_CHANCE) return
@@ -1361,19 +1304,29 @@ function DriverDeliveries() {
     return () => clearInterval(interval)
   }, [isMonitoring])
 
-  const advanceStage = () => {
-    if (!statusCfg || !statusCfg.nextStage) return
+  const advanceStage = async () => {
+    if (!active || !statusCfg || !statusCfg.nextStage) return
+    const nextDbStatus = DRIVER_STATUS_TO_DB[statusCfg.nextStage]
+    const { error } = await supabase.functions.invoke('admin-users', {
+      body: { action: 'update-driver-delivery', deliveryId: active.id, status: nextDbStatus },
+    })
+    if (error) {
+      alert('Failed to update the delivery. Please try again.')
+      return
+    }
     if (statusCfg.nextStage === 'DELIVERED') {
       // Handing over the cargo finishes the driver's job — archive it right away instead of
       // asking for a separate "complete" tap. Customer confirmation happens later, on its own.
       setData((prev) => ({
         active: null,
-        completed: [{ ...prev.active, status: 'DELIVERED' }, ...prev.completed],
+        upcoming: prev.upcoming || [],
+        completed: [{ ...prev.active, status: 'DELIVERED' }, ...(prev.completed || [])],
       }))
       // The live feed is per-trip and this trip just ended — its history now
       // lives in the archived report instead, so clear it for the next trip.
       setLiveAlerts([])
       setIsAlertHistoryExpanded(false)
+      setCompletionNotice({ id: active.id, customerName: active.customerName })
       return
     }
     if (statusCfg.nextStage === 'FOR_PICKUP') {
@@ -1394,6 +1347,7 @@ function DriverDeliveries() {
   }
 
   const openDirections = (origin, destination) => {
+    if (!origin || !destination) return
     window.open(toGoogleMapsDirections(origin, destination), '_blank')
   }
 
@@ -1421,6 +1375,18 @@ function DriverDeliveries() {
   return (
     <DriverLayout title="Deliveries" background={null}>
       <div className="flex w-full min-w-0 flex-col gap-3 pb-4">
+        {deliveriesError && (
+          <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 sm:px-4 sm:py-3 sm:text-sm">
+            {deliveriesError}
+          </p>
+        )}
+
+        {isLoadingDeliveries ? (
+          <p className="rounded-xl border border-amber-200/70 bg-white p-5 text-center text-[11px] text-slate-500">
+            Loading your deliveries…
+          </p>
+        ) : (
+          <>
         {/* Tabs */}
         <div className="flex border-b border-slate-200">
           {DELIVERY_TABS.map((tab) => (
@@ -1491,7 +1457,9 @@ function DriverDeliveries() {
                       <Wallet className="h-3 w-3 shrink-0 text-amber-700" />
                       <p className="text-[9px] text-slate-500">Fee</p>
                     </div>
-                    <p className="truncate text-xs font-bold text-amber-900">₱{active.quotation.amount.toLocaleString()}</p>
+                    <p className="truncate text-xs font-bold text-amber-900">
+                      {active.quotation ? `₱${Number(active.quotation.amount).toLocaleString()}` : '—'}
+                    </p>
                   </div>
                 </div>
 
@@ -1751,6 +1719,8 @@ function DriverDeliveries() {
             </div>
           )
         )}
+          </>
+        )}
       </div>
 
       {/* Confirm before advancing the delivery status — prevents an accidental tap on the
@@ -1785,6 +1755,37 @@ function DriverDeliveries() {
               >
                 {statusCfg.nextLabel}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Completion confirmation — floats above the page after the driver hands
+          over the cargo, and auto-dismisses after a few seconds. */}
+      {completionNotice && (
+        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center px-4">
+          <div className="pointer-events-auto w-full max-w-sm overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-2xl shadow-emerald-900/15">
+            <div className="flex items-center gap-3 bg-emerald-600 px-4 py-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20">
+                <CheckCircle2 className="h-5 w-5 text-white" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-white">Delivery Completed</p>
+                <p className="truncate text-[11px] text-emerald-100">{completionNotice.id} • handed over to the customer</p>
+              </div>
+              <button
+                onClick={() => setCompletionNotice(null)}
+                aria-label="Dismiss"
+                className="shrink-0 rounded-full p-1 text-emerald-100 transition hover:bg-white/20 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="px-4 py-3">
+              <p className="text-[11px] leading-relaxed text-slate-600">
+                Great job! This delivery has been marked as delivered and moved to your history. The customer will
+                confirm on their end to finalize the trip.
+              </p>
             </div>
           </div>
         </div>

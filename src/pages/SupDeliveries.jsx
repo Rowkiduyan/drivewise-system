@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   Check,
   CheckCircle2,
   ChevronRight,
   FileText,
+  Handshake,
   MapPin,
   Package,
   Search,
@@ -145,6 +146,18 @@ function formatIsoDateTime(iso) {
   return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}, ${hour12}:${String(d.getMinutes()).padStart(2, '0')} ${suffix}`
 }
 
+// Short timestamp for chat bubbles: "Aug 3, 11:02 PM".
+function formatMessageTimestamp(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const h = d.getHours()
+  const suffix = h >= 12 ? 'PM' : 'AM'
+  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+  return `${months[d.getMonth()]} ${d.getDate()}, ${hour12}:${String(d.getMinutes()).padStart(2, '0')} ${suffix}`
+}
+
 function getTruckType(r) {
   return r.crew?.truck?.truckType || r.truckType || 'AUV'
 }
@@ -247,12 +260,19 @@ function QuotationExpenseForm({
   operatingTotal,
   income,
   proposedRate,
+  customerBidMin,
+  customerBidMax,
+  customerCounterMin,
+  customerCounterMax,
   onSubmit,
   submitLabel,
 }) {
   const fm = (v) => parseMoney(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const directExpenses = form.directExpenses
   const indirectExpenses = form.indirectExpenses
+  const hasCustomerBidRange = customerBidMin != null && customerBidMax != null
+  const overCustomerBid = hasCustomerBidRange && proposedRate > customerBidMax
+  const hasCustomerCounterOffer = customerCounterMin != null && customerCounterMax != null
   const setField = (fieldPath, value) => {
     onFormChange((p) => {
       const next = { ...p }
@@ -381,6 +401,24 @@ function QuotationExpenseForm({
           <span className="text-sm font-bold text-slate-900 uppercase">Proposed Rate</span>
           <span className="text-lg font-bold text-sky-700">₱{fm(proposedRate)}</span>
         </div>
+        {hasCustomerBidRange && (
+          <p className="text-xs text-slate-500">
+            Customer's price range bid:{' '}
+            <span className="font-semibold">₱{Number(customerBidMin).toLocaleString()} – ₱{Number(customerBidMax).toLocaleString()}</span>
+          </p>
+        )}
+        {overCustomerBid && (
+          <p className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-600">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            The proposed rate is past the customer's price range bid (₱{Number(customerBidMax).toLocaleString()}). Adjust the quotation or expect a counter-offer.
+          </p>
+        )}
+        {hasCustomerCounterOffer && (
+          <p className="flex items-center gap-1.5 rounded-lg bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700">
+            <Handshake className="h-3.5 w-3.5 shrink-0" />
+            Customer requested a counter-offer range of ₱{Number(customerCounterMin).toLocaleString()} – ₱{Number(customerCounterMax).toLocaleString()}. Consider this when setting the proposed rate.
+          </p>
+        )}
       </div>
 
       <button
@@ -640,12 +678,6 @@ for (const c of delivery_cancellations) {
     cancelledFromStatus: c.cancelled_from_status,
     cancellationReason: c.cancellation_reason,
   }
-}
-
-const CUSTOMER_REPLIES = {
-  'Item damaged': 'Thank you for the update. Please schedule a replacement for the damaged cases.',
-  'Missing item(s)': 'Understood. Kindly confirm the schedule for the delivery of the missing boxes.',
-  'Wrong item delivered': 'Appreciated. Please advise when the correct stock can be exchanged.',
 }
 
 const reportedIssues = [
@@ -1055,6 +1087,12 @@ function DeliveryRequestDetails({ request }) {
             <span className="text-sm font-semibold text-slate-600">Price Range Bid</span>
             <span className="text-sm font-bold text-blue-700">{getPriceRangeBid(request)}</span>
           </div>
+          {request.customerCounterMin != null && request.customerCounterMax != null && (
+            <div className="mt-1.5 flex items-center gap-1.5 rounded-xl bg-orange-50 border border-orange-100 px-4 py-2 text-xs font-semibold text-orange-700">
+              <Handshake className="h-3.5 w-3.5 shrink-0" />
+              Customer requested a counter-offer: ₱{Number(request.customerCounterMin).toLocaleString()} – ₱{Number(request.customerCounterMax).toLocaleString()}
+            </div>
+          )}
         </div>
 
         {request.notes && (
@@ -2157,6 +2195,15 @@ function mapDbRequest(row, clientName, fleet) {
     cancelledBy: row.cancelled_by,
     cancelReason: row.cancel_reason,
     cancelledAt: row.cancelled_at ? formatIsoDateTime(row.cancelled_at) : null,
+    // Customer confirmation / issue-report state (written by the customer via
+    // CustomerDeliveries.jsx; the Issues and Completed modules read these).
+    receivedConfirmed: row.received_confirmed,
+    receivedConfirmedAt: row.received_confirmed_at ? formatIsoDateTime(row.received_confirmed_at) : null,
+    issueReported: row.issue_reported,
+    issueReportedAt: row.issue_reported_at ? formatIsoDateTime(row.issue_reported_at) : null,
+    issueDescription: row.issue_description || '',
+    resolvedAt: row.resolved_at ? formatIsoDateTime(row.resolved_at) : null,
+    completedAt: row.completed_at ? formatIsoDateTime(row.completed_at) : null,
     // Rebuild the assigned crew (same shape the assignment pickers produce)
     // from the persisted columns so an assigned request still shows its
     // driver/helpers/truck after a reload.
@@ -2176,7 +2223,10 @@ function getCounterOfferRange(r) {
 }
 
 function SupDeliveries() {
-  const [requests, setRequests] = useState(() => autoCompleteDelivered(mockRequests))
+  // Mock inbox state kept for the legacy mock modules (writes only — the UI
+  // reads the real dbRequests inbox now, and chat messages come from
+  // delivery_messages).
+  const [, setRequests] = useState(() => autoCompleteDelivered(mockRequests))
   const [dbRequests, setDbRequests] = useState([])
   // Real fleet for the Assign Vehicle pickers — trucks (from the RLS-open
   // `trucks` table) and crew (drivers/helpers via admin-users list-crew).
@@ -2237,99 +2287,166 @@ function SupDeliveries() {
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
-
   // Load the real inbox: all delivery_requests (Supervisor read policy) plus
   // the customer display names via the admin-users Edge Function (the client
   // can't read customer_records directly), then attach any existing quotations.
   // Only the inbox is DB-backed for now; the other modules still use mock data.
-  useEffect(() => {
-    let isMounted = true
-
-    async function loadInbox() {
-      setIsLoading(true)
-      setLoadError('')
-      try {
-        const clientNameById = {}
-        const { data: clientsData, error: clientsError } = await supabase.functions.invoke('admin-users', {
-          body: { action: 'list-clients' },
-        })
-        if (!clientsError && Array.isArray(clientsData?.clients)) {
-          for (const client of clientsData.clients) {
-            clientNameById[client.id] = client.name
-          }
+  const mountedRef = useRef(true)
+  const loadInbox = useCallback(async () => {
+    setIsLoading(true)
+    setLoadError('')
+    try {
+      const clientNameById = {}
+      const { data: clientsData, error: clientsError } = await supabase.functions.invoke('admin-users', {
+        body: { action: 'list-clients' },
+      })
+      if (!clientsError && Array.isArray(clientsData?.clients)) {
+        for (const client of clientsData.clients) {
+          clientNameById[client.id] = client.name
         }
-
-        // Real fleet for the Assign Vehicle pickers: trucks from the `trucks`
-        // table (RLS-open, so the supervisor can query directly) and crew from
-        // the admin-users list-crew action (drivers/helpers + *_records rows).
-        const fleet = { drivers: [], helpers: [], trucks: [] }
-        const { data: trucksData, error: trucksError } = await supabase.from('trucks').select('*')
-        if (!trucksError) {
-          fleet.trucks = (trucksData || []).map(mapFleetTruck)
-        }
-        const { data: crewData, error: crewError } = await supabase.functions.invoke('admin-users', {
-          body: { action: 'list-crew' },
-        })
-        if (!crewError && Array.isArray(crewData?.crew)) {
-          for (const m of crewData.crew) {
-            if (m.deactivated_at || !m.record_id) continue
-            const mapped = mapFleetCrewMember(m)
-            if (m.role === 'Driver') fleet.drivers.push(mapped)
-            else if (m.role === 'Helper') fleet.helpers.push(mapped)
-          }
-        }
-        if (isMounted) setFleet(fleet)
-
-        const { data, error } = await supabase
-          .from('delivery_requests')
-          .select('*')
-          .order('created_at', { ascending: false })
-        if (!isMounted) return
-        if (error) {
-          setLoadError('Failed to load delivery requests. Please try again.')
-          setDbRequests([])
-          return
-        }
-
-        let rows = (data || []).map((row) => mapDbRequest(row, clientNameById[row.customer_auth_id], fleet))
-        const ids = rows.map((r) => r.id)
-
-        if (ids.length > 0) {
-          const { data: qtns, error: qError } = await supabase
-            .from('delivery_quotations')
-            .select('*')
-            .in('delivery_id', ids)
-          if (!isMounted) return
-          if (!qError) {
-            const qtnsByDelivery = {}
-            for (const q of qtns || []) {
-              if (!qtnsByDelivery[q.delivery_id]) qtnsByDelivery[q.delivery_id] = {}
-              qtnsByDelivery[q.delivery_id][q.quotation_type] = q
-            }
-            rows = rows.map((row) => {
-              const qmap = qtnsByDelivery[row.id] || {}
-              return {
-                ...row,
-                quotation: qmap.initial ? { amount: qmap.initial.amount, breakdown: qmap.initial.breakdown, notes: qmap.initial.notes, validUntil: qmap.initial.valid_until } : null,
-                updatedQuotation: qmap.updated ? { amount: qmap.updated.amount, breakdown: qmap.updated.breakdown, notes: qmap.updated.notes, validUntil: qmap.updated.valid_until } : null,
-              }
-            })
-          }
-        }
-
-        if (isMounted) setDbRequests(rows)
-      } catch {
-        if (isMounted) setLoadError('Failed to load delivery requests. Please try again.')
-      } finally {
-        if (isMounted) setIsLoading(false)
       }
-    }
 
-    loadInbox()
-    return () => {
-      isMounted = false
+      // Real fleet for the Assign Vehicle pickers: trucks from the `trucks`
+      // table (RLS-open, so the supervisor can query directly) and crew from
+      // the admin-users list-crew action (drivers/helpers + *_records rows).
+      const fleet = { drivers: [], helpers: [], trucks: [] }
+      const { data: trucksData, error: trucksError } = await supabase.from('trucks').select('*')
+      if (!trucksError) {
+        fleet.trucks = (trucksData || []).map(mapFleetTruck)
+      }
+      const { data: crewData, error: crewError } = await supabase.functions.invoke('admin-users', {
+        body: { action: 'list-crew' },
+      })
+      if (!crewError && Array.isArray(crewData?.crew)) {
+        for (const m of crewData.crew) {
+          if (m.deactivated_at || !m.record_id) continue
+          const mapped = mapFleetCrewMember(m)
+          if (m.role === 'Driver') fleet.drivers.push(mapped)
+          else if (m.role === 'Helper') fleet.helpers.push(mapped)
+        }
+      }
+      if (mountedRef.current) setFleet(fleet)
+
+      const { data, error } = await supabase
+        .from('delivery_requests')
+        .select('*')
+        .order('created_at', { ascending: false })
+      if (!mountedRef.current) return
+      if (error) {
+        setLoadError('Failed to load delivery requests. Please try again.')
+        setDbRequests([])
+        return
+      }
+
+      let rows = (data || []).map((row) => mapDbRequest(row, clientNameById[row.customer_auth_id], fleet))
+
+      const ids = rows.map((r) => r.id)
+
+      if (ids.length > 0) {
+        const { data: qtns, error: qError } = await supabase
+          .from('delivery_quotations')
+          .select('*')
+          .in('delivery_id', ids)
+        if (!mountedRef.current) return
+        if (!qError) {
+          const qtnsByDelivery = {}
+          for (const q of qtns || []) {
+            if (!qtnsByDelivery[q.delivery_id]) qtnsByDelivery[q.delivery_id] = {}
+            qtnsByDelivery[q.delivery_id][q.quotation_type] = q
+          }
+          rows = rows.map((row) => {
+            const qmap = qtnsByDelivery[row.id] || {}
+            return {
+              ...row,
+              quotation: qmap.initial ? { amount: qmap.initial.amount, breakdown: qmap.initial.breakdown, notes: qmap.initial.notes, validUntil: qmap.initial.valid_until } : null,
+              updatedQuotation: qmap.updated ? { amount: qmap.updated.amount, breakdown: qmap.updated.breakdown, notes: qmap.updated.notes, validUntil: qmap.updated.valid_until } : null,
+            }
+          })
+        }
+      }
+
+      if (mountedRef.current) setDbRequests(rows)
+    } catch {
+      if (mountedRef.current) setLoadError('Failed to load delivery requests. Please try again.')
+    } finally {
+      if (mountedRef.current) setIsLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    loadInbox()
+    return () => {
+      mountedRef.current = false
+    }
+  }, [loadInbox])
+
+  // Keep the supervisor's lists live: any change to delivery_requests (customer
+  // reports an issue, confirms receipt, etc.) refreshes the inbox/issues lists.
+  useEffect(() => {
+    const channel = supabase
+      .channel('sup-delivery-requests-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'delivery_requests' }, () => {
+        loadInbox()
+      })
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [loadInbox])
+
+  // Live conversation for the currently open issue: load existing messages from
+  // `delivery_messages` and append any new ones as they arrive via Realtime.
+  // Keyed by delivery id so switching issues never flashes stale messages.
+  const [issueMessages, setIssueMessages] = useState({ deliveryId: null, messages: [] })
+  useEffect(() => {
+    const deliveryId = selectedIssue?.id
+    if (!deliveryId) return undefined
+    let isMounted = true
+    supabase
+      .from('delivery_messages')
+      .select('*')
+      .eq('delivery_id', deliveryId)
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (!error && isMounted) setIssueMessages({ deliveryId, messages: data || [] })
+      })
+    const channel = supabase
+      .channel(`sup-issue-${deliveryId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'delivery_messages', filter: `delivery_id=eq.${deliveryId}` },
+        (payload) => {
+          const row = payload.new
+          if (!isMounted || row.delivery_id !== deliveryId) return
+          setIssueMessages((prev) =>
+            prev.deliveryId !== deliveryId || prev.messages.some((m) => m.id === row.id)
+              ? prev
+              : { deliveryId, messages: [...prev.messages, row] },
+          )
+        },
+      )
+      .subscribe()
+    return () => {
+      isMounted = false
+      supabase.removeChannel(channel)
+    }
+  }, [selectedIssue?.id])
+
+  // Map the raw delivery_messages rows (id, sender, message, created_at) into
+  // the { id, sender, text, at } shape the IssueDetailView chat renders.
+  const selectedIssueWithMessages = useMemo(() => {
+    if (!selectedIssue) return null
+    const messages = issueMessages.deliveryId === selectedIssue.id ? issueMessages.messages : []
+    return {
+      ...selectedIssue,
+      messages: messages.map((m) => ({
+        id: m.id,
+        sender: m.sender,
+        text: m.message,
+        at: formatMessageTimestamp(m.created_at),
+      })),
+    }
+  }, [selectedIssue, issueMessages])
 
   const inboxRows = useMemo(
     () => dbRequests.filter((r) => ['PENDING_REQUEST', 'QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED', 'ASSIGNED'].includes(r.status)),
@@ -2393,8 +2510,8 @@ function SupDeliveries() {
   const paginatedInbox = filteredInbox.slice((safePage - 1) * itemsPerPage, safePage * itemsPerPage)
 
   const ongoingDeliveries = useMemo(
-    () => requests.filter((r) => ['OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED'].includes(r.status)),
-    [requests],
+    () => dbRequests.filter((r) => ['OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED'].includes(r.status)),
+    [dbRequests],
   )
 
   const filteredTransit = useMemo(() => {
@@ -2426,8 +2543,8 @@ function SupDeliveries() {
   }, [filteredTransit, monitoredDeliveryId, ongoingDeliveries])
 
   const completedDeliveries = useMemo(
-    () => requests.filter((r) => r.status === 'COMPLETED'),
-    [requests],
+    () => dbRequests.filter((r) => r.status === 'COMPLETED'),
+    [dbRequests],
   )
 
   // Declined/cancelled requests from the real data — read from dbRequests so
@@ -2461,8 +2578,8 @@ function SupDeliveries() {
   const paginatedCancelled = filteredCancelled.slice((cancelledSafePage - 1) * itemsPerPage, cancelledSafePage * itemsPerPage)
 
   const reportedIssuesList = useMemo(
-    () => requests.filter((r) => r.issueReported),
-    [requests],
+    () => dbRequests.filter((r) => r.issueReported),
+    [dbRequests],
   )
 
   const filteredIssues = useMemo(
@@ -2521,35 +2638,34 @@ function SupDeliveries() {
       prev.map((issue) => (issue.id === id ? { ...issue, resolvedAt, completedAt: resolvedAt, status: 'COMPLETED' } : issue)),
     )
     setSelectedIssue((prev) => (prev && prev.id === id ? { ...prev, resolvedAt, completedAt: resolvedAt, status: 'COMPLETED' } : prev))
+    // Persist the resolution to the backend so it survives a reload and the
+    // Completed module picks the request up (status COMPLETED + resolved_at).
+    supabase
+      .from('delivery_requests')
+      .update({ status: 'COMPLETED', resolved_at: new Date().toISOString(), completed_at: new Date().toISOString() })
+      .eq('id', id)
+      .then(({ error }) => {
+        if (error) return
+        setDbRequests((prev) => prev.map((row) =>
+          row.id === id
+            ? { ...row, status: 'COMPLETED', resolvedAt: formatIsoDateTime(new Date().toISOString()), completedAt: formatIsoDateTime(new Date().toISOString()) }
+            : row,
+        ))
+      })
   }
 
-  const sendIssueMessage = (id, text) => {
-    const at = new Date().toLocaleString('en-PH', {
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-    const newMsg = { id: `m-${Date.now()}`, sender: 'supervisor', text, at }
-    setRequests((prev) =>
-      prev.map((issue) => (issue.id === id ? { ...issue, messages: [...(issue.messages || []), newMsg] } : issue)),
+  const sendIssueMessage = async (id, text) => {
+    const { data, error } = await supabase
+      .from('delivery_messages')
+      .insert({ delivery_id: id, sender: 'supervisor', message: text })
+      .select()
+      .single()
+    if (error || !data) return
+    setIssueMessages((prev) =>
+      prev.deliveryId !== id || prev.messages.some((m) => m.id === data.id)
+        ? prev
+        : { deliveryId: id, messages: [...prev.messages, data] },
     )
-    setSelectedIssue((prev) =>
-      prev && prev.id === id ? { ...prev, messages: [...(prev.messages || []), newMsg] } : prev,
-    )
-    const issue = requests.find((i) => i.id === id)
-    const replyText =
-      CUSTOMER_REPLIES[issue?.issueCategory] ||
-      'We appreciate your response. Please keep us posted on the resolution.'
-    setTimeout(() => {
-      const reply = { id: `m-${Date.now() + 1}`, sender: 'customer', text: replyText, at }
-      setRequests((prev) =>
-        prev.map((i) => (i.id === id ? { ...i, messages: [...(i.messages || []), reply] } : i)),
-      )
-      setSelectedIssue((prev) =>
-        prev && prev.id === id ? { ...prev, messages: [...(prev.messages || []), reply] } : prev,
-      )
-    }, 1500)
   }
 
   const openDetails = (request) => {
@@ -3052,6 +3168,12 @@ function SupDeliveries() {
                         <span className="text-sm font-semibold text-slate-600">Price Range Bid</span>
                         <span className="text-sm font-bold text-blue-700">{getPriceRangeBid(selectedRequest)}</span>
                       </div>
+                      {selectedRequest.customerCounterMin != null && selectedRequest.customerCounterMax != null && (
+                        <div className="mt-1.5 flex items-center gap-1.5 rounded-xl bg-orange-50 border border-orange-100 px-4 py-2 text-xs font-semibold text-orange-700">
+                          <Handshake className="h-3.5 w-3.5 shrink-0" />
+                          Customer requested a counter-offer: ₱{Number(selectedRequest.customerCounterMin).toLocaleString()} – ₱{Number(selectedRequest.customerCounterMax).toLocaleString()}
+                        </div>
+                      )}
                     </div>
 
                     {/* Delivery Notes */}
@@ -3182,6 +3304,12 @@ function SupDeliveries() {
                       <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Customer Price Range Bid</p>
                         <p className="text-sm font-semibold text-slate-800">{getPriceRangeBid(selectedRequest)}</p>
+                        {selectedRequest.customerCounterMin != null && selectedRequest.customerCounterMax != null && (
+                          <p className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-orange-700">
+                            <Handshake className="h-3 w-3 shrink-0" />
+                            Counter-offer: ₱{Number(selectedRequest.customerCounterMin).toLocaleString()} – ₱{Number(selectedRequest.customerCounterMax).toLocaleString()}
+                          </p>
+                        )}
                       </div>
                       <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Total Distance (KM)</p>
@@ -3220,6 +3348,10 @@ function SupDeliveries() {
                         operatingTotal={getOperatingTotal()}
                         income={getIncome()}
                         proposedRate={getProposedRate()}
+                        customerBidMin={selectedRequest ? selectedRequest.budgetMin : null}
+                        customerBidMax={selectedRequest ? selectedRequest.budgetMax : null}
+                        customerCounterMin={selectedRequest ? selectedRequest.customerCounterMin : null}
+                        customerCounterMax={selectedRequest ? selectedRequest.customerCounterMax : null}
                         onSubmit={submitQuotation}
                         submitLabel="Submit Quotation"
                       />
@@ -3574,6 +3706,10 @@ function SupDeliveries() {
                         operatingTotal={getOperatingTotal()}
                         income={getIncome()}
                         proposedRate={getProposedRate()}
+                        customerBidMin={selectedRequest ? selectedRequest.budgetMin : null}
+                        customerBidMax={selectedRequest ? selectedRequest.budgetMax : null}
+                        customerCounterMin={selectedRequest ? selectedRequest.customerCounterMin : null}
+                        customerCounterMax={selectedRequest ? selectedRequest.customerCounterMax : null}
                         onSubmit={handleSubmitUpdatedQuotation}
                         submitLabel="Submit Updated Quotation"
                       />
@@ -4645,7 +4781,7 @@ function SupDeliveries() {
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
                   <IssueDetailView
-                    delivery={selectedIssue}
+                    delivery={selectedIssueWithMessages}
                     onResolve={() => resolveIssue(selectedIssue.id)}
                     onSendMessage={(text) => sendIssueMessage(selectedIssue.id, text)}
                   />

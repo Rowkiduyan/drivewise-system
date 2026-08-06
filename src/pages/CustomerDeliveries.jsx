@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  AlertTriangle, ArrowLeft, Calendar, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardList, Clock, FileText, MapPin, Package, Search, Send, Truck, Users, X
+  AlertTriangle, ArrowLeft, Calendar, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardList, Clock, FileText, MapPin, MessageSquare, Package, Search, Send, Truck, Users, X
 } from 'lucide-react'
 import CustomerLayout from '../layout/CustomerLayout.jsx'
 import { truckTypes, itemTypes } from '../lib/deliveryOptions.js'
@@ -710,7 +710,7 @@ function MobileDetailCard({ children }) {
 // to read inside a small dialog, especially on a phone. Everything the old
 // modal showed is still here, just laid out as page sections with a Back
 // action instead of dialog chrome.
-function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onCancellation }) {
+function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onCancellation, onReceivedConfirmation, onIssueReport }) {
   const [showQuotationResponse, setShowQuotationResponse] = useState(false)
   const [quotationAction, setQuotationAction] = useState(null)
   const [priceRange, setPriceRange] = useState({ min: '', max: '' })
@@ -727,6 +727,85 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
   const [showIssueModal, setShowIssueModal] = useState(false)
   const [issueReason, setIssueReason] = useState('')
   const [issueDescription, setIssueDescription] = useState('')
+
+  // Backend-persisted conversation with DriveWise for the "Report an Issue"
+  // flow: messages live in delivery_messages and stream in via Realtime.
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatDraft, setChatDraft] = useState('')
+  const chatResolved = Boolean(request.resolvedAt)
+
+  useEffect(() => {
+    if (!request.issueReported) return undefined
+    let isMounted = true
+    supabase
+      .from('delivery_messages')
+      .select('id, sender, message, created_at')
+      .eq('delivery_id', request.id)
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (!error && isMounted) setChatMessages(data || [])
+      })
+    const channel = supabase
+      .channel(`customer-chat-${request.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'delivery_messages', filter: `delivery_id=eq.${request.id}` },
+        (payload) => {
+          const row = payload.new
+          if (!isMounted || row.delivery_id !== request.id) return
+          setChatMessages((prev) => (prev.some((m) => m.id === row.id) ? prev : [...prev, row]))
+        },
+      )
+      .subscribe()
+    return () => {
+      isMounted = false
+      supabase.removeChannel(channel)
+    }
+  }, [request.id, request.issueReported])
+
+  // Keep this delivery row in sync live (supervisor resolves the issue, etc.)
+  // so the chat becomes read-only the moment the resolution lands.
+  const onUpdateRef = useRef(onUpdate)
+  useEffect(() => {
+    onUpdateRef.current = onUpdate
+  })
+  useEffect(() => {
+    const channel = supabase
+      .channel(`customer-request-row-${request.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'delivery_requests', filter: `id=eq.${request.id}` },
+        (payload) => {
+          const row = payload.new
+          onUpdateRef.current(request.id, {
+            status: row.status,
+            receivedConfirmed: row.received_confirmed,
+            receivedConfirmedAt: row.received_confirmed_at,
+            issueReported: row.issue_reported,
+            issueDescription: row.issue_description,
+            resolvedAt: row.resolved_at,
+            completedAt: row.completed_at,
+          })
+        },
+      )
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [request.id])
+
+  const handleSendChat = async () => {
+    const text = chatDraft.trim()
+    if (!text) return
+    const { data, error } = await supabase
+      .from('delivery_messages')
+      .insert({ delivery_id: request.id, sender: 'customer', message: text })
+      .select()
+      .single()
+    if (error) return
+    setChatMessages((prev) => (prev.some((m) => m.id === data.id) ? prev : [...prev, data]))
+    setChatDraft('')
+  }
 
   const status = statusConfig[request.status] || statusConfig.PENDING_REQUEST
   const StatusIcon = status.icon
@@ -811,7 +890,8 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
   }
 
   const handleConfirmReceived = () => {
-    onUpdate(request.id, { receivedConfirmed: true, receivedConfirmedAt: new Date().toISOString() })
+    onUpdate(request.id, { status: 'DELIVERY_COMPLETED', receivedConfirmed: true, receivedConfirmedAt: new Date().toISOString() })
+    onReceivedConfirmation?.(request.id)
     setShowConfirmModal(false)
   }
 
@@ -823,6 +903,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
       issueDescription: reason,
       issueReportedAt: new Date().toISOString()
     })
+    onIssueReport?.(request.id, { issueDescription: reason })
     setShowIssueModal(false)
     setIssueReason('')
     setIssueDescription('')
@@ -1863,6 +1944,70 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
         </div>
       )}
 
+      {request.issueReported && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+            <MessageSquare className="h-4 w-4 text-amber-600" />
+            Conversation with DriveWise
+          </h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Chat with the delivery team about your reported issue.
+            {chatResolved && <span className="font-medium text-emerald-700"> This issue is resolved — the conversation is now read-only.</span>}
+          </p>
+
+          <div className="mt-3 max-h-72 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+            {chatMessages.length === 0 && (
+              <p className="py-6 text-center text-xs text-slate-400">
+                No messages yet. The DriveWise team will follow up with you here.
+              </p>
+            )}
+            {chatMessages.map((m) => {
+              const isCustomer = m.sender === 'customer'
+              return (
+                <div key={m.id} className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
+                    isCustomer
+                      ? 'rounded-br-sm bg-emerald-600 text-white'
+                      : 'rounded-bl-sm bg-white text-slate-800 ring-1 ring-inset ring-slate-200'
+                  }`}>
+                    <p className="whitespace-pre-wrap">{m.message}</p>
+                    <p className={`mt-1 text-[10px] ${isCustomer ? 'text-emerald-100' : 'text-slate-400'}`}>
+                      {formatTimestamp(m.created_at)}
+                    </p>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {!chatResolved ? (
+            <div className="mt-3 flex gap-2">
+              <input
+                type="text"
+                value={chatDraft}
+                onChange={(e) => setChatDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSendChat() }}
+                placeholder="Type a message..."
+                className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
+              />
+              <button
+                onClick={handleSendChat}
+                disabled={!chatDraft.trim()}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Send className="h-4 w-4" />
+                Send
+              </button>
+            </div>
+          ) : (
+            <div className="mt-3 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-medium text-emerald-700">
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              This conversation is now read-only because the issue has been resolved.
+            </div>
+          )}
+        </div>
+      )}
+
       {showCancelForm && (
         <div className="rounded-2xl border border-red-200 bg-red-50 p-2.5 md:p-4 md:shadow-sm">
           <h3 className="text-xs font-semibold text-red-800 md:text-sm">Cancel This Delivery</h3>
@@ -2298,6 +2443,13 @@ function mapDeliveryRow(row) {
     cancelledBy: row.cancelled_by,
     cancelReason: row.cancel_reason,
     cancelledAt: row.cancelled_at,
+    receivedConfirmed: row.received_confirmed,
+    receivedConfirmedAt: row.received_confirmed_at,
+    issueReported: row.issue_reported,
+    issueReportedAt: row.issue_reported_at,
+    issueDescription: row.issue_description || '',
+    resolvedAt: row.resolved_at,
+    completedAt: row.completed_at,
     createdAt: row.created_at
   }
 }
@@ -2496,6 +2648,45 @@ function CustomerDeliveries() {
     }
   }
 
+  // Persist a customer "Confirm Received" to the backend: moves the request to
+  // COMPLETED and records when receipt was confirmed. Local state is updated
+  // optimistically by handleUpdateRequest; this write keeps the confirmation
+  // (and the COMPLETED status) across reloads for the customer, supervisor, and
+  // driver.
+  const persistReceivedConfirmation = async (id) => {
+    try {
+      await supabase
+        .from('delivery_requests')
+        .update({
+          status: 'COMPLETED',
+          received_confirmed: true,
+          received_confirmed_at: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+    } catch {
+      // Optimistic local state already applied.
+    }
+  }
+
+  // Persist a customer "Report an Issue" to the backend: status stays DELIVERED
+  // (per the SupDeliveries status-flow contract — the Issues module reads
+  // issue_reported, not a separate status), with the reason and timestamp.
+  const persistIssueReport = async (id, payload) => {
+    try {
+      await supabase
+        .from('delivery_requests')
+        .update({
+          issue_reported: true,
+          issue_reported_at: new Date().toISOString(),
+          issue_description: payload?.issueDescription || null,
+        })
+        .eq('id', id)
+    } catch {
+      // Optimistic local state already applied.
+    }
+  }
+
   const filteredRequests = deliveryRequests.filter(req => {
     // Filter by tab
     if (activeTab !== 'all' && req.status !== activeTab) return false
@@ -2555,6 +2746,8 @@ function CustomerDeliveries() {
           onUpdate={handleUpdateRequest}
           onQuotationResponse={persistQuotationResponse}
           onCancellation={persistCancellation}
+          onReceivedConfirmation={persistReceivedConfirmation}
+          onIssueReport={persistIssueReport}
         />
       </CustomerLayout>
     )
@@ -2767,7 +2960,8 @@ function CustomerDeliveries() {
               </button>
               <button
                 onClick={() => {
-                  handleUpdateRequest(confirmingRequest.id, { receivedConfirmed: true, receivedConfirmedAt: new Date().toISOString() })
+                  handleUpdateRequest(confirmingRequest.id, { status: 'DELIVERY_COMPLETED', receivedConfirmed: true, receivedConfirmedAt: new Date().toISOString() })
+                  persistReceivedConfirmation(confirmingRequest.id)
                   setConfirmingRequest(null)
                 }}
                 className="flex-1 rounded-lg bg-emerald-600 px-3 py-2.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
@@ -2837,6 +3031,7 @@ function CustomerDeliveries() {
                     issueDescription: reason,
                     issueReportedAt: new Date().toISOString()
                   })
+                  persistIssueReport(reportingRequest.id, { issueDescription: reason })
                   setReportingRequest(null)
                   setCardIssueReason('')
                   setCardIssueText('')

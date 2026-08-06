@@ -613,6 +613,183 @@ Deno.serve(async (req) => {
     }
   }
 
+  // Driver deliveries: resolve the delivery_requests assigned to the caller
+  // with the crew, customer, truck, and quotation details a Driver client
+  // can't read directly (the *_records tables, delivery_quotations, and the
+  // customer's display name are all service_role-only / not readable by a
+  // Driver session — see DATABASE.md and SUPABASE_GOTCHAS.md #8). Both
+  // actions look the caller's D00x record id up server-side from
+  // driver_records, so the client never sends its own crew id.
+  //
+  // Status updates go through update-driver-delivery (service_role) rather
+  // than a direct client UPDATE, so no RLS policy or column-guard trigger is
+  // needed on delivery_requests for Drivers — the transition table below is
+  // the guard, and it only allows the forward steps the driver UI performs.
+  if (callerRow.role === "Driver") {
+    const { data: driverRecord, error: driverRecordError } = await adminClient
+      .from("driver_records")
+      .select("id, first_name, middle_name, last_name, contact_number")
+      .eq("auth_id", callerData.user.id)
+      .maybeSingle();
+
+    if (driverRecordError || !driverRecord) {
+      return json({ error: "Unable to find your driver profile" }, 400);
+    }
+
+    const DRIVER_STATUS_TRANSITIONS: Record<string, string[]> = {
+      ASSIGNED: ["OUT_FOR_PICKUP"],
+      OUT_FOR_PICKUP: ["OUT_FOR_DROPOFF"],
+      ARRIVED_PICKUP: ["OUT_FOR_DROPOFF"],
+      OUT_FOR_DROPOFF: ["DELIVERED"],
+      ARRIVED_DROPOFF: ["DELIVERED"],
+    };
+
+    const formatCrewName = (rec: Record<string, unknown>) =>
+      [rec.first_name, rec.middle_name, rec.last_name].filter(Boolean).join(" ").trim();
+
+    if (action === "get-driver-deliveries") {
+      const { data: rows, error: rowsError } = await adminClient
+        .from("delivery_requests")
+        .select("*")
+        .eq("assigned_driver_id", driverRecord.id as string)
+        .order("pickup_date", { ascending: true });
+
+      if (rowsError) {
+        return json({ error: rowsError.message }, 400);
+      }
+
+      const deliveries: Array<Record<string, unknown>> = [];
+      const rowsList = rows || [];
+
+      const customerAuthIds = Array.from(new Set(rowsList.map((r) => r.customer_auth_id as string)));
+      const customerNameById = new Map<string, string>();
+      if (customerAuthIds.length > 0) {
+        const { data: customers } = await adminClient
+          .from("customer_records")
+          .select("auth_id, client_name, first_name, last_name")
+          .in("auth_id", customerAuthIds);
+        for (const c of customers || []) {
+          const clientName = c.client_name as string | null;
+          const personalName = [c.first_name, c.last_name].filter(Boolean).join(" ");
+          customerNameById.set(c.auth_id as string, clientName || personalName || "Client");
+        }
+      }
+
+      const helperIds = Array.from(new Set(rowsList.flatMap((r) => (r.assigned_helper_ids as string[]) || [])));
+      const helperById = new Map<string, Record<string, unknown>>();
+      if (helperIds.length > 0) {
+        const { data: helpers } = await adminClient
+          .from("helper_records")
+          .select("id, first_name, middle_name, last_name, contact_number")
+          .in("id", helperIds);
+        for (const h of helpers || []) helperById.set(h.id as string, h);
+      }
+
+      const plateNumbers = Array.from(new Set(rowsList.map((r) => r.assigned_truck_plate as string).filter(Boolean)));
+      const truckByPlate = new Map<string, Record<string, unknown>>();
+      if (plateNumbers.length > 0) {
+        const { data: trucks } = await adminClient
+          .from("trucks")
+          .select("plate_number, truck_type, max_capacity, brand, model")
+          .in("plate_number", plateNumbers);
+        for (const t of trucks || []) truckByPlate.set(t.plate_number as string, t);
+      }
+
+      const deliveryIds = rowsList.map((r) => r.id as string);
+      const quotationByDelivery = new Map<string, { amount: number }>();
+      if (deliveryIds.length > 0) {
+        // ordered ascending so the last row per delivery is the latest quotation
+        const { data: quotations } = await adminClient
+          .from("delivery_quotations")
+          .select("delivery_id, amount, created_at")
+          .in("delivery_id", deliveryIds)
+          .order("created_at", { ascending: true });
+        for (const q of quotations || []) {
+          quotationByDelivery.set(q.delivery_id as string, { amount: Number(q.amount) });
+        }
+      }
+
+      for (const r of rowsList) {
+        const helpers = ((r.assigned_helper_ids as string[]) || []).map((id) => {
+          const h = helperById.get(id);
+          return h ? { id, name: formatCrewName(h) || "Helper", position: h.position ?? "" } : { id, name: "Helper", position: "" };
+        });
+        const truck = r.assigned_truck_plate ? truckByPlate.get(r.assigned_truck_plate as string) : null;
+        const customerName = customerNameById.get(r.customer_auth_id as string) || "Client";
+        deliveries.push({
+          id: r.id,
+          customerName,
+          companyName: customerName,
+          itemType: r.item_type ? String(r.item_type).charAt(0).toUpperCase() + String(r.item_type).slice(1) : r.item_type,
+          pickupDate: r.pickup_date,
+          pickupTime: r.pickup_time ? String(r.pickup_time).slice(0, 5) : null,
+          dropoffDate: r.dropoff_date,
+          dropoffTime: r.dropoff_time ? String(r.dropoff_time).slice(0, 5) : null,
+          pickupAddress: r.pickup_location,
+          deliveryAddress: r.dropoff_location,
+          cargoWeight: r.cargo_weight,
+          status: r.status,
+          assignedAt: r.assigned_at,
+          driver: {
+            id: driverRecord.id,
+            name: formatCrewName(driverRecord) || "You",
+            phone: driverRecord.contact_number ?? "",
+          },
+          helpers,
+          truck: truck
+            ? {
+                plateNumber: truck.plate_number,
+                truckType: truck.truck_type,
+                capacity: truck.max_capacity != null ? `${Number(truck.max_capacity).toLocaleString()} kg` : null,
+              }
+            : null,
+          quotation: quotationByDelivery.get(r.id as string) || null,
+        });
+      }
+
+      return json({ ok: true, deliveries });
+    }
+
+    if (action === "update-driver-delivery") {
+      const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
+      const nextStatus = typeof body.status === "string" ? body.status : "";
+
+      if (!deliveryId || !nextStatus) {
+        return json({ error: "deliveryId and status are required" }, 400);
+      }
+
+      const { data: row, error: rowError } = await adminClient
+        .from("delivery_requests")
+        .select("id, status, assigned_driver_id")
+        .eq("id", deliveryId)
+        .maybeSingle();
+
+      if (rowError || !row) {
+        return json({ error: "Delivery not found" }, 400);
+      }
+
+      if (row.assigned_driver_id !== (driverRecord.id as string)) {
+        return json({ error: "Forbidden" }, 403);
+      }
+
+      const allowed = DRIVER_STATUS_TRANSITIONS[row.status as string] || [];
+      if (!allowed.includes(nextStatus)) {
+        return json({ error: `Cannot move a delivery from ${row.status} to ${nextStatus}` }, 400);
+      }
+
+      const { error: updateError } = await adminClient
+        .from("delivery_requests")
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .eq("id", deliveryId);
+
+      if (updateError) {
+        return json({ error: updateError.message }, 400);
+      }
+
+      return json({ ok: true, status: nextStatus });
+    }
+  }
+
   if (!ADMIN_ROLES.includes(callerRow.role)) {
     return json({ error: "Forbidden" }, 403);
   }
