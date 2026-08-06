@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
-import { supabase } from './supabaseClient.js'
+import { useEffect, useState } from "react";
+import { supabase } from "./supabaseClient.js";
 
 function deriveInitials(firstName, lastName) {
-  const first = firstName?.trim()?.charAt(0) || ''
-  const last = lastName?.trim()?.charAt(0) || ''
-  const initials = (first + last).toUpperCase()
-  return initials || '?'
+  const first = firstName?.trim()?.charAt(0) || "";
+  const last = lastName?.trim()?.charAt(0) || "";
+  const initials = (first + last).toUpperCase();
+  return initials || "?";
 }
 
 // Shared by every sidebar layout (Admin/Supervisor/Driver/Customer) to show
@@ -14,31 +14,40 @@ function deriveInitials(firstName, lastName) {
 // directly (service_role only, see DATABASE.md), so this goes through the
 // admin-users Edge Function's get-own-profile action.
 export function useUserInitials() {
-  const [initials, setInitials] = useState('')
+  const [initials, setInitials] = useState("");
 
   useEffect(() => {
-    let isMounted = true
+    let isMounted = true;
 
     async function loadInitials() {
-      const { data, error } = await supabase.functions.invoke('admin-users', {
-        body: { action: 'get-own-profile' }
-      })
-
-      if (!isMounted || error) {
-        return
+      // Ensure we have an authenticated session before invoking the Edge Function.
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        // No session – skip the request; the component will render placeholder initials.
+        return;
       }
 
-      setInitials(deriveInitials(data.profile.first_name, data.profile.last_name))
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "get-own-profile" },
+      });
+
+      if (!isMounted || error) {
+        return;
+      }
+
+      setInitials(
+        deriveInitials(data.profile.first_name, data.profile.last_name),
+      );
     }
 
-    loadInitials()
+    loadInitials();
 
     return () => {
-      isMounted = false
-    }
-  }, [])
+      isMounted = false;
+    };
+  }, []);
 
-  return initials
+  return initials;
 }
 
 // Same get-own-profile fetch as useUserInitials, but also returns
@@ -47,32 +56,44 @@ export function useUserInitials() {
 // useUserInitials's return shape) so the three layouts that only need
 // initials aren't touched.
 export function useUserProfile() {
-  const [profile, setProfile] = useState({ initials: '', profilePicture: null })
+  const [profile, setProfile] = useState({
+    initials: "",
+    profilePicture: null,
+  });
 
   useEffect(() => {
-    let isMounted = true
+    let isMounted = true;
 
     async function loadProfile() {
-      const { data, error } = await supabase.functions.invoke('admin-users', {
-        body: { action: 'get-own-profile' }
-      })
+      // Ensure an authenticated session exists before calling the Edge Function.
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        return;
+      }
+
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "get-own-profile" },
+      });
 
       if (!isMounted || error) {
-        return
+        return;
       }
 
       setProfile({
-        initials: deriveInitials(data.profile.first_name, data.profile.last_name),
-        profilePicture: data.profile.profile_picture || null
-      })
+        initials: deriveInitials(
+          data.profile.first_name,
+          data.profile.last_name,
+        ),
+        profilePicture: data.profile.profile_picture || null,
+      });
     }
 
-    loadProfile()
+    loadProfile();
 
     return () => {
-      isMounted = false
-    }
-  }, [])
+      isMounted = false;
+    };
+  }, []);
 
-  return profile
+  return profile;
 }

@@ -11,7 +11,7 @@ import HelperProfile from "./pages/HelperProfile.jsx";
 import LandingPage from "./pages/LandingPage.jsx";
 import Login from "./pages/Login.jsx";
 import AdminHome from "./pages/AdminHome.jsx";
-import AdminDeviceManagement from "./pages/AdminDeviceManagement.jsx";
+import AdminDevices from "./pages/AdminDevices.jsx";
 import AdminAnalysis from "./pages/AdminAnalysis.jsx";
 import AdminProfile from "./pages/AdminProfile.jsx";
 import AdminTrucks from "./pages/AdminTrucks.jsx";
@@ -81,7 +81,7 @@ function App() {
       <Route path="/admin/user-management" element={<AdminHome />} />
       <Route
         path="/admin/device-management"
-        element={<AdminDeviceManagement />}
+        element={<AdminDevices />}
       />
       <Route path="/admin/analysis" element={<AdminAnalysis />} />
       <Route path="/admin/profile" element={<AdminProfile />} />

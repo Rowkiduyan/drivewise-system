@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import AdminLayout from "../layout/AdminLayout.jsx";
+import AddTruckModal from "../components/AddTruckModal.jsx";
 import {
   ArrowLeft,
   Truck,
@@ -19,6 +20,7 @@ import {
   Cog,
   Wind,
 } from "lucide-react";
+import { supabase } from "../lib/supabaseClient.js";
 
 // Utility to format a stored date string (yyyy-MM or yyyy-MM-dd) as "MM/YYYY"
 const formatMonthYear = (dateStr) => {
@@ -487,6 +489,31 @@ function AdminTruckProfile() {
   const [tripStatusFilter, setTripStatusFilter] = useState("All");
   const [tripPage, setTripPage] = useState(1);
   const [maintenanceStatusFilter, setMaintenanceStatusFilter] = useState("All");
+  const [isEditModalOpen, setEditModalOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  // Fetch the latest truck data after an edit. Uses plate_number as identifier.
+  const fetchTruck = async () => {
+    if (!truck?.plate_number) return;
+    const { data, error } = await supabase
+      .from("trucks")
+      .select("*")
+      .eq("plate_number", truck.plate_number)
+      .single();
+    if (error) {
+      setToast({ message: error.message, type: "error" });
+    } else if (data) {
+      // Simple approach: reload the page to reflect updated data.
+      // In a more refined implementation we could store truck data in state.
+      window.location.reload();
+    }
+  };
+  // Auto‑clear toast after a short period (3 seconds)
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   const trips = useMemo(() => (truck ? buildMockTrips(truck) : []), [truck]);
   const maintenanceRecords = useMemo(
@@ -604,14 +631,31 @@ function AdminTruckProfile() {
           {/* Edit button placeholder – backend functionality to be added later */}
           <button
             type="button"
-            onClick={() => {
-              // TODO: open edit modal for the current truck
-            }}
+            onClick={() => setEditModalOpen(true)}
             className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
           >
             <Pencil className="h-4 w-4" />
             Edit
           </button>
+          {/* Toast message with slide‑down animation */}
+          {toast && (
+            <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+              <p
+                className={`
+                    px-4 py-2 rounded-md shadow-md text-sm font-medium
+                    transition-transform duration-300 ease-out
+                    ${
+                      toast.type === "success"
+                        ? "bg-green-100 text-green-800 border border-green-300"
+                        : "bg-red-100 text-red-800 border border-red-300"
+                    }
+                    transform translate-y-0 opacity-100
+                  `}
+              >
+                {toast.message}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Profile header — compact identity strip: avatar, plate/status on
@@ -1010,6 +1054,25 @@ function AdminTruckProfile() {
           </div>
         )}
       </div>
+      {isEditModalOpen && (
+        <AddTruckModal
+          isOpen={isEditModalOpen}
+          onClose={() => setEditModalOpen(false)}
+          mode="edit"
+          initialData={truck}
+          onSuccess={() => {
+            // Show success toast, then refresh data.
+            setToast({
+              message: "Truck updated successfully",
+              type: "success",
+            });
+            if (typeof fetchTruck === "function") {
+              fetchTruck();
+            }
+            setEditModalOpen(false);
+          }}
+        />
+      )}
     </AdminLayout>
   );
 }
