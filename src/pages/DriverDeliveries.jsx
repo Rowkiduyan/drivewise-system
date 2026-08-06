@@ -210,6 +210,18 @@ function formatAlertTimestamp(value) {
   return `${monthLabel} ${day}, ${hour12}:${minute} ${suffix}`
 }
 
+// Today's date as "YYYY-MM-DD" in the user's local timezone. Delivery
+// pickup/dropoff dates are calendar dates entered by the customer (e.g.
+// "2026-08-07"), so grouping must compare against the *local* date — using
+// Date.toISOString() (UTC) shifts the comparison a day ahead in timezones
+// east of UTC (e.g. PH, UTC+8) during the morning.
+function localTodayISO() {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
 // Time-only ("2:45pm") variant of formatAlertTimestamp, for the live
 // monitoring feed where a full date would be redundant — every alert shown
 // there happened moments ago, today.
@@ -1234,7 +1246,7 @@ function DriverDeliveries() {
 
   const active = data.active
   const statusCfg = active ? statusConfig[active.status] : null
-  const todayISO = new Date().toISOString().slice(0, 10)
+  const todayISO = localTodayISO()
   const isActiveToday = active ? active.pickupDate === todayISO : false
   const todayCount = isActiveToday ? 1 : 0
   const upcomingCount = data.upcoming.length
@@ -1267,7 +1279,7 @@ function DriverDeliveries() {
         return
       }
       const mapped = (result?.deliveries || []).map(mapDelivery)
-      const today = new Date().toISOString().slice(0, 10)
+      const today = localTodayISO()
       const nonArchived = mapped
         .filter((d) => d.status !== 'DELIVERED' && d.status !== 'COMPLETED')
         .sort((a, b) => String(a.pickupDate || '').localeCompare(String(b.pickupDate || '')))

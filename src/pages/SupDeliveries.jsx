@@ -1068,6 +1068,9 @@ function DeliveryRequestDetails({ request }) {
             <Row label="Truck Type" value={getTruckType(request)} />
             <Row label="Capacity" value={getTruckCapacity(request)} />
             <Row label="Commodity Type" value={getCommodityType(request.itemType)} />
+            <Row label="Plate Number" value={request.crew?.truck?.plateNumber || 'Not yet assigned'} />
+            <Row label="Driver" value={request.crew?.driver?.name || 'Not yet assigned'} />
+            <Row label="Helpers" value={(request.crew?.helpers || []).map((h) => h.name).join(', ') || 'Not yet assigned'} />
           </div>
         </div>
 
@@ -1708,14 +1711,10 @@ function RouteDeviationTab({ report }) {
 function CompletedDeliveryReport({ delivery }) {
   const report = completed_delivery_reports[delivery.id]
   const [reportTab, setReportTab] = useState('details')
-
-  if (!report) {
-    return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
-        No detailed report available for this delivery.
-      </div>
-    )
-  }
+  // Telemetry tabs (trip/behavior/route) only apply when a DriveWise report
+  // exists. Real DB deliveries have no telemetry, so fall back to the tabs
+  // that only need the delivery row (Details + Quotation).
+  const tabs = report ? REPORT_TABS : REPORT_TABS.filter((t) => t.id === 'details' || t.id === 'quotation')
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -1735,7 +1734,7 @@ function CompletedDeliveryReport({ delivery }) {
       </div>
 
       <div className="flex gap-2 overflow-x-auto border-b border-slate-200 bg-slate-50 px-4 py-2.5 md:px-5">
-        {REPORT_TABS.map((tab) => {
+        {tabs.map((tab) => {
           const Icon = tab.icon
           const isActive = reportTab === tab.id
           return (
@@ -1756,9 +1755,9 @@ function CompletedDeliveryReport({ delivery }) {
       <div className="p-4 md:p-5">
         {reportTab === 'details' && <DeliveryRequestDetails request={delivery} />}
         {reportTab === 'quotation' && <QuotationTab delivery={delivery} />}
-        {reportTab === 'trip' && <TripDetailsTab delivery={delivery} report={report} />}
-        {reportTab === 'behavior' && <DriveWiseAnalysisTab report={report} />}
-        {reportTab === 'route' && <RouteDeviationTab report={report} />}
+        {report && reportTab === 'trip' && <TripDetailsTab delivery={delivery} report={report} />}
+        {report && reportTab === 'behavior' && <DriveWiseAnalysisTab report={report} />}
+        {report && reportTab === 'route' && <RouteDeviationTab report={report} />}
       </div>
     </div>
   )
@@ -1772,6 +1771,7 @@ function CancelledDeliveryDetails({ delivery }) {
     cancellationReason: delivery.cancelReason,
     cancelledBy: delivery.cancelledBy,
     cancelledAt: delivery.cancelledAt,
+    cancelledFromStatus: delivery.cancelledFromStatus,
   }
   return (
     <div className="space-y-4">
@@ -1964,7 +1964,7 @@ function IssueDetailView({ delivery, onResolve, onSendMessage }) {
       )}
 
       <div className="flex gap-2 overflow-x-auto border-b border-slate-200 bg-slate-50 px-4 py-2.5 md:px-5">
-        {REPORT_TABS.map((tab) => {
+        {(report ? REPORT_TABS : REPORT_TABS.filter((t) => t.id === 'details' || t.id === 'quotation')).map((tab) => {
           const Icon = tab.icon
           const isActive = reportTab === tab.id
           return (
@@ -1983,21 +1983,11 @@ function IssueDetailView({ delivery, onResolve, onSendMessage }) {
       </div>
 
       <div className="p-4 md:p-5">
-        {!report ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
-            No detailed report available for this delivery.
-          </div>
-        ) : reportTab === 'details' ? (
-          <DeliveryRequestDetails request={delivery} />
-        ) : reportTab === 'quotation' ? (
-          <QuotationTab delivery={delivery} />
-        ) : reportTab === 'trip' ? (
-          <TripDetailsTab delivery={delivery} report={report} />
-        ) : reportTab === 'behavior' ? (
-          <DriveWiseAnalysisTab report={report} />
-        ) : (
-          <RouteDeviationTab report={report} />
-        )}
+        {reportTab === 'details' && <DeliveryRequestDetails request={delivery} />}
+        {reportTab === 'quotation' && <QuotationTab delivery={delivery} />}
+        {report && reportTab === 'trip' && <TripDetailsTab delivery={delivery} report={report} />}
+        {report && reportTab === 'behavior' && <DriveWiseAnalysisTab report={report} />}
+        {report && reportTab === 'route' && <RouteDeviationTab report={report} />}
       </div>
     </div>
   )
@@ -2195,6 +2185,7 @@ function mapDbRequest(row, clientName, fleet) {
     cancelledBy: row.cancelled_by,
     cancelReason: row.cancel_reason,
     cancelledAt: row.cancelled_at ? formatIsoDateTime(row.cancelled_at) : null,
+    cancelledFromStatus: row.cancelled_from_status,
     // Customer confirmation / issue-report state (written by the customer via
     // CustomerDeliveries.jsx; the Issues and Completed modules read these).
     receivedConfirmed: row.received_confirmed,
@@ -2374,6 +2365,7 @@ function SupDeliveries() {
   }, [])
 
   useEffect(() => {
+    mountedRef.current = true
     loadInbox()
     return () => {
       mountedRef.current = false
@@ -2809,14 +2801,27 @@ function SupDeliveries() {
   }
   const confirmDecline = async () => {
     if (!selectedRequest) return
+    const cancelledAt = new Date().toISOString()
     const { error } = await supabase
       .from('delivery_requests')
-      .update({ status: 'CANCELLED' })
+      .update({
+        status: 'CANCELLED',
+        cancelled_by: 'supervisor',
+        cancel_reason: 'Location Restriction',
+        cancelled_at: cancelledAt,
+        cancelled_from_status: selectedRequest.status,
+      })
       .eq('id', selectedRequest.id)
     if (error) {
       return alert('Failed to decline the request. Please try again.')
     }
-    updateRequest(selectedRequest.id, { status: 'CANCELLED' })
+    updateRequest(selectedRequest.id, {
+      status: 'CANCELLED',
+      cancelledBy: 'supervisor',
+      cancelReason: 'Location Restriction',
+      cancelledAt: formatIsoDateTime(cancelledAt),
+      cancelledFromStatus: selectedRequest.status,
+    })
     setShowDeclineDialog(false)
     setSelectedRequest(null)
   }
@@ -3147,6 +3152,9 @@ function SupDeliveries() {
                         <Row label="Truck Type" value={getTruckType(selectedRequest)} />
                         <Row label="Capacity" value={getTruckCapacity(selectedRequest)} />
                         <Row label="Commodity Type" value={getCommodityType(selectedRequest.itemType)} />
+                        <Row label="Plate Number" value={selectedRequest.crew?.truck?.plateNumber || 'Not yet assigned'} />
+                        <Row label="Driver" value={selectedRequest.crew?.driver?.name || 'Not yet assigned'} />
+                        <Row label="Helpers" value={(selectedRequest.crew?.helpers || []).map((h) => h.name).join(', ') || 'Not yet assigned'} />
                       </div>
                     </div>
 
@@ -4994,9 +5002,9 @@ function SupDeliveries() {
                         <p className="text-sm text-slate-700 line-clamp-2">{delivery.pickupAddress}</p>
                         <p className="text-sm text-slate-700 line-clamp-2">{delivery.deliveryAddress}</p>
                         <div className="flex justify-center">
-                          {delivery.cancellation ? (
+                          {(delivery.cancellation?.cancelledFromStatus || delivery.cancelledFromStatus) ? (
                             <span className="inline-flex max-w-full rounded-full bg-slate-100 px-2 py-0.5 text-center text-[10px] font-semibold text-slate-600">
-                              {statusLabel[delivery.cancellation.cancelledFromStatus] ?? delivery.cancellation.cancelledFromStatus.replaceAll('_', ' ')}
+                              {statusLabel[delivery.cancellation?.cancelledFromStatus || delivery.cancelledFromStatus] ?? (delivery.cancellation?.cancelledFromStatus || delivery.cancelledFromStatus).replaceAll('_', ' ')}
                             </span>
                           ) : (
                             <span className="text-sm text-slate-400">—</span>

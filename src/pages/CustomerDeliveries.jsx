@@ -29,6 +29,17 @@ function formatDisplayDateTime(dateStr, timeStr) {
   return `${monthLabel} ${day}, ${year}, ${hour12}:${String(minute).padStart(2, '0')} ${period}`
 }
 
+// Today's date as "YYYY-MM-DD" in the user's local timezone. Pickup dates are
+// calendar dates (e.g. "2026-08-07"), so comparisons like "is the pickup still
+// in the future?" must use the local date — Date.toISOString() (UTC) would
+// shift the comparison a day ahead in timezones east of UTC (e.g. PH, UTC+8).
+function localTodayISO() {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
 // Status configuration
 const statusConfig = {
   PENDING_REQUEST: { label: 'Pending Request', color: 'bg-amber-100 text-amber-800', icon: Clock },
@@ -820,7 +831,16 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
   const itemLabel = request.itemType === 'other'
     ? `Other: ${request.otherItemType}`
     : itemTypes.find(i => i.value === request.itemType)?.label || request.itemType
-  const truckLabel = truckTypes.find(t => t.value === request.truckType)?.label || request.truckType
+  // The requested truck type (what the customer asked for) vs. the actual
+  // truck the supervisor assigned (from the fleet). Once a truck is assigned,
+  // the assigned truck's real type is shown as the primary "Truck Type" on
+  // both the customer and supervisor sides; the requested type is kept only
+  // as a note when it differs (a reefer may be assigned a dry van, etc.).
+  const requestedTruckLabel = truckTypes.find(t => t.value === request.truckType)?.label || request.truckType
+  const truckLabel = request.crew?.truck?.truckType || requestedTruckLabel
+  const requestedTruckNote = request.crew?.truck?.truckType && request.crew.truck.truckType !== requestedTruckLabel
+    ? `Requested: ${requestedTruckLabel}`
+    : null
   const plateNumber = request.crew?.truck?.plateNumber
   const driverName = request.crew?.driver?.name
   const helpersLabel = request.crew?.helpers?.length
@@ -850,7 +870,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
   // A crew/truck is already assigned once the request reaches FOR_PICKUP — from that
   // point on, cancelling needs the supervisor to sign off rather than taking effect right away.
   const hasAssignedCrew = Boolean(request.crew)
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localTodayISO()
   const isBeforePickup = !request.pickupDate || request.pickupDate > today
   const cancellationPending = request.cancellationRequested && request.status !== 'CANCELLED'
   const isCancellable = CANCELLABLE_STATUSES.includes(request.status) && isBeforePickup && !cancellationPending
@@ -921,13 +941,15 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
       })
     } else {
       const cancelledAt = new Date().toISOString()
+      const cancelledFromStatus = request.dbStatus || request.status
       onUpdate(request.id, {
         status: 'CANCELLED',
         cancelReason: reason,
         cancelledBy: 'customer',
-        cancelledAt
+        cancelledAt,
+        cancelledFromStatus
       })
-      onCancellation?.(request.id, { cancelledBy: 'customer', cancelReason: reason, cancelledAt })
+      onCancellation?.(request.id, { cancelledBy: 'customer', cancelReason: reason, cancelledAt, cancelledFromStatus })
     }
 
     setShowCancelForm(false)
@@ -1133,6 +1155,9 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
               <div>
                 <p className="text-[10px] text-slate-500 md:text-xs">Truck Type</p>
                 <p className="font-medium text-slate-900">{truckLabel}</p>
+                {requestedTruckNote && (
+                  <p className="text-[10px] text-slate-400">{requestedTruckNote}</p>
+                )}
               </div>
               <div>
                 <p className="text-[10px] text-slate-500 md:text-xs">Plate Number</p>
@@ -1303,6 +1328,9 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                     </h4>
                     <div className="space-y-1.5">
                       <Row label="Truck Type" value={truckLabel} />
+                      {requestedTruckNote && (
+                        <p className="text-[11px] text-slate-400">{requestedTruckNote}</p>
+                      )}
                       <Row label="Plate Number" value={plateNumber || 'Not yet assigned'} />
                       <Row label="Driver" value={driverName || 'Not yet assigned'} />
                       <Row label="Helpers" value={helpersLabel || 'Not yet assigned'} />
@@ -1626,7 +1654,10 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                     </span>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold text-slate-900">{request.crew.truck.plateNumber}</p>
-                      <p className="text-xs text-slate-500">{truckLabel}</p>
+                      <p className="text-xs text-slate-500">{request.crew.truck.capacity || ''}</p>
+                      {requestedTruckNote && (
+                        <p className="text-xs text-slate-400">{requestedTruckNote}</p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2443,6 +2474,7 @@ function mapDeliveryRow(row) {
     cancelledBy: row.cancelled_by,
     cancelReason: row.cancel_reason,
     cancelledAt: row.cancelled_at,
+    cancelledFromStatus: row.cancelled_from_status,
     receivedConfirmed: row.received_confirmed,
     receivedConfirmedAt: row.received_confirmed_at,
     issueReported: row.issue_reported,
@@ -2575,6 +2607,20 @@ function CustomerDeliveries() {
           }
           rows = rows.map((row) => attachQuotationState(row, qtnsByDelivery[row.id] || {}))
         }
+
+        // Resolve the assigned crew (driver/helpers/truck) server-side: the
+        // *_records tables are service_role-only, so the customer session can't
+        // read the names behind assigned_driver_id / assigned_helper_ids
+        // directly. get-delivery-crew returns them keyed by delivery id.
+        const { data: crewResult, error: crewError } = await supabase.functions.invoke('admin-users', {
+          body: { action: 'get-delivery-crew', deliveryIds: ids },
+        })
+        if (!isMounted) return
+        if (!crewError && crewResult?.crewByDelivery) {
+          rows = rows.map((row) => (
+            crewResult.crewByDelivery[row.id] ? { ...row, crew: crewResult.crewByDelivery[row.id] } : row
+          ))
+        }
       }
 
       if (isMounted) setDeliveryRequests(rows)
@@ -2641,6 +2687,7 @@ function CustomerDeliveries() {
           cancelled_by: payload?.cancelledBy || null,
           cancel_reason: payload?.cancelReason || null,
           cancelled_at: payload?.cancelledAt || null,
+          cancelled_from_status: payload?.cancelledFromStatus || null,
         })
         .eq('id', id)
     } catch {

@@ -790,6 +790,96 @@ Deno.serve(async (req) => {
     }
   }
 
+  // get-delivery-crew lets a Customer resolve the names behind their assigned
+  // crew (driver/helpers/truck) for their own delivery requests. The customer
+  // session can read its own delivery_requests rows (RLS) and the trucks table,
+  // but driver_records / helper_records are service_role-only (see DATABASE.md)
+  // — so the names are resolved here and returned keyed by delivery id. Only
+  // rows owned by the caller are ever read or returned.
+  if (action === "get-delivery-crew") {
+    const requestedIds: string[] = Array.isArray(body.deliveryIds) ? body.deliveryIds : [];
+    if (requestedIds.length === 0) {
+      return json({ ok: true, crewByDelivery: {} });
+    }
+
+    const { data: rows, error: rowsError } = await adminClient
+      .from("delivery_requests")
+      .select("id, customer_auth_id, assigned_driver_id, assigned_helper_ids, assigned_truck_plate")
+      .in("id", requestedIds);
+
+    if (rowsError) {
+      return json({ error: rowsError.message }, 400);
+    }
+
+    const owned = (rows || []).filter((r) => r.customer_auth_id === callerData.user.id);
+    if (owned.length === 0) {
+      return json({ ok: true, crewByDelivery: {} });
+    }
+
+    const formatCrewName = (rec: Record<string, unknown>) =>
+      [rec.first_name, rec.middle_name, rec.last_name].filter(Boolean).join(" ").trim();
+
+    const driverIds = Array.from(new Set(owned.map((r) => r.assigned_driver_id as string).filter(Boolean)));
+    const driverById = new Map<string, Record<string, unknown>>();
+    if (driverIds.length > 0) {
+      const { data: drivers } = await adminClient
+        .from("driver_records")
+        .select("id, first_name, middle_name, last_name")
+        .in("id", driverIds);
+      for (const d of drivers || []) driverById.set(d.id as string, d);
+    }
+
+    const helperIds = Array.from(new Set(owned.flatMap((r) => (r.assigned_helper_ids as string[]) || [])));
+    const helperById = new Map<string, Record<string, unknown>>();
+    if (helperIds.length > 0) {
+      const { data: helpers } = await adminClient
+        .from("helper_records")
+        .select("id, first_name, middle_name, last_name")
+        .in("id", helperIds);
+      for (const h of helpers || []) helperById.set(h.id as string, h);
+    }
+
+    const plateNumbers = Array.from(new Set(owned.map((r) => r.assigned_truck_plate as string).filter(Boolean)));
+    const truckByPlate = new Map<string, Record<string, unknown>>();
+    if (plateNumbers.length > 0) {
+      const { data: trucks } = await adminClient
+        .from("trucks")
+        .select("plate_number, truck_type, max_capacity")
+        .in("plate_number", plateNumbers);
+      for (const t of trucks || []) truckByPlate.set(t.plate_number as string, t);
+    }
+
+    const crewByDelivery: Record<string, unknown> = {};
+    for (const r of owned) {
+      if (!r.assigned_driver_id) {
+        continue;
+      }
+
+      const driver = driverById.get(r.assigned_driver_id as string);
+      const helpers = ((r.assigned_helper_ids as string[]) || []).map((id) => {
+        const h = helperById.get(id);
+        return h ? { id, name: formatCrewName(h) || "Helper" } : { id, name: "Helper" };
+      });
+      const truck = r.assigned_truck_plate ? truckByPlate.get(r.assigned_truck_plate as string) : null;
+
+      crewByDelivery[r.id as string] = {
+        driver: driver ? { id: r.assigned_driver_id, name: formatCrewName(driver) || "Driver" } : null,
+        helpers,
+        truck: truck
+          ? {
+              plateNumber: truck.plate_number,
+              truckType: truck.truck_type,
+              capacity: truck.max_capacity != null ? `${Number(truck.max_capacity).toLocaleString()} kg` : null,
+            }
+          : r.assigned_truck_plate
+            ? { plateNumber: r.assigned_truck_plate, truckType: null, capacity: null }
+            : null,
+      };
+    }
+
+    return json({ ok: true, crewByDelivery });
+  }
+
   if (!ADMIN_ROLES.includes(callerRow.role)) {
     return json({ error: "Forbidden" }, 403);
   }
