@@ -77,12 +77,15 @@ export default function AddTruckModal({
     container_height: "",
     container_length: "",
     current_mileage: "",
-    maintenance_interval: "",
-    maintenance_mileage_interval: "",
+    // Default maintenance values as requested
+    maintenance_interval: 6,
+    maintenance_mileage_interval: 5000,
   });
 
   // New state for edit mode handling
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  // Separate confirmation for the Add (create) flow
+  const [showAddConfirmModal, setShowAddConfirmModal] = useState(false);
   const [originalDeviceId, setOriginalDeviceId] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -163,20 +166,24 @@ export default function AddTruckModal({
         container_height: "",
         container_length: "",
         current_mileage: "",
-        maintenance_interval: "",
-        maintenance_mileage_interval: "",
+        // Default maintenance values as requested
+        maintenance_interval: 6,
+        maintenance_mileage_interval: 5000,
       });
       setOriginalDeviceId(null);
       const fetchDevices = async () => {
         const { data, error } = await supabase
           .from("devices")
-          .select("device_id, device_status, plate_number")
-          .eq("plate_number", null);
+          .select("device_id, device_status, plate_number");
         if (error) {
           console.error("Failed to fetch devices:", error);
           setAvailableDevices([]);
         } else {
-          setAvailableDevices(data || []);
+          // Only keep devices that are not assigned to any truck (plate_number null)
+          const unassigned = (data || []).filter(
+            (d) => d.plate_number === null,
+          );
+          setAvailableDevices(unassigned);
         }
       };
       fetchDevices();
@@ -245,6 +252,9 @@ export default function AddTruckModal({
         });
         return;
       }
+      // First insert the truck via the parent handler
+      if (onSubmit) await onSubmit(truckData);
+      // After the truck exists, associate the selected device (if any)
       if (formData.device_id) {
         const { error: deviceError } = await supabase
           .from("devices")
@@ -252,7 +262,6 @@ export default function AddTruckModal({
           .eq("device_id", formData.device_id);
         if (deviceError) throw deviceError;
       }
-      if (onSubmit) onSubmit(truckData);
       onClose();
       // Add custom options if needed
       if (
@@ -357,7 +366,8 @@ export default function AddTruckModal({
     if (mode === "edit") {
       setShowConfirmModal(true);
     } else {
-      executeCreateTruck();
+      // Open confirmation overlay for adding a new truck
+      setShowAddConfirmModal(true);
     }
   };
 
@@ -390,7 +400,9 @@ export default function AddTruckModal({
               value={formData.plate_number}
               onChange={handleChange}
               disabled={mode === "edit"}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm bg-gray-100 cursor-not-allowed"
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                mode === "edit" ? "bg-gray-100 cursor-not-allowed" : "bg-white"
+              }`}
             />
           </div>
           {/* Row: Date Acquired – calendar picker */}
@@ -690,6 +702,39 @@ export default function AddTruckModal({
                 <button
                   type="button"
                   onClick={executeUpdateTruck}
+                  className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? "Saving..." : "Confirm"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Confirmation overlay for add mode */}
+        {showAddConfirmModal && (
+          <div className="fixed inset-0 flex items-center justify-center bg-black/40">
+            <div className="bg-white rounded-lg p-6 max-w-sm w-full shadow-lg">
+              <h3 className="mb-4 text-lg font-medium text-gray-800">
+                Confirm New Truck
+              </h3>
+              <p className="mb-4 text-sm text-gray-600">
+                Are you sure you want to add this truck?
+              </p>
+              <div className="flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddConfirmModal(false)}
+                  className="rounded bg-gray-200 px-4 py-2 text-sm text-gray-800 hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setShowAddConfirmModal(false);
+                    await executeCreateTruck();
+                  }}
                   className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700"
                   disabled={isSubmitting}
                 >
