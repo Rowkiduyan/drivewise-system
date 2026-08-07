@@ -10,6 +10,9 @@
     - Driver profiles
     - Drowsiness monitoring sessions
     - Drowsiness alert records
+    - Trucks
+    - Telemetry devices
+    - Delivery requests and quotations
 
     The schema is currently under active development and will expand as additional fleet management features are implemented.
 
@@ -24,6 +27,11 @@
     users (1) -------- (1) customer_records
 
     sessions (1) ----- (N) alerts
+
+    trucks (1) ----- (0..N) devices              [devices.plate_number -> trucks.plate_number]
+    users (1) ----- (N) delivery_requests         [delivery_requests.customer_auth_id -> users.id]
+    delivery_requests (1) ----- (N) delivery_quotations [delivery_quotations.delivery_id -> delivery_requests.id]
+    users (1) ----- (N) delivery_quotations        [delivery_quotations.submitted_by -> users.id]
 
     Each user has exactly one profile row, in the `*_records` table matching their `role` — never more than one, and never in more than one table at a time.
 
@@ -108,6 +116,8 @@
 
     A session begins when raspberry pi is turned on and monitoring starts and ends when monitoring stops.
 
+    This describes the current prototype's session lifecycle. Per `IMPLEMENTATION/03_START_TRIP_AND_SESSION.md` and `IMPLEMENTATION/03B_PAUSE_AND_RESUME_TRIP.md`, this table's shape and lifecycle will become driver-triggered (Start/Pause/Resume/End Trip) as those phases are implemented.
+
     ### Key Fields
 
     - session_id
@@ -164,15 +174,144 @@
 
     ---
 
+    ## trucks
+
+    ### Purpose
+
+    Stores registered delivery trucks in the fleet. Created outside this document's original scope (added directly in Supabase); documented here to match the deployed schema as of 2026-08-06.
+
+    ### Key Fields
+
+    - id (UUID, Primary Key, default `gen_random_uuid()`)
+    - plate_number (text, unique, not null) — the truck's business identifier; referenced by `devices.plate_number`.
+    - date_acquired (text, nullable)
+    - brand (text, not null)
+    - model (text, not null)
+    - truck_type (text, not null)
+    - year_model (integer, nullable)
+    - container_height / container_width / container_length (numeric, nullable)
+    - max_capacity (numeric, nullable)
+    - current_mileage (numeric, nullable, default 0) — currently set manually via `AddTruckModal.jsx` (initial odometer reading). Decided 2026-08-08: once GPS/Sessions are implemented, this also gets auto-incremented per completed Session (Pause or End Trip) by that Session's GPS-derived distance — see `IMPLEMENTATION/05_GPS_PIPELINE.md`. Manual entry stays as the initial baseline only.
+    - maintenance_mileage_interval (numeric, nullable)
+    - maintenance_interval (integer, nullable)
+    - created_at (timestamptz, not null, default `timezone('utc', now())`)
+
+    Column `ordinal_position` has gaps (8, 9, 17, 18 are missing) from previously dropped columns — no action needed, just noting the deployed table doesn't have contiguous positions.
+
+    ### Relationships
+
+    - Referenced by `devices.plate_number`.
+
+    ---
+
+    ## devices
+
+    ### Purpose
+
+    Represents a Raspberry Pi telemetry device. Created outside this document's original scope (added directly in Supabase); documented here to match the deployed schema as of 2026-08-06.
+
+    ### Key Fields
+
+    - id (UUID, Primary Key, default `gen_random_uuid()`)
+    - device_id (text, unique, not null) — the device's own identifier, distinct from the internal `id` column. This is what `IMPLEMENTATION/*.md` refers to as `device_id`.
+    - plate_number (text, nullable) — references `trucks.plate_number`; nullable, so a device can exist unassigned to any truck.
+    - device_status (text, nullable, default `'Active'`)
+    - created_at (timestamptz, not null, default `timezone('utc', now())`)
+    - last_ping (timestamptz, nullable)
+    - device_secret_hash (text, nullable) — added 2026-08-06, not yet backfilled on existing rows and not yet read/written by any Edge Function.
+
+    ### Relationships
+
+    - `plate_number` references `trucks.plate_number` directly — there is no separate `truck_device_assignments` join table in the deployed schema.
+
+    ### Open contradictions with `IMPLEMENTATION/*.md`
+
+    See the chat discussion from 2026-08-06 — not resolved here, flagged for the team to decide:
+
+    - ~~No `device_secret` (or hashed equivalent) column exists.~~ Resolved 2026-08-06: `device_secret_hash` added. Still open: no existing device row has a value backfilled yet, and no Edge Function in `04_DEVICE_BOOT_AND_HEARTBEAT.md`/`05_GPS_PIPELINE.md`/`06_DROWSINESS_ALERT_PIPELINE.md` reads/writes it yet — the column exists but device authentication isn't wired up to it.
+    - ~~There is no `truck_device_assignments` table.~~ Resolved 2026-08-06 (decision, not a gap): not building one. Nothing needs assignment history — `devices.plate_number` (a direct FK to `trucks.plate_number`) is sufficient and is what the already-shipped Truck Management UI (`AdminTrucks.jsx`, `AddTruckModal.jsx`, `AdminTruckProfile.jsx`) already reads/writes. `IMPLEMENTATION/*.md` has been updated to reference this lookup instead.
+    - ~~`last_ping` exists instead of `last_seen`.~~ Resolved 2026-08-06 (decision, not a gap): confirmed `last_ping` is the same heartbeat-timestamp concept the docs called `last_seen`, and the column stays named `last_ping` since other modules already depend on it. `IMPLEMENTATION/*.md` (`04_DEVICE_BOOT_AND_HEARTBEAT.md`, `08_REALTIME_DASHBOARD.md`, `10_TESTING_CHECKLIST.md`) has been updated to reference `last_ping`.
+
+    ---
+
+    ## delivery_requests
+
+    ### Purpose
+
+    Represents a customer's delivery request, from initial booking through completion. Created outside this document's original scope (added directly in Supabase); documented here to match the deployed schema as of 2026-08-06.
+
+    ### Key Fields
+
+    - id (text, Primary Key, default `'DR-' || zero-padded sequence`, e.g. `DR-0001`)
+    - customer_auth_id (uuid, not null) — references `users.id`.
+    - pickup_date / pickup_time, dropoff_date / dropoff_time (not null)
+    - pickup_location / dropoff_location (text, not null)
+    - truck_type (text, not null) — requested truck type
+    - item_type (text, not null), other_item_type (text, nullable)
+    - cargo_weight (numeric, not null)
+    - budget_min / budget_max (numeric, nullable)
+    - notes (text, nullable)
+    - status (text, not null, default `'PENDING_REQUEST'`)
+    - customer_counter_min / customer_counter_max (numeric, nullable) — customer's counter-proposal on budget
+    - assigned_driver_id (text, nullable)
+    - assigned_helper_ids (array, nullable)
+    - assigned_truck_plate (text, nullable)
+    - assigned_at (timestamptz, nullable)
+    - created_at / updated_at (timestamptz, not null, default `now()`)
+
+    ### Relationships
+
+    - `customer_auth_id` references `users.id` (enforced foreign key).
+    - `assigned_driver_id`, `assigned_helper_ids`, and `assigned_truck_plate` are **not** enforced foreign keys at the database level, despite conceptually referring to `driver_records.id`, crew `users.id` values, and `trucks.plate_number` respectively — treat as unvalidated at the DB layer until confirmed otherwise.
+
+    ### Open contradictions with `IMPLEMENTATION/*.md`
+
+    - There is no separate `trips` table. `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md` onward describes a two-table model (`bookings` → `trips`, with `trips.status` cycling Assigned/Active/Paused/Completed). The deployed schema instead has this single `delivery_requests` table with one `status` column (currently seen default: `PENDING_REQUEST`) and driver/truck/helper assignment fields already on it — booking and trip appear to be the same row here, not two tables.
+    - ~~Counter-proposals and helper assignment "not described by this workflow, no backing schema."~~ Resolved 2026-08-06: `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md` now documents the real quotation-negotiation and crew-assignment flow (`delivery_quotations`, `customer_counter_min`/`max`, `assigned_helper_ids`).
+    - `status` already carries a full shipment-milestone flow, defined in code comments in `src/pages/SupDeliveries.jsx` (~line 434): `PENDING_REQUEST` → `QUOTATION_SUBMITTED`/`COUNTER_OFFER_SUBMITTED`/`FINAL_QUOTATION_SUBMITTED` → `APPROVED` → `ASSIGNED` → `OUT_FOR_PICKUP`/`ARRIVED_PICKUP` → `OUT_FOR_DROPOFF`/`ARRIVED_DROPOFF` → `DELIVERED` → `COMPLETED` (or `CANCELLED`). This tracks *where the shipment physically is*, driven by driver/dispatcher checkpoint actions — it is a different concern from `IMPLEMENTATION/`'s Trip/Session model, which tracks *whether GPS/drowsiness monitoring is currently running*. Resolution (not a contradiction, just a note for whoever implements Start/Pause/Resume/End Trip against this table): do not add Active/Paused/etc. values into `delivery_requests.status` — it already has no room for them alongside the milestone values above, and a single column can't hold both "`OUT_FOR_PICKUP`" and "`Paused`" at once. Start/Pause/Resume should only ever create/close rows in `sessions`; whether monitoring is currently on is answered by whether an open (no `ended_at`) `sessions` row exists for the delivery request, never by `delivery_requests.status`.
+
+One deliberate exception (decided 2026-08-06, see `IMPLEMENTATION/07_END_TRIP.md`): End Trip *does* also set `delivery_requests.status` to `DELIVERED`, since that's an existing milestone value in the flow above, not a new Session-state value — it's wiring an existing action (delivery physically finished) to an existing milestone, not mixing the two concerns. The Customer's "Confirm Receive" button then advances it to `COMPLETED`, same as the existing flow already does for a manually-confirmed delivery.
+
+    ---
+
+    ## delivery_quotations
+
+    ### Purpose
+
+    A price quotation submitted against a delivery request. Created outside this document's original scope (added directly in Supabase); documented here to match the deployed schema as of 2026-08-06.
+
+    ### Key Fields
+
+    - id (text, Primary Key, default `'QTN-' || zero-padded sequence`, e.g. `QTN-0001`)
+    - delivery_id (text, not null) — references `delivery_requests.id`.
+    - quotation_type (text, not null, default `'initial'`)
+    - amount (numeric, not null)
+    - breakdown (jsonb, not null, default `'{}'`)
+    - notes (text, nullable)
+    - valid_until (date, nullable)
+    - submitted_by (uuid, nullable) — references `users.id`.
+    - created_at (timestamptz, not null, default `now()`)
+
+    ### Relationships
+
+    - `delivery_id` references `delivery_requests.id`.
+    - `submitted_by` references `users.id`.
+
+    ### Open contradiction with `IMPLEMENTATION/*.md`
+
+    `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md`'s Important Rules currently states quotations are "not described by this workflow and have no backing schema... treat as unbuilt" — that line is no longer accurate now that `delivery_quotations` exists.
+
+    ---
+
     # Current Notes
 
-    The current database supports the drowsiness detection prototype.
-
-    At this stage:
+    The `sessions`/`alerts` pair still supports only the original drowsiness detection prototype:
 
     - One Raspberry Pi device sends monitoring data.
     - Drowsiness events are associated with a single predefined account.
-    - Multi-driver and multi-truck support has not yet been implemented.
+    - `sessions` is not yet linked to `delivery_requests`, `trucks`, or `devices` (no `trip_id`/`driver_id`/`truck_id`/`device_id` columns).
+
+    `trucks` and `devices` tables now exist (added directly in Supabase, outside this document's original scope) — multi-truck fleet data is tracked, but not yet wired into the drowsiness/telemetry tables above. See the "Open contradictions" notes under `devices` and `delivery_requests`.
 
     ---
     # Naming Conventions
@@ -181,10 +320,11 @@
     - Foreign keys reference the parent table's primary key.
     - Timestamps use UTC.
     - Per-role profile table ids use a single role-prefix letter + zero-padded sequence: `D` (Driver), `S` (Supervisor), `A` (Admin), `H` (Helper), `C` (Customer).
+    - `delivery_requests`/`delivery_quotations` ids use a short word prefix + zero-padded sequence instead: `DR-0001`, `QTN-0001` (via `nextval()` on a dedicated sequence per table, not the per-role letter convention above).
 
 
     This document describes the current logical database design.
 
     Authentication, RLS policies, Edge Functions, and Supabase-specific security are documented separately.
 
-    The schema will be expanded to support trips, trucks, GPS tracking, and fleet management features as development continues.
+    The schema will be expanded to support GPS tracking and further fleet management features as development continues. `trucks` and `devices` already exist; a `trips`/`sessions` model wiring drivers, trucks, devices, and delivery requests together per `IMPLEMENTATION/*.md` does not exist yet — see the "Open contradictions" notes above.

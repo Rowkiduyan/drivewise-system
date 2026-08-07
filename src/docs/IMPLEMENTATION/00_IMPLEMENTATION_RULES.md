@@ -33,7 +33,9 @@ Both communicate only with Supabase over the internet.
 
 ## Raspberry Pi Responsibilities
 
-The Raspberry Pi only knows:
+The Raspberry Pi is only a telemetry device.
+
+It only knows:
 
 - device_id
 - device_secret
@@ -43,8 +45,18 @@ It never knows:
 - driver_id
 - truck_id
 - trip_id
+- session_id
 
 Those relationships are managed entirely by the backend.
+
+It is only responsible for:
+
+- heartbeat
+- GPS
+- drowsiness detection
+- uploading alerts
+
+Business logic always belongs to the backend.
 
 ## Backend Responsibilities
 
@@ -53,9 +65,12 @@ The backend is responsible for:
 - Trip lifecycle
 - Session lifecycle
 - Device authentication
+- Device lookup
 - GPS storage
 - Alert storage
 - Device online/offline detection
+
+The backend maps incoming telemetry to the correct active session.
 
 ## Implementation Philosophy
 
@@ -66,3 +81,11 @@ Do not implement future phases.
 Do not add extra features not described in the current phase.
 
 If information is missing, ask instead of assuming.
+
+## Existing UI and Design
+
+If a screen, component, or design already exists for a feature being implemented, wire the backend/logic into it as-is — do not redesign, restyle, or restructure it as part of implementing that phase.
+
+This applies even if the existing UI is currently mocked, uses placeholder data, or doesn't yet match a phase's described backend shape (e.g. `SupDeliveries.jsx`, `CustomerDeliveries.jsx`) — connect it to the real data source, do not rebuild it.
+
+If the existing UI is genuinely incompatible with the required functionality, report that instead of changing it unasked, per the "ask instead of assuming" rule above.

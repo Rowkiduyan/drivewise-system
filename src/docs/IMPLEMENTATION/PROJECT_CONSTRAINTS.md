@@ -19,6 +19,8 @@
 
 - One active session per device.
 - One active device assignment per truck.
+- One Active or Paused Trip per driver at a time — a driver may have several Assigned Trips queued, but must complete (End Trip) the one they're on before starting a different one.
 - Trips begin only when the driver presses Start Trip.
 - Trips end only when the driver presses End Trip.
 - Heartbeat loss never ends a trip.
+- Powering off the Raspberry Pi never changes Trip or Session status — it is only detected passively via heartbeat timeout.
