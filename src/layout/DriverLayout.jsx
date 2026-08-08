@@ -242,8 +242,8 @@ function DriverLayout({ title, background, children }) {
         </aside>
 
         {/* Main Content */}
-        <div className="flex-1 min-w-0 flex flex-col overflow-hidden pt-14 md:pt-0">
-          <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden pt-14 md:pt-0">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             <div className="h-full px-4 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8 lg:px-12 lg:py-10">
               {deactivationWarning ? (
                 <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">

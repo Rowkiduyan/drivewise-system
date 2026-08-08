@@ -10,14 +10,13 @@ Driver presses End Trip in the Driver Web Application.
 
 The backend:
 
-- verifies the trip is Active
-- updates trip status to Completed
-- records actual_end_time
-- updates the session
-- records ended_at
-- calculates duration
-- computes the distance driven this Session, from its GPS route (see `05_GPS_PIPELINE.md`), and adds it to `trucks.current_mileage` for the truck used in this Session
-- marks session Completed
+- verifies there is a currently open Session for this delivery request
+- updates `delivery_requests.status` to `DELIVERED` (see "Delivery Status" below — this is the one place Trip actions touch `status`, not a generic "Completed" value)
+- updates the session:
+  - records end_time
+  - calculates duration
+  - computes the distance driven this Session, from its GPS route (see `05_GPS_PIPELINE.md`), and adds it to `trucks.current_mileage` for the truck used in this Session
+  - marks session Completed
 
 After the backend confirms completion:
 

@@ -74,7 +74,8 @@ export function getRecommendedTruckValue(itemType, cargoWeight) {
 }
 
 // Minimum number of days customers must schedule a delivery in advance
-export const MIN_SCHEDULING_DAYS = 3
+// TEMPORARY: set to 0 to allow same-day scheduling for testing Start Trip end-to-end. Revert to 3 before production.
+export const MIN_SCHEDULING_DAYS = 0
 
 // Returns the earliest selectable delivery date (today + MIN_SCHEDULING_DAYS) as YYYY-MM-DD
 export function getMinDeliveryDate() {

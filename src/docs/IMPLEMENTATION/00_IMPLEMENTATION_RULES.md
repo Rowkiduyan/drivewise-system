@@ -89,3 +89,9 @@ If a screen, component, or design already exists for a feature being implemented
 This applies even if the existing UI is currently mocked, uses placeholder data, or doesn't yet match a phase's described backend shape (e.g. `SupDeliveries.jsx`, `CustomerDeliveries.jsx`) — connect it to the real data source, do not rebuild it.
 
 If the existing UI is genuinely incompatible with the required functionality, report that instead of changing it unasked, per the "ask instead of assuming" rule above.
+
+## Missing UI
+
+If no screen, component, or button exists yet for triggering the current phase's functionality (e.g. no button wired to call it), building/wiring that minimal UI is part of implementing that phase — not a separate, later step. A phase implemented as backend-only, with no way for a user to actually trigger it, is not considered complete.
+
+This does not authorize new screens, redesigns, or extra UI beyond what the phase requires to be usable — only the minimum needed to trigger and observe the phase's functionality end-to-end. If it's unclear whether a phase requires new UI or is meant to be backend-only, ask instead of assuming.

@@ -1,5 +1,9 @@
 # Phase 3 - Start Trip
 
+## Status
+
+Implemented and tested 2026-08-08 — `supabase/functions/driver-trip/index.ts` (`action: "start-trip"`). Verified end-to-end: creates the `sessions` row correctly and leaves `delivery_requests.status` unchanged.
+
 ## Goal
 
 Implement the complete Start Trip workflow.
@@ -8,9 +12,9 @@ Implement the complete Start Trip workflow.
 
 Supervisor has already created a trip.
 
-Trip status:
+`delivery_requests.status`:
 
-Assigned
+`ASSIGNED`
 
 Driver logs into the Driver Web Application.
 
@@ -20,19 +24,19 @@ Driver presses Start Trip.
 
 The backend:
 
-- verifies the trip is Assigned
-- changes trip status to Active
-- records actual_start_time
+- verifies `delivery_requests.status` is `ASSIGNED`
 - determines the Raspberry Pi assigned to the selected truck
 - creates a new session
 
-The session stores:
+Start Trip does **not** change `delivery_requests.status` — per the two-axis rule (see `DATABASE.md`'s `delivery_requests` notes), Active is a Session-state concept, not a milestone value, so it only ever lives on the `sessions` row. The Session's existence (and its own `status = Active`) *is* the record that the Trip is actively being driven; there's no separate Trip-level marker for it. (Whether Start Trip should also advance the milestone status, e.g. to `OUT_FOR_PICKUP`, is a separate question that hasn't been decided — flagging rather than assuming, same as the deliberate End Trip → `DELIVERED` exception was an explicit decision, not a default.)
 
-- trip_id
+The session stores (see `DATABASE.md`'s `sessions` entry for the exact deployed column names):
+
+- delivery_request_id
 - driver_id
-- truck_id
+- truck_plate
 - device_id
-- started_at
+- start_time
 - status = Active
 
 The backend expects telemetry after the session is created.
@@ -43,8 +47,7 @@ The Raspberry Pi does not need to be online.
 
 Pressing Start Trip:
 
-- activates the Trip
-- creates the first Session
+- creates the first Session (its `status = Active` is what makes the Trip "active" in practice — see the Workflow note above on why `delivery_requests.status` itself doesn't change)
 
 Subsequent driving periods use Resume Trip instead of Start Trip.
 
@@ -52,7 +55,7 @@ Trips may contain multiple Sessions.
 
 If the Raspberry Pi is offline:
 
-- Trip remains Active.
+- `delivery_requests.status` is unaffected either way (see above).
 - Session remains Active.
 - Dashboard shows Waiting for Device immediately after Start Trip; once 30 seconds pass with no heartbeat for the new Session, the dashboard shows Monitoring Unavailable instead (see `08_REALTIME_DASHBOARD.md`).
 - The Trip does NOT automatically end because telemetry is unavailable.
@@ -65,14 +68,14 @@ Do not implement alerts.
 
 ## Rest Stop Recommendation
 
-Every 2 hours of continuous driving within a single active Session, the Driver Web Application shows a rest stop recommendation notification. This is anchored to that Session's `started_at` (continuous driving time), not the Trip overall — since Pause/Resume already splits driving into separate Sessions, the 2-hour clock naturally resets whenever the driver actually takes a break, and doesn't carry over across days on a multi-Session Trip.
+Every 2 hours of continuous driving within a single active Session, the Driver Web Application shows a rest stop recommendation notification. This is anchored to that Session's `start_time` (continuous driving time), not the Trip overall — since Pause/Resume already splits driving into separate Sessions, the 2-hour clock naturally resets whenever the driver actually takes a break, and doesn't carry over across days on a multi-Session Trip.
 
 This is advisory only:
 
 - It is entirely up to the driver whether to act on it (e.g. press Pause Trip) or dismiss it and keep driving.
 - It never automatically pauses, ends, or otherwise changes Trip or Session state — same principle as the "never auto-end" rules elsewhere (see `08_REALTIME_DASHBOARD.md`, `09_EDGE_CASES.md`).
 
-No new schema is needed — `sessions.started_at` already exists, so this is a client-side timer in the Driver Web Application while a Session is active, not a backend/database feature.
+No new schema is needed — `sessions.start_time` already exists, so this is a client-side timer in the Driver Web Application while a Session is active, not a backend/database feature.
 
 ## Deliverable
 

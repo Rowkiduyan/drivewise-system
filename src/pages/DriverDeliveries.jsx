@@ -1342,7 +1342,16 @@ function DriverDeliveries() {
       return
     }
     if (statusCfg.nextStage === 'FOR_PICKUP') {
-      // Driving — and therefore monitoring — starts now.
+      // Driving — and therefore monitoring — starts now. Sequenced after the
+      // status update above per STATUS.md's handoff plan: if this call fails,
+      // the delivery status is already correct and this can just be retried.
+      const { error: tripError } = await supabase.functions.invoke('driver-trip', {
+        body: { action: 'start-trip', deliveryRequestId: active.id },
+      })
+      if (tripError) {
+        alert('Delivery status updated, but starting the trip session failed. Please try again.')
+        return
+      }
       setLiveAlerts([])
       setIsAlertHistoryExpanded(false)
     }

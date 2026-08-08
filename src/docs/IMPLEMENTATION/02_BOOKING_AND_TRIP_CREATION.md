@@ -13,21 +13,31 @@ Both paths end at the same place: a trip row with driver, truck, and schedule fi
 
 ## Required Schema
 
-DATABASE.md does not yet define a `bookings` table or a `trips` table (`sessions` and `alerts` exist, but not in the shape Phase 3 onward already assumes — e.g. a `session` needs `trip_id`/`driver_id`/`truck_id`/`device_id`/`status`, which the current `sessions` table does not have).
+Decided 2026-08-08: there is no `bookings` table and no `trips` table, and neither will be built. `delivery_requests` (already deployed — see `DATABASE.md`) plays both roles: it's the booking record from creation, and it already carries driver/truck/helper assignment (`assigned_driver_id`/`assigned_truck_plate`/`assigned_helper_ids`/`assigned_at`) — a separate `trips` table would have duplicated those same fields and created two sources of truth for "who's driving this." Everywhere below that used to say `trips`/`bookings`, read it as `delivery_requests`.
+
+`sessions` has been extended (2026-08-08) with `delivery_request_id`/`driver_id`/`truck_plate`/`device_id`/`status`, linking a Session directly to the `delivery_requests` row it belongs to — see `DATABASE.md`'s `sessions` entry for the exact columns. This is what Phase 3 onward (Start Trip, GPS, Alerts) writes to.
 
 `trucks` and `devices` already exist in Supabase (see `DATABASE.md`). A device is linked to its truck directly via `devices.plate_number` — decided 2026-08-06 not to build a separate `truck_device_assignments` table, since nothing needs assignment history, just the current pairing.
 
-Per `00_IMPLEMENTATION_RULES.md`, this is reported rather than assumed. Before implementing this phase:
+Per `00_IMPLEMENTATION_RULES.md`, remaining gaps are reported rather than assumed:
 
-1. Confirm the actual current schema (DATABASE.md may be behind the real database — verify directly against Supabase).
-2. Define/confirm a `bookings` table: booking id, `customer_auth_id`, pickup/dropoff location, pickup/dropoff date & time, item type, truck type requested, notes, status, created_at.
-3. Define/confirm a `trips` table: trip id, nullable `booking_id` (FK to `bookings`), `driver_id`, `truck_id`, status, scheduled/actual start & end times, pickup/dropoff location, a suggested route (for Route Comparison, see `01_SYSTEM_ARCHITECTURE.md`), created_at. Decided 2026-08-06: the suggested route is auto-generated (via the Google Directions API, from pickup to dropoff) rather than manually drawn by the Supervisor — so this column stores a full route (e.g. an encoded polyline/coordinate list), generated once at trip-creation time, not just the two endpoint locations.
-4. A Trip may contain multiple delivery stops (see `01_SYSTEM_ARCHITECTURE.md`'s Trip definition). A single `pickup/dropoff location` pair on `trips` does not represent multi-stop trips — confirm whether a separate stops table (or an ordered stops column) is required, or whether stops are out of scope for the current phase. Do not assume a shape. If/when implemented, stops are a simple ordered list (for route/reference purposes only) — do not add per-stop status tracking (e.g. Pending/Arrived/Departed) unless a later phase explicitly specifies it; nothing in the current spec calls for stop-level progress.
-5. Decided 2026-08-08: the truck (and therefore the Raspberry Pi) assigned to a Trip **can** change between Sessions of the same Trip (e.g. a truck breakdown during an overnight Pause, Resume Trip on a different truck). Consequences for schema:
-   - `sessions` gets its own `truck_id`/`device_id`, independently resolved per Session, not inherited from the Trip. This is already implied by the existing mileage rule in `03B_PAUSE_AND_RESUME_TRIP.md` and `07_END_TRIP.md`, which each add distance to `trucks.current_mileage` for "the truck used in this Session" — that only makes sense if a Session can pin its own truck independent of whatever the Trip is currently assigned.
-   - `trips.truck_id` remains and is mutable — it tracks the truck *currently* assigned to the Trip (for supervisor-facing "what truck is this trip on right now" views). It gets updated whenever a Resume Trip happens on a different truck. The Session rows are the historical record of what was actually used at each point in time; `trips.truck_id` is only the live pointer.
+1. `delivery_requests` does not yet have a stored suggested route. Decided 2026-08-06: the suggested route is auto-generated (from pickup to dropoff) rather than manually drawn by the Supervisor — so this column, once added, stores a full route (e.g. an encoded polyline/coordinate list), generated once at trip-creation time, not just the two endpoint locations. Decided 2026-08-08: route generation uses the **Routes API** (`computeRoutes`), not the legacy Directions API — see "Google Maps Platform Setup" below. Confirm/add this column before implementing route generation.
+2. A Trip may contain multiple delivery stops (see `01_SYSTEM_ARCHITECTURE.md`'s Trip definition). A single `pickup_location`/`dropoff_location` pair on `delivery_requests` does not represent multi-stop trips — confirm whether a separate stops table (or an ordered stops column) is required, or whether stops are out of scope for the current phase (see the open multi-stop scope question raised in chat — not yet decided). Do not assume a shape. If/when implemented, stops are a simple ordered list (for route/reference purposes only) — do not add per-stop status tracking (e.g. Pending/Arrived/Departed) unless a later phase explicitly specifies it; nothing in the current spec calls for stop-level progress.
+3. Decided 2026-08-08: the truck (and therefore the Raspberry Pi) assigned to a Trip **can** change between Sessions of the same Trip (e.g. a truck breakdown during an overnight Pause, Resume Trip on a different truck). Consequences for schema:
+   - `sessions.truck_plate`/`sessions.device_id` are resolved independently per Session, not inherited from the Trip — already added (see above). This is what the mileage rule in `03B_PAUSE_AND_RESUME_TRIP.md` and `07_END_TRIP.md` relies on: each adds distance to `trucks.current_mileage` for "the truck used in this Session," which only makes sense if a Session can pin its own truck independent of whatever the delivery is currently assigned.
+   - `delivery_requests.assigned_truck_plate` remains the *current* truck (for supervisor-facing "what truck is this on right now" views) — it gets updated whenever a Resume Trip happens on a different truck. The `sessions` rows are the historical record of what was actually used at each point in time; `assigned_truck_plate` is only the live pointer.
    - See `03B_PAUSE_AND_RESUME_TRIP.md`'s Resume Trip section for the resulting workflow (truck selection/confirmation, then device resolution from that truck).
-6. Do not implement against assumed column names — get them confirmed first, the same way Phase 1 verifies schema before Phase 3 writes code.
+4. Do not implement against assumed column names — get them confirmed first, the same way Phase 1 verifies schema before Phase 3 writes code.
+
+## Google Maps Platform Setup
+
+Decided 2026-08-08 (billing/API setup session):
+
+- Google Cloud project billing is linked to the free $300/90-day trial credit. A budget alert is configured (Billing → Budgets & alerts) so spend is monitored; this is a notification only, it does not cap or disable billing automatically.
+- APIs enabled: **Maps JavaScript API** (renders the map/route — **parked/open contradiction as of 2026-08-08**: the already-built `DriverDeliveries.jsx` actually renders its map with Leaflet/`react-leaflet`, not this API; see `01_SYSTEM_ARCHITECTURE.md`'s Route Comparison section for the full note before implementing map rendering), **Routes API** (`computeRoutes` — generates the suggested route stored on `delivery_requests` at creation time, see Required Schema above; unaffected by the rendering question), and **Places API (New)** (address autocomplete on the booking form's pickup/dropoff fields).
+- One API key is shared across all three APIs (an API key is scoped to the Cloud project, not to an individual API) — restricted by HTTP referrer (Website restriction) to the app's dev/prod origins, and by API restriction to only the three APIs above.
+- The key is stored as `VITE_GOOGLE_MAPS_API_KEY` in `.env` (gitignored) / `.env.example` (placeholder only).
+- Places Autocomplete must use session tokens (or the `PlaceAutocompleteElement` widget, which handles this automatically) so a single address search is billed once per session rather than once per keystroke.
 
 ## Booking Workflow (Customer)
 
@@ -73,17 +83,17 @@ The backend records `assigned_at` and sets status to `ASSIGNED`.
 
 The assigned delivery crew (driver and helpers) then sees this as their assigned delivery in their respective portals. `ASSIGNED` is the state Phase 3 (Start Trip) begins from once the driver is ready to actually start driving.
 
-If a separate `trips` table ends up being built (see the open question in Required Schema above), this assignment step is what would create/populate it — that architectural question is still unresolved and is tracked separately in `DATABASE.md`, not restated here.
+This assignment step is what makes the `delivery_requests` row ready for Phase 3 — no separate `trips` row gets created, per the decision in Required Schema above.
 
 ## Important Rules
 
-A booking never becomes Active or Completed by itself — only the trip it produces does. Booking status and trip status are tracked separately.
+Booking and Trip are now the same `delivery_requests` row (see Required Schema above) — there is no separate booking-status/trip-status pair to keep in sync. `PENDING_REQUEST`/`APPROVED`/etc. and Session-driven telemetry state coexist on that one row without conflicting (see `DATABASE.md`'s `delivery_requests` notes on why `status` and `sessions` are different concerns).
 
 Quotation negotiation and crew (driver/helper) assignment are now documented above (2026-08-06) — `delivery_quotations` and `delivery_requests.assigned_helper_ids` already have backing schema, contradicting what this line used to say. `SupDeliveries.jsx`/`CustomerDeliveries.jsx` are the existing UI for this — per `00_IMPLEMENTATION_RULES.md`'s Existing UI and Design rule, wire into it as-is rather than rebuilding it.
 
 Do not implement GPS, heartbeat, sessions, or alerts in this phase — those begin in Phase 3 onward, once the trip is Active.
 
-A completed assignment is never reopened as the same trip. If a driver returns to the depot and later receives a new assignment (even the same day or the next day), that is a new trip creation — a new `trips` row via this phase's workflow — not a resumption of the prior trip. See `01_SYSTEM_ARCHITECTURE.md`'s Trip definition.
+A completed assignment is never reopened as the same trip. If a driver returns to the depot and later receives a new assignment (even the same day or the next day), that is a new trip creation — a new `delivery_requests` row via this phase's workflow — not a resumption of the prior one. See `01_SYSTEM_ARCHITECTURE.md`'s Trip definition.
 
 ## Deliverable
 

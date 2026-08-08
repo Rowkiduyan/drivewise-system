@@ -6,10 +6,10 @@ Verify every workflow and edge case described in Phases 1-9 before sign-off.
 
 ## Trip and Session Lifecycle
 
-- Start Trip transitions trip status Assigned → Active and creates the first Session.
-- Pause Trip completes the current Session and keeps the Trip Active (status Paused).
-- Resume Trip creates a new Session and continues the same Trip.
-- End Trip transitions trip status Active → Completed and completes the current Session.
+- Start Trip creates the first Session (`status = Active`) without changing `delivery_requests.status` (still `ASSIGNED`).
+- Pause Trip completes the current Session; `delivery_requests.status` is unaffected either way.
+- Resume Trip creates a new Session and continues the same Trip (same `delivery_requests` row).
+- End Trip completes the current Session and sets `delivery_requests.status` to `DELIVERED` (the one deliberate exception — see `07_END_TRIP.md`).
 - A Trip with multiple Sessions (via one or more Pause/Resume cycles) is still one Trip.
 - A completed Trip is never resumed as the same Trip.
 - Driver returns to depot, receives a new assignment: a new Trip is created, not a resumption of the completed one.
@@ -51,7 +51,7 @@ Verify every workflow and edge case described in Phases 1-9 before sign-off.
 ## Rest Stop Recommendation
 
 - Notification appears after 2 continuous hours of driving within a single active Session.
-- The 2-hour clock resets on Pause/Resume (measured from the current Session's `started_at`, not cumulative Trip time).
+- The 2-hour clock resets on Pause/Resume (measured from the current Session's `start_time`, not cumulative Trip time).
 - Dismissing/ignoring it never changes Trip or Session state.
 
 ## Dashboard

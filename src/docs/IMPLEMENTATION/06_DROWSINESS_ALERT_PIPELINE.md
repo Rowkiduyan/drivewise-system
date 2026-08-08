@@ -6,11 +6,20 @@ Implement real-time alert uploads.
 
 ## Required Schema
 
-The upload payload below does not match `DATABASE.md`'s existing `alerts` table. `DATABASE.md` has `event_type` and `duration`; this phase's payload has `alert_type` and `metadata`, with no `duration`. Per `00_IMPLEMENTATION_RULES.md`, this is reported rather than assumed — confirm before implementing whether:
+Resolved 2026-08-08 — no schema change needed, only the payload below was wrong:
 
-- `event_type`/`alert_type` is a rename (pick one name) or two distinct fields.
-- `metadata` (shape TBD — e.g. JSONB) is added to `alerts`.
-- `duration` is still populated (and if so, by what — is it sent by the Raspberry Pi, or computed by the backend from consecutive alerts?), or dropped from the table.
+- Use `event_type` (the real column), not `alert_type` — per `00_IMPLEMENTATION_RULES.md`'s rule against renaming existing columns, the docs were fixed instead of the table.
+- No `metadata` column — nothing in `DROWSINESS.md`'s "Data Produced" section calls for one; not adding a column nothing needs.
+- `duration` is populated by the Raspberry Pi directly — its detection logic already measures duration (e.g. "eyes closed continuously for 3 seconds") before sending the alert, so the backend doesn't need to compute it.
+
+Decided 2026-08-08 — `event_type` uses these four values, matching `DROWSINESS.md`'s detection conditions:
+
+- `prolonged_eye_closure` — Continuous Eye Closure
+- `pattern_eye_closure_yawn` — Eye Closure + Yawning
+- `pattern_repeated_eye_closure` — Repeated Eye Closure
+- `face_not_detected` — Eyes Not Detected
+
+The first three reuse `SupAnalysisIndiv.jsx`'s existing `ALERT_TYPE_LABELS` values as-is, since that UI is already built around them. `face_not_detected` is new — `DROWSINESS.md`'s fourth condition wasn't in that mock yet, so `ALERT_TYPE_LABELS` (and any other place alert types are enumerated) needs this value added when this phase is implemented.
 
 ## Rules
 
@@ -22,9 +31,8 @@ Immediately upload:
 
 - device_id
 - device_secret
-- alert_type
-- timestamp
-- metadata
+- event_type
+- duration
 
 The backend:
 

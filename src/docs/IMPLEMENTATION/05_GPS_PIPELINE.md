@@ -6,7 +6,7 @@ Implement GPS uploads.
 
 ## Required Schema
 
-`DATABASE.md` does not yet define a `gps_logs` table at all — only `sessions` and `alerts` currently exist. Per `00_IMPLEMENTATION_RULES.md`, this is reported rather than assumed. Before implementing this phase, define/confirm a `gps_logs` table: id, `session_id` (FK to `sessions`), latitude, longitude, timestamp, created_at.
+Resolved 2026-08-08: `gps_logs` now exists (id, `session_id` text FK to `sessions.session_id`, latitude, longitude, timestamp, created_at — see `DATABASE.md`). Locked to `service_role` only for now; a Supervisor-dashboard read path is a decision for `08_REALTIME_DASHBOARD.md`, not this phase.
 
 ## Rules
 

@@ -13,6 +13,7 @@
     - Trucks
     - Telemetry devices
     - Delivery requests and quotations
+    - GPS logs
 
     The schema is currently under active development and will expand as additional fleet management features are implemented.
 
@@ -32,6 +33,11 @@
     users (1) ----- (N) delivery_requests         [delivery_requests.customer_auth_id -> users.id]
     delivery_requests (1) ----- (N) delivery_quotations [delivery_quotations.delivery_id -> delivery_requests.id]
     users (1) ----- (N) delivery_quotations        [delivery_quotations.submitted_by -> users.id]
+    delivery_requests (1) ----- (N) sessions       [sessions.delivery_request_id -> delivery_requests.id]
+    driver_records (1) ----- (N) sessions          [sessions.driver_id -> driver_records.id]
+    trucks (1) ----- (N) sessions                  [sessions.truck_plate -> trucks.plate_number]
+    devices (1) ----- (N) sessions                 [sessions.device_id -> devices.device_id]
+    sessions (1) ----- (N) gps_logs                [gps_logs.session_id -> sessions.session_id]
 
     Each user has exactly one profile row, in the `*_records` table matching their `role` — never more than one, and never in more than one table at a time.
 
@@ -116,7 +122,9 @@
 
     A session begins when raspberry pi is turned on and monitoring starts and ends when monitoring stops.
 
-    This describes the current prototype's session lifecycle. Per `IMPLEMENTATION/03_START_TRIP_AND_SESSION.md` and `IMPLEMENTATION/03B_PAUSE_AND_RESUME_TRIP.md`, this table's shape and lifecycle will become driver-triggered (Start/Pause/Resume/End Trip) as those phases are implemented.
+    This described the original prototype's session lifecycle. Per `IMPLEMENTATION/03_START_TRIP_AND_SESSION.md` and `IMPLEMENTATION/03B_PAUSE_AND_RESUME_TRIP.md`, the lifecycle becomes driver-triggered (Start/Pause/Resume/End Trip) as those phases are implemented. Start Trip is implemented and tested (2026-08-08, `driver-trip` Edge Function) — Pause/Resume/End Trip are not yet built.
+
+    `service_role` grants confirmed working (2026-08-08) via the `driver-trip` Edge Function: `select`/`insert`/`update` on `sessions` (had to be granted — see `SUPABASE_GOTCHAS.md` #2/#7), plus `select` on `delivery_requests`/`driver_records`/`users`/`devices` (already sufficient, no grant needed).
 
     ### Key Fields
 
@@ -126,10 +134,21 @@
     - end_time
     - total_alerts
     - session_duration
+    - delivery_request_id (text, nullable) — references `delivery_requests.id`. Added 2026-08-08. There is no separate `trips` table (see `delivery_requests`' notes below) — a Session belongs directly to a `delivery_requests` row.
+    - driver_id (text, nullable) — references `driver_records.id`. Added 2026-08-08.
+    - truck_plate (text, nullable) — references `trucks.plate_number`. Added 2026-08-08. Pinned per-Session (not inherited from the Trip) so a truck swap between Sessions of the same delivery is representable — see `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md`.
+    - device_id (text, nullable) — references `devices.device_id`. Added 2026-08-08.
+    - status (text, nullable) — e.g. `Active`/`Completed`. Added 2026-08-08.
+
+    A partial unique index (`sessions_one_active_per_device`) enforces at most one `status = 'Active'` session per `device_id` — the "one active session per device" rule from `PROJECT_CONSTRAINTS.md` is now DB-enforced, not just an application-level rule.
 
     ### Relationships
 
     - One session can contain multiple alerts.
+    - `delivery_request_id` references `delivery_requests.id`.
+    - `driver_id` references `driver_records.id`.
+    - `truck_plate` references `trucks.plate_number`.
+    - `device_id` references `devices.device_id`.
 
     ---
 
@@ -174,6 +193,32 @@
 
     ---
 
+    ## gps_logs
+
+    ### Purpose
+
+    Stores one GPS reading per upload from an active Session's device. Added 2026-08-08 to support `IMPLEMENTATION/05_GPS_PIPELINE.md` — previously did not exist at all.
+
+    ### Key Fields
+
+    - id (bigint, Primary Key, identity)
+    - session_id (text, not null) — references `sessions.session_id`.
+    - latitude (double precision, not null)
+    - longitude (double precision, not null)
+    - timestamp (timestamptz, not null) — the reading's own timestamp, as sent by the Raspberry Pi.
+    - created_at (timestamptz, not null, default `now()`) — when the row landed in the database (kept separate from `timestamp` in case of upload delay).
+
+    An index on `(session_id, timestamp)` supports reconstructing a Session's route in chronological order (Route Comparison, mileage calculation).
+
+    `service_role` grant confirmed 2026-08-08: `grant select on public.gps_logs to service_role;` — added ahead of `driver-trip`'s Pause Trip action, which sums this table's rows per Session to compute mileage. Not tested by any Edge Function before this (Phase 5/GPS upload isn't implemented yet), so this was unconfirmed until now — same per-table grant gotcha as `SUPABASE_GOTCHAS.md` #2/#7.
+
+    ### Relationships
+
+    - `session_id` references `sessions.session_id`.
+    - Locked to `service_role` only for now (see `SUPABASE_GOTCHAS.md` #2/#7/#8) — a read path for the Supervisor dashboard (RLS policy or Edge Function) is a decision for `IMPLEMENTATION/08_REALTIME_DASHBOARD.md`, not made yet.
+
+    ---
+
     ## trucks
 
     ### Purpose
@@ -198,6 +243,8 @@
 
     Column `ordinal_position` has gaps (8, 9, 17, 18 are missing) from previously dropped columns — no action needed, just noting the deployed table doesn't have contiguous positions.
 
+    `service_role` grant confirmed 2026-08-08: `grant update on public.trucks to service_role;` — added ahead of `driver-trip`'s Pause Trip action (`IMPLEMENTATION/03B_PAUSE_AND_RESUME_TRIP.md`), which auto-increments `current_mileage` on session close. Previously only `select` was granted (see `driver-trip/index.ts`'s header comment) — same per-table grant gotcha as `SUPABASE_GOTCHAS.md` #2/#7.
+
     ### Relationships
 
     - Referenced by `devices.plate_number`.
@@ -218,7 +265,7 @@
     - device_status (text, nullable, default `'Active'`)
     - created_at (timestamptz, not null, default `timezone('utc', now())`)
     - last_ping (timestamptz, nullable)
-    - device_secret_hash (text, nullable) — added 2026-08-06, not yet backfilled on existing rows and not yet read/written by any Edge Function.
+    - device_secret_hash (text, nullable) — added 2026-08-06. Backfilled 2026-08-08 (every existing device row now has a SHA-256 hash of a randomly generated secret; the plaintext was only ever shown once, in the backfill query's output, and must be manually configured on each physical Raspberry Pi). Not yet read/written by any Edge Function — device authentication isn't wired up yet.
 
     ### Relationships
 
@@ -228,7 +275,7 @@
 
     See the chat discussion from 2026-08-06 — not resolved here, flagged for the team to decide:
 
-    - ~~No `device_secret` (or hashed equivalent) column exists.~~ Resolved 2026-08-06: `device_secret_hash` added. Still open: no existing device row has a value backfilled yet, and no Edge Function in `04_DEVICE_BOOT_AND_HEARTBEAT.md`/`05_GPS_PIPELINE.md`/`06_DROWSINESS_ALERT_PIPELINE.md` reads/writes it yet — the column exists but device authentication isn't wired up to it.
+    - ~~No `device_secret` (or hashed equivalent) column exists.~~ Resolved 2026-08-06: `device_secret_hash` added; backfilled 2026-08-08. Still open: no Edge Function in `04_DEVICE_BOOT_AND_HEARTBEAT.md`/`05_GPS_PIPELINE.md`/`06_DROWSINESS_ALERT_PIPELINE.md` reads/writes it yet — the column is populated but device authentication isn't wired up to it. That's implementation code, not a schema gap — see Phase 3 onward.
     - ~~There is no `truck_device_assignments` table.~~ Resolved 2026-08-06 (decision, not a gap): not building one. Nothing needs assignment history — `devices.plate_number` (a direct FK to `trucks.plate_number`) is sufficient and is what the already-shipped Truck Management UI (`AdminTrucks.jsx`, `AddTruckModal.jsx`, `AdminTruckProfile.jsx`) already reads/writes. `IMPLEMENTATION/*.md` has been updated to reference this lookup instead.
     - ~~`last_ping` exists instead of `last_seen`.~~ Resolved 2026-08-06 (decision, not a gap): confirmed `last_ping` is the same heartbeat-timestamp concept the docs called `last_seen`, and the column stays named `last_ping` since other modules already depend on it. `IMPLEMENTATION/*.md` (`04_DEVICE_BOOT_AND_HEARTBEAT.md`, `08_REALTIME_DASHBOARD.md`, `10_TESTING_CHECKLIST.md`) has been updated to reference `last_ping`.
 
@@ -266,7 +313,7 @@
 
     ### Open contradictions with `IMPLEMENTATION/*.md`
 
-    - There is no separate `trips` table. `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md` onward describes a two-table model (`bookings` → `trips`, with `trips.status` cycling Assigned/Active/Paused/Completed). The deployed schema instead has this single `delivery_requests` table with one `status` column (currently seen default: `PENDING_REQUEST`) and driver/truck/helper assignment fields already on it — booking and trip appear to be the same row here, not two tables.
+    - ~~There is no separate `trips` table.~~ Resolved 2026-08-08 (decision, not a gap): not building one. `delivery_requests` already carries driver/truck/helper assignment (`assigned_driver_id`/`assigned_truck_plate`/`assigned_helper_ids`) — a separate `trips` table would duplicate that data and create two sources of truth for "who's driving this." Instead, `sessions` was extended (see `sessions`' Key Fields above) with `delivery_request_id`/`driver_id`/`truck_plate`/`device_id`/`status`, linking Sessions directly to `delivery_requests`. `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md` still describes a `bookings`/`trips` two-table model in places — that description is superseded by this decision and should be read as historical/aspirational, not current.
     - ~~Counter-proposals and helper assignment "not described by this workflow, no backing schema."~~ Resolved 2026-08-06: `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md` now documents the real quotation-negotiation and crew-assignment flow (`delivery_quotations`, `customer_counter_min`/`max`, `assigned_helper_ids`).
     - `status` already carries a full shipment-milestone flow, defined in code comments in `src/pages/SupDeliveries.jsx` (~line 434): `PENDING_REQUEST` → `QUOTATION_SUBMITTED`/`COUNTER_OFFER_SUBMITTED`/`FINAL_QUOTATION_SUBMITTED` → `APPROVED` → `ASSIGNED` → `OUT_FOR_PICKUP`/`ARRIVED_PICKUP` → `OUT_FOR_DROPOFF`/`ARRIVED_DROPOFF` → `DELIVERED` → `COMPLETED` (or `CANCELLED`). This tracks *where the shipment physically is*, driven by driver/dispatcher checkpoint actions — it is a different concern from `IMPLEMENTATION/`'s Trip/Session model, which tracks *whether GPS/drowsiness monitoring is currently running*. Resolution (not a contradiction, just a note for whoever implements Start/Pause/Resume/End Trip against this table): do not add Active/Paused/etc. values into `delivery_requests.status` — it already has no room for them alongside the milestone values above, and a single column can't hold both "`OUT_FOR_PICKUP`" and "`Paused`" at once. Start/Pause/Resume should only ever create/close rows in `sessions`; whether monitoring is currently on is answered by whether an open (no `ended_at`) `sessions` row exists for the delivery request, never by `delivery_requests.status`.
 
@@ -305,13 +352,13 @@ One deliberate exception (decided 2026-08-06, see `IMPLEMENTATION/07_END_TRIP.md
 
     # Current Notes
 
-    The `sessions`/`alerts` pair still supports only the original drowsiness detection prototype:
+    The `sessions`/`alerts` pair still only runs the original drowsiness detection prototype's logic:
 
     - One Raspberry Pi device sends monitoring data.
     - Drowsiness events are associated with a single predefined account.
-    - `sessions` is not yet linked to `delivery_requests`, `trucks`, or `devices` (no `trip_id`/`driver_id`/`truck_id`/`device_id` columns).
+    - `sessions` now has the columns to link to `delivery_requests`, `driver_records`, `trucks`, and `devices` (added 2026-08-08), but nothing writes to them yet — no Start/Pause/Resume/End Trip logic exists, so every current `sessions` row still has these columns `null`.
 
-    `trucks` and `devices` tables now exist (added directly in Supabase, outside this document's original scope) — multi-truck fleet data is tracked, but not yet wired into the drowsiness/telemetry tables above. See the "Open contradictions" notes under `devices` and `delivery_requests`.
+    `trucks` and `devices` tables now exist (added directly in Supabase, outside this document's original scope) — multi-truck fleet data is tracked. `gps_logs` now exists (2026-08-08) but nothing writes to it yet — no GPS upload Edge Function has been implemented. `alerts`' shape is confirmed correct as-is (2026-08-08) — `IMPLEMENTATION/06_DROWSINESS_ALERT_PIPELINE.md`'s payload was fixed to match it (`event_type`/`duration`, no `metadata`), not the other way around. See the "Open contradictions" notes under `devices` and `delivery_requests` for what's resolved vs. still open.
 
     ---
     # Naming Conventions
@@ -327,4 +374,4 @@ One deliberate exception (decided 2026-08-06, see `IMPLEMENTATION/07_END_TRIP.md
 
     Authentication, RLS policies, Edge Functions, and Supabase-specific security are documented separately.
 
-    The schema will be expanded to support GPS tracking and further fleet management features as development continues. `trucks` and `devices` already exist; a `trips`/`sessions` model wiring drivers, trucks, devices, and delivery requests together per `IMPLEMENTATION/*.md` does not exist yet — see the "Open contradictions" notes above.
+    The schema will be expanded to support further fleet management features as development continues. `trucks`, `devices`, and `gps_logs` already exist; `sessions` now has the columns linking it to `delivery_requests`/`driver_records`/`trucks`/`devices` (2026-08-08). No Start/Pause/Resume/End Trip or GPS-upload logic has been implemented yet — see the "Open contradictions" notes above and each `IMPLEMENTATION/*.md` phase's Required Schema section.

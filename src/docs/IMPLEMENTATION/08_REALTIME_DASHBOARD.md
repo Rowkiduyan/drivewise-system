@@ -23,7 +23,7 @@ The dashboard must distinguish between:
 
 Monitoring Unavailable means the Trip has started, but the Raspberry Pi has never connected. Supervisors should clearly understand that the driver is on an active Trip but telemetry is unavailable — not that the driver is idle or the Trip has stalled.
 
-Monitoring Unavailable reuses `DEVICE_OFFLINE_TIMEOUT` (30 seconds, see `PROJECT_CONSTRAINTS.md`) — no separate threshold. If `Current Server Time - Session.started_at > 30 seconds` and the device has never sent a heartbeat for this Session, show Monitoring Unavailable instead of Waiting for Device. Before that 30 seconds elapses, show Waiting for Device. Once at least one heartbeat has been received for the Session, the state is governed by Online/Offline (`devices.last_ping`) instead, never Monitoring Unavailable again for that Session.
+Monitoring Unavailable reuses `DEVICE_OFFLINE_TIMEOUT` (30 seconds, see `PROJECT_CONSTRAINTS.md`) — no separate threshold. If `Current Server Time - Session.start_time > 30 seconds` and the device has never sent a heartbeat for this Session, show Monitoring Unavailable instead of Waiting for Device. Before that 30 seconds elapses, show Waiting for Device. Once at least one heartbeat has been received for the Session, the state is governed by Online/Offline (`devices.last_ping`) instead, never Monitoring Unavailable again for that Session.
 
 The dashboard determines online status using `devices.last_ping`.
 
