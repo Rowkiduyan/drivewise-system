@@ -8,7 +8,7 @@ import {
   Clock,
   MapPin,
   Navigation,
-  Play,
+  Pause,
   Search,
   Truck,
   Wallet,
@@ -17,249 +17,120 @@ import HelperLayout from '../layout/HelperLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 
 // Helper-facing workflow: Assigned -> Heading to Pickup -> Out for Delivery ->
-// Delivered. The helper can advance the delivery through every stage, exactly
-// like the driver, until the cargo is handed over.
+// Delivered. Read-only — the Helper never presses Start/Pause/Resume/End
+// Trip (only the Driver does, see 03_START_TRIP_AND_SESSION.md's "Helper
+// visibility" note); this page just reflects the same delivery_requests
+// status and Active/Paused session state the Driver's screen drives.
 const statusConfig = {
   ASSIGNED: {
     label: 'Assigned',
     badge: 'bg-indigo-100 text-indigo-700',
-    nextLabel: 'Start Pickup',
-    nextIcon: Play,
-    nextStage: 'FOR_PICKUP',
-    nextColor: 'bg-teal-600 hover:bg-teal-700',
-    banner: 'Ready to head to the pickup location?',
-    bannerIcon: Play,
-    confirmTitle: 'Start heading to pickup?',
-    confirmDescription: 'This marks the delivery as in progress and begins navigation to the pickup location. The cargo hasn’t been collected yet.',
+    banner: 'Waiting for the driver to start this trip.',
+    bannerIcon: Clock,
   },
   FOR_PICKUP: {
     label: 'Heading to Pickup',
     badge: 'bg-cyan-100 text-cyan-700',
-    nextLabel: 'Confirm Pickup',
-    nextIcon: CheckCircle2,
-    nextStage: 'OUT_FOR_DELIVERY',
-    nextColor: 'bg-cyan-600 hover:bg-cyan-700',
-    banner: 'Head to the pickup location to collect the items.',
+    banner: 'The driver is heading to the pickup location.',
     bannerIcon: MapPin,
-    confirmTitle: 'Confirm cargo pickup?',
-    confirmDescription: 'This confirms the cargo has been collected at the pickup location and updates the status to Out for Delivery.',
   },
   OUT_FOR_DELIVERY: {
     label: 'Out for Delivery',
     badge: 'bg-blue-100 text-blue-700',
-    nextLabel: 'Complete Delivery',
-    nextIcon: CheckCircle2,
-    nextStage: 'DELIVERED',
-    nextColor: 'bg-emerald-600 hover:bg-emerald-700',
-    banner: 'Delivering to the drop-off location.',
+    banner: 'The driver is delivering to the drop-off location.',
     bannerIcon: Navigation,
-    confirmTitle: 'Complete this delivery?',
-    confirmDescription: 'This confirms the cargo has been handed over to the customer and moves the delivery to your history.',
   },
   DELIVERED: {
     label: 'Delivered',
     badge: 'bg-teal-100 text-teal-700',
-    nextLabel: null,
-    nextIcon: null,
-    nextStage: null,
-    nextColor: null,
     banner: null,
     bannerIcon: null,
   },
   COMPLETED: {
     label: 'Completed',
     badge: 'bg-green-100 text-green-700',
-    nextLabel: null,
-    nextIcon: null,
-    nextStage: null,
-    nextColor: null,
     banner: null,
     bannerIcon: null,
   },
 }
 
-const mockTruck = {
-  plateNumber: 'ABC 1234',
-  truckType: 'AUV',
-  capacity: '1.2 tons',
-  imageUrl: 'https://images.unsplash.com/photo-1556122071-e404eaedb77f?auto=format&fit=crop&w=600&q=80',
+// Maps delivery_requests.status (the backend/Driver-driven values) to this
+// page's simplified stage labels — same mapping DriverDeliveries.jsx uses,
+// since both UIs describe the same underlying status.
+const DB_TO_HELPER_STATUS = {
+  ASSIGNED: 'ASSIGNED',
+  OUT_FOR_PICKUP: 'FOR_PICKUP',
+  ARRIVED_PICKUP: 'OUT_FOR_DELIVERY',
+  OUT_FOR_DROPOFF: 'OUT_FOR_DELIVERY',
+  ARRIVED_DROPOFF: 'OUT_FOR_DELIVERY',
+  DELIVERED: 'DELIVERED',
+  COMPLETED: 'COMPLETED',
 }
 
-const mockDriver = {
-  id: 'DRV-001',
-  name: 'Carlos Mendoza',
-  phone: '+63 912 311 1222',
-}
-
-const mockHelpers = [
-  { id: 'HLP-001', name: 'Pedro Garcia' },
-  { id: 'HLP-002', name: 'Luis Torres' },
-]
-
-function buildInitialState() {
+// Today's date as "YYYY-MM-DD" in the user's local timezone — matches
+// DriverDeliveries.jsx's localTodayISO, avoiding the UTC-vs-local mismatch
+// toISOString() has for timezones east of UTC (e.g. PH, UTC+8).
+function localTodayISO() {
   const now = new Date()
-  const today = now.toISOString().slice(0, 10)
-  const fmtTime = (h, m) => `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
-  const addDays = (n) => {
-    const d = new Date(now)
-    d.setDate(d.getDate() + n)
-    return d.toISOString().slice(0, 10)
-  }
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
 
+// Some pickup/dropoff locations are stored as a "lat, lng" coordinate pair
+// rather than a street address — parse those back into coords for the maps.
+function parseCoords(value) {
+  if (!value) return null
+  const m = String(value).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/)
+  if (!m) return null
+  const lat = parseFloat(m[1])
+  const lng = parseFloat(m[2])
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null
+  return { lat, lng }
+}
+
+function formatAssignedAt(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString('en-PH', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+// Shapes the admin-users get-helper-deliveries payload into what this page
+// renders — mirrors DriverDeliveries.jsx's mapDelivery for the same reason:
+// the client can't read delivery_requests/*_records directly (service_role
+// only, see DATABASE.md / SUPABASE_GOTCHAS.md #8).
+function mapDelivery(d) {
+  const str = (v) => (v == null ? '' : String(v))
   return {
-    active: {
-      id: 'DEL-008',
-      customerName: 'Jose Rizal',
-      companyName: 'Jollibee',
-      pickupAddress: '321 Warehouse District, Brgy. Valenzuela, Caloocan',
-      deliveryAddress: '654 Business Park, Brgy. Bicutan, Parañaque',
-      itemType: 'Fast Food',
-      pickupDate: today,
-      pickupTime: fmtTime(now.getHours(), (now.getMinutes() + 15) % 60),
-      status: 'ASSIGNED',
-      createdAt: '2026-07-25 14:00',
-      pickupCoords: { lat: 14.6572, lng: 120.9802 },
-      destinationCoords: { lat: 14.4934, lng: 121.0405 },
-      quotation: {
-        amount: 5500,
-        breakdown: [
-          { label: 'Base Delivery Fee', amount: 2000 },
-          { label: 'Distance Fee', amount: 1200 },
-          { label: 'Truck Type Surcharge', amount: 800 },
-          { label: 'Fuel Surcharge', amount: 600 },
-          { label: 'Loading/Unloading Fee', amount: 900 },
-        ],
-        notes: 'Standard delivery rate',
-      },
-      crew: {
-        driver: mockDriver,
-        helpers: mockHelpers,
-        truck: mockTruck,
-      },
-      assignedAt: 'Jul 26, 2026, 08:00 AM',
+    id: str(d.id),
+    customerName: str(d.customerName) || 'Customer',
+    companyName: str(d.companyName),
+    itemType: str(d.itemType),
+    pickupDate: str(d.pickupDate),
+    pickupTime: str(d.pickupTime),
+    pickupAddress: str(d.pickupAddress),
+    deliveryAddress: str(d.deliveryAddress),
+    status: DB_TO_HELPER_STATUS[d.status] || str(d.status),
+    hasOpenSession: Boolean(d.hasOpenSession),
+    assignedAt: formatAssignedAt(d.assignedAt),
+    quotation: d.quotation ? { amount: Number(d.quotation.amount) } : null,
+    crew: {
+      driver: d.driver ? { id: str(d.driver.id), name: str(d.driver.name), phone: str(d.driver.phone) } : { id: '', name: 'Unassigned', phone: '' },
+      helpers: d.helpers || [],
+      truck: d.truck
+        ? { plateNumber: str(d.truck.plateNumber), truckType: str(d.truck.truckType), capacity: str(d.truck.capacity || '') }
+        : { plateNumber: '—', truckType: '', capacity: '' },
     },
-    upcoming: [
-      {
-        id: 'DEL-009',
-        customerName: 'Maria Santos',
-        companyName: 'Mang Inasal',
-        pickupAddress: 'Quezon City Hub, Brgy. Kamuning, Quezon City',
-        deliveryAddress: 'Eastwood Mall, Brgy. Bagumbayan, Quezon City',
-        itemType: 'Fast Food',
-        pickupDate: addDays(1),
-        pickupTime: '09:00',
-        status: 'ASSIGNED',
-        pickupCoords: { lat: 14.6360, lng: 121.0350 },
-        destinationCoords: { lat: 14.6091, lng: 121.0797 },
-        quotation: {
-          amount: 3200,
-          breakdown: [
-            { label: 'Base Delivery Fee', amount: 1500 },
-            { label: 'Distance Fee', amount: 700 },
-            { label: 'Truck Type Surcharge', amount: 500 },
-            { label: 'Fuel Surcharge', amount: 500 },
-          ],
-          notes: 'Morning delivery',
-        },
-        crew: {
-          driver: mockDriver,
-          helpers: [mockHelpers[0]],
-          truck: mockTruck,
-        },
-        assignedAt: 'Jul 29, 2026, 09:00 AM',
-      },
-      {
-        id: 'DEL-010',
-        customerName: 'Ferdinand Cruz',
-        companyName: 'Red Ribbon',
-        pickupAddress: 'Makati Depot, Brgy. Poblacion, Makati',
-        deliveryAddress: 'Ortigas Center, Brgy. San Antonio, Pasig',
-        itemType: 'Bakery Goods',
-        pickupDate: addDays(3),
-        pickupTime: '10:30',
-        status: 'ASSIGNED',
-        pickupCoords: { lat: 14.5547, lng: 121.0244 },
-        destinationCoords: { lat: 14.5870, lng: 121.0614 },
-        quotation: {
-          amount: 2800,
-          breakdown: [
-            { label: 'Base Delivery Fee', amount: 1300 },
-            { label: 'Distance Fee', amount: 600 },
-            { label: 'Truck Type Surcharge', amount: 400 },
-            { label: 'Fuel Surcharge', amount: 500 },
-          ],
-          notes: 'Standard delivery',
-        },
-        crew: {
-          driver: mockDriver,
-          helpers: mockHelpers,
-          truck: { plateNumber: 'DEF 9012', truckType: 'AUV', capacity: '1.2 tons' },
-        },
-        assignedAt: 'Jul 28, 2026, 03:00 PM',
-      },
-    ],
-    completed: [
-      {
-        id: 'DEL-004',
-        customerName: 'Ana Ramirez',
-        companyName: "McDonald's",
-        pickupAddress: 'Pasig Hub, Brgy. San Joaquin, Pasig',
-        deliveryAddress: 'BGC Branch, Brgy. Fort Bonifacio, Taguig',
-        itemType: 'Frozen Goods',
-        pickupDate: '2026-07-20',
-        pickupTime: '08:30',
-        status: 'COMPLETED',
-        pickupCoords: { lat: 14.5600, lng: 121.0700 },
-        destinationCoords: { lat: 14.5506, lng: 121.0471 },
-        quotation: {
-          amount: 4200,
-          breakdown: [
-            { label: 'Base Delivery Fee', amount: 1500 },
-            { label: 'Distance Fee', amount: 800 },
-            { label: 'Truck Type Surcharge', amount: 600 },
-            { label: 'Fuel Surcharge', amount: 500 },
-            { label: 'Loading/Unloading Fee', amount: 800 },
-          ],
-          notes: 'Standard delivery',
-        },
-        crew: {
-          driver: mockDriver,
-          helpers: [{ id: 'HLP-001', name: 'Pedro Garcia' }],
-          truck: { plateNumber: 'ABC 1234', truckType: 'AUV', capacity: '1.2 tons' },
-        },
-        assignedAt: 'Jul 19, 2026, 08:00 AM',
-      },
-      {
-        id: 'DEL-005',
-        customerName: 'Roberto Dimagiba',
-        companyName: 'Chowking',
-        pickupAddress: 'Cavite Depot, Brgy. San Antonio, Cavite',
-        deliveryAddress: 'Alabang Branch, Brgy. Alabang, Muntinlupa',
-        itemType: 'Dry Food',
-        pickupDate: '2026-07-19',
-        pickupTime: '06:00',
-        status: 'COMPLETED',
-        pickupCoords: { lat: 14.3000, lng: 120.9600 },
-        destinationCoords: { lat: 14.4201, lng: 121.0312 },
-        quotation: {
-          amount: 3800,
-          breakdown: [
-            { label: 'Base Delivery Fee', amount: 1200 },
-            { label: 'Distance Fee', amount: 600 },
-            { label: 'Truck Type Surcharge', amount: 500 },
-            { label: 'Fuel Surcharge', amount: 400 },
-            { label: 'Loading/Unloading Fee', amount: 1100 },
-          ],
-          notes: 'Early morning delivery',
-        },
-        crew: {
-          driver: mockDriver,
-          helpers: [{ id: 'HLP-002', name: 'Luis Torres' }],
-          truck: { plateNumber: 'XYZ 5678', truckType: '2T_REF', capacity: '2.0 tons' },
-        },
-        assignedAt: 'Jul 18, 2026, 10:00 AM',
-      },
-    ],
+    pickupCoords: parseCoords(d.pickupAddress),
+    destinationCoords: parseCoords(d.deliveryAddress),
   }
 }
 
@@ -600,20 +471,26 @@ function TabButton({ label, count, isActive, onClick }) {
 }
 
 function HelperDeliveries() {
-  const [data, setData] = useState(() => buildInitialState())
+  const [data, setData] = useState({ active: null, upcoming: [], completed: [] })
+  const [isLoadingDeliveries, setIsLoadingDeliveries] = useState(true)
+  const [deliveriesError, setDeliveriesError] = useState('')
   const [selectedDelivery, setSelectedDelivery] = useState(null)
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState('today')
-  const [confirmingStageAdvance, setConfirmingStageAdvance] = useState(false)
   const [currentHelperName, setCurrentHelperName] = useState('')
 
   const active = data.active
   const statusCfg = active ? statusConfig[active.status] : null
-  const todayISO = new Date().toISOString().slice(0, 10)
+  const todayISO = localTodayISO()
   const isActiveToday = active ? active.pickupDate === todayISO : false
   const todayCount = isActiveToday ? 1 : 0
   const upcomingCount = data.upcoming.length
   const pastCount = data.completed.length
+
+  // Same "Paused isn't a stored value" read as DriverDeliveries.jsx — a delivery
+  // past ASSIGNED with no open Session means the driver has paused the trip.
+  const isDrivingStage = Boolean(active) && (active.status === 'FOR_PICKUP' || active.status === 'OUT_FOR_DELIVERY')
+  const isPausedTrip = isDrivingStage && !active.hasOpenSession
 
   const isCurrentHelper = (member) =>
     Boolean(currentHelperName) && member.name.trim().toLowerCase() === currentHelperName.trim().toLowerCase()
@@ -641,23 +518,44 @@ function HelperDeliveries() {
     }
   }, [])
 
+  useEffect(() => {
+    let isMounted = true
+
+    async function loadDeliveries() {
+      setIsLoadingDeliveries(true)
+      setDeliveriesError('')
+      const { data: result, error } = await supabase.functions.invoke('admin-users', {
+        body: { action: 'get-helper-deliveries' },
+      })
+      if (!isMounted) return
+      if (error) {
+        setDeliveriesError('Failed to load your deliveries. Please try again.')
+        setData({ active: null, upcoming: [], completed: [] })
+        setIsLoadingDeliveries(false)
+        return
+      }
+      const mapped = (result?.deliveries || []).map(mapDelivery)
+      const today = localTodayISO()
+      const nonArchived = mapped
+        .filter((d) => d.status !== 'DELIVERED' && d.status !== 'COMPLETED')
+        .sort((a, b) => String(a.pickupDate || '').localeCompare(String(b.pickupDate || '')))
+      const activeDelivery = nonArchived.find((d) => d.pickupDate === today) || null
+      setData({
+        active: activeDelivery,
+        upcoming: nonArchived.filter((d) => d.id !== (activeDelivery && activeDelivery.id)),
+        completed: mapped.filter((d) => d.status === 'DELIVERED' || d.status === 'COMPLETED'),
+      })
+      setIsLoadingDeliveries(false)
+    }
+
+    loadDeliveries()
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
   const openDirections = (origin, destination) => {
     window.open(`https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}&travelmode=driving`, '_blank')
-  }
-
-  const advanceStage = () => {
-    if (!statusCfg || !statusCfg.nextStage) return
-    if (statusCfg.nextStage === 'DELIVERED') {
-      setData((prev) => ({
-        active: null,
-        completed: [{ ...prev.active, status: 'DELIVERED' }, ...prev.completed],
-      }))
-      return
-    }
-    setData((prev) => ({
-      ...prev,
-      active: { ...prev.active, status: statusCfg.nextStage },
-    }))
   }
 
   const filteredHistory = data.completed.filter((d) => {
@@ -681,6 +579,18 @@ function HelperDeliveries() {
   return (
     <HelperLayout title="Deliveries" background={null}>
       <div className="flex w-full min-w-0 flex-col gap-3 pb-4">
+        {deliveriesError && (
+          <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 sm:px-4 sm:py-3 sm:text-sm">
+            {deliveriesError}
+          </p>
+        )}
+
+        {isLoadingDeliveries ? (
+          <p className="rounded-xl border border-teal-200/70 bg-white p-5 text-center text-[11px] text-slate-500">
+            Loading your deliveries…
+          </p>
+        ) : (
+          <>
         {/* Tabs */}
         <div className="flex border-b border-slate-200">
           {DELIVERY_TABS.map((tab) => (
@@ -698,7 +608,12 @@ function HelperDeliveries() {
         {activeTab === 'today' && (active && isActiveToday ? (
           <>
             <div className="flex flex-col gap-3">
-              {statusCfg.banner && (
+              {isPausedTrip ? (
+                <div className="flex items-center gap-1.5 rounded-xl bg-teal-800 px-3.5 py-2.5 text-[11px] font-medium text-white sm:text-xs">
+                  <Pause className="h-3.5 w-3.5 shrink-0" />
+                  Trip paused — the driver has paused this trip.
+                </div>
+              ) : statusCfg.banner && (
                 <div className="flex items-center gap-1.5 rounded-xl bg-teal-900 px-3.5 py-2.5 text-[11px] font-medium text-white sm:text-xs">
                   {statusCfg.bannerIcon && <statusCfg.bannerIcon className="h-3.5 w-3.5 shrink-0" />}
                   {statusCfg.banner}
@@ -751,7 +666,9 @@ function HelperDeliveries() {
                       <Wallet className="h-3 w-3 shrink-0 text-teal-700" />
                       <p className="text-[9px] text-slate-500">Fee</p>
                     </div>
-                    <p className="truncate text-xs font-bold text-teal-900">₱{active.quotation.amount.toLocaleString()}</p>
+                    <p className="truncate text-xs font-bold text-teal-900">
+                      {active.quotation ? `₱${Number(active.quotation.amount).toLocaleString()}` : '—'}
+                    </p>
                   </div>
                 </div>
 
@@ -860,18 +777,6 @@ function HelperDeliveries() {
                 </section>
               </div>
             </div>
-
-            {statusCfg.nextLabel && (
-              <div className="sticky bottom-0 z-10 -mx-4 border-t border-teal-200/70 bg-white/95 px-4 py-2.5 backdrop-blur-sm sm:-mx-6 sm:px-6 md:-mx-8 md:px-8 lg:-mx-12 lg:px-12">
-                <button
-                  onClick={() => setConfirmingStageAdvance(true)}
-                  className={`mx-auto flex w-full items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-xs font-bold text-white transition sm:w-auto sm:min-w-[280px] ${statusCfg.nextColor}`}
-                >
-                  <statusCfg.nextIcon className="h-4 w-4" />
-                  {statusCfg.nextLabel}
-                </button>
-              </div>
-            )}
           </>
         ) : (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-center">
@@ -946,44 +851,9 @@ function HelperDeliveries() {
             </div>
           )
         )}
+          </>
+        )}
       </div>
-
-      {/* Confirm before advancing the delivery status — prevents an accidental tap on the
-          sticky action button from silently moving the job to its next stage. */}
-      {confirmingStageAdvance && statusCfg?.nextLabel && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="confirm-stage-title"
-        >
-          <div className="w-full max-w-sm rounded-2xl border border-teal-200/70 bg-white p-4 shadow-xl">
-            <h2 id="confirm-stage-title" className="text-sm font-bold text-slate-900">
-              {statusCfg.confirmTitle}
-            </h2>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
-              {statusCfg.confirmDescription}
-            </p>
-            <div className="mt-4 flex gap-1.5">
-              <button
-                onClick={() => setConfirmingStageAdvance(false)}
-                className="flex-1 whitespace-nowrap rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  advanceStage()
-                  setConfirmingStageAdvance(false)
-                }}
-                className={`flex-1 whitespace-nowrap rounded-lg px-2.5 py-2 text-[11px] font-semibold text-white transition ${statusCfg.nextColor}`}
-              >
-                {statusCfg.nextLabel}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </HelperLayout>
   )
 }

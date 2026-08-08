@@ -11,8 +11,10 @@ import {
   ClipboardList,
   Clock,
   EyeOff,
+  Loader2,
   MapPin,
   Navigation,
+  Pause,
   Play,
   Repeat,
   Route,
@@ -781,6 +783,7 @@ function mapDelivery(d) {
     pickupAddress: str(d.pickupAddress),
     deliveryAddress: str(d.deliveryAddress),
     status: DB_TO_DRIVER_STATUS[d.status] || str(d.status),
+    hasOpenSession: Boolean(d.hasOpenSession),
     assignedAt: formatAssignedAt(d.assignedAt),
     quotation: d.quotation ? { amount: Number(d.quotation.amount), breakdown: null } : null,
     crew: {
@@ -1240,6 +1243,12 @@ function DriverDeliveries() {
   const [expandedReport, setExpandedReport] = useState(null)
   const [activeTab, setActiveTab] = useState('today')
   const [confirmingStageAdvance, setConfirmingStageAdvance] = useState(false)
+  const [confirmingPause, setConfirmingPause] = useState(false)
+  const [confirmingResume, setConfirmingResume] = useState(false)
+  // Shared across every confirm-modal action below since only one can ever be
+  // open at a time — see the "Loading States" convention in DESIGNS.md for
+  // why every future confirm-modal button should follow this same pattern.
+  const [isSubmittingTripAction, setIsSubmittingTripAction] = useState(false)
   const [liveAlerts, setLiveAlerts] = useState([])
   const [isAlertHistoryExpanded, setIsAlertHistoryExpanded] = useState(false)
   const [completionNotice, setCompletionNotice] = useState(null)
@@ -1259,8 +1268,12 @@ function DriverDeliveries() {
 
   // Monitoring runs for the whole time the vehicle is being driven — both the
   // pickup leg and the delivery leg — matching how the post-trip Behavior
-  // report treats it as a single session spanning the entire trip.
-  const isMonitoring = Boolean(active) && (active.status === 'FOR_PICKUP' || active.status === 'OUT_FOR_DELIVERY')
+  // report treats it as a single session spanning the entire trip. A driver
+  // past ASSIGNED with no open Session is Paused, not "not yet started" —
+  // see 03B_PAUSE_AND_RESUME_TRIP.md's "Paused isn't a stored value" note.
+  const isDrivingStage = Boolean(active) && (active.status === 'FOR_PICKUP' || active.status === 'OUT_FOR_DELIVERY')
+  const isMonitoring = isDrivingStage && active.hasOpenSession
+  const isPausedTrip = isDrivingStage && !active.hasOpenSession
 
   useEffect(() => {
     let isMounted = true
@@ -1316,6 +1329,21 @@ function DriverDeliveries() {
     return () => clearInterval(interval)
   }, [isMonitoring])
 
+  // Runs a confirm-modal action while it's in flight: blocks re-entry (a second
+  // tap while the first request is still pending is a no-op instead of firing
+  // a duplicate call), then always closes the modal and clears the loading
+  // state whether the action succeeded or the alert()-based error path fired.
+  const runTripAction = async (action, closeModal) => {
+    if (isSubmittingTripAction) return
+    setIsSubmittingTripAction(true)
+    try {
+      await action()
+    } finally {
+      setIsSubmittingTripAction(false)
+      closeModal()
+    }
+  }
+
   const advanceStage = async () => {
     if (!active || !statusCfg || !statusCfg.nextStage) return
     const nextDbStatus = DRIVER_STATUS_TO_DB[statusCfg.nextStage]
@@ -1327,6 +1355,17 @@ function DriverDeliveries() {
       return
     }
     if (statusCfg.nextStage === 'DELIVERED') {
+      // Handing over the cargo finishes the driver's job — closes the trip's Session
+      // (end_time/duration/mileage) same as Start Pickup opens one. Sequenced after
+      // the status update above per STATUS.md's handoff plan: if this call fails, the
+      // delivery status is already correct and this can just be retried.
+      const { error: tripError } = await supabase.functions.invoke('driver-trip', {
+        body: { action: 'end-trip', deliveryRequestId: active.id },
+      })
+      if (tripError) {
+        alert('Delivery status updated, but ending the trip session failed. Please try again.')
+        return
+      }
       // Handing over the cargo finishes the driver's job — archive it right away instead of
       // asking for a separate "complete" tap. Customer confirmation happens later, on its own.
       setData((prev) => ({
@@ -1363,8 +1402,38 @@ function DriverDeliveries() {
     }
     setData((prev) => ({
       ...prev,
-      active: { ...prev.active, status: statusCfg.nextStage },
+      active: {
+        ...prev.active,
+        status: statusCfg.nextStage,
+        hasOpenSession: statusCfg.nextStage === 'FOR_PICKUP' ? true : prev.active.hasOpenSession,
+      },
     }))
+  }
+
+  const pauseTrip = async () => {
+    if (!active) return
+    const { error } = await supabase.functions.invoke('driver-trip', {
+      body: { action: 'pause-trip', deliveryRequestId: active.id },
+    })
+    if (error) {
+      alert('Failed to pause the trip. Please try again.')
+      return
+    }
+    setData((prev) => ({ ...prev, active: { ...prev.active, hasOpenSession: false } }))
+    setLiveAlerts([])
+    setIsAlertHistoryExpanded(false)
+  }
+
+  const resumeTrip = async () => {
+    if (!active) return
+    const { error } = await supabase.functions.invoke('driver-trip', {
+      body: { action: 'resume-trip', deliveryRequestId: active.id },
+    })
+    if (error) {
+      alert('Failed to resume the trip. Please try again.')
+      return
+    }
+    setData((prev) => ({ ...prev, active: { ...prev.active, hasOpenSession: true } }))
   }
 
   const openDirections = (origin, destination) => {
@@ -1425,7 +1494,12 @@ function DriverDeliveries() {
         {activeTab === 'today' && (active && isActiveToday ? (
           <>
             <div className="flex flex-col gap-3">
-              {statusCfg.banner && (
+              {isPausedTrip ? (
+                <div className="flex items-center gap-1.5 rounded-xl bg-amber-800 px-3.5 py-2.5 text-[11px] font-medium text-white sm:text-xs">
+                  <Pause className="h-3.5 w-3.5 shrink-0" />
+                  Trip paused — GPS and drowsiness monitoring are stopped. Resume when you're ready to continue driving.
+                </div>
+              ) : statusCfg.banner && (
                 <div className="flex items-center gap-1.5 rounded-xl bg-amber-900 px-3.5 py-2.5 text-[11px] font-medium text-white sm:text-xs">
                   {statusCfg.bannerIcon && <statusCfg.bannerIcon className="h-3.5 w-3.5 shrink-0" />}
                   {statusCfg.banner}
@@ -1653,15 +1727,38 @@ function DriverDeliveries() {
               </div>
             </div>
 
-            {statusCfg.nextLabel && (
+            {isPausedTrip && (
               <div className="sticky bottom-0 z-10 -mx-4 border-t border-amber-200/70 bg-white/95 px-4 py-2.5 backdrop-blur-sm sm:-mx-6 sm:px-6 md:-mx-8 md:px-8 lg:-mx-12 lg:px-12">
                 <button
-                  onClick={() => setConfirmingStageAdvance(true)}
-                  className={`mx-auto flex w-full items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-xs font-bold text-white transition sm:w-auto sm:min-w-[280px] ${statusCfg.nextColor}`}
+                  onClick={() => setConfirmingResume(true)}
+                  className="mx-auto flex w-full items-center justify-center gap-2 rounded-lg bg-amber-900 px-5 py-2.5 text-xs font-bold text-white transition hover:bg-amber-800 sm:w-auto sm:min-w-[280px]"
                 >
-                  <statusCfg.nextIcon className="h-4 w-4" />
-                  {statusCfg.nextLabel}
+                  <Play className="h-4 w-4" />
+                  Resume Trip
                 </button>
+              </div>
+            )}
+
+            {!isPausedTrip && statusCfg.nextLabel && (
+              <div className="sticky bottom-0 z-10 -mx-4 border-t border-amber-200/70 bg-white/95 px-4 py-2.5 backdrop-blur-sm sm:-mx-6 sm:px-6 md:-mx-8 md:px-8 lg:-mx-12 lg:px-12">
+                <div className="mx-auto flex w-full flex-col gap-1.5 sm:w-auto sm:min-w-[280px] sm:flex-row">
+                  {isMonitoring && (
+                    <button
+                      onClick={() => setConfirmingPause(true)}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2.5 text-xs font-bold text-amber-900 transition hover:bg-amber-50"
+                    >
+                      <Pause className="h-4 w-4" />
+                      Pause Trip
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setConfirmingStageAdvance(true)}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-xs font-bold text-white transition ${statusCfg.nextColor}`}
+                  >
+                    <statusCfg.nextIcon className="h-4 w-4" />
+                    {statusCfg.nextLabel}
+                  </button>
+                </div>
               </div>
             )}
           </>
@@ -1763,18 +1860,90 @@ function DriverDeliveries() {
             <div className="mt-4 flex gap-1.5">
               <button
                 onClick={() => setConfirmingStageAdvance(false)}
-                className="flex-1 whitespace-nowrap rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                disabled={isSubmittingTripAction}
+                className="flex-1 whitespace-nowrap rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  advanceStage()
-                  setConfirmingStageAdvance(false)
-                }}
-                className={`flex-1 whitespace-nowrap rounded-lg px-2.5 py-2 text-[11px] font-semibold text-white transition ${statusCfg.nextColor}`}
+                onClick={() => runTripAction(advanceStage, () => setConfirmingStageAdvance(false))}
+                disabled={isSubmittingTripAction}
+                className={`flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-2 text-[11px] font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-70 ${statusCfg.nextColor}`}
               >
-                {statusCfg.nextLabel}
+                {isSubmittingTripAction && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}
+                {isSubmittingTripAction ? 'Please wait…' : statusCfg.nextLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm before Pause/Resume — same compact-modal pattern as the stage-advance
+          confirmation above, since both stop/start GPS and drowsiness monitoring. */}
+      {confirmingPause && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-pause-title"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-amber-200/70 bg-white p-4 shadow-xl">
+            <h2 id="confirm-pause-title" className="text-sm font-bold text-slate-900">
+              Pause this trip?
+            </h2>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
+              This stops GPS and drowsiness monitoring for now. The delivery stays assigned to you — resume whenever you're ready to continue driving.
+            </p>
+            <div className="mt-4 flex gap-1.5">
+              <button
+                onClick={() => setConfirmingPause(false)}
+                disabled={isSubmittingTripAction}
+                className="flex-1 whitespace-nowrap rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => runTripAction(pauseTrip, () => setConfirmingPause(false))}
+                disabled={isSubmittingTripAction}
+                className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-amber-900 px-2.5 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSubmittingTripAction && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}
+                {isSubmittingTripAction ? 'Please wait…' : 'Pause Trip'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmingResume && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-resume-title"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-amber-200/70 bg-white p-4 shadow-xl">
+            <h2 id="confirm-resume-title" className="text-sm font-bold text-slate-900">
+              Resume this trip?
+            </h2>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
+              This restarts GPS and drowsiness monitoring and continues the same delivery from here.
+            </p>
+            <div className="mt-4 flex gap-1.5">
+              <button
+                onClick={() => setConfirmingResume(false)}
+                disabled={isSubmittingTripAction}
+                className="flex-1 whitespace-nowrap rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => runTripAction(resumeTrip, () => setConfirmingResume(false))}
+                disabled={isSubmittingTripAction}
+                className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-amber-900 px-2.5 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSubmittingTripAction && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}
+                {isSubmittingTripAction ? 'Please wait…' : 'Resume Trip'}
               </button>
             </div>
           </div>

@@ -46,6 +46,13 @@ Stored GPS logs must remain attributable to their Session (and, through the Sess
 
 The same per-Session GPS log also drives truck mileage tracking (see `03B_PAUSE_AND_RESUME_TRIP.md`/`07_END_TRIP.md`): distance driven is the sum of the point-to-point distances between consecutive `gps_logs` rows within that Session, added to `trucks.current_mileage` when the Session closes (Pause or End Trip). Computing it per-Session, not per-Trip, means it stays correct even if the assigned truck ever changes between Sessions of the same Trip (see the truck-swap decision in `02_BOOKING_AND_TRIP_CREATION.md`) — each Session's mileage always goes to whichever truck it actually used.
 
+**Decided 2026-08-08, mechanism not yet designed:** GPS tracking should continue while a Trip is Paused, for anti-theft/asset-visibility reasons — a Supervisor should be able to see where the truck actually is even if the driver paused (see `03B_PAUSE_AND_RESUME_TRIP.md`). This conflicts with the rule above ("GPS uploads only occur when an active session exists") as currently implemented: `pause-trip` (`driver-trip` Edge Function, built 2026-08-08) closes the Session outright (`end_time` set, `status = Completed`), and `gps_logs.session_id` is a not-null FK to a session — so there is no session row left for a GPS point to attach to during a pause under the current schema. Closing this gap needs its own design decision before it can be built, e.g.:
+
+- A separate truck-position tracking path keyed to the Trip (`delivery_request_id`) instead of `session_id`, running independently of Session state — GPS keeps flowing whenever a Trip is in progress (`OUT_FOR_PICKUP` through `DELIVERED`), while drowsiness detection still stops on Pause via `session_active` (`04_DEVICE_BOOT_AND_HEARTBEAT.md`).
+- Or, not closing the Session on Pause at all — reintroducing a real "Paused" status on `sessions` instead of ending it, which directly reverses `03B_PAUSE_AND_RESUME_TRIP.md`'s "Paused isn't a stored value anywhere" decision and the already-implemented/tested `pause-trip` mileage-on-close behavior.
+
+Not resolved here — do not build either without picking one first.
+
 ## Deliverable
 
 Implement GPS upload only.

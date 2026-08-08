@@ -31,8 +31,15 @@ The backend:
 
 - authenticates the device
 - updates devices.last_ping
+- resolves whether an active Session currently exists for this device
 
 No online flag is stored.
+
+The backend's response includes one field back to the Raspberry Pi:
+
+- session_active (boolean)
+
+Decided 2026-08-08: this is the only thing the backend ever sends back on a heartbeat, and it is a status readback, not a command — see the Raspberry Pi Shutdown section below for why that distinction matters. It exists so Pause Trip has a real effect on the physical device (see `03B_PAUSE_AND_RESUME_TRIP.md`): without it, pausing a Trip in the Driver Web Application had no way to reach the Raspberry Pi at all, and the only way to actually stop detection/vibration was manually powering the device off.
 
 ## Device Authentication
 
@@ -50,7 +57,7 @@ Offline
 
 ## Raspberry Pi Shutdown
 
-The Raspberry Pi has no shutdown signal and no bidirectional control channel with the backend — it only ever sends telemetry, it never receives commands (see `00_IMPLEMENTATION_RULES.md`).
+The Raspberry Pi has no shutdown signal and no command channel with the backend — it only ever sends telemetry and reads back its own `session_active` status (see Heartbeat above); the backend never pushes an instruction to the Pi, and the Pi never receives or executes commands (see `00_IMPLEMENTATION_RULES.md`). This is a deliberate, narrower exception to "telemetry only," not a general bidirectional channel — if a future need calls for the backend to actually instruct the Pi to do something, that is a separate decision, not an extension of this one.
 
 Powering off the Raspberry Pi (for any reason, at any time) does exactly this and nothing else:
 
@@ -68,13 +75,17 @@ Recommended driver flow (not enforced by the backend): press Pause Trip or End T
 
 Heartbeat continues even when no active session exists.
 
-GPS, drowsiness detection, and alert uploads must NOT start unless an active session exists.
+Drowsiness detection and alert uploads must NOT start unless an active session exists. GPS is a partial exception — see the note below, decided 2026-08-08, superseding the original "all three gated identically" design this section first described.
 
 Once an active session exists:
 
-- GPS uploads begin.
+- GPS uploads begin (though see below — GPS is meant to also run during a Pause, not only while a Session is Active).
 - Drowsiness detection begins.
 - Alert uploads begin.
+
+Mechanism for detection/vibration/alerts (decided 2026-08-08, resolves how the Raspberry Pi — which never knows `session_id` and previously had no way to learn session state at all, see `00_IMPLEMENTATION_RULES.md` — can actually gate any of this locally): the Pi reads `session_active` off every heartbeat response and starts/stops drowsiness detection (including the vibration motor) and alert uploads accordingly, on its own, within one heartbeat interval (~10 seconds) of a Pause/Resume/Start/End Trip action. This makes Pause Trip's effect on the physical device immediate and automatic for these three — powering the Pi off during a pause (`Raspberry Pi Shutdown` above) becomes optional, not the only way to stop them. Not yet implemented — pending Phase 4/6 build work.
+
+GPS is different (decided 2026-08-08, mechanism not yet designed — see `05_GPS_PIPELINE.md`'s note): it should keep flowing during a Pause for anti-theft/asset-visibility reasons, so it cannot simply be gated on `session_active` the way the other three are — that flag goes false exactly when Pause happens, which is the one moment GPS should keep working. Whether GPS ends up gated on a separate flag (e.g. `trip_active`, true from Start Trip through End Trip regardless of Pause) or some other mechanism is unresolved; `session_active` as specified above is not the right signal for it.
 
 ## Deliverable
 

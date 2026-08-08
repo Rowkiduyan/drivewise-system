@@ -40,6 +40,8 @@ Pressing End Trip (i.e. completing the delivery) also sets `delivery_requests.st
 
 In the Customer's view, a delivery with status `DELIVERED` shows a "Confirm Receive" button — a second validation, independent of the driver's End Trip action, that the customer actually received the goods. Pressing it sets status to `COMPLETED`. This matches the existing status flow already documented in `SupDeliveries.jsx`, where `COMPLETED` happens either from customer confirmation or automatically 7 days after `DELIVERED` with no action taken.
 
+**Helper visibility:** Implemented 2026-08-09 (see `03_START_TRIP_AND_SESSION.md`'s Helper visibility note). Helpers never press End Trip — only the Driver does. `HelperDeliveries.jsx` no longer has its own local stage-advance buttons (the old `Start Pickup`/`Confirm Pickup`/`Complete Delivery` mock actions were removed) — the page is fully read-only now. Once the Driver ends the Trip and `delivery_requests.status` becomes `DELIVERED`, `get-helper-deliveries` returns that real status and the delivery moves into the Helper's "Past" tab on next page load, the same crew-visibility principle as `02_BOOKING_AND_TRIP_CREATION.md`'s `ASSIGNED` note. Not realtime — requires a reload if the page was already open when the Driver ended the trip (see `03_START_TRIP_AND_SESSION.md`'s note; `08_REALTIME_DASHBOARD.md` scope).
+
 ## Deliverable
 
 Implement only End Trip.

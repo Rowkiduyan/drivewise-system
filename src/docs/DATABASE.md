@@ -122,7 +122,7 @@
 
     A session begins when raspberry pi is turned on and monitoring starts and ends when monitoring stops.
 
-    This described the original prototype's session lifecycle. Per `IMPLEMENTATION/03_START_TRIP_AND_SESSION.md` and `IMPLEMENTATION/03B_PAUSE_AND_RESUME_TRIP.md`, the lifecycle becomes driver-triggered (Start/Pause/Resume/End Trip) as those phases are implemented. Start Trip is implemented and tested (2026-08-08, `driver-trip` Edge Function) — Pause/Resume/End Trip are not yet built.
+    This described the original prototype's session lifecycle. Per `IMPLEMENTATION/03_START_TRIP_AND_SESSION.md` and `IMPLEMENTATION/03B_PAUSE_AND_RESUME_TRIP.md`, the lifecycle becomes driver-triggered (Start/Pause/Resume/End Trip) as those phases are implemented. Start/Pause/Resume/End Trip are all implemented and tested (2026-08-08, `driver-trip` Edge Function).
 
     `service_role` grants confirmed working (2026-08-08) via the `driver-trip` Edge Function: `select`/`insert`/`update` on `sessions` (had to be granted — see `SUPABASE_GOTCHAS.md` #2/#7), plus `select` on `delivery_requests`/`driver_records`/`users`/`devices` (already sufficient, no grant needed).
 
@@ -216,6 +216,10 @@
 
     - `session_id` references `sessions.session_id`.
     - Locked to `service_role` only for now (see `SUPABASE_GOTCHAS.md` #2/#7/#8) — a read path for the Supervisor dashboard (RLS policy or Edge Function) is a decision for `IMPLEMENTATION/08_REALTIME_DASHBOARD.md`, not made yet.
+
+    ### Open schema question (2026-08-08, not resolved)
+
+    Decided (see `IMPLEMENTATION/05_GPS_PIPELINE.md`, `IMPLEMENTATION/03B_PAUSE_AND_RESUME_TRIP.md`): GPS tracking should continue while a Trip is Paused, for anti-theft/asset-visibility reasons. But `session_id` here is `not null`, and Pause Trip closes the Session it would otherwise reference — so there is no valid `session_id` to write during a pause under this schema as it stands. Needs one of: a nullable `session_id` plus a `delivery_request_id` column so GPS can be attributed to the Trip directly when there's no open Session, or some other mechanism — not decided. Do not build GPS-during-Pause against the schema as currently documented above without resolving this first.
 
     ---
 
@@ -356,7 +360,7 @@ One deliberate exception (decided 2026-08-06, see `IMPLEMENTATION/07_END_TRIP.md
 
     - One Raspberry Pi device sends monitoring data.
     - Drowsiness events are associated with a single predefined account.
-    - `sessions` now has the columns to link to `delivery_requests`, `driver_records`, `trucks`, and `devices` (added 2026-08-08), but nothing writes to them yet — no Start/Pause/Resume/End Trip logic exists, so every current `sessions` row still has these columns `null`.
+    - `sessions` now has the columns to link to `delivery_requests`, `driver_records`, `trucks`, and `devices` (added 2026-08-08). Start/Pause/Resume/End Trip logic is implemented and writes these columns on every new Session — older rows created before that logic existed still have them `null`.
 
     `trucks` and `devices` tables now exist (added directly in Supabase, outside this document's original scope) — multi-truck fleet data is tracked. `gps_logs` now exists (2026-08-08) but nothing writes to it yet — no GPS upload Edge Function has been implemented. `alerts`' shape is confirmed correct as-is (2026-08-08) — `IMPLEMENTATION/06_DROWSINESS_ALERT_PIPELINE.md`'s payload was fixed to match it (`event_type`/`duration`, no `metadata`), not the other way around. See the "Open contradictions" notes under `devices` and `delivery_requests` for what's resolved vs. still open.
 
@@ -374,4 +378,4 @@ One deliberate exception (decided 2026-08-06, see `IMPLEMENTATION/07_END_TRIP.md
 
     Authentication, RLS policies, Edge Functions, and Supabase-specific security are documented separately.
 
-    The schema will be expanded to support further fleet management features as development continues. `trucks`, `devices`, and `gps_logs` already exist; `sessions` now has the columns linking it to `delivery_requests`/`driver_records`/`trucks`/`devices` (2026-08-08). No Start/Pause/Resume/End Trip or GPS-upload logic has been implemented yet — see the "Open contradictions" notes above and each `IMPLEMENTATION/*.md` phase's Required Schema section.
+    The schema will be expanded to support further fleet management features as development continues. `trucks`, `devices`, and `gps_logs` already exist; `sessions` now has the columns linking it to `delivery_requests`/`driver_records`/`trucks`/`devices` (2026-08-08). Start/Pause/Resume/End Trip logic is implemented; GPS-upload logic has not been — see the "Open contradictions" notes above and each `IMPLEMENTATION/*.md` phase's Required Schema section.

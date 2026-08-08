@@ -15,6 +15,10 @@ Driver
 
 - Hamburger menu
 
+Helper
+
+- Hamburger menu — Helpers ride along with the Driver on the same delivery, so their portal gets the same mobile treatment as the Driver's, not the desktop sidebar.
+
 Customer
 
 - Hamburger menu

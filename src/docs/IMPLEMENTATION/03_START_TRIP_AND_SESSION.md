@@ -66,6 +66,8 @@ Do not implement GPS.
 
 Do not implement alerts.
 
+**Helper visibility:** Implemented 2026-08-09. Helpers never press Start Trip (or Pause/Resume/End) — only the Driver does. `admin-users`' `get-helper-deliveries` action (Helper-role-gated, resolved via `assigned_helper_ids` containment) returns each assigned delivery's real `delivery_requests.status` plus `hasOpenSession`, computed the same open (`status = Active`) `sessions`-row check `get-driver-deliveries` uses — no separate action trigger, no `update-helper-delivery` action exists. `HelperDeliveries.jsx` renders this read-only: status badge/progress bar reflect the real status, and an Active/Paused banner mirrors the Driver's. Not realtime — the Helper's portal fetches once on page load, same as the Driver's own page; picking up a Trip-state change made while the page is already open is deferred to `08_REALTIME_DASHBOARD.md`'s scope, not specific to Helper.
+
 ## Rest Stop Recommendation
 
 Every 2 hours of continuous driving within a single active Session, the Driver Web Application shows a rest stop recommendation notification. This is anchored to that Session's `start_time` (continuous driving time), not the Trip overall — since Pause/Resume already splits driving into separate Sessions, the 2-hour clock naturally resets whenever the driver actually takes a break, and doesn't carry over across days on a multi-Session Trip.

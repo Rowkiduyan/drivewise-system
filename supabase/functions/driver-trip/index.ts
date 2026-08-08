@@ -1,6 +1,6 @@
 // Supabase Edge Function: driver-trip
 // Handles Driver-initiated Trip lifecycle actions (Start/Pause/Resume/End Trip
-// — only start-trip is implemented so far). Authenticates the caller's own
+// — End Trip is not implemented yet). Authenticates the caller's own
 // session (same pattern as admin-users), then uses service_role server-side
 // to read/write delivery_requests/sessions/devices/trucks/driver_records past
 // RLS.
@@ -38,6 +38,17 @@ function json(body: unknown, status = 200) {
     status,
     headers: { "Content-Type": "application/json", ...CORS_HEADERS },
   });
+}
+
+// Haversine distance in kilometers between two lat/lon points.
+function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 Deno.serve(async (req) => {
@@ -202,6 +213,335 @@ Deno.serve(async (req) => {
     // Session-state concept, not a shipment-milestone value (see
     // DATABASE.md's delivery_requests notes and 03_START_TRIP_AND_SESSION.md).
     return json({ ok: true, session });
+  }
+
+  if (action === "pause-trip") {
+    const deliveryRequestId = typeof body.deliveryRequestId === "string" ? body.deliveryRequestId : "";
+
+    if (!deliveryRequestId) {
+      return json({ error: "deliveryRequestId is required" }, 400);
+    }
+
+    const { data: delivery, error: deliveryError } = await adminClient
+      .from("delivery_requests")
+      .select("id, assigned_driver_id")
+      .eq("id", deliveryRequestId)
+      .single();
+
+    if (deliveryError || !delivery) {
+      return json({ error: "Delivery request not found" }, 400);
+    }
+
+    if (delivery.assigned_driver_id !== driverId) {
+      return json({ error: "This delivery is not assigned to you" }, 403);
+    }
+
+    const { data: session, error: sessionFetchError } = await adminClient
+      .from("sessions")
+      .select("session_id, start_time, truck_plate")
+      .eq("delivery_request_id", deliveryRequestId)
+      .eq("status", "Active")
+      .maybeSingle();
+
+    if (sessionFetchError) {
+      return json({ error: sessionFetchError.message }, 400);
+    }
+
+    if (!session) {
+      return json({ error: "No active session found for this delivery" }, 400);
+    }
+
+    const endTime = new Date();
+    const sessionDuration = Math.round((endTime.getTime() - new Date(session.start_time).getTime()) / 1000);
+
+    // Distance driven this Session, from its GPS route (05_GPS_PIPELINE.md):
+    // sum of point-to-point distances between consecutive gps_logs rows,
+    // chronologically. No telemetry exists yet, so this is 0 for now.
+    const { data: gpsLogs, error: gpsLogsError } = await adminClient
+      .from("gps_logs")
+      .select("latitude, longitude")
+      .eq("session_id", session.session_id)
+      .order("timestamp", { ascending: true });
+
+    if (gpsLogsError) {
+      return json({ error: gpsLogsError.message }, 400);
+    }
+
+    let distanceKmDriven = 0;
+    for (let i = 1; i < (gpsLogs?.length ?? 0); i++) {
+      const prev = gpsLogs![i - 1];
+      const curr = gpsLogs![i];
+      distanceKmDriven += distanceKm(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+    }
+
+    if (session.truck_plate && distanceKmDriven > 0) {
+      const { data: truck, error: truckError } = await adminClient
+        .from("trucks")
+        .select("current_mileage")
+        .eq("plate_number", session.truck_plate)
+        .maybeSingle();
+
+      if (truckError) {
+        return json({ error: truckError.message }, 400);
+      }
+
+      if (truck) {
+        const { error: truckUpdateError } = await adminClient
+          .from("trucks")
+          .update({ current_mileage: (truck.current_mileage ?? 0) + distanceKmDriven })
+          .eq("plate_number", session.truck_plate);
+
+        if (truckUpdateError) {
+          return json({ error: truckUpdateError.message }, 400);
+        }
+      }
+    }
+
+    const { data: updatedSession, error: updateError } = await adminClient
+      .from("sessions")
+      .update({
+        end_time: endTime.toISOString(),
+        session_duration: sessionDuration,
+        status: "Completed",
+      })
+      .eq("session_id", session.session_id)
+      .select()
+      .single();
+
+    if (updateError) {
+      return json({ error: updateError.message }, 400);
+    }
+
+    // delivery_requests.status is deliberately NOT changed here — same
+    // two-axis rule as Start Trip (see 03B_PAUSE_AND_RESUME_TRIP.md).
+    return json({ ok: true, session: updatedSession, distanceKm: distanceKmDriven });
+  }
+
+  if (action === "resume-trip") {
+    const deliveryRequestId = typeof body.deliveryRequestId === "string" ? body.deliveryRequestId : "";
+
+    if (!deliveryRequestId) {
+      return json({ error: "deliveryRequestId is required" }, 400);
+    }
+
+    const { data: delivery, error: deliveryError } = await adminClient
+      .from("delivery_requests")
+      .select("id, assigned_driver_id, assigned_truck_plate")
+      .eq("id", deliveryRequestId)
+      .single();
+
+    if (deliveryError || !delivery) {
+      return json({ error: "Delivery request not found" }, 400);
+    }
+
+    if (delivery.assigned_driver_id !== driverId) {
+      return json({ error: "This delivery is not assigned to you" }, 403);
+    }
+
+    const { data: existingOpenSession, error: existingOpenSessionError } = await adminClient
+      .from("sessions")
+      .select("session_id")
+      .eq("delivery_request_id", deliveryRequestId)
+      .eq("status", "Active")
+      .maybeSingle();
+
+    if (existingOpenSessionError) {
+      return json({ error: existingOpenSessionError.message }, 400);
+    }
+
+    if (existingOpenSession) {
+      return json({ error: "This delivery already has an active session" }, 409);
+    }
+
+    // Scope decision (see STATUS.md, 2026-08-08): the backend accepts an
+    // optional truck override for the documented truck-swap-after-breakdown
+    // case, but no truck-picker UI exists yet — this defaults to the Trip's
+    // current truck until that override is actually wired up.
+    const truckPlate =
+      typeof body.truckPlate === "string" && body.truckPlate ? body.truckPlate : delivery.assigned_truck_plate;
+
+    if (truckPlate !== delivery.assigned_truck_plate) {
+      const { error: deliveryUpdateError } = await adminClient
+        .from("delivery_requests")
+        .update({ assigned_truck_plate: truckPlate })
+        .eq("id", deliveryRequestId);
+
+      if (deliveryUpdateError) {
+        return json({ error: deliveryUpdateError.message }, 400);
+      }
+    }
+
+    // Resolved fresh via devices.plate_number, not reused from the prior
+    // Session — picks up both a truck swap and a fleet-level device
+    // reassignment since the last Session (03B_PAUSE_AND_RESUME_TRIP.md).
+    let deviceId: string | null = null;
+    if (truckPlate) {
+      const { data: device, error: deviceError } = await adminClient
+        .from("devices")
+        .select("device_id")
+        .eq("plate_number", truckPlate)
+        .maybeSingle();
+
+      if (deviceError) {
+        return json({ error: deviceError.message }, 400);
+      }
+
+      deviceId = device?.device_id ?? null;
+    }
+
+    if (deviceId) {
+      const { data: deviceActiveSession, error: deviceActiveSessionError } = await adminClient
+        .from("sessions")
+        .select("session_id")
+        .eq("device_id", deviceId)
+        .eq("status", "Active")
+        .maybeSingle();
+
+      if (deviceActiveSessionError) {
+        return json({ error: deviceActiveSessionError.message }, 400);
+      }
+
+      if (deviceActiveSession) {
+        return json({ error: "This truck's device is already in an active session for a different delivery" }, 409);
+      }
+    }
+
+    const { data: session, error: sessionError } = await adminClient
+      .from("sessions")
+      .insert({
+        session_id: crypto.randomUUID(),
+        delivery_request_id: delivery.id,
+        driver_id: driverId,
+        truck_plate: truckPlate,
+        device_id: deviceId,
+        start_time: new Date().toISOString(),
+        status: "Active",
+      })
+      .select()
+      .single();
+
+    if (sessionError) {
+      if (sessionError.code === "23505") {
+        return json({ error: "This truck's device is already in an active session for a different delivery" }, 409);
+      }
+      return json({ error: sessionError.message }, 400);
+    }
+
+    return json({ ok: true, session });
+  }
+
+  if (action === "end-trip") {
+    const deliveryRequestId = typeof body.deliveryRequestId === "string" ? body.deliveryRequestId : "";
+
+    if (!deliveryRequestId) {
+      return json({ error: "deliveryRequestId is required" }, 400);
+    }
+
+    const { data: delivery, error: deliveryError } = await adminClient
+      .from("delivery_requests")
+      .select("id, assigned_driver_id")
+      .eq("id", deliveryRequestId)
+      .single();
+
+    if (deliveryError || !delivery) {
+      return json({ error: "Delivery request not found" }, 400);
+    }
+
+    if (delivery.assigned_driver_id !== driverId) {
+      return json({ error: "This delivery is not assigned to you" }, 403);
+    }
+
+    const { data: session, error: sessionFetchError } = await adminClient
+      .from("sessions")
+      .select("session_id, start_time, truck_plate")
+      .eq("delivery_request_id", deliveryRequestId)
+      .eq("status", "Active")
+      .maybeSingle();
+
+    if (sessionFetchError) {
+      return json({ error: sessionFetchError.message }, 400);
+    }
+
+    if (!session) {
+      return json({ error: "No active session found for this delivery" }, 400);
+    }
+
+    const endTime = new Date();
+    const sessionDuration = Math.round((endTime.getTime() - new Date(session.start_time).getTime()) / 1000);
+
+    // Distance driven this Session, from its GPS route (05_GPS_PIPELINE.md):
+    // sum of point-to-point distances between consecutive gps_logs rows,
+    // chronologically. No telemetry exists yet, so this is 0 for now.
+    const { data: gpsLogs, error: gpsLogsError } = await adminClient
+      .from("gps_logs")
+      .select("latitude, longitude")
+      .eq("session_id", session.session_id)
+      .order("timestamp", { ascending: true });
+
+    if (gpsLogsError) {
+      return json({ error: gpsLogsError.message }, 400);
+    }
+
+    let distanceKmDriven = 0;
+    for (let i = 1; i < (gpsLogs?.length ?? 0); i++) {
+      const prev = gpsLogs![i - 1];
+      const curr = gpsLogs![i];
+      distanceKmDriven += distanceKm(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+    }
+
+    if (session.truck_plate && distanceKmDriven > 0) {
+      const { data: truck, error: truckError } = await adminClient
+        .from("trucks")
+        .select("current_mileage")
+        .eq("plate_number", session.truck_plate)
+        .maybeSingle();
+
+      if (truckError) {
+        return json({ error: truckError.message }, 400);
+      }
+
+      if (truck) {
+        const { error: truckUpdateError } = await adminClient
+          .from("trucks")
+          .update({ current_mileage: (truck.current_mileage ?? 0) + distanceKmDriven })
+          .eq("plate_number", session.truck_plate);
+
+        if (truckUpdateError) {
+          return json({ error: truckUpdateError.message }, 400);
+        }
+      }
+    }
+
+    const { data: updatedSession, error: updateError } = await adminClient
+      .from("sessions")
+      .update({
+        end_time: endTime.toISOString(),
+        session_duration: sessionDuration,
+        status: "Completed",
+      })
+      .eq("session_id", session.session_id)
+      .select()
+      .single();
+
+    if (updateError) {
+      return json({ error: updateError.message }, 400);
+    }
+
+    // The one deliberate exception to "Trip actions never touch
+    // delivery_requests.status" (see 07_END_TRIP.md, DATABASE.md's
+    // delivery_requests notes) — DELIVERED is an existing shipment-milestone
+    // value, not a new Session-state value, so wiring End Trip to it doesn't
+    // mix the two concerns the way an Active/Paused value would.
+    const { error: deliveryUpdateError } = await adminClient
+      .from("delivery_requests")
+      .update({ status: "DELIVERED" })
+      .eq("id", deliveryRequestId);
+
+    if (deliveryUpdateError) {
+      return json({ error: deliveryUpdateError.message }, 400);
+    }
+
+    return json({ ok: true, session: updatedSession, distanceKm: distanceKmDriven });
   }
 
   return json({ error: "Unknown action" }, 400);

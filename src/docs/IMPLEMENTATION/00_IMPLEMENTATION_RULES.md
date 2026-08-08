@@ -58,6 +58,8 @@ It is only responsible for:
 
 Business logic always belongs to the backend.
 
+One narrow exception (decided 2026-08-08, see `04_DEVICE_BOOT_AND_HEARTBEAT.md`'s Heartbeat and Active Session sections): the backend's heartbeat response includes a `session_active` boolean, which the Pi reads to locally start/stop GPS, drowsiness detection, and alert uploads (including the vibration motor) — this is what makes Pause Trip actually silence the device instead of requiring a manual power-off. It is a status readback, not a command: the backend still never tells the Pi to do anything, and the Pi still never learns `session_id`/`trip_id`/`driver_id`/`truck_id`. This does not make the channel bidirectional in the command sense — see `04_DEVICE_BOOT_AND_HEARTBEAT.md`'s Raspberry Pi Shutdown section for why that distinction is deliberate.
+
 ## Backend Responsibilities
 
 The backend is responsible for:

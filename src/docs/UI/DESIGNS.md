@@ -58,6 +58,21 @@ Danger buttons should always be red.
 
 ---
 
+## Loading States
+
+Any button that triggers an async backend call — most commonly a modal's confirm button — must show a loading state while the request is in flight, and must be disabled (along with its modal's Cancel button) for the duration. This prevents a double-tap from firing the request twice, which is easy to hit on mobile (slower taps, no cursor feedback) and on slower connections generally.
+
+Decided 2026-08-08 (first applied to `DriverDeliveries.jsx`'s Confirm Pickup/Complete Delivery/Pause Trip/Resume Trip confirm-modal buttons — see `STATUS.md`). The pattern:
+
+- Track a single `isSubmitting`-style boolean in the component. If more than one confirm modal exists but only one can ever be open at a time, share one flag across all of them rather than one per action — simpler, and there's never a real case where two could be in flight together.
+- Guard the handler itself against re-entry (`if (isSubmitting) return`) as well as disabling the button — belt and suspenders, since a disabled button can still receive a queued click event on some mobile browsers a frame before the disabled state paints.
+- While submitting: swap the button's label for a small spinner + "Please wait…" (a `Loader2`-style icon with `animate-spin` is the standard here), and disable both the confirm and cancel buttons (`disabled:cursor-not-allowed disabled:opacity-50`/`70`).
+- Close the modal (and reset the flag) only after the async call settles — not immediately on click — so the loading state is actually visible for however long the request takes, and so a failure's `alert()` (or future non-alert error UI) appears while context is still on screen rather than after the modal has already vanished.
+
+Apply this to every new confirm-modal button going forward, not just the ones it already covers.
+
+---
+
 ## Tables
 
 Tables should:

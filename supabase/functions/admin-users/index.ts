@@ -709,6 +709,22 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Lets the Driver UI tell "never started" (ASSIGNED, no session yet)
+      // apart from "paused" (status already past ASSIGNED but no open
+      // Session) so it knows whether to show Pause or Resume Trip — see
+      // 03B_PAUSE_AND_RESUME_TRIP.md's "Paused isn't a stored value" note.
+      const openSessionDeliveryIds = new Set<string>();
+      if (deliveryIds.length > 0) {
+        const { data: openSessions } = await adminClient
+          .from("sessions")
+          .select("delivery_request_id")
+          .in("delivery_request_id", deliveryIds)
+          .eq("status", "Active");
+        for (const s of openSessions || []) {
+          openSessionDeliveryIds.add(s.delivery_request_id as string);
+        }
+      }
+
       for (const r of rowsList) {
         const helpers = ((r.assigned_helper_ids as string[]) || []).map((id) => {
           const h = helperById.get(id);
@@ -729,6 +745,7 @@ Deno.serve(async (req) => {
           deliveryAddress: r.dropoff_location,
           cargoWeight: r.cargo_weight,
           status: r.status,
+          hasOpenSession: openSessionDeliveryIds.has(r.id as string),
           assignedAt: r.assigned_at,
           driver: {
             id: driverRecord.id,
@@ -787,6 +804,147 @@ Deno.serve(async (req) => {
       }
 
       return json({ ok: true, status: nextStatus });
+    }
+  }
+
+  // Helper deliveries: read-only visibility into the Trip/Session state the
+  // Driver drives. Helpers never press Start/Pause/Resume/End Trip (see
+  // 03_START_TRIP_AND_SESSION.md's "Helper visibility" note) — so unlike the
+  // Driver block above, there is no update-helper-delivery action, only this
+  // read. hasOpenSession is computed the same way get-driver-deliveries does.
+  if (callerRow.role === "Helper") {
+    const { data: helperRecord, error: helperRecordError } = await adminClient
+      .from("helper_records")
+      .select("id, first_name, middle_name, last_name, contact_number")
+      .eq("auth_id", callerData.user.id)
+      .maybeSingle();
+
+    if (helperRecordError || !helperRecord) {
+      return json({ error: "Unable to find your helper profile" }, 400);
+    }
+
+    if (action === "get-helper-deliveries") {
+      const { data: rows, error: rowsError } = await adminClient
+        .from("delivery_requests")
+        .select("*")
+        .contains("assigned_helper_ids", [helperRecord.id as string])
+        .order("pickup_date", { ascending: true });
+
+      if (rowsError) {
+        return json({ error: rowsError.message }, 400);
+      }
+
+      const rowsList = rows || [];
+      const formatCrewName = (rec: Record<string, unknown>) =>
+        [rec.first_name, rec.middle_name, rec.last_name].filter(Boolean).join(" ").trim();
+
+      const customerAuthIds = Array.from(new Set(rowsList.map((r) => r.customer_auth_id as string)));
+      const customerNameById = new Map<string, string>();
+      if (customerAuthIds.length > 0) {
+        const { data: customers } = await adminClient
+          .from("customer_records")
+          .select("auth_id, client_name, first_name, last_name")
+          .in("auth_id", customerAuthIds);
+        for (const c of customers || []) {
+          const clientName = c.client_name as string | null;
+          const personalName = [c.first_name, c.last_name].filter(Boolean).join(" ");
+          customerNameById.set(c.auth_id as string, clientName || personalName || "Client");
+        }
+      }
+
+      const driverIds = Array.from(new Set(rowsList.map((r) => r.assigned_driver_id as string).filter(Boolean)));
+      const driverById = new Map<string, Record<string, unknown>>();
+      if (driverIds.length > 0) {
+        const { data: drivers } = await adminClient
+          .from("driver_records")
+          .select("id, first_name, middle_name, last_name, contact_number")
+          .in("id", driverIds);
+        for (const d of drivers || []) driverById.set(d.id as string, d);
+      }
+
+      const helperIds = Array.from(new Set(rowsList.flatMap((r) => (r.assigned_helper_ids as string[]) || [])));
+      const helperById = new Map<string, Record<string, unknown>>();
+      if (helperIds.length > 0) {
+        const { data: helpers } = await adminClient
+          .from("helper_records")
+          .select("id, first_name, middle_name, last_name")
+          .in("id", helperIds);
+        for (const h of helpers || []) helperById.set(h.id as string, h);
+      }
+
+      const plateNumbers = Array.from(new Set(rowsList.map((r) => r.assigned_truck_plate as string).filter(Boolean)));
+      const truckByPlate = new Map<string, Record<string, unknown>>();
+      if (plateNumbers.length > 0) {
+        const { data: trucks } = await adminClient
+          .from("trucks")
+          .select("plate_number, truck_type, max_capacity")
+          .in("plate_number", plateNumbers);
+        for (const t of trucks || []) truckByPlate.set(t.plate_number as string, t);
+      }
+
+      const deliveryIds = rowsList.map((r) => r.id as string);
+      const quotationByDelivery = new Map<string, { amount: number }>();
+      if (deliveryIds.length > 0) {
+        const { data: quotations } = await adminClient
+          .from("delivery_quotations")
+          .select("delivery_id, amount, created_at")
+          .in("delivery_id", deliveryIds)
+          .order("created_at", { ascending: true });
+        for (const q of quotations || []) {
+          quotationByDelivery.set(q.delivery_id as string, { amount: Number(q.amount) });
+        }
+      }
+
+      // Same open-Session computation get-driver-deliveries uses above — Helper
+      // visibility into Active/Paused mirrors the Driver's, read-only.
+      const openSessionDeliveryIds = new Set<string>();
+      if (deliveryIds.length > 0) {
+        const { data: openSessions } = await adminClient
+          .from("sessions")
+          .select("delivery_request_id")
+          .in("delivery_request_id", deliveryIds)
+          .eq("status", "Active");
+        for (const s of openSessions || []) {
+          openSessionDeliveryIds.add(s.delivery_request_id as string);
+        }
+      }
+
+      const deliveries = rowsList.map((r) => {
+        const driver = r.assigned_driver_id ? driverById.get(r.assigned_driver_id as string) : null;
+        const helpers = ((r.assigned_helper_ids as string[]) || []).map((id) => {
+          const h = helperById.get(id);
+          return h ? { id, name: formatCrewName(h) || "Helper" } : { id, name: "Helper" };
+        });
+        const truck = r.assigned_truck_plate ? truckByPlate.get(r.assigned_truck_plate as string) : null;
+        const customerName = customerNameById.get(r.customer_auth_id as string) || "Client";
+        return {
+          id: r.id,
+          customerName,
+          companyName: customerName,
+          itemType: r.item_type ? String(r.item_type).charAt(0).toUpperCase() + String(r.item_type).slice(1) : r.item_type,
+          pickupDate: r.pickup_date,
+          pickupTime: r.pickup_time ? String(r.pickup_time).slice(0, 5) : null,
+          pickupAddress: r.pickup_location,
+          deliveryAddress: r.dropoff_location,
+          status: r.status,
+          hasOpenSession: openSessionDeliveryIds.has(r.id as string),
+          assignedAt: r.assigned_at,
+          driver: driver
+            ? { id: r.assigned_driver_id, name: formatCrewName(driver) || "Driver", phone: driver.contact_number ?? "" }
+            : null,
+          helpers,
+          truck: truck
+            ? {
+                plateNumber: truck.plate_number,
+                truckType: truck.truck_type,
+                capacity: truck.max_capacity != null ? `${Number(truck.max_capacity).toLocaleString()} kg` : null,
+              }
+            : null,
+          quotation: quotationByDelivery.get(r.id as string) || null,
+        };
+      });
+
+      return json({ ok: true, deliveries });
     }
   }
 
@@ -878,6 +1036,123 @@ Deno.serve(async (req) => {
     }
 
     return json({ ok: true, crewByDelivery });
+  }
+
+  // upload-profile-picture / remove-profile-picture: any signed-in user may
+  // manage their OWN picture (userId === their own auth id) — every role's
+  // own Profile page calls these two actions, not just Admin's user-management
+  // UI. An Admin may additionally manage any user's picture. Checked here,
+  // before the blanket Admin-only gate below, since non-Admin self-service is
+  // otherwise indistinguishable from the Admin-managing-another-user case.
+  const PROFILE_PICTURE_ACTIONS = ["upload-profile-picture", "remove-profile-picture"];
+  if (PROFILE_PICTURE_ACTIONS.includes(action)) {
+    const userId = typeof body.userId === "string" ? body.userId : "";
+
+    if (!userId) {
+      return json({ error: "userId is required" }, 400);
+    }
+
+    if (userId !== callerData.user.id && !ADMIN_ROLES.includes(callerRow.role)) {
+      return json({ error: "Forbidden" }, 403);
+    }
+
+    if (action === "upload-profile-picture") {
+      const fileBase64 = typeof body.fileBase64 === "string" ? body.fileBase64 : "";
+      const contentType = typeof body.contentType === "string" ? body.contentType : "";
+
+      if (!fileBase64) {
+        return json({ error: "fileBase64 is required" }, 400);
+      }
+
+      const extension = EXTENSION_BY_CONTENT_TYPE[contentType];
+      if (!extension) {
+        return json({ error: "contentType must be image/jpeg, image/png, or image/webp" }, 400);
+      }
+
+      const { data: targetUserRow, error: targetUserError } = await adminClient
+        .from("users")
+        .select("role")
+        .eq("id", userId)
+        .single();
+
+      if (targetUserError || !targetUserRow) {
+        return json({ error: targetUserError?.message || "User not found" }, 400);
+      }
+
+      const table = ROLE_TABLE[targetUserRow.role];
+      const bytes = decodeBase64(fileBase64);
+
+      if (bytes.byteLength > MAX_PROFILE_PICTURE_BYTES) {
+        return json({ error: "Image is too large (max 512KB after processing)" }, 400);
+      }
+
+      const path = `${userId}.${extension}`;
+      const { error: uploadError } = await adminClient.storage
+        .from(PROFILE_PICTURE_BUCKET)
+        .upload(path, bytes, { contentType, upsert: true });
+
+      if (uploadError) {
+        return json({ error: uploadError.message }, 400);
+      }
+
+      const { data: publicUrlData } = adminClient.storage
+        .from(PROFILE_PICTURE_BUCKET)
+        .getPublicUrl(path);
+
+      // Cache-bust: the storage path never changes across re-uploads (same
+      // userId + extension, upsert: true), so without this every consumer
+      // (sidebar, manage dialog) would keep showing a browser-cached copy of
+      // the old picture after a new one is uploaded.
+      const profilePictureUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`;
+
+      const { error: updateError } = await adminClient
+        .from(table)
+        .update({ profile_picture: profilePictureUrl })
+        .eq("auth_id", userId);
+
+      if (updateError) {
+        return json({ error: updateError.message }, 400);
+      }
+
+      return json({ ok: true, profile_picture: profilePictureUrl });
+    }
+
+    // remove-profile-picture: deletes the stored object (tried under every
+    // extension we ever accept, since we don't otherwise know which one this
+    // user's picture was uploaded as) rather than just nulling the column, so
+    // removing a picture actually frees the storage instead of leaving an
+    // orphaned object behind.
+    const { data: targetUserRow, error: targetUserError } = await adminClient
+      .from("users")
+      .select("role")
+      .eq("id", userId)
+      .single();
+
+    if (targetUserError || !targetUserRow) {
+      return json({ error: targetUserError?.message || "User not found" }, 400);
+    }
+
+    const table = ROLE_TABLE[targetUserRow.role];
+    const paths = Object.values(EXTENSION_BY_CONTENT_TYPE).map((ext) => `${userId}.${ext}`);
+
+    const { error: removeError } = await adminClient.storage
+      .from(PROFILE_PICTURE_BUCKET)
+      .remove(paths);
+
+    if (removeError) {
+      return json({ error: removeError.message }, 400);
+    }
+
+    const { error: updateError } = await adminClient
+      .from(table)
+      .update({ profile_picture: null })
+      .eq("auth_id", userId);
+
+    if (updateError) {
+      return json({ error: updateError.message }, 400);
+    }
+
+    return json({ ok: true });
   }
 
   if (!ADMIN_ROLES.includes(callerRow.role)) {
@@ -1011,117 +1286,6 @@ Deno.serve(async (req) => {
       const message = profileError instanceof Error ? profileError.message : "Unable to save profile record";
       return json({ error: message }, 400);
     }
-  }
-
-  // Admin-only, same as update-profile — an Admin can set their own picture
-  // (calling with their own userId) or any managed user's. The client
-  // always crops/re-encodes to JPEG first (src/lib/profilePicture.js), so
-  // this only ever writes one object per user, keyed by userId + ".jpg".
-  if (action === "upload-profile-picture") {
-    const userId = typeof body.userId === "string" ? body.userId : "";
-    const fileBase64 = typeof body.fileBase64 === "string" ? body.fileBase64 : "";
-    const contentType = typeof body.contentType === "string" ? body.contentType : "";
-
-    if (!userId || !fileBase64) {
-      return json({ error: "userId and fileBase64 are required" }, 400);
-    }
-
-    const extension = EXTENSION_BY_CONTENT_TYPE[contentType];
-    if (!extension) {
-      return json({ error: "contentType must be image/jpeg, image/png, or image/webp" }, 400);
-    }
-
-    const { data: targetUserRow, error: targetUserError } = await adminClient
-      .from("users")
-      .select("role")
-      .eq("id", userId)
-      .single();
-
-    if (targetUserError || !targetUserRow) {
-      return json({ error: targetUserError?.message || "User not found" }, 400);
-    }
-
-    const table = ROLE_TABLE[targetUserRow.role];
-    const bytes = decodeBase64(fileBase64);
-
-    if (bytes.byteLength > MAX_PROFILE_PICTURE_BYTES) {
-      return json({ error: "Image is too large (max 512KB after processing)" }, 400);
-    }
-
-    const path = `${userId}.${extension}`;
-    const { error: uploadError } = await adminClient.storage
-      .from(PROFILE_PICTURE_BUCKET)
-      .upload(path, bytes, { contentType, upsert: true });
-
-    if (uploadError) {
-      return json({ error: uploadError.message }, 400);
-    }
-
-    const { data: publicUrlData } = adminClient.storage
-      .from(PROFILE_PICTURE_BUCKET)
-      .getPublicUrl(path);
-
-    // Cache-bust: the storage path never changes across re-uploads (same
-    // userId + extension, upsert: true), so without this every consumer
-    // (sidebar, manage dialog) would keep showing a browser-cached copy of
-    // the old picture after a new one is uploaded.
-    const profilePictureUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`;
-
-    const { error: updateError } = await adminClient
-      .from(table)
-      .update({ profile_picture: profilePictureUrl })
-      .eq("auth_id", userId);
-
-    if (updateError) {
-      return json({ error: updateError.message }, 400);
-    }
-
-    return json({ ok: true, profile_picture: profilePictureUrl });
-  }
-
-  // Admin-only, same gate as upload-profile-picture. Deletes the stored
-  // object (tried under every extension we ever accept, since we don't
-  // otherwise know which one this user's picture was uploaded as) rather
-  // than just nulling the column, so removing a picture actually frees the
-  // storage instead of leaving an orphaned object behind.
-  if (action === "remove-profile-picture") {
-    const userId = typeof body.userId === "string" ? body.userId : "";
-
-    if (!userId) {
-      return json({ error: "userId is required" }, 400);
-    }
-
-    const { data: targetUserRow, error: targetUserError } = await adminClient
-      .from("users")
-      .select("role")
-      .eq("id", userId)
-      .single();
-
-    if (targetUserError || !targetUserRow) {
-      return json({ error: targetUserError?.message || "User not found" }, 400);
-    }
-
-    const table = ROLE_TABLE[targetUserRow.role];
-    const paths = Object.values(EXTENSION_BY_CONTENT_TYPE).map((ext) => `${userId}.${ext}`);
-
-    const { error: removeError } = await adminClient.storage
-      .from(PROFILE_PICTURE_BUCKET)
-      .remove(paths);
-
-    if (removeError) {
-      return json({ error: removeError.message }, 400);
-    }
-
-    const { error: updateError } = await adminClient
-      .from(table)
-      .update({ profile_picture: null })
-      .eq("auth_id", userId);
-
-    if (updateError) {
-      return json({ error: updateError.message }, 400);
-    }
-
-    return json({ ok: true });
   }
 
   const userId = typeof body.userId === "string" ? body.userId : "";

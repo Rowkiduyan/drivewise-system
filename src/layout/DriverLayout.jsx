@@ -126,7 +126,7 @@ function DriverLayout({ title, background, children }) {
 
   return (
     <main
-      className="relative flex h-screen w-screen overflow-hidden bg-white text-slate-900"
+      className="relative flex h-dvh w-screen overflow-hidden bg-white text-slate-900"
       style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
     >
       {background}
@@ -171,7 +171,7 @@ function DriverLayout({ title, background, children }) {
       />
 
       <aside
-        className={`fixed left-0 top-0 z-40 flex h-screen w-56 flex-col gap-3 border-r border-amber-900/80 bg-amber-950 py-3 backdrop-blur transition-transform duration-300 md:hidden ${
+        className={`fixed left-0 top-0 z-40 flex h-dvh w-56 flex-col gap-3 border-r border-amber-900/80 bg-amber-950 py-3 backdrop-blur transition-transform duration-300 md:hidden ${
           isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         role="navigation"
