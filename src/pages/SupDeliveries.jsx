@@ -35,6 +35,7 @@ import {
   AlertCircle,
   Lock,
   MessageSquare,
+  CameraOff,
 } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -959,6 +960,7 @@ const ALERT_TYPE_ICONS = {
   prolonged_eye_closure: EyeOff,
   pattern_eye_closure_yawn: AlertTriangle,
   pattern_repeated_eye_closure: Repeat,
+  face_not_detected: CameraOff,
 }
 
 function formatAlertDuration(seconds) {

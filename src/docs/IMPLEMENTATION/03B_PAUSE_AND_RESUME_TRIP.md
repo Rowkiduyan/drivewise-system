@@ -56,12 +56,12 @@ Pause Trip is for temporary suspensions where the same assignment continues late
 
 A Trip may be paused and resumed any number of times; each Resume Trip creates a new Session, so a Trip may accumulate multiple Sessions over multiple days.
 
-Pause/Resume closes and reopens the backend Session. Originally (as first implemented 2026-08-08) this gated GPS as well as drowsiness-alert uploads, and did not reach the Raspberry Pi at all — the vibration motor ran off the Pi's own local detection with no way to know Session state, so a manual power-off was the only way to actually stop it. Two decisions since then (both 2026-08-08, both mechanism-not-yet-designed, see `05_GPS_PIPELINE.md` and `04_DEVICE_BOOT_AND_HEARTBEAT.md`) change what "gates" what:
+Pause/Resume closes and reopens the backend Session. Originally (as first implemented 2026-08-08) this gated GPS as well as drowsiness-alert uploads, and did not reach the Raspberry Pi at all — the vibration motor ran off the Pi's own local detection with no way to know Session state, so a manual power-off was the only way to actually stop it. Two decisions since then (both decided 2026-08-08, see `05_GPS_PIPELINE.md` and `04_DEVICE_BOOT_AND_HEARTBEAT.md`) change what "gates" what:
 
 - Drowsiness detection/vibration/alerts: the Pi will read a `session_active` boolean back on every heartbeat and locally gate detection/vibration/alerts on it — Pause Trip silences these within one heartbeat interval (~10s), and powering the Pi off becomes optional rather than required.
-- GPS: should keep flowing during a Pause regardless of `session_active` (anti-theft/asset-visibility — see below), which is *not* the same signal and needs its own mechanism since `gps_logs.session_id` currently requires an open Session that Pause closes.
+- GPS: keeps flowing during a Pause regardless of `session_active` (anti-theft/asset-visibility — see below). Mechanism resolved 2026-08-10 (see `05_GPS_PIPELINE.md`'s "GPS-during-Pause" note): `gps_logs.session_id` is now nullable and a not-null `delivery_request_id` column attributes readings to the Trip directly, so GPS no longer needs an open Session to write to.
 
-Neither is built yet — both are pending Phase 4/5/6 work.
+Neither is built yet (schema/backend design resolved, implementation still pending Phase 4/5/6 work).
 
 **Decided 2026-08-08, deferred to Phase 8:** what should happen if a truck is observed moving while its Trip is Paused? Originally framed as a non-issue "by construction" (GPS uploads rejected with no active Session), that framing no longer holds once GPS-during-Pause above is built — a paused-but-moving truck would then be real, visible data. Whether/how to flag that as an anomaly to a Supervisor (vs. treating it as simply expected now that Pause no longer implies "truck isn't moving") is real-time monitoring, not Session lifecycle, so it belongs in `08_REALTIME_DASHBOARD.md`'s scope — see the note added there. Not designed, not building it now.
 

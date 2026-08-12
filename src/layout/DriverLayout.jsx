@@ -243,7 +243,12 @@ function DriverLayout({ title, background, children }) {
 
         {/* Main Content */}
         <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden pt-14 md:pt-0">
-          <div className="flex-1 min-h-0 overflow-y-auto">
+          {/* id used by DriverDeliveries.jsx's phone-only page-scroll rail (the
+              Live Navigation map's gestureHandling is 'greedy' and would
+              otherwise swallow a scroll swipe) to scroll this exact container
+              directly -- this div, not window/document, is what actually
+              scrolls; the outer <main> is h-dvh overflow-hidden. */}
+          <div id="driver-scroll-container" className="flex-1 min-h-0 overflow-y-auto">
             <div className="h-full px-4 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8 lg:px-12 lg:py-10">
               {deactivationWarning ? (
                 <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">

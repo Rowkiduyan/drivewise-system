@@ -19,6 +19,7 @@ import {
   Truck,
   Users,
   Building2,
+  CameraOff,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -177,12 +178,14 @@ const ALERT_TYPE_LABELS = {
   prolonged_eye_closure: "Prolonged Eye Closure",
   pattern_eye_closure_yawn: "Eye Closure + Yawn",
   pattern_repeated_eye_closure: "Repeated Eye Closure",
+  face_not_detected: "Eyes Not Detected",
 };
 
 const ALERT_TYPE_ICONS = {
   prolonged_eye_closure: EyeOff,
   pattern_eye_closure_yawn: AlertTriangle,
   pattern_repeated_eye_closure: Repeat,
+  face_not_detected: CameraOff,
 };
 
 // Alert rows carry the human-readable label (see ALERT_TYPE_LABELS), not the

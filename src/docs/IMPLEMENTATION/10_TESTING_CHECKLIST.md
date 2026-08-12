@@ -35,9 +35,10 @@ Verify every workflow and edge case described in Phases 1-9 before sign-off.
 
 ## GPS Pipeline
 
-- GPS uploads occur only while an Active Session exists, at a 1 second interval.
+- GPS uploads occur at a 1 second interval whenever the device's Trip is in progress — Active or Paused (see `05_GPS_PIPELINE.md`'s "GPS-during-Pause" note) — not only while a Session is open.
+- During a Pause, the uploaded `gps_logs` row has `delivery_request_id` set but `session_id` null; once the Trip fully ends (`delivery_requests.status = DELIVERED`), further uploads for that device are rejected.
 - GPS unavailable: upload is skipped for that reading; heartbeat continues; no session/device error state is raised.
-- The Raspberry Pi never inserts directly into `gps_logs`; the backend resolves the active session before insert.
+- The Raspberry Pi never inserts directly into `gps_logs`; the backend resolves the Trip (and, if open, the Session) before insert.
 - A Trip's actual route is correctly reconstructed by combining GPS logs from all of its Sessions in chronological order (multi-session and multi-day Trips).
 - Route Comparison correctly compares the Trip's suggested route against its reconstructed actual route.
 

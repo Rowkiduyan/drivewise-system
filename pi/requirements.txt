@@ -1,0 +1,12 @@
+opencv-python
+dlib
+imutils
+scipy
+numpy
+requests
+pyserial
+picamera2
+# RPi.GPIO is usually preinstalled on Raspberry Pi OS; on Bookworm+ it may
+# need `python3-rpi-lgpio` from apt instead of this pip package -- check
+# your OS version before assuming this line is enough.
+RPi.GPIO

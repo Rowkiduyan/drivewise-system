@@ -91,7 +91,11 @@ export default function AdminDevices() {
       .delete()
       .eq("device_id", device.device_id);
     if (error) {
-      setToast({ message: "Delete failed", type: "error" });
+      const message =
+        error.code === "23503"
+          ? "Cannot delete: this device has session history."
+          : "Delete failed";
+      setToast({ message, type: "error" });
       return;
     }
     setDevices((prev) => prev.filter((d) => d.device_id !== device.device_id));

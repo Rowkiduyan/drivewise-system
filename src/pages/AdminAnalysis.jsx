@@ -4,7 +4,8 @@ import AdminLayout from '../layout/AdminLayout.jsx'
 const ALERT_TYPE_LABELS = {
   prolonged_eye_closure: 'Prolonged Eye Closure',
   pattern_eye_closure_yawn: 'Eye Closure + Yawn',
-  pattern_repeated_eye_closure: 'Repeated Eye Closure'
+  pattern_repeated_eye_closure: 'Repeated Eye Closure',
+  face_not_detected: 'Eyes Not Detected'
 }
 
 function formatDuration(seconds) {

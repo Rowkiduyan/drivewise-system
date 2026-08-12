@@ -37,7 +37,8 @@
     driver_records (1) ----- (N) sessions          [sessions.driver_id -> driver_records.id]
     trucks (1) ----- (N) sessions                  [sessions.truck_plate -> trucks.plate_number]
     devices (1) ----- (N) sessions                 [sessions.device_id -> devices.device_id]
-    sessions (1) ----- (N) gps_logs                [gps_logs.session_id -> sessions.session_id]
+    sessions (0..1) ----- (N) gps_logs             [gps_logs.session_id -> sessions.session_id, nullable]
+    delivery_requests (1) ----- (N) gps_logs       [gps_logs.delivery_request_id -> delivery_requests.id]
 
     Each user has exactly one profile row, in the `*_records` table matching their `role` — never more than one, and never in more than one table at a time.
 
@@ -179,17 +180,25 @@
 
     Stores every drowsiness event detected during a monitoring session.
 
-    ### Key Fields
+    ### Key Fields (verified via `information_schema.columns` 2026-08-11, ahead of Phase 6)
 
-    - id
-    - event_type
-    - duration
-    - session_id
-    - created_at
+    - id (bigint, Primary Key, identity, not null)
+    - created_at (timestamptz, not null, default `now()`)
+    - event_type (text, not null)
+    - duration (double precision, not null)
+    - session_id (text, nullable) — references `sessions.session_id`. Nullable at the DB level, though Phase 6's Rules ("Only active sessions may generate alerts") mean a correctly-behaving alert-upload function should always set it.
+
+    17 existing rows as of 2026-08-11 (leftover from `drowsines.py`/`renz_test.py` prototype testing — direct anon-key inserts, not through any Edge Function).
+
+    ### Grants (verified via `information_schema.role_table_grants` 2026-08-11; `service_role` fixed same day ahead of Phase 6's `alert-upload` deploy)
+
+    - `service_role`: `select`, `insert` (plus `references`/`trigger`/`truncate`) — run via `grant select, insert on public.alerts to service_role;` before deploying `alert-upload`. Same per-table grant gotcha every other telemetry table hit (`SUPABASE_GOTCHAS.md` #2/#7).
+    - `anon`: **revoked 2026-08-12** (`revoke all on public.alerts from anon;`, confirmed via `information_schema.role_table_grants` — `anon` no longer appears in the table's grants at all). Previously had unrestricted `select`/`insert`/`references`/`trigger`/`truncate`, matching the prototype scripts' direct-anon-key write pattern; since the anon/publishable key is public and client-embedded, that had allowed anyone to insert or read arbitrary alert rows (same category of gap `devices` had before being tightened 2026-08-11). Held back at the time pending confirmation that `alert-upload` was the sole write path — confirmed via repeated bench testing through 2026-08-12 (Phase 6 completion, GSM retest), so the revoke was executed.
+    - `authenticated`: `select`/`references`/`trigger`/`truncate` — no `insert`/`update`/`delete`. This is what lets the Driver Web App's Realtime subscription (`DriverDeliveries.jsx`, Phase 6) receive `alerts` `INSERT` events.
 
     ### Relationships
 
-    - Belongs to one monitoring session.
+    - `session_id` references `sessions.session_id`, nullable.
 
     ---
 
@@ -197,29 +206,37 @@
 
     ### Purpose
 
-    Stores one GPS reading per upload from an active Session's device. Added 2026-08-08 to support `IMPLEMENTATION/05_GPS_PIPELINE.md` — previously did not exist at all.
+    Stores one GPS reading per upload from a device whose Trip is in progress (Active or Paused). Added 2026-08-08 to support `IMPLEMENTATION/05_GPS_PIPELINE.md` — previously did not exist at all.
 
     ### Key Fields
 
     - id (bigint, Primary Key, identity)
-    - session_id (text, not null) — references `sessions.session_id`.
+    - session_id (text, nullable) — references `sessions.session_id`. Set when an open (`status = Active`) Session exists for the reading; null while the Trip is Paused (see "GPS-during-Pause" below). **Actually made nullable 2026-08-11** — the GPS-during-Pause design was written up as resolved 2026-08-10, but the live column was still `NOT NULL` until this date; see the note under "GPS-during-Pause" below.
+    - delivery_request_id (text, not null) — references `delivery_requests.id`. **Actually added 2026-08-11** — same gap as `session_id` above: designed 2026-08-10, but the column didn't exist on the live table until this date. Always set, regardless of Session state, so every reading is attributable to its Trip even when there's no open Session to hang it off of.
     - latitude (double precision, not null)
     - longitude (double precision, not null)
     - timestamp (timestamptz, not null) — the reading's own timestamp, as sent by the Raspberry Pi.
     - created_at (timestamptz, not null, default `now()`) — when the row landed in the database (kept separate from `timestamp` in case of upload delay).
 
-    An index on `(session_id, timestamp)` supports reconstructing a Session's route in chronological order (Route Comparison, mileage calculation).
+    An index on `(session_id, timestamp)` supports reconstructing a Session's route in chronological order (Route Comparison, mileage calculation — Session-scoped, so it only ever sees Active-Session readings). A second index on `(delivery_request_id, timestamp)` supports Trip-level live-position queries (Supervisor asset visibility) that need every reading regardless of which Session, if any, was open when it landed. **Not yet created** — these indexes were part of the original design but weren't included in the 2026-08-11 fix (which only added the missing column/nullability); still open.
 
-    `service_role` grant confirmed 2026-08-08: `grant select on public.gps_logs to service_role;` — added ahead of `driver-trip`'s Pause Trip action, which sums this table's rows per Session to compute mileage. Not tested by any Edge Function before this (Phase 5/GPS upload isn't implemented yet), so this was unconfirmed until now — same per-table grant gotcha as `SUPABASE_GOTCHAS.md` #2/#7.
+    `service_role` grant confirmed 2026-08-08: `grant select on public.gps_logs to service_role;` — added ahead of `driver-trip`'s Pause Trip action, which sums this table's rows per Session to compute mileage. Re-checked 2026-08-11 ahead of Phase 5 (GPS upload): `service_role` already has full `select`/`insert`/`update`/`delete` on this table (confirmed via `information_schema.role_table_grants`) — `insert` was never previously exercised by any Edge Function, but the grant already exists. Phase 5's `gps-upload` function is now built, deployed, and curl-verified end-to-end (2026-08-11) against this schema.
+
+    `authenticated` grant added 2026-08-12: `grant select on public.gps_logs to authenticated;` — needed for `DriverDeliveries.jsx`'s live in-app navigation (`LiveNavigationMap`, Google Maps JavaScript API) to subscribe to `gps_logs` `INSERT`s via Supabase Realtime, which honors table grants the same way a normal `select` does; without this the subscription would silently receive nothing. Same reasoning/pattern as the `alerts` table's `authenticated: select` grant. Originally recorded here as "a blanket grant, no RLS restriction" — **that was wrong, caught 2026-08-12 (later same-day session) while live-testing the navigation feature**: RLS is in fact enabled on this table, and no policy had ever been added alongside this grant, so every `authenticated` query was silently returning zero rows the entire time (a grant alone does not bypass RLS) — the live-position arrow could never have rendered, for real GPS data or test data alike, until this was fixed. Added: `create policy "authenticated select gps_logs" on public.gps_logs for select to authenticated using (true);`, matching `alerts`' equally permissive existing policy. Confirmed live afterward: the Realtime subscription actually receives rows now.
+
+    **Second, separate gap found right after fixing the one above, same session:** the RLS fix alone still wasn't enough for live *updates* — the seed-fetch (a plain REST `select` on mount) worked, but the `postgres_changes` `INSERT` subscription itself never fired, so the map's position arrow updated once and then never moved again. Root cause: `gps_logs` had never been added to the `supabase_realtime` publication — the same class of gap already hit and fixed for `alerts`/`delivery_requests` during Phase 6 (see that table's entry). `postgres_changes` only broadcasts for tables in that publication, independent of grants/RLS. Fixed: `alter publication supabase_realtime add table public.gps_logs;`. Confirmed live via a scripted GPS-movement simulation afterward.
 
     ### Relationships
 
-    - `session_id` references `sessions.session_id`.
-    - Locked to `service_role` only for now (see `SUPABASE_GOTCHAS.md` #2/#7/#8) — a read path for the Supervisor dashboard (RLS policy or Edge Function) is a decision for `IMPLEMENTATION/08_REALTIME_DASHBOARD.md`, not made yet.
+    - `session_id` references `sessions.session_id`, nullable.
+    - `delivery_request_id` references `delivery_requests.id`, not null.
+    - `service_role` (full access, bypasses RLS) and, as of 2026-08-12, `authenticated` (`select` only, gated by the RLS policy above, not just the grant) — a broader read path for the Supervisor dashboard specifically (RLS policy or Edge Function) is still a decision for `IMPLEMENTATION/08_REALTIME_DASHBOARD.md`, not made yet; the 2026-08-12 grant+policy were scoped to what the Driver app's own navigation needs, not a general opening of this table.
 
-    ### Open schema question (2026-08-08, not resolved)
+    ### GPS-during-Pause (designed 2026-08-10, actually deployed 2026-08-11)
 
-    Decided (see `IMPLEMENTATION/05_GPS_PIPELINE.md`, `IMPLEMENTATION/03B_PAUSE_AND_RESUME_TRIP.md`): GPS tracking should continue while a Trip is Paused, for anti-theft/asset-visibility reasons. But `session_id` here is `not null`, and Pause Trip closes the Session it would otherwise reference — so there is no valid `session_id` to write during a pause under this schema as it stands. Needs one of: a nullable `session_id` plus a `delivery_request_id` column so GPS can be attributed to the Trip directly when there's no open Session, or some other mechanism — not decided. Do not build GPS-during-Pause against the schema as currently documented above without resolving this first.
+    GPS tracking continues while a Trip is Paused, for anti-theft/asset-visibility reasons (see `IMPLEMENTATION/05_GPS_PIPELINE.md`, `IMPLEMENTATION/03B_PAUSE_AND_RESUME_TRIP.md`). `session_id` was `not null` originally, and Pause Trip closes the Session it would otherwise reference — so there was no valid `session_id` to write during a pause under the original schema. Resolved by making `session_id` nullable and adding `delivery_request_id` (always set) so a reading can be attributed to its Trip directly, independent of whether a Session happens to be open. See `IMPLEMENTATION/05_GPS_PIPELINE.md` for the backend lookup logic that resolves `delivery_request_id`/`session_id` per upload.
+
+    **Gap found 2026-08-11:** this design was documented as "resolved" on 2026-08-10, but the actual `alter table` statements were never run — the live table still had `session_id not null` and no `delivery_request_id` column at all until this was caught while curl-testing the newly-built `gps-upload` function (Phase 5) and traced back via `information_schema.columns`. Fixed by running (table was empty, 0 rows, no backfill needed): `alter table public.gps_logs alter column session_id drop not null;` then `alter table public.gps_logs add column delivery_request_id text not null references public.delivery_requests(id);`. Lesson: a decision documented as "resolved" here previously meant "decided," not necessarily "applied to the live database" — worth re-verifying schema docs against `information_schema` before trusting them as current, not just against migration history (these tables have no migration files at all, see each table's Purpose note).
 
     ---
 
@@ -269,7 +286,14 @@
     - device_status (text, nullable, default `'Active'`)
     - created_at (timestamptz, not null, default `timezone('utc', now())`)
     - last_ping (timestamptz, nullable)
-    - device_secret_hash (text, nullable) — added 2026-08-06. Backfilled 2026-08-08 (every existing device row now has a SHA-256 hash of a randomly generated secret; the plaintext was only ever shown once, in the backfill query's output, and must be manually configured on each physical Raspberry Pi). Not yet read/written by any Edge Function — device authentication isn't wired up yet.
+    - device_secret_hash (text, nullable) — added 2026-08-06. Backfilled 2026-08-08 (every existing device row now has a SHA-256 hash of a randomly generated secret; the plaintext was only ever shown once, in the backfill query's output, and must be manually configured on each physical Raspberry Pi). Read/written starting 2026-08-11: the `admin-users` Edge Function's `register-device` action generates a new device's secret server-side, hashes it (plain lowercase-hex SHA-256, no salt — same format the backfill used), stores the hash, and returns the plaintext once for the Admin to copy onto the physical Pi (never stored, never retrievable again). The `device-heartbeat` Edge Function reads this hash on every heartbeat to authenticate the device (`04_DEVICE_BOOT_AND_HEARTBEAT.md`).
+
+    ### Grants (confirmed 2026-08-11)
+
+    Unlike `sessions`/`gps_logs`/`trucks`, this table was originally left with full unrestricted `anon`/`authenticated` grants (a Supabase default-privileges gap, see `SUPABASE_GOTCHAS.md` #8) — notable here specifically because `device_secret_hash` is a live authentication credential once Phase 4 heartbeat is wired up. Tightened 2026-08-11:
+    - `anon`: no access (`revoke all`).
+    - `authenticated`: column-scoped — `select`/`insert`/`update` on `id, device_id, plate_number, device_status, created_at, last_ping` only (never `device_secret_hash`), plus the original `delete` (unchanged, used by Admin Devices' delete action). This is what the Admin Devices/Add-Truck/Edit-Device UI reads and writes directly from the browser.
+    - `service_role`: full `select`/`insert`/`update`/`delete`, unchanged — used by `admin-users` (`register-device`) and `device-heartbeat`.
 
     ### Relationships
 
@@ -279,7 +303,7 @@
 
     See the chat discussion from 2026-08-06 — not resolved here, flagged for the team to decide:
 
-    - ~~No `device_secret` (or hashed equivalent) column exists.~~ Resolved 2026-08-06: `device_secret_hash` added; backfilled 2026-08-08. Still open: no Edge Function in `04_DEVICE_BOOT_AND_HEARTBEAT.md`/`05_GPS_PIPELINE.md`/`06_DROWSINESS_ALERT_PIPELINE.md` reads/writes it yet — the column is populated but device authentication isn't wired up to it. That's implementation code, not a schema gap — see Phase 3 onward.
+    - ~~No `device_secret` (or hashed equivalent) column exists.~~ Resolved 2026-08-06: `device_secret_hash` added; backfilled 2026-08-08. Resolved 2026-08-11: `admin-users` (`register-device`) writes it, `device-heartbeat` reads it — see the Key Fields entry above. `05_GPS_PIPELINE.md`/`06_DROWSINESS_ALERT_PIPELINE.md` still don't authenticate against it yet — those are separate, later phases.
     - ~~There is no `truck_device_assignments` table.~~ Resolved 2026-08-06 (decision, not a gap): not building one. Nothing needs assignment history — `devices.plate_number` (a direct FK to `trucks.plate_number`) is sufficient and is what the already-shipped Truck Management UI (`AdminTrucks.jsx`, `AddTruckModal.jsx`, `AdminTruckProfile.jsx`) already reads/writes. `IMPLEMENTATION/*.md` has been updated to reference this lookup instead.
     - ~~`last_ping` exists instead of `last_seen`.~~ Resolved 2026-08-06 (decision, not a gap): confirmed `last_ping` is the same heartbeat-timestamp concept the docs called `last_seen`, and the column stays named `last_ping` since other modules already depend on it. `IMPLEMENTATION/*.md` (`04_DEVICE_BOOT_AND_HEARTBEAT.md`, `08_REALTIME_DASHBOARD.md`, `10_TESTING_CHECKLIST.md`) has been updated to reference `last_ping`.
 
@@ -309,11 +333,16 @@
     - assigned_truck_plate (text, nullable)
     - assigned_at (timestamptz, nullable)
     - created_at / updated_at (timestamptz, not null, default `now()`)
+    - stops — **not yet deployed.** Decided 2026-08-10 (see `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md`'s Required Schema gap #2): `jsonb`, not null, default `'[]'` — an ordered array of intermediate stop locations visited between `pickup_location` (first) and `dropoff_location` (last), which are unaffected. Reference-only (no per-stop status). Confirm/add this column before implementing multi-stop route generation or the booking form's stop-entry UI — same not-yet-deployed status as the suggested-route column noted in `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md`'s Required Schema gap #1.
 
     ### Relationships
 
     - `customer_auth_id` references `users.id` (enforced foreign key).
     - `assigned_driver_id`, `assigned_helper_ids`, and `assigned_truck_plate` are **not** enforced foreign keys at the database level, despite conceptually referring to `driver_records.id`, crew `users.id` values, and `trucks.plate_number` respectively — treat as unvalidated at the DB layer until confirmed otherwise.
+
+    ### Realtime
+
+    Found 2026-08-11 while testing Phase 6's Realtime alerts (`06_DROWSINESS_ALERT_PIPELINE.md`): `delivery_requests` was never added to Supabase's `supabase_realtime` publication, despite `SupDeliveries.jsx` already having a `postgres_changes` subscription on it (`sup-delivery-requests-live`) since before this session. That subscription was therefore silently non-functional — the table not being published means no event ever fires, regardless of RLS/grants. Fixed by running `alter publication supabase_realtime add table public.delivery_requests;`. Its `"Supervisors can read all delivery requests"` RLS policy (`authenticated` role, `current_user_role() = 'Supervisor'`) should now let a real Supervisor session receive these events; not live-verified against an actual Supervisor login (none available this session), only confirmed the publication + policy are both now in place.
 
     ### Open contradictions with `IMPLEMENTATION/*.md`
 

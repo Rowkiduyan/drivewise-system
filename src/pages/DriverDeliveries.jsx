@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Calendar,
@@ -25,12 +25,31 @@ import {
   Wallet,
   Activity,
   X,
+  CameraOff,
+  Volume2,
+  VolumeX,
+  Maximize2,
+  Minimize2,
+  LocateFixed,
 } from 'lucide-react'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
+import {
+  GoogleMap,
+  Marker as GoogleMapMarker,
+  Polyline as GoogleMapPolyline,
+  useJsApiLoader,
+} from '@react-google-maps/api'
 import DriverLayout from '../layout/DriverLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
+
+// Module-level, not recreated per render -- @react-google-maps/api's own
+// useJsApiLoader warns against passing a fresh array each render (it treats
+// a new array reference as "libraries changed" and reloads the SDK).
+// 'geometry' is needed for computeDistanceBetween (step-advance) and
+// isLocationOnEdge (deviation/reroute detection) below.
+const GOOGLE_MAPS_LIBRARIES = ['geometry']
 
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -128,34 +147,61 @@ const ALERT_TYPE_LABELS = {
   prolonged_eye_closure: 'Prolonged Eye Closure',
   pattern_eye_closure_yawn: 'Eye Closure + Yawn',
   pattern_repeated_eye_closure: 'Repeated Eye Closure',
+  face_not_detected: 'Eyes Not Detected',
 }
 
 const ALERT_TYPE_ICONS = {
   prolonged_eye_closure: EyeOff,
   pattern_eye_closure_yawn: AlertTriangle,
   pattern_repeated_eye_closure: Repeat,
+  face_not_detected: CameraOff,
 }
 
-// Live drowsiness monitoring runs client-side against a simulated feed —
-// there's no real camera/detection pipeline wired into this frontend yet —
-// so a delivery in progress gets an occasional random alert instead of a
-// static post-trip summary, matching the pace of real fatigue events
-// (roughly one every 5-10 minutes of driving, not constant).
-const LIVE_ALERT_TICK_MS = 20000
-const LIVE_ALERT_CHANCE = 0.18
+// Driver-facing audio alert (06_DROWSINESS_ALERT_PIPELINE.md). Two clips,
+// escalating by how clustered the alerts are: the first four alerts in any
+// rolling 30-minute window use the normal chime; the moment a 5th alert
+// lands within that same 30-minute window, it and every alert after it
+// (until the window clears) use the more urgent clip instead.
+const USUAL_ALERT_SRC = encodeURI('/Usual Alert.mp3')
+const MULTIPLE_ALERT_SRC = encodeURI('/5+ Multiple Alert.mp3')
+const ALERT_CLUSTER_WINDOW_MS = 30 * 60 * 1000
+const ALERT_CLUSTER_THRESHOLD = 5
 
-// Presentation seed for the "Confirm Pickup" moment — guarantees a
-// realistic-looking couple of alerts appear right away (instead of
-// depending on the random interval to eventually produce one), so a demo
-// of the delivery leg always has something to show. Timestamps are computed
-// relative to "now" at seed time, most-recent first, matching the order
-// the live interval prepends new alerts in.
-function buildMockLiveAlertSeed() {
-  const now = Date.now()
-  return [
-    { id: `live-seed-${now}-a`, type: 'pattern_eye_closure_yawn', duration: 34, time: new Date(now - 2 * 60 * 1000).toISOString() },
-    { id: `live-seed-${now}-b`, type: 'prolonged_eye_closure', duration: 47, time: new Date(now - 6 * 60 * 1000).toISOString() },
-  ]
+// Browsers block <audio>.play() with no prior user interaction on the page.
+// Playing muted-and-immediately-paused at Start Trip (the driver's first
+// interaction) unlocks both clips so a later real alert can just play.
+function unlockAlertAudio(audioEl) {
+  if (!audioEl) return
+  const wasMuted = audioEl.muted
+  audioEl.muted = true
+  audioEl
+    .play()
+    .then(() => {
+      audioEl.pause()
+      audioEl.currentTime = 0
+      audioEl.muted = wasMuted
+    })
+    .catch(() => {
+      audioEl.muted = wasMuted
+    })
+}
+
+// Plays the clip twice in a row — one pass isn't attention-grabbing enough
+// for a drowsiness alert, per feedback while testing this feature live.
+function playAlertClip(audioEl) {
+  if (!audioEl) return
+  const attemptPlay = () =>
+    audioEl.play().catch((err) => {
+      console.warn('Drowsiness alert audio failed to play:', err)
+    })
+  const playSecondTime = () => {
+    audioEl.removeEventListener('ended', playSecondTime)
+    audioEl.currentTime = 0
+    attemptPlay()
+  }
+  audioEl.addEventListener('ended', playSecondTime, { once: true })
+  audioEl.currentTime = 0
+  attemptPlay()
 }
 
 const RISK_BADGE_CLASSES = {
@@ -278,6 +324,423 @@ function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoo
         </Marker>
       </MapContainer>
     </div>
+  )
+}
+
+const GOOGLE_MAP_CONTAINER_STYLE = { width: '100%', height: '100%' }
+// ~100m in degrees at this latitude -- isLocationOnEdge wants a tolerance in
+// degrees, not meters. Rough conversion, not geodesically exact, which is
+// fine for a "has the driver visibly left the route" check.
+const NAV_REROUTE_TOLERANCE_DEGREES = 0.0009
+const NAV_STEP_ADVANCE_METERS = 35
+const NAV_REROUTE_DEBOUNCE_MS = 12000
+// Street-level nav zoom (Waze/Google Nav "Start" view) -- 16 read as a
+// regular browsing zoom, not a close-in driving view. User feedback
+// 2026-08-12 after live-testing the tilt/rotation fixes; bumped in steps
+// (16 -> 18 -> 19 -> 21) per further feedback that it still read as too
+// zoomed out. Google Maps silently clamps to whatever max zoom its imagery
+// actually supports for a given location (typically ~20-21, sometimes less
+// outside dense city centers), so this is close to the real usable ceiling
+// most places already.
+const NAV_ZOOM = 21
+
+function stripHtml(html) {
+  return String(html || '').replace(/<[^>]+>/g, '')
+}
+
+// Live in-app turn-by-turn navigation (capstone requirement: built on the
+// Google Maps JavaScript API, not a static embed). Position comes from the
+// Raspberry Pi's gps_logs uploads (passed in as `livePosition`), not the
+// browser's own geolocation -- see 01_SYSTEM_ARCHITECTURE.md's Route
+// Comparison section. Only rendered while isDrivingStage (see call site);
+// the existing "Navigate Now" native-app deep-link (`onOpenDirections`) is
+// kept as a fallback, not replaced. isMonitoring/nextLabel/NextIcon/
+// nextColor/onPause/onResume/onStageAdvance mirror the page's own sticky
+// bottom action bar exactly (same fields as statusCfg + the same three
+// confirm-modal triggers) -- used only while fullscreen (see the footer
+// below), since fullscreen covers that action bar entirely and the driver
+// would otherwise have no way to Pause/advance the trip without backing out
+// of fullscreen first.
+function LiveNavigationMap({
+  origin,
+  destination,
+  livePosition,
+  isPaused,
+  onOpenDirections,
+  isMonitoring,
+  nextLabel,
+  NextIcon,
+  nextColor,
+  onPause,
+  onResume,
+  onStageAdvance,
+}) {
+  const { isLoaded } = useJsApiLoader({
+    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
+    libraries: GOOGLE_MAPS_LIBRARIES,
+  })
+
+  const [directions, setDirections] = useState(null)
+  const [currentStepIndex, setCurrentStepIndex] = useState(0)
+  const [isMuted, setIsMuted] = useState(false)
+  const [routeError, setRouteError] = useState(false)
+  // Purely a layout toggle (fixed-position overlay over the whole viewport,
+  // see the section's className below) -- doesn't unmount or remount
+  // anything, so the drowsiness-alert <audio> elements/Realtime subscription
+  // (both live in the parent DriverDeliveries component, entirely outside
+  // this component's tree) keep running unaffected while fullscreen.
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  // Direction of travel, in degrees, derived from consecutive GPS ticks --
+  // drives the Waze/Google Maps-style rotating arrow marker below.
+  const [heading, setHeading] = useState(0)
+  const mapRef = useRef(null)
+  // Plain ref, not state: exists only so the recenter effect below can also
+  // fire once the map finishes loading, in case livePosition (from the seed
+  // fetch on mount) already arrived before mapRef.current was set -- without
+  // this, that race left the map stuck on initialCenter after a page
+  // refresh mid-trip instead of recentering on the driver's actual position,
+  // since the effect's only dependency was livePosition and a ref change
+  // alone doesn't re-run an effect.
+  const [isMapReady, setIsMapReady] = useState(false)
+  const lastAnnouncedStepRef = useRef(-1)
+  const lastRerouteAtRef = useRef(0)
+  const previousPositionRef = useRef(null)
+  // Deliberately captured once and never updated -- passing a `center` prop
+  // that changes with livePosition would make @react-google-maps/api call
+  // map.setCenter() on every GPS tick, which resets tilt/heading back to 0
+  // as a side effect. All camera movement after mount goes exclusively
+  // through moveCamera() below instead, which doesn't have that problem.
+  const [initialCenter] = useState(() => origin || destination)
+
+  const computeRoute = (routeOrigin, routeDestination) => {
+    if (!window.google || !routeOrigin || !routeDestination) return
+    new window.google.maps.DirectionsService().route(
+      {
+        origin: routeOrigin,
+        destination: routeDestination,
+        travelMode: window.google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => {
+        if (status === 'OK' && result) {
+          setDirections(result)
+          setCurrentStepIndex(0)
+          setRouteError(false)
+        } else {
+          setRouteError(true)
+        }
+      },
+    )
+  }
+
+  // Initial route + recompute on a leg switch (pickup -> dropoff). Not
+  // recomputed on every GPS tick -- livePosition is deliberately left out of
+  // this dependency list; see the deviation effect below for the one case a
+  // live position should trigger a fresh route.
+  useEffect(() => {
+    if (!isLoaded || !destination) return
+    computeRoute(livePosition || origin, destination)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded, destination?.lat, destination?.lng])
+
+  // Recenter/follow as new positions arrive, and derive a heading (like
+  // Waze/Google Maps' navigation-mode arrow) from consecutive GPS ticks --
+  // gps_logs has no heading/bearing column, only latitude/longitude, so
+  // there's nothing to read a heading from directly. Skip tiny movements
+  // (GPS drift while stationary) so the arrow doesn't jitter randomly.
+  //
+  // The camera itself is also tilted/rotated to match, not just the marker
+  // icon -- this is what actually gives the Waze/Google Nav "Start" look
+  // (angled 3D perspective, direction-of-travel always up on screen) rather
+  // than a flat north-up view with a rotating arrow on top of it. Requires a
+  // vector map (VITE_GOOGLE_MAPS_MAP_ID) -- tilt/rotation on a plain raster
+  // map is unreliable. All camera changes go through one moveCamera() call
+  // -- center/zoom/tilt/heading composed atomically -- not separate
+  // panTo()/setTilt()/setHeading() calls, which was the earlier bug:
+  // setCenter()-style calls (including the ones @react-google-maps/api's own
+  // `center` prop diffing triggers) reset tilt/heading back to 0 as a side
+  // effect, so the map would briefly show tilted on load then flatten out
+  // the moment any center update landed.
+  //
+  // Marker rotation: a legacy google.maps.Marker's Symbol icon is a screen-
+  // space billboard -- it does NOT rotate along with the camera's `heading`
+  // the way the underlying map plane does, so setting icon.rotation to the
+  // same absolute heading as the camera does not cancel out to "pointing up
+  // on screen" (tried first, confirmed wrong via live testing -- the arrow
+  // didn't track direction of travel). The correct Waze/Google-Nav model is
+  // simpler: the arrow itself never rotates, always pointing straight up:
+  // the camera is what turns to keep direction-of-travel at the top of the
+  // screen, so the world rotates under a fixed forward-facing arrow instead.
+  // `heading` state is still computed here and still drives the camera --
+  // just no longer also fed into the marker's rotation.
+  useEffect(() => {
+    if (!livePosition || !mapRef.current) return
+    let nextHeading = heading
+    // Only derive a heading from a *previous* position within this mount --
+    // on a fresh page load/refresh, previousPositionRef starts empty, so the
+    // first tick has nothing to compare against and correctly just recenters
+    // without changing heading; consecutive-tick comparisons behave the same
+    // as before once a second reading arrives.
+    if (previousPositionRef.current && window.google) {
+      const from = new window.google.maps.LatLng(previousPositionRef.current.lat, previousPositionRef.current.lng)
+      const to = new window.google.maps.LatLng(livePosition.lat, livePosition.lng)
+      if (window.google.maps.geometry.spherical.computeDistanceBetween(from, to) > 2) {
+        nextHeading = window.google.maps.geometry.spherical.computeHeading(from, to)
+        setHeading(nextHeading)
+      }
+    }
+    previousPositionRef.current = livePosition
+    mapRef.current.moveCamera({ center: livePosition, zoom: NAV_ZOOM, tilt: 45, heading: nextHeading })
+    // isMapReady is read here (via mapRef.current, guaranteed set once it's
+    // true) purely to re-run this effect once the map finishes loading --
+    // see isMapReady's own comment for the refresh-race it closes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livePosition, isMapReady])
+
+  // Manual recenter (the "Locate" button below) -- gestureHandling: 'greedy'
+  // lets the driver freely drag/pan the map away from livePosition to look
+  // around, and nothing else snaps it back until the next GPS tick's own
+  // moveCamera() call overwrites wherever the driver left it. This lets them
+  // jump back immediately instead of waiting.
+  const handleRecenter = () => {
+    if (!livePosition || !mapRef.current) return
+    mapRef.current.moveCamera({ center: livePosition, zoom: NAV_ZOOM, tilt: 45, heading })
+  }
+
+  // Advance the current turn-by-turn step once the driver is close enough to
+  // this step's end point.
+  useEffect(() => {
+    if (!isLoaded || !livePosition || !directions) return
+    const steps = directions.routes[0]?.legs[0]?.steps || []
+    const step = steps[currentStepIndex]
+    if (!step) return
+    const distance = window.google.maps.geometry.spherical.computeDistanceBetween(
+      new window.google.maps.LatLng(livePosition.lat, livePosition.lng),
+      step.end_location,
+    )
+    if (distance <= NAV_STEP_ADVANCE_METERS && currentStepIndex < steps.length - 1) {
+      // Legitimate external-system sync (reacting to a GPS position tick
+      // arriving via props from the parent's Realtime subscription), not a
+      // derived-state anti-pattern -- see the rule's own guidance quoted in
+      // its message.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCurrentStepIndex((i) => i + 1)
+    }
+  }, [livePosition, directions, currentStepIndex, isLoaded])
+
+  // Reroute if the driver has visibly left the planned path. Debounced so a
+  // driver stuck off-route for a while doesn't spam DirectionsService.
+  useEffect(() => {
+    if (!isLoaded || !livePosition || !directions || isPaused) return
+    const overviewPath = directions.routes[0]?.overview_path
+    if (!overviewPath) return
+    const routePolyline = new window.google.maps.Polyline({ path: overviewPath })
+    const onRoute = window.google.maps.geometry.poly.isLocationOnEdge(
+      new window.google.maps.LatLng(livePosition.lat, livePosition.lng),
+      routePolyline,
+      NAV_REROUTE_TOLERANCE_DEGREES,
+    )
+    if (onRoute) return
+    const now = Date.now()
+    if (now - lastRerouteAtRef.current < NAV_REROUTE_DEBOUNCE_MS) return
+    lastRerouteAtRef.current = now
+    computeRoute(livePosition, destination)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livePosition, directions, isPaused, isLoaded])
+
+  // Announce the current step once via speech synthesis -- once per step
+  // index, not on every GPS tick that happens to land within the same step.
+  useEffect(() => {
+    if (isMuted || !directions) return
+    if (lastAnnouncedStepRef.current === currentStepIndex) return
+    const steps = directions.routes[0]?.legs[0]?.steps || []
+    const step = steps[currentStepIndex]
+    if (!step || typeof window.speechSynthesis === 'undefined') return
+    lastAnnouncedStepRef.current = currentStepIndex
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(stripHtml(step.instructions)))
+  }, [currentStepIndex, directions, isMuted])
+
+  const steps = directions?.routes[0]?.legs[0]?.steps || []
+  const currentStep = steps[currentStepIndex]
+
+  return (
+    <section
+      className={
+        isFullscreen
+          ? 'fixed inset-0 z-50 flex h-dvh w-full flex-col overflow-hidden bg-white'
+          : 'overflow-hidden rounded-xl border border-amber-200/70 bg-white'
+      }
+    >
+      <div className="flex items-center justify-between border-b border-amber-200/70 bg-amber-50 px-3 py-2">
+        <h3 className="text-xs font-bold text-slate-900">Live Navigation</h3>
+        <div className="flex items-center gap-1.5">
+          {isPaused && (
+            <span className="rounded-full bg-amber-800 px-2 py-0.5 text-[10px] font-semibold text-white">Paused</span>
+          )}
+          <button
+            onClick={() => setIsFullscreen((f) => !f)}
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            className="rounded-md p-1 text-amber-800 hover:bg-amber-100"
+          >
+            {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            onClick={() => setIsMuted((m) => !m)}
+            aria-label={isMuted ? 'Unmute voice guidance' : 'Mute voice guidance'}
+            className="rounded-md p-1 text-amber-800 hover:bg-amber-100"
+          >
+            {isMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Taller than the static iframe it replaces (h-36/h-44) -- this is
+          now the page's primary interactive nav view (tilt, rotation,
+          live marker, turn instructions), not a small at-a-glance preview,
+          so it needs more room to actually be usable. In fullscreen, grows
+          to fill the remaining viewport height instead of a fixed size. */}
+      <div className={`relative ${isFullscreen ? 'w-full flex-1' : 'h-[28rem] w-full sm:h-[32rem]'}`}>
+        {!isLoaded ? (
+          <div className="flex h-full items-center justify-center text-slate-400">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : (
+          <GoogleMap
+            mapContainerStyle={GOOGLE_MAP_CONTAINER_STYLE}
+            center={initialCenter}
+            zoom={NAV_ZOOM}
+            onLoad={(map) => {
+              mapRef.current = map
+              // Initial tilt before any livePosition has arrived yet --
+              // further tilt/heading changes all go through the
+              // moveCamera() effect above once GPS ticks start landing.
+              map.moveCamera({ tilt: 45 })
+              // Triggers the recenter effect immediately if livePosition
+              // (from the seed fetch on mount) already resolved before the
+              // map itself finished loading -- otherwise the map stayed on
+              // initialCenter after a refresh instead of the driver's actual
+              // last-known position until the next live GPS tick arrived.
+              setIsMapReady(true)
+            }}
+            options={{
+              disableDefaultUI: true,
+              gestureHandling: 'greedy',
+              mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID,
+            }}
+          >
+            {directions && (
+              // Rendered as a plain Polyline, not <DirectionsRenderer> --
+              // DirectionsRenderer calls map.fitBounds() internally to zoom
+              // out and fit the *entire* route on screen whenever it (re)sets
+              // directions, which fights the zoom/tilt moveCamera() sets
+              // above (this was the actual cause of the map looking flat and
+              // fully zoomed out to the whole route instead of a tilted,
+              // street-level, GPS-following view). `preserveViewport: true`
+              // was tried first to suppress that, but DirectionsRenderer is
+              // now a deprecated API (Feb 2026) whose "existing bugs...will
+              // not be addressed" per its own console warning, and the
+              // override kept recurring -- a Polyline never touches the
+              // camera at all, so there's nothing left to fight.
+              <GoogleMapPolyline
+                path={directions.routes[0]?.overview_path || []}
+                options={{
+                  strokeColor: '#7C3AED',
+                  strokeOpacity: 0.9,
+                  strokeWeight: 7,
+                  zIndex: 1,
+                }}
+              />
+            )}
+            {livePosition && (
+              <GoogleMapMarker
+                position={livePosition}
+                icon={{
+                  path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                  scale: 6,
+                  fillColor: '#2563eb',
+                  fillOpacity: 1,
+                  strokeColor: '#fff',
+                  strokeWeight: 2,
+                  // Fixed, not `heading` -- see the effect above for why:
+                  // the camera rotates to keep direction-of-travel pointing
+                  // up on screen, so the arrow itself always stays "up" too.
+                  rotation: 0,
+                }}
+              />
+            )}
+          </GoogleMap>
+        )}
+        {livePosition && (
+          <button
+            onClick={handleRecenter}
+            aria-label="Center on my location"
+            className="absolute bottom-3 right-3 z-10 rounded-full bg-white p-2 text-amber-900 shadow-md hover:bg-amber-50"
+          >
+            <LocateFixed className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      <div className="space-y-1.5 border-t border-amber-200/70 px-3 py-2.5 text-[11px]">
+        {routeError ? (
+          <p className="text-slate-500">Couldn't compute a route right now — use "Navigate Now" below instead.</p>
+        ) : currentStep ? (
+          <div dangerouslySetInnerHTML={{ __html: currentStep.instructions }} className="text-slate-700" />
+        ) : (
+          <p className="text-slate-500">{isLoaded ? 'Computing route…' : 'Loading map…'}</p>
+        )}
+        {currentStep && <p className="text-[10px] text-slate-400">{currentStep.distance?.text}</p>}
+      </div>
+
+      {/* Fullscreen covers the page's own sticky bottom action bar (Pause
+          Trip/Confirm Pickup/etc) entirely, so it's reproduced here instead
+          of "Navigate Now" -- otherwise there'd be no way to advance the
+          trip without backing out of fullscreen first. Same structure as
+          that action bar: Resume Trip alone while paused, otherwise Pause
+          Trip (only while actually monitoring) next to the stage-advance
+          button. Not fullscreen: unchanged "Navigate Now" fallback link. */}
+      <div className="border-t border-amber-200/70 p-2.5">
+        {isFullscreen ? (
+          isPaused ? (
+            <button
+              onClick={onResume}
+              className="flex w-full items-center justify-center gap-1.5 rounded-md bg-amber-900 px-3 py-2 text-[11px] font-bold text-white transition hover:bg-amber-800"
+            >
+              <Play className="h-3.5 w-3.5" />
+              Resume Trip
+            </button>
+          ) : (
+            <div className="flex gap-1.5">
+              {isMonitoring && (
+                <button
+                  onClick={onPause}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-amber-300 bg-white px-3 py-2 text-[11px] font-bold text-amber-900 transition hover:bg-amber-50"
+                >
+                  <Pause className="h-3.5 w-3.5" />
+                  Pause Trip
+                </button>
+              )}
+              {nextLabel && (
+                <button
+                  onClick={onStageAdvance}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[11px] font-bold text-white transition ${nextColor}`}
+                >
+                  {NextIcon && <NextIcon className="h-3.5 w-3.5" />}
+                  {nextLabel}
+                </button>
+              )}
+            </div>
+          )
+        ) : (
+          <button
+            onClick={onOpenDirections}
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-amber-900 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-800"
+          >
+            <Navigation className="h-3.5 w-3.5" />
+            Navigate Now
+          </button>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -784,6 +1247,7 @@ function mapDelivery(d) {
     deliveryAddress: str(d.deliveryAddress),
     status: DB_TO_DRIVER_STATUS[d.status] || str(d.status),
     hasOpenSession: Boolean(d.hasOpenSession),
+    sessionId: d.sessionId || null,
     assignedAt: formatAssignedAt(d.assignedAt),
     quotation: d.quotation ? { amount: Number(d.quotation.amount), breakdown: null } : null,
     crew: {
@@ -1252,12 +1716,36 @@ function DriverDeliveries() {
   const [liveAlerts, setLiveAlerts] = useState([])
   const [isAlertHistoryExpanded, setIsAlertHistoryExpanded] = useState(false)
   const [completionNotice, setCompletionNotice] = useState(null)
+  // Live nav position, sourced from the Pi's gps_logs uploads -- see the
+  // Realtime subscription below. null until the first reading arrives.
+  const [livePosition, setLivePosition] = useState(null)
+  // Phone-only page-scroll slider (a real scrollbar-style thumb, not just an
+  // invisible swipe pad -- see the effect and handlers further down, near
+  // isDrivingStage, for how its position is tracked/dragged): thumb size and
+  // offset within the track, in pixels, kept in sync with
+  // #driver-scroll-container's actual scroll position.
+  const scrollTrackRef = useRef(null)
+  const [scrollThumb, setScrollThumb] = useState({ height: 40, top: 0 })
+  const scrollDragRef = useRef(null)
+  const usualAlertAudioRef = useRef(null)
+  const multipleAlertAudioRef = useRef(null)
+  // Mirrors liveAlerts so the Realtime handler below can read the current
+  // alert history synchronously (setLiveAlerts' updater runs later, during
+  // React's next render, so it can't be read back same-tick).
+  const liveAlertsRef = useRef([])
+  useEffect(() => {
+    liveAlertsRef.current = liveAlerts
+  }, [liveAlerts])
 
   const active = data.active
   const statusCfg = active ? statusConfig[active.status] : null
   const todayISO = localTodayISO()
-  const isActiveToday = active ? active.pickupDate === todayISO : false
-  const todayCount = isActiveToday ? 1 : 0
+  // "active" already prioritizes an open Session over pickupDate === today
+  // (see the loadDeliveries fix below) — the workspace tab must show it
+  // regardless of pickupDate, or a stale-dated open Session's Pause/End
+  // Trip controls become unreachable again, same bug in a different spot.
+  const hasActiveDelivery = Boolean(active)
+  const todayCount = hasActiveDelivery ? 1 : 0
   const upcomingCount = data.upcoming.length
   const pastCount = data.completed.length
 
@@ -1274,6 +1762,90 @@ function DriverDeliveries() {
   const isDrivingStage = Boolean(active) && (active.status === 'FOR_PICKUP' || active.status === 'OUT_FOR_DELIVERY')
   const isMonitoring = isDrivingStage && active.hasOpenSession
   const isPausedTrip = isDrivingStage && !active.hasOpenSession
+
+  // Keeps the page-scroll slider's thumb in sync with #driver-scroll-
+  // container's real scroll position/size (DriverLayout.jsx's actual
+  // scrollable content div -- the outer shell is h-dvh/overflow-hidden, so
+  // window/document itself never scrolls). Recomputes on every scroll event
+  // (from any scroll source, not just this thumb's own drag) and on resize,
+  // so the thumb visibly tracks reality instead of a fixed/dead-looking
+  // control. Exists because LiveNavigationMap's GoogleMap uses
+  // gestureHandling: 'greedy', which otherwise swallows a scroll swipe
+  // landing on the map.
+  useEffect(() => {
+    if (!isDrivingStage) return undefined
+    const container = document.getElementById('driver-scroll-container')
+    const track = scrollTrackRef.current
+    if (!container || !track) return undefined
+    const updateThumb = () => {
+      const trackHeight = track.clientHeight
+      const scrollableHeight = container.scrollHeight - container.clientHeight
+      const visibleRatio = container.clientHeight / container.scrollHeight
+      const thumbHeight = Math.min(trackHeight, Math.max(32, trackHeight * visibleRatio))
+      const scrollRatio = scrollableHeight > 0 ? container.scrollTop / scrollableHeight : 0
+      setScrollThumb({ height: thumbHeight, top: scrollRatio * (trackHeight - thumbHeight) })
+    }
+    updateThumb()
+    container.addEventListener('scroll', updateThumb)
+    window.addEventListener('resize', updateThumb)
+    return () => {
+      container.removeEventListener('scroll', updateThumb)
+      window.removeEventListener('resize', updateThumb)
+    }
+  }, [isDrivingStage])
+
+  // Dragging the thumb itself (Pointer Events, not Touch Events -- covers a
+  // real phone's touchscreen AND a mouse-drag test in a resized desktop
+  // browser the same way; touch-only handlers would silently do nothing for
+  // a mouse drag) maps the drag distance to a proportional scroll distance,
+  // same ratio a native scrollbar thumb uses.
+  const handleScrollThumbPointerDown = (e) => {
+    const container = document.getElementById('driver-scroll-container')
+    const track = scrollTrackRef.current
+    if (!container || !track) return
+    scrollDragRef.current = {
+      startY: e.clientY,
+      startScrollTop: container.scrollTop,
+      trackHeight: track.clientHeight,
+      thumbHeight: scrollThumb.height,
+      scrollableHeight: container.scrollHeight - container.clientHeight,
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const handleScrollThumbPointerMove = (e) => {
+    const drag = scrollDragRef.current
+    if (!drag) return
+    const container = document.getElementById('driver-scroll-container')
+    if (!container) return
+    const trackRange = drag.trackHeight - drag.thumbHeight
+    const scrollDelta = trackRange > 0 ? ((e.clientY - drag.startY) / trackRange) * drag.scrollableHeight : 0
+    container.scrollTop = Math.min(Math.max(drag.startScrollTop + scrollDelta, 0), drag.scrollableHeight)
+  }
+  const handleScrollThumbPointerEnd = () => {
+    scrollDragRef.current = null
+  }
+
+  // Fallback unlock: the Start Trip button unlocks audio for the tab it was
+  // pressed in, but a page reload mid-trip (or opening the trip in a new tab
+  // while it's already Active) mounts fresh <audio> elements that were never
+  // unlocked, and the browser then silently blocks the first real alert.
+  // Unlocking on the very next tap/click while monitoring closes that gap.
+  useEffect(() => {
+    if (!isMonitoring) return undefined
+    const unlock = () => {
+      unlockAlertAudio(usualAlertAudioRef.current)
+      unlockAlertAudio(multipleAlertAudioRef.current)
+      // Also primes speechSynthesis for LiveNavigationMap's turn-by-turn
+      // announcements, same reasoning as the audio unlock above -- it fires
+      // from a Realtime event, not a direct click, so needs priming here.
+      if (typeof window.speechSynthesis !== 'undefined') {
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(''))
+      }
+      document.removeEventListener('pointerdown', unlock)
+    }
+    document.addEventListener('pointerdown', unlock)
+    return () => document.removeEventListener('pointerdown', unlock)
+  }, [isMonitoring])
 
   useEffect(() => {
     let isMounted = true
@@ -1296,7 +1868,11 @@ function DriverDeliveries() {
       const nonArchived = mapped
         .filter((d) => d.status !== 'DELIVERED' && d.status !== 'COMPLETED')
         .sort((a, b) => String(a.pickupDate || '').localeCompare(String(b.pickupDate || '')))
-      const activeDelivery = nonArchived.find((d) => d.pickupDate === today) || null
+      // A delivery with a genuinely open Session takes priority over "today's"
+      // delivery — a stale open Session on a different pickup_date must still
+      // surface as Active so its Pause/End Trip controls stay reachable. See
+      // STATUS.md's 2026-08-11 incident (driver D002/DR-0015 stuck ~64h).
+      const activeDelivery = nonArchived.find((d) => d.hasOpenSession) || nonArchived.find((d) => d.pickupDate === today) || null
       setData({
         active: activeDelivery,
         upcoming: nonArchived.filter((d) => d.id !== (activeDelivery && activeDelivery.id)),
@@ -1317,17 +1893,106 @@ function DriverDeliveries() {
     return () => clearTimeout(timer)
   }, [completionNotice])
 
+  // Real-time drowsiness alerts (06_DROWSINESS_ALERT_PIPELINE.md): the Pi
+  // uploads to the `alerts` table via the alert-upload Edge Function as soon
+  // as a detection threshold is reached; this subscribes to new rows for the
+  // active session and plays the audio alert alongside the Pi's own vibration
+  // motor. Only subscribes while actually monitoring (Active session).
   useEffect(() => {
-    if (!isMonitoring) return undefined
-    const interval = setInterval(() => {
-      if (Math.random() >= LIVE_ALERT_CHANCE) return
-      const types = Object.keys(ALERT_TYPE_LABELS)
-      const type = types[Math.floor(Math.random() * types.length)]
-      const duration = 25 + Math.floor(Math.random() * 40)
-      setLiveAlerts((prev) => [{ id: `live-${Date.now()}`, type, duration, time: new Date().toISOString() }, ...prev])
-    }, LIVE_ALERT_TICK_MS)
-    return () => clearInterval(interval)
-  }, [isMonitoring])
+    if (!isMonitoring || !active?.sessionId) return undefined
+    let cancelled = false
+
+    // Seed with whatever's already in the table for this session — liveAlerts
+    // is otherwise pure client state, so a page reload/remount mid-trip would
+    // otherwise silently show 0 alerts even though the real ones are safely
+    // in the database.
+    async function loadExistingAlerts() {
+      const { data, error } = await supabase
+        .from('alerts')
+        .select('id, event_type, duration, created_at')
+        .eq('session_id', active.sessionId)
+        .order('created_at', { ascending: false })
+      if (cancelled || error || !data) return
+      setLiveAlerts((prev) => {
+        const seenIds = new Set(prev.map((a) => a.id))
+        const fetched = data
+          .filter((row) => !seenIds.has(String(row.id)))
+          .map((row) => ({ id: String(row.id), type: row.event_type, duration: row.duration, time: row.created_at }))
+        return [...prev, ...fetched].sort((a, b) => new Date(b.time) - new Date(a.time))
+      })
+    }
+    loadExistingAlerts()
+
+    const channel = supabase
+      .channel(`alerts-session-${active.sessionId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'alerts', filter: `session_id=eq.${active.sessionId}` },
+        (payload) => {
+          const row = payload.new
+          const newAlert = { id: String(row.id), type: row.event_type, duration: row.duration, time: row.created_at }
+          // No audio for face_not_detected -- the Pi's own vibration motor
+          // already gives physical feedback for this case, and it fires
+          // easily (e.g. glancing at mirrors/dashboard), unlike the other
+          // three alert types which are all genuine drowsiness signals.
+          if (newAlert.type !== 'face_not_detected') {
+            const windowStart = new Date(newAlert.time).getTime() - ALERT_CLUSTER_WINDOW_MS
+            const alertsInWindow =
+              liveAlertsRef.current.filter((a) => new Date(a.time).getTime() >= windowStart).length + 1
+            playAlertClip(
+              alertsInWindow >= ALERT_CLUSTER_THRESHOLD ? multipleAlertAudioRef.current : usualAlertAudioRef.current,
+            )
+          }
+          setLiveAlerts((prev) => [newAlert, ...prev])
+        },
+      )
+      .subscribe()
+    return () => {
+      cancelled = true
+      supabase.removeChannel(channel)
+    }
+  }, [isMonitoring, active?.sessionId])
+
+  // Live nav position (05_GPS_PIPELINE.md): the Pi uploads to gps_logs via
+  // the gps-upload Edge Function roughly once per second while its Session
+  // is Active. Same shape as the alerts subscription above -- seed-fetch the
+  // latest reading, then subscribe for new ones. Gated on isMonitoring (not
+  // just isDrivingStage): when Paused, this tears down and livePosition
+  // simply stops updating, freezing LiveNavigationMap's marker/route in
+  // place rather than tracking a closed session (gps_logs rows uploaded
+  // during a Pause carry a different, since-closed session_id and won't
+  // match this filter anyway).
+  useEffect(() => {
+    if (!isMonitoring || !active?.sessionId) return undefined
+    let cancelled = false
+
+    async function loadLatestPosition() {
+      const { data, error } = await supabase
+        .from('gps_logs')
+        .select('latitude, longitude, created_at')
+        .eq('session_id', active.sessionId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      if (cancelled || error || !data?.length) return
+      setLivePosition({ lat: data[0].latitude, lng: data[0].longitude })
+    }
+    loadLatestPosition()
+
+    const channel = supabase
+      .channel(`gps-session-${active.sessionId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'gps_logs', filter: `session_id=eq.${active.sessionId}` },
+        (payload) => {
+          setLivePosition({ lat: payload.new.latitude, lng: payload.new.longitude })
+        },
+      )
+      .subscribe()
+    return () => {
+      cancelled = true
+      supabase.removeChannel(channel)
+    }
+  }, [isMonitoring, active?.sessionId])
 
   // Runs a confirm-modal action while it's in flight: blocks re-entry (a second
   // tap while the first request is still pending is a no-op instead of firing
@@ -1380,24 +2045,28 @@ function DriverDeliveries() {
       setCompletionNotice({ id: active.id, customerName: active.customerName })
       return
     }
+    let newSessionId = null
     if (statusCfg.nextStage === 'FOR_PICKUP') {
       // Driving — and therefore monitoring — starts now. Sequenced after the
       // status update above per STATUS.md's handoff plan: if this call fails,
       // the delivery status is already correct and this can just be retried.
-      const { error: tripError } = await supabase.functions.invoke('driver-trip', {
+      const { data: tripData, error: tripError } = await supabase.functions.invoke('driver-trip', {
         body: { action: 'start-trip', deliveryRequestId: active.id },
       })
       if (tripError) {
         alert('Delivery status updated, but starting the trip session failed. Please try again.')
         return
       }
+      // Pressing Start Trip is the driver's first interaction on the page,
+      // which browsers require before any audio can autoplay later — see
+      // 06_DROWSINESS_ALERT_PIPELINE.md's "Driver-Facing Audio Alert" section.
+      unlockAlertAudio(usualAlertAudioRef.current)
+      unlockAlertAudio(multipleAlertAudioRef.current)
+      newSessionId = tripData?.session?.session_id || null
       setLiveAlerts([])
       setIsAlertHistoryExpanded(false)
     }
     if (statusCfg.nextStage === 'OUT_FOR_DELIVERY') {
-      // Cargo just got confirmed picked up — seed a couple of example
-      // alerts so the monitoring card has something to show right away.
-      setLiveAlerts(buildMockLiveAlertSeed())
       setIsAlertHistoryExpanded(false)
     }
     setData((prev) => ({
@@ -1406,6 +2075,7 @@ function DriverDeliveries() {
         ...prev.active,
         status: statusCfg.nextStage,
         hasOpenSession: statusCfg.nextStage === 'FOR_PICKUP' ? true : prev.active.hasOpenSession,
+        sessionId: statusCfg.nextStage === 'FOR_PICKUP' ? newSessionId : prev.active.sessionId,
       },
     }))
   }
@@ -1419,21 +2089,22 @@ function DriverDeliveries() {
       alert('Failed to pause the trip. Please try again.')
       return
     }
-    setData((prev) => ({ ...prev, active: { ...prev.active, hasOpenSession: false } }))
+    setData((prev) => ({ ...prev, active: { ...prev.active, hasOpenSession: false, sessionId: null } }))
     setLiveAlerts([])
     setIsAlertHistoryExpanded(false)
   }
 
   const resumeTrip = async () => {
     if (!active) return
-    const { error } = await supabase.functions.invoke('driver-trip', {
+    const { data: tripData, error } = await supabase.functions.invoke('driver-trip', {
       body: { action: 'resume-trip', deliveryRequestId: active.id },
     })
     if (error) {
       alert('Failed to resume the trip. Please try again.')
       return
     }
-    setData((prev) => ({ ...prev, active: { ...prev.active, hasOpenSession: true } }))
+    const newSessionId = tripData?.session?.session_id || null
+    setData((prev) => ({ ...prev, active: { ...prev.active, hasOpenSession: true, sessionId: newSessionId } }))
   }
 
   const openDirections = (origin, destination) => {
@@ -1464,6 +2135,8 @@ function DriverDeliveries() {
 
   return (
     <DriverLayout title="Deliveries" background={null}>
+      <audio ref={usualAlertAudioRef} src={USUAL_ALERT_SRC} preload="auto" hidden />
+      <audio ref={multipleAlertAudioRef} src={MULTIPLE_ALERT_SRC} preload="auto" hidden />
       <div className="flex w-full min-w-0 flex-col gap-3 pb-4">
         {deliveriesError && (
           <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 sm:px-4 sm:py-3 sm:text-sm">
@@ -1491,7 +2164,7 @@ function DriverDeliveries() {
         </div>
 
         {/* Today tab — today's delivery is the driver's dedicated workspace, not a modal */}
-        {activeTab === 'today' && (active && isActiveToday ? (
+        {activeTab === 'today' && (active ? (
           <>
             <div className="flex flex-col gap-3">
               {isPausedTrip ? (
@@ -1580,40 +2253,99 @@ function DriverDeliveries() {
               {/* Route & Navigation — always visible; recenters as the delivery progresses.
                   This is the one map/address surface on the page: the old separate "Navigate Now"
                   and "Route Overview" cards duplicated the same two addresses and two live map
-                  embeds, so they're merged here into a single always-current source of truth. */}
-              <section className="overflow-hidden rounded-xl border border-amber-200/70 bg-white">
-                <div className="border-b border-amber-200/70 bg-amber-50 px-3 py-2">
-                  <h3 className="text-xs font-bold text-slate-900">
-                    {activeNeedsPickup ? 'Navigate to Pickup Location' : 'Navigate to Drop-off Location'}
-                  </h3>
-                </div>
-                <iframe
-                  title="Navigation Map"
-                  src={toGoogleMapEmbed(activeNavTarget)}
-                  className="h-36 w-full sm:h-44"
-                  loading="lazy"
-                  referrerPolicy="no-referrer-when-downgrade"
+                  embeds, so they're merged here into a single always-current source of truth.
+                  Before the driving stage: the original static Google Maps embed (single point,
+                  no live position needed yet — the driver hasn't started moving). Once driving
+                  starts (isDrivingStage): swaps to LiveNavigationMap, the capstone-required live
+                  turn-by-turn view built on the Google Maps JavaScript API — see
+                  01_SYSTEM_ARCHITECTURE.md's Route Comparison section. */}
+              {isDrivingStage ? (
+                <LiveNavigationMap
+                  origin={activeNavOrigin}
+                  destination={activeNavTarget}
+                  livePosition={livePosition}
+                  isPaused={isPausedTrip}
+                  onOpenDirections={() => openDirections(activeNavOrigin, activeNavTarget)}
+                  isMonitoring={isMonitoring}
+                  nextLabel={statusCfg.nextLabel}
+                  NextIcon={statusCfg.nextIcon}
+                  nextColor={statusCfg.nextColor}
+                  onPause={() => setConfirmingPause(true)}
+                  onResume={() => setConfirmingResume(true)}
+                  onStageAdvance={() => setConfirmingStageAdvance(true)}
                 />
-                <div className="space-y-1.5 border-t border-amber-200/70 px-3 py-2.5 text-[11px]">
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[8px] font-bold text-sky-700">P</span>
-                    <span className="truncate text-slate-600">{active.pickupAddress}</span>
+              ) : (
+                <section className="overflow-hidden rounded-xl border border-amber-200/70 bg-white">
+                  <div className="border-b border-amber-200/70 bg-amber-50 px-3 py-2">
+                    <h3 className="text-xs font-bold text-slate-900">
+                      {activeNeedsPickup ? 'Navigate to Pickup Location' : 'Navigate to Drop-off Location'}
+                    </h3>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[8px] font-bold text-emerald-700">D</span>
-                    <span className="truncate text-slate-600">{active.deliveryAddress}</span>
+                  <iframe
+                    title="Navigation Map"
+                    src={toGoogleMapEmbed(activeNavTarget)}
+                    className="h-36 w-full sm:h-44"
+                    loading="lazy"
+                    referrerPolicy="no-referrer-when-downgrade"
+                  />
+                  <div className="space-y-1.5 border-t border-amber-200/70 px-3 py-2.5 text-[11px]">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[8px] font-bold text-sky-700">P</span>
+                      <span className="truncate text-slate-600">{active.pickupAddress}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[8px] font-bold text-emerald-700">D</span>
+                      <span className="truncate text-slate-600">{active.deliveryAddress}</span>
+                    </div>
                   </div>
+                  <div className="border-t border-amber-200/70 p-2.5">
+                    <button
+                      onClick={() => openDirections(activeNavOrigin, activeNavTarget)}
+                      className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-amber-900 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-800"
+                    >
+                      <Navigation className="h-3.5 w-3.5" />
+                      Navigate Now
+                    </button>
+                  </div>
+                </section>
+              )}
+
+              {/* Phone-only page-scroll slider, pinned to the actual left edge of
+                  the viewport (fixed, not part of the Live Navigation card at all)
+                  -- always reachable at a fixed spot on screen regardless of where
+                  the page is currently scrolled to. A real scrollbar-style track +
+                  thumb: the thumb visibly moves as the page scrolls (from any
+                  source), and can itself be dragged to scroll -- not just an
+                  invisible swipe pad, which read as "stuck"/non-functional since
+                  nothing ever visibly moved. Exists because LiveNavigationMap's
+                  GoogleMap uses gestureHandling: 'greedy' (a single-finger drag
+                  anywhere on the map pans it, per its Waze-style UX), so a finger
+                  swiping down to scroll the page instead grabs the map if it lands
+                  there; this track/thumb has no map listeners attached at all, so
+                  a drag here always falls through to normal page scrolling. Only
+                  shown while the live map is actually on screen (isDrivingStage)
+                  and on phone widths (sm:hidden -- mouse wheel/trackpad scroll
+                  isn't caught by the map the same way desktop doesn't need this). */}
+              {isDrivingStage && (
+                <div
+                  ref={scrollTrackRef}
+                  // z-20, deliberately below DriverLayout's mobile nav drawer/backdrop
+                  // (z-40/z-30) -- if the drawer is opened while this is showing, this
+                  // should sit behind the backdrop, not float on top of it. top-20/
+                  // bottom-20 keeps clear of the mobile top bar and the page's own
+                  // sticky bottom action bar (Pause Trip/Confirm Pickup/etc).
+                  className="fixed left-1.5 top-20 bottom-20 z-20 w-2 rounded-full bg-slate-200/80 sm:hidden"
+                >
+                  <div
+                    onPointerDown={handleScrollThumbPointerDown}
+                    onPointerMove={handleScrollThumbPointerMove}
+                    onPointerUp={handleScrollThumbPointerEnd}
+                    onPointerCancel={handleScrollThumbPointerEnd}
+                    style={{ height: scrollThumb.height, transform: `translateY(${scrollThumb.top}px)`, touchAction: 'none' }}
+                    className="w-2 rounded-full bg-amber-800 shadow"
+                  />
                 </div>
-                <div className="border-t border-amber-200/70 p-2.5">
-                  <button
-                    onClick={() => openDirections(activeNavOrigin, activeNavTarget)}
-                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-amber-900 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-800"
-                  >
-                    <Navigation className="h-3.5 w-3.5" />
-                    Navigate Now
-                  </button>
-                </div>
-              </section>
+              )}
 
               {/* Full delivery detail — everything the old modal showed, now part of the page.
                   Addresses live only in the Route section above, so they aren't repeated here. */}
@@ -1845,7 +2577,13 @@ function DriverDeliveries() {
           sticky action button from silently moving the job to its next stage. */}
       {confirmingStageAdvance && statusCfg?.nextLabel && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4"
+          // z-[60], above LiveNavigationMap's fullscreen overlay (z-50) -- a
+          // confirm modal opened from that overlay's own Pause/Confirm
+          // Pickup buttons must render on top of it, not tie/lose the
+          // stacking order to it, or the modal could render invisibly
+          // behind the fullscreen map with taps silently reaching the map
+          // instead of the modal's buttons underneath.
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 px-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="confirm-stage-title"
@@ -1882,7 +2620,8 @@ function DriverDeliveries() {
           confirmation above, since both stop/start GPS and drowsiness monitoring. */}
       {confirmingPause && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4"
+          // z-[60] -- see confirmingStageAdvance's modal above for why.
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 px-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="confirm-pause-title"
@@ -1917,7 +2656,8 @@ function DriverDeliveries() {
 
       {confirmingResume && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4"
+          // z-[60] -- see confirmingStageAdvance's modal above for why.
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 px-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="confirm-resume-title"
@@ -1953,7 +2693,10 @@ function DriverDeliveries() {
       {/* Completion confirmation — floats above the page after the driver hands
           over the cargo, and auto-dismisses after a few seconds. */}
       {completionNotice && (
-        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center px-4">
+        // z-[70], above both the fullscreen map (z-50) and its confirm
+        // modals (z-[60]) -- same reasoning, this toast can fire right after
+        // a Complete Delivery confirm triggered from fullscreen.
+        <div className="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center px-4">
           <div className="pointer-events-auto w-full max-w-sm overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-2xl shadow-emerald-900/15">
             <div className="flex items-center gap-3 bg-emerald-600 px-4 py-3">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20">

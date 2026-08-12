@@ -7,9 +7,9 @@ export default function RegisterDeviceModal({ onClose }) {
   const [plateNumber, setPlateNumber] = useState("");
   const [availableDevices, setAvailableDevices] = useState([]);
   const [plateOptions, setPlateOptions] = useState([]);
-  const [status, setStatus] = useState("active");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [registeredSecret, setRegisteredSecret] = useState(null);
 
   // Fetch unassigned devices when modal opens
   // Fetch unassigned devices for potential future use (e.g., validation)
@@ -61,21 +61,55 @@ export default function RegisterDeviceModal({ onClose }) {
       return;
     }
     setLoading(true);
-    const { error: dbError } = await supabase.from("devices").insert([
-      {
-        device_id: deviceId.trim().toUpperCase(),
-        plate_number: plateNumber.trim().toUpperCase() || null,
-        device_status: status,
+    const { data, error: fnError } = await supabase.functions.invoke("admin-users", {
+      body: {
+        action: "register-device",
+        deviceId: deviceId.trim(),
+        plateNumber: plateNumber.trim() || null,
+        status: "Active",
       },
-    ]);
+    });
     setLoading(false);
-    if (dbError) {
-      setError(dbError.message);
+    if (fnError || data?.error) {
+      setError(data?.error || fnError.message);
     } else {
-      // success, close modal
-      onClose();
+      // Show the one-time device_secret instead of closing immediately — it
+      // is never retrievable again after this response (see admin-users'
+      // register-device action).
+      setRegisteredSecret({ deviceId: data.device_id, secret: data.device_secret });
     }
   };
+
+  if (registeredSecret) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-30">
+        <div className="relative w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
+          <h2 className="mb-2 text-xl font-semibold text-slate-800">
+            Device Registered
+          </h2>
+          <p className="mb-3 text-sm text-slate-600">
+            Copy this device secret and manually configure it on the physical
+            Raspberry Pi for <span className="font-mono">{registeredSecret.deviceId}</span>.
+          </p>
+          <p className="mb-3 break-all rounded border border-slate-200 bg-slate-50 p-2 font-mono text-sm text-slate-900">
+            {registeredSecret.secret}
+          </p>
+          <p className="mb-4 text-sm text-red-700">
+            This secret will not be shown again.
+          </p>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-30">
@@ -123,18 +157,6 @@ export default function RegisterDeviceModal({ onClose }) {
                   {p}
                 </option>
               ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-sm font-medium text-slate-700">Status</span>
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className="mt-1 block w-full rounded border border-slate-300 p-2 focus:border-violet-400 focus:outline-none"
-            >
-              <option value="Active">Active</option>
-              <option value="Inactive">Inactive</option>
-              <option value="Maintenance">Maintenance</option>
             </select>
           </label>
           <div className="flex justify-end space-x-2 pt-2">

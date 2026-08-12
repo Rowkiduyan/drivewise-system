@@ -94,6 +94,23 @@ function generateTempPassword() {
     .join("")}!`;
 }
 
+// Plaintext device_secret, shown to the Admin exactly once at registration
+// time so it can be manually flashed onto the physical Raspberry Pi (see
+// 04_DEVICE_BOOT_AND_HEARTBEAT.md). Only the SHA-256 hash below is stored.
+function generateDeviceSecret() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Must match the hashing the device-heartbeat Edge Function uses to verify
+// this same secret on every heartbeat — plain lowercase-hex SHA-256, no salt,
+// same format the 2026-08-08 backfill used for existing devices.
+async function sha256Hex(input: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // Builds the local part of a generated login email from structured name
 // parts: first-name initial + middle-name initial(s), if any + surname,
 // e.g. firstName "John", middleName "Michael", lastName "Doe" -> "jmdoe".
@@ -714,14 +731,19 @@ Deno.serve(async (req) => {
       // Session) so it knows whether to show Pause or Resume Trip — see
       // 03B_PAUSE_AND_RESUME_TRIP.md's "Paused isn't a stored value" note.
       const openSessionDeliveryIds = new Set<string>();
+      // Also needed by Phase 6 (06_DROWSINESS_ALERT_PIPELINE.md): the Driver UI
+      // subscribes to Realtime alerts filtered by session_id, so it needs the
+      // active session's id, not just whether one is open.
+      const sessionIdByDelivery = new Map<string, string>();
       if (deliveryIds.length > 0) {
         const { data: openSessions } = await adminClient
           .from("sessions")
-          .select("delivery_request_id")
+          .select("session_id, delivery_request_id")
           .in("delivery_request_id", deliveryIds)
           .eq("status", "Active");
         for (const s of openSessions || []) {
           openSessionDeliveryIds.add(s.delivery_request_id as string);
+          sessionIdByDelivery.set(s.delivery_request_id as string, s.session_id as string);
         }
       }
 
@@ -746,6 +768,7 @@ Deno.serve(async (req) => {
           cargoWeight: r.cargo_weight,
           status: r.status,
           hasOpenSession: openSessionDeliveryIds.has(r.id as string),
+          sessionId: sessionIdByDelivery.get(r.id as string) || null,
           assignedAt: r.assigned_at,
           driver: {
             id: driverRecord.id,
@@ -1157,6 +1180,38 @@ Deno.serve(async (req) => {
 
   if (!ADMIN_ROLES.includes(callerRow.role)) {
     return json({ error: "Forbidden" }, 403);
+  }
+
+  // Registers a new Raspberry Pi device row and generates its device_secret
+  // server-side (never in the browser) so the hash going into
+  // device_secret_hash is never derived from a value the client chose. The
+  // plaintext secret is returned once, the same way create-user returns
+  // tempPassword once — the Admin copies it and manually configures the
+  // physical Pi with it; it is never retrievable again after this response.
+  if (action === "register-device") {
+    const deviceId = typeof body.deviceId === "string" ? body.deviceId.trim().toUpperCase() : "";
+    const plateNumber = typeof body.plateNumber === "string" ? body.plateNumber.trim().toUpperCase() || null : null;
+    const status = typeof body.status === "string" ? body.status : "Active";
+
+    if (!deviceId) {
+      return json({ error: "Device ID is required" }, 400);
+    }
+
+    const deviceSecret = generateDeviceSecret();
+    const deviceSecretHash = await sha256Hex(deviceSecret);
+
+    const { error: insertError } = await adminClient.from("devices").insert({
+      device_id: deviceId,
+      plate_number: plateNumber,
+      device_status: status,
+      device_secret_hash: deviceSecretHash,
+    });
+
+    if (insertError) {
+      return json({ error: insertError.message }, 400);
+    }
+
+    return json({ ok: true, device_id: deviceId, device_secret: deviceSecret });
   }
 
   if (action === "create-user") {
