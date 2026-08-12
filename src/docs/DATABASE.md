@@ -113,6 +113,12 @@
 
     **Manual setup required** (not created by any migration in this repo): create the bucket in the Supabase Dashboard (Storage → New bucket → name `driver-profile-pics` → Public). It must be Public since the frontend renders `profile_picture`'s stored URL directly as an `<img src>` with no signing step. `service_role` bypasses object-level RLS the same way it bypasses table RLS (unlike gotcha #2/#7, `storage.objects` is a Supabase-managed table that already grants `service_role` full access — only the bucket itself needs to be created manually).
 
+    ### delivery-proof-photos
+
+    Holds proof-of-completion photos for each item in a delivery's Pickup → Dropoff → Stops chain (`IMPLEMENTATION/02B_MULTI_STOP_DELIVERIES.md`'s "Photo-Required Chain Completion"), uploaded by the Helper: `{delivery_id}/pickup.jpg`, `{delivery_id}/dropoff.jpg`, `{delivery_id}/stop-{index}.jpg` (always JPEG, resized client-side but not cropped square — see `src/lib/proofPhoto.js`). Written by three Helper-gated `admin-users` actions (`update-driver-delivery` scoped to `OUT_FOR_DROPOFF`, `complete-dropoff`, `complete-stop`), `upsert: true`.
+
+    **Created 2026-08-12 via the Storage REST API** (`POST {SUPABASE_URL}/storage/v1/bucket`, service-role key) rather than the Dashboard — unlike raw table DDL (which needs the SQL Editor/a DB connection), bucket creation goes through the same REST surface `service_role` already has, so no manual step was needed this time. Public, same reasoning as `driver-profile-pics` above.
+
     ---
 
     ## sessions
@@ -150,6 +156,10 @@
     - `driver_id` references `driver_records.id`.
     - `truck_plate` references `trucks.plate_number`.
     - `device_id` references `devices.device_id`.
+
+    ### Realtime
+
+    Added to the `supabase_realtime` publication 2026-08-12 (`alter publication supabase_realtime add table public.sessions;`) — previously missing, same class of gap already hit for `alerts`/`delivery_requests`/`gps_logs`. Needed for the Helper portal's live Active/Paused status (`IMPLEMENTATION/03_START_TRIP_AND_SESSION.md`'s Realtime catch-up). Also required a new RLS policy (`assigned crew can read own sessions`, see `RLS.md`) since Driver/Helper had no read access to this table at all before — and that policy had to be written as a `SECURITY DEFINER` function call rather than an inline join, or Realtime silently drops every event despite the publication/RLS otherwise being correct (see `SUPABASE_GOTCHAS.md` #9).
 
     ---
 
@@ -218,7 +228,11 @@
     - timestamp (timestamptz, not null) — the reading's own timestamp, as sent by the Raspberry Pi.
     - created_at (timestamptz, not null, default `now()`) — when the row landed in the database (kept separate from `timestamp` in case of upload delay).
 
-    An index on `(session_id, timestamp)` supports reconstructing a Session's route in chronological order (Route Comparison, mileage calculation — Session-scoped, so it only ever sees Active-Session readings). A second index on `(delivery_request_id, timestamp)` supports Trip-level live-position queries (Supervisor asset visibility) that need every reading regardless of which Session, if any, was open when it landed. **Not yet created** — these indexes were part of the original design but weren't included in the 2026-08-11 fix (which only added the missing column/nullability); still open.
+An index on `(session_id, timestamp)` supports reconstructing a Session's route in chronological order (Route Comparison, mileage calculation — Session-scoped, so it only ever sees Active-Session readings). A second index on `(delivery_request_id, timestamp)` supports Trip-level live-position queries (Supervisor asset visibility) that need every reading regardless of which Session, if any, was open when it landed. **Created 2026-08-12**, ahead of Phase 8 (`IMPLEMENTATION/08_REALTIME_DASHBOARD.md`) — both were part of the original design but had sat unopened since the 2026-08-11 fix (which only added the missing column/nullability):
+```sql
+create index on public.gps_logs (session_id, timestamp);
+create index on public.gps_logs (delivery_request_id, timestamp);
+```
 
     `service_role` grant confirmed 2026-08-08: `grant select on public.gps_logs to service_role;` — added ahead of `driver-trip`'s Pause Trip action, which sums this table's rows per Session to compute mileage. Re-checked 2026-08-11 ahead of Phase 5 (GPS upload): `service_role` already has full `select`/`insert`/`update`/`delete` on this table (confirmed via `information_schema.role_table_grants`) — `insert` was never previously exercised by any Edge Function, but the grant already exists. Phase 5's `gps-upload` function is now built, deployed, and curl-verified end-to-end (2026-08-11) against this schema.
 
@@ -230,7 +244,7 @@
 
     - `session_id` references `sessions.session_id`, nullable.
     - `delivery_request_id` references `delivery_requests.id`, not null.
-    - `service_role` (full access, bypasses RLS) and, as of 2026-08-12, `authenticated` (`select` only, gated by the RLS policy above, not just the grant) — a broader read path for the Supervisor dashboard specifically (RLS policy or Edge Function) is still a decision for `IMPLEMENTATION/08_REALTIME_DASHBOARD.md`, not made yet; the 2026-08-12 grant+policy were scoped to what the Driver app's own navigation needs, not a general opening of this table.
+    - `service_role` (full access, bypasses RLS) and `authenticated` (`select` only, gated by the RLS policy above, not just the grant) — added 2026-08-12 for the Driver app's own navigation, and confirmed sufficient as-is for Phase 8's Supervisor dashboard too (`IMPLEMENTATION/08_REALTIME_DASHBOARD.md`), also built 2026-08-12: the existing `using (true)` policy is unscoped by role, so no separate grant/policy was needed for Supervisor reads.
 
     ### GPS-during-Pause (designed 2026-08-10, actually deployed 2026-08-11)
 
@@ -333,7 +347,8 @@
     - assigned_truck_plate (text, nullable)
     - assigned_at (timestamptz, nullable)
     - created_at / updated_at (timestamptz, not null, default `now()`)
-    - stops — **not yet deployed.** Decided 2026-08-10 (see `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md`'s Required Schema gap #2): `jsonb`, not null, default `'[]'` — an ordered array of intermediate stop locations visited between `pickup_location` (first) and `dropoff_location` (last), which are unaffected. Reference-only (no per-stop status). Confirm/add this column before implementing multi-stop route generation or the booking form's stop-entry UI — same not-yet-deployed status as the suggested-route column noted in `IMPLEMENTATION/02_BOOKING_AND_TRIP_CREATION.md`'s Required Schema gap #1.
+    - stops (jsonb, not null, default `'[]'`) — **deployed 2026-08-12** (`supabase/migrations/20260812134525_delivery_requests_stops.sql`, verified live via REST `select` before building against it). An ordered array of intermediate stop locations visited after `dropoff_location` in the real chain order Pickup → Dropoff → Stops (see `IMPLEMENTATION/02B_MULTI_STOP_DELIVERIES.md` — originally documented as "between pickup and dropoff," corrected same day). Customer-entered at booking time only, capped at 5. ~~Reference-only (no per-stop status)~~ — superseded 2026-08-12: each entry gains `completed`/`completedAt`/`photoUrl` once the Helper completes it: `{"location": "...", "completed": true, "completedAt": "<iso>", "photoUrl": "..."}`.
+    - pickup_photo_url / dropoff_photo_url (text, nullable), dropoff_completed_at (timestamptz, nullable) — **deployed 2026-08-12** (`supabase/migrations/20260812151605_delivery_requests_proof_photos.sql`). Proof-of-completion photos for the first two items in the chain (Pickup, Dropoff), written by the Helper-gated `admin-users` actions described in `IMPLEMENTATION/02B_MULTI_STOP_DELIVERIES.md`. `dropoff_completed_at` exists separately from `updated_at` because completing the dropoff doesn't always change `status` (only does when there are no stops after it — see that doc's "finality is computed dynamically" note).
 
     ### Relationships
 
@@ -343,6 +358,8 @@
     ### Realtime
 
     Found 2026-08-11 while testing Phase 6's Realtime alerts (`06_DROWSINESS_ALERT_PIPELINE.md`): `delivery_requests` was never added to Supabase's `supabase_realtime` publication, despite `SupDeliveries.jsx` already having a `postgres_changes` subscription on it (`sup-delivery-requests-live`) since before this session. That subscription was therefore silently non-functional — the table not being published means no event ever fires, regardless of RLS/grants. Fixed by running `alter publication supabase_realtime add table public.delivery_requests;`. Its `"Supervisors can read all delivery requests"` RLS policy (`authenticated` role, `current_user_role() = 'Supervisor'`) should now let a real Supervisor session receive these events; not live-verified against an actual Supervisor login (none available this session), only confirmed the publication + policy are both now in place.
+
+    **Driver/Helper read access added 2026-08-12** (`assigned crew can read own deliveries`, see `RLS.md`), for the Helper portal's Realtime catch-up (`IMPLEMENTATION/03_START_TRIP_AND_SESSION.md`). Previously Driver/Helper had no direct read access to this table at all — all reads went through `admin-users`'s `service_role` connection. Live-verified end-to-end in the browser: Driver pressing "Complete Delivery" (a `status` change to `DELIVERED`) was picked up by an already-open Helper tab within seconds, no reload. Written as a `SECURITY DEFINER` function call (`delivery_request_visible_to_caller`) rather than an inline join for the same reason as `sessions`' equivalent policy — see `SUPABASE_GOTCHAS.md` #9.
 
     ### Open contradictions with `IMPLEMENTATION/*.md`
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Calendar,
@@ -89,29 +89,31 @@ const statusConfig = {
     confirmTitle: 'Start heading to pickup?',
     confirmDescription: 'This marks the delivery as in progress and begins navigation to the pickup location. You haven’t collected the cargo yet.',
   },
+  // Confirm Pickup and Complete Delivery moved to the Helper (2026-08-12,
+  // 02B_MULTI_STOP_DELIVERIES.md) — photo-required completion of the whole
+  // Pickup -> Dropoff -> Stops chain is now HelperDeliveries.jsx's job. The
+  // Driver's UI just reflects these two stages read-only (no nextStage/
+  // nextLabel means no action button renders — see the banner-only render
+  // path below).
   FOR_PICKUP: {
     label: 'Heading to Pickup',
     badge: 'bg-cyan-100 text-cyan-700',
-    nextLabel: 'Confirm Pickup',
-    nextIcon: CheckCircle2,
-    nextStage: 'OUT_FOR_DELIVERY',
-    nextColor: 'bg-cyan-600 hover:bg-cyan-700',
-    banner: 'Head to the pickup location to collect the items.',
+    nextLabel: null,
+    nextIcon: null,
+    nextStage: null,
+    nextColor: null,
+    banner: 'Waiting for the helper to confirm pickup.',
     bannerIcon: MapPin,
-    confirmTitle: 'Confirm cargo pickup?',
-    confirmDescription: 'This confirms you’ve collected the cargo at the pickup location and updates the status to Out for Delivery.',
   },
   OUT_FOR_DELIVERY: {
     label: 'Out for Delivery',
     badge: 'bg-blue-100 text-blue-700',
-    nextLabel: 'Complete Delivery',
-    nextIcon: CheckCircle2,
-    nextStage: 'DELIVERED',
-    nextColor: 'bg-blue-600 hover:bg-blue-700',
-    banner: 'Delivering to the drop-off location.',
+    nextLabel: null,
+    nextIcon: null,
+    nextStage: null,
+    nextColor: null,
+    banner: 'Waiting for the helper to complete the delivery chain.',
     bannerIcon: Navigation,
-    confirmTitle: 'Complete this delivery?',
-    confirmDescription: 'This confirms the cargo has been handed over to the customer and moves the delivery to your history.',
   },
   DELIVERED: {
     label: 'Delivered',
@@ -364,6 +366,7 @@ function stripHtml(html) {
 function LiveNavigationMap({
   origin,
   destination,
+  stops,
   livePosition,
   isPaused,
   onOpenDirections,
@@ -382,6 +385,12 @@ function LiveNavigationMap({
 
   const [directions, setDirections] = useState(null)
   const [currentStepIndex, setCurrentStepIndex] = useState(0)
+  // Which leg of a multi-stop route the driver is currently on (0 = heading
+  // to the first stop/destination, ... one leg per stop plus a final leg to
+  // destination). Always 0 when there are no stops. Client-side only, never
+  // written back — stops are reference-only, no per-stop status
+  // (02B_MULTI_STOP_DELIVERIES.md).
+  const [currentLegIndex, setCurrentLegIndex] = useState(0)
   const [isMuted, setIsMuted] = useState(false)
   const [routeError, setRouteError] = useState(false)
   // Purely a layout toggle (fixed-position overlay over the whole viewport,
@@ -402,7 +411,7 @@ function LiveNavigationMap({
   // since the effect's only dependency was livePosition and a ref change
   // alone doesn't re-run an effect.
   const [isMapReady, setIsMapReady] = useState(false)
-  const lastAnnouncedStepRef = useRef(-1)
+  const lastAnnouncedStepRef = useRef('')
   const lastRerouteAtRef = useRef(0)
   const previousPositionRef = useRef(null)
   // Deliberately captured once and never updated -- passing a `center` prop
@@ -412,18 +421,20 @@ function LiveNavigationMap({
   // through moveCamera() below instead, which doesn't have that problem.
   const [initialCenter] = useState(() => origin || destination)
 
-  const computeRoute = (routeOrigin, routeDestination) => {
+  const computeRoute = (routeOrigin, routeDestination, routeWaypoints) => {
     if (!window.google || !routeOrigin || !routeDestination) return
     new window.google.maps.DirectionsService().route(
       {
         origin: routeOrigin,
         destination: routeDestination,
+        waypoints: routeWaypoints && routeWaypoints.length > 0 ? routeWaypoints : undefined,
         travelMode: window.google.maps.TravelMode.DRIVING,
       },
       (result, status) => {
         if (status === 'OK' && result) {
           setDirections(result)
           setCurrentStepIndex(0)
+          setCurrentLegIndex(0)
           setRouteError(false)
         } else {
           setRouteError(true)
@@ -432,15 +443,28 @@ function LiveNavigationMap({
     )
   }
 
-  // Initial route + recompute on a leg switch (pickup -> dropoff). Not
-  // recomputed on every GPS tick -- livePosition is deliberately left out of
-  // this dependency list; see the deviation effect below for the one case a
-  // live position should trigger a fresh route.
+  // Stops (reference-only locations between pickup and dropoff) become
+  // DirectionsService waypoints -- one extra `legs[]` entry per stop. Text
+  // addresses are parsed to coords via parseCoords the same way pickup/
+  // dropoff already are; DirectionsService also accepts a raw address string
+  // directly, so an unparseable value (a real street address, not "lat,lng")
+  // is passed through as-is rather than dropped.
+  const waypoints = (stops || []).map((stop) => ({
+    location: parseCoords(stop.location) || stop.location,
+    stopover: true,
+  }))
+  const stopsKey = waypoints.map((w) => (typeof w.location === 'string' ? w.location : `${w.location.lat},${w.location.lng}`)).join('|')
+
+  // Initial route + recompute on a leg switch (pickup -> dropoff) or when the
+  // dropoff leg's stops become known. Not recomputed on every GPS tick --
+  // livePosition is deliberately left out of this dependency list; see the
+  // deviation effect below for the one case a live position should trigger a
+  // fresh route.
   useEffect(() => {
     if (!isLoaded || !destination) return
-    computeRoute(livePosition || origin, destination)
+    computeRoute(livePosition || origin, destination, waypoints)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, destination?.lat, destination?.lng])
+  }, [isLoaded, destination?.lat, destination?.lng, stopsKey])
 
   // Recenter/follow as new positions arrive, and derive a heading (like
   // Waze/Google Maps' navigation-mode arrow) from consecutive GPS ticks --
@@ -507,25 +531,34 @@ function LiveNavigationMap({
   }
 
   // Advance the current turn-by-turn step once the driver is close enough to
-  // this step's end point.
+  // this step's end point. With stops/waypoints, a route has one legs[]
+  // entry per stop (plus a final leg to destination) -- once the last step
+  // of the current leg is reached, advance to the next leg instead (arrived
+  // at that stop) and reset the step index for it. Client-side only, per the
+  // "no per-stop status tracking" decision (02B_MULTI_STOP_DELIVERIES.md).
   useEffect(() => {
     if (!isLoaded || !livePosition || !directions) return
-    const steps = directions.routes[0]?.legs[0]?.steps || []
+    const legs = directions.routes[0]?.legs || []
+    const steps = legs[currentLegIndex]?.steps || []
     const step = steps[currentStepIndex]
     if (!step) return
     const distance = window.google.maps.geometry.spherical.computeDistanceBetween(
       new window.google.maps.LatLng(livePosition.lat, livePosition.lng),
       step.end_location,
     )
-    if (distance <= NAV_STEP_ADVANCE_METERS && currentStepIndex < steps.length - 1) {
-      // Legitimate external-system sync (reacting to a GPS position tick
-      // arriving via props from the parent's Realtime subscription), not a
-      // derived-state anti-pattern -- see the rule's own guidance quoted in
-      // its message.
+    if (distance > NAV_STEP_ADVANCE_METERS) return
+    // Legitimate external-system sync (reacting to a GPS position tick
+    // arriving via props from the parent's Realtime subscription), not a
+    // derived-state anti-pattern -- see the rule's own guidance quoted in
+    // its message.
+    if (currentStepIndex < steps.length - 1) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setCurrentStepIndex((i) => i + 1)
+    } else if (currentLegIndex < legs.length - 1) {
+      setCurrentLegIndex((i) => i + 1)
+      setCurrentStepIndex(0)
     }
-  }, [livePosition, directions, currentStepIndex, isLoaded])
+  }, [livePosition, directions, currentStepIndex, currentLegIndex, isLoaded])
 
   // Reroute if the driver has visibly left the planned path. Debounced so a
   // driver stuck off-route for a while doesn't spam DirectionsService.
@@ -543,24 +576,36 @@ function LiveNavigationMap({
     const now = Date.now()
     if (now - lastRerouteAtRef.current < NAV_REROUTE_DEBOUNCE_MS) return
     lastRerouteAtRef.current = now
-    computeRoute(livePosition, destination)
+    // Only re-route through stops not yet reached -- waypoints[i] corresponds
+    // 1:1 to legs[i] (the leg heading to that stop), so the stops already
+    // passed (indices before currentLegIndex) are dropped rather than
+    // re-inserted into the new route. computeRoute resets currentLegIndex to
+    // 0 on success, which correctly means "0 stops remaining before this one"
+    // for the new, shorter waypoints list.
+    computeRoute(livePosition, destination, waypoints.slice(currentLegIndex))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [livePosition, directions, isPaused, isLoaded])
+  }, [livePosition, directions, isPaused, isLoaded, currentLegIndex])
 
   // Announce the current step once via speech synthesis -- once per step
   // index, not on every GPS tick that happens to land within the same step.
   useEffect(() => {
     if (isMuted || !directions) return
-    if (lastAnnouncedStepRef.current === currentStepIndex) return
-    const steps = directions.routes[0]?.legs[0]?.steps || []
+    const key = `${currentLegIndex}:${currentStepIndex}`
+    if (lastAnnouncedStepRef.current === key) return
+    const steps = directions.routes[0]?.legs[currentLegIndex]?.steps || []
     const step = steps[currentStepIndex]
     if (!step || typeof window.speechSynthesis === 'undefined') return
-    lastAnnouncedStepRef.current = currentStepIndex
+    lastAnnouncedStepRef.current = key
     window.speechSynthesis.speak(new SpeechSynthesisUtterance(stripHtml(step.instructions)))
-  }, [currentStepIndex, directions, isMuted])
+  }, [currentStepIndex, currentLegIndex, directions, isMuted])
 
-  const steps = directions?.routes[0]?.legs[0]?.steps || []
+  const legs = directions?.routes[0]?.legs || []
+  const steps = legs[currentLegIndex]?.steps || []
   const currentStep = steps[currentStepIndex]
+  // "Stop 2 of 4"-style indicator -- only meaningful with stops (more than
+  // one leg); legs.length === stops.length + 1 (final leg is to destination).
+  const totalStopLegs = legs.length - 1
+  const isOnFinalLeg = currentLegIndex >= totalStopLegs
 
   return (
     <section
@@ -681,6 +726,13 @@ function LiveNavigationMap({
       </div>
 
       <div className="space-y-1.5 border-t border-amber-200/70 px-3 py-2.5 text-[11px]">
+        {totalStopLegs > 0 && (
+          <p className="font-semibold text-amber-800">
+            {isOnFinalLeg
+              ? 'Heading to Drop-off'
+              : `Stop ${currentLegIndex + 1} of ${totalStopLegs}`}
+          </p>
+        )}
         {routeError ? (
           <p className="text-slate-500">Couldn't compute a route right now — use "Navigate Now" below instead.</p>
         ) : currentStep ? (
@@ -1245,6 +1297,10 @@ function mapDelivery(d) {
     pickupTime: str(d.pickupTime),
     pickupAddress: str(d.pickupAddress),
     deliveryAddress: str(d.deliveryAddress),
+    // Reference-only intermediate stops between pickup/dropoff, customer-entered
+    // at booking time — feeds LiveNavigationMap's dropoff-leg waypoints only,
+    // never delivery_requests.status (02B_MULTI_STOP_DELIVERIES.md).
+    stops: Array.isArray(d.stops) ? d.stops : [],
     status: DB_TO_DRIVER_STATUS[d.status] || str(d.status),
     hasOpenSession: Boolean(d.hasOpenSession),
     sessionId: d.sessionId || null,
@@ -1751,8 +1807,36 @@ function DriverDeliveries() {
 
   // Before pickup, the relevant leg is "get to the pickup point"; after pickup, it's "get to drop-off."
   const activeNeedsPickup = active ? (active.status === 'ASSIGNED' || active.status === 'FOR_PICKUP') : true
-  const activeNavTarget = active ? (activeNeedsPickup ? active.pickupCoords : active.destinationCoords) : null
   const activeNavOrigin = active ? (activeNeedsPickup ? { lat: 14.5506, lng: 121.0471 } : active.pickupCoords) : null
+
+  // The real chain order is Pickup -> Dropoff -> Stop 1 -> ... -> Stop N, not
+  // "stops sandwiched between pickup and a fixed final dropoff" (see
+  // 02B_MULTI_STOP_DELIVERIES.md). On the dropoff leg, when stops exist,
+  // dropoff_location becomes a waypoint and the LAST stop becomes the real
+  // navigation target instead.
+  let activeNavTarget = null
+  let activeNavStops = []
+  if (active) {
+    if (activeNeedsPickup) {
+      activeNavTarget = active.pickupCoords
+    } else if (active.stops.length > 0) {
+      const lastStopCoords = parseCoords(active.stops[active.stops.length - 1].location)
+      if (lastStopCoords) {
+        activeNavTarget = lastStopCoords
+        activeNavStops = [{ location: active.deliveryAddress }, ...active.stops.slice(0, -1)]
+      } else {
+        // Last stop's address doesn't parse to coordinates (parseCoords only
+        // understands "lat, lng" text, same limitation pickup/dropoff already
+        // have) -- fall back to dropoff as the destination and every stop as
+        // a waypoint before it, rather than breaking the map on an
+        // unparseable final target.
+        activeNavTarget = active.destinationCoords
+        activeNavStops = active.stops
+      }
+    } else {
+      activeNavTarget = active.destinationCoords
+    }
+  }
 
   // Monitoring runs for the whole time the vehicle is being driven — both the
   // pickup leg and the delivery leg — matching how the post-trip Behavior
@@ -1847,45 +1931,78 @@ function DriverDeliveries() {
     return () => document.removeEventListener('pointerdown', unlock)
   }, [isMonitoring])
 
-  useEffect(() => {
-    let isMounted = true
+  // Tracks the active delivery's id across calls so a refresh (below) can
+  // detect "the trip I was watching just finished" — needed now that the
+  // Helper, not this page, is what actually completes the delivery chain
+  // (Confirm Pickup, dropoff, every stop — 02B_MULTI_STOP_DELIVERIES.md), so
+  // this page has no local call site for that moment anymore.
+  const prevActiveIdRef = useRef(null)
 
-    async function loadDeliveries() {
-      setIsLoadingDeliveries(true)
-      setDeliveriesError('')
-      const { data: result, error } = await supabase.functions.invoke('admin-users', {
-        body: { action: 'get-driver-deliveries' },
-      })
-      if (!isMounted) return
-      if (error) {
-        setDeliveriesError('Failed to load your deliveries. Please try again.')
-        setData({ active: null, upcoming: [], completed: [] })
-        setIsLoadingDeliveries(false)
-        return
-      }
-      const mapped = (result?.deliveries || []).map(mapDelivery)
-      const today = localTodayISO()
-      const nonArchived = mapped
-        .filter((d) => d.status !== 'DELIVERED' && d.status !== 'COMPLETED')
-        .sort((a, b) => String(a.pickupDate || '').localeCompare(String(b.pickupDate || '')))
-      // A delivery with a genuinely open Session takes priority over "today's"
-      // delivery — a stale open Session on a different pickup_date must still
-      // surface as Active so its Pause/End Trip controls stay reachable. See
-      // STATUS.md's 2026-08-11 incident (driver D002/DR-0015 stuck ~64h).
-      const activeDelivery = nonArchived.find((d) => d.hasOpenSession) || nonArchived.find((d) => d.pickupDate === today) || null
-      setData({
-        active: activeDelivery,
-        upcoming: nonArchived.filter((d) => d.id !== (activeDelivery && activeDelivery.id)),
-        completed: mapped.filter((d) => d.status === 'DELIVERED' || d.status === 'COMPLETED'),
-      })
+  // Extracted so both the initial load and the Realtime subscription below
+  // can share it — same pattern HelperDeliveries.jsx's loadDeliveries uses.
+  const loadDeliveries = useCallback(async () => {
+    setIsLoadingDeliveries(true)
+    setDeliveriesError('')
+    const { data: result, error } = await supabase.functions.invoke('admin-users', {
+      body: { action: 'get-driver-deliveries' },
+    })
+    if (error) {
+      setDeliveriesError('Failed to load your deliveries. Please try again.')
+      setData({ active: null, upcoming: [], completed: [] })
       setIsLoadingDeliveries(false)
+      return
     }
+    const mapped = (result?.deliveries || []).map(mapDelivery)
+    const today = localTodayISO()
+    const nonArchived = mapped
+      .filter((d) => d.status !== 'DELIVERED' && d.status !== 'COMPLETED')
+      .sort((a, b) => String(a.pickupDate || '').localeCompare(String(b.pickupDate || '')))
+    // A delivery with a genuinely open Session takes priority over "today's"
+    // delivery — a stale open Session on a different pickup_date must still
+    // surface as Active so its Pause/End Trip controls stay reachable. See
+    // STATUS.md's 2026-08-11 incident (driver D002/DR-0015 stuck ~64h).
+    const activeDelivery = nonArchived.find((d) => d.hasOpenSession) || nonArchived.find((d) => d.pickupDate === today) || null
 
-    loadDeliveries()
-    return () => {
-      isMounted = false
+    const justCompleted = mapped.find(
+      (d) => d.id === prevActiveIdRef.current && (d.status === 'DELIVERED' || d.status === 'COMPLETED'),
+    )
+    if (justCompleted) {
+      setCompletionNotice({ id: justCompleted.id, customerName: justCompleted.customerName })
+      setLiveAlerts([])
+      setIsAlertHistoryExpanded(false)
     }
+    prevActiveIdRef.current = activeDelivery?.id || null
+
+    setData({
+      active: activeDelivery,
+      upcoming: nonArchived.filter((d) => d.id !== (activeDelivery && activeDelivery.id)),
+      completed: mapped.filter((d) => d.status === 'DELIVERED' || d.status === 'COMPLETED'),
+    })
+    setIsLoadingDeliveries(false)
   }, [])
+
+  useEffect(() => {
+    // Initial fetch on mount, same shape as every other data-load effect in
+    // this file -- not a derived-state anti-pattern.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadDeliveries()
+  }, [loadDeliveries])
+
+  // Live pickup: the Helper now completes Confirm Pickup/dropoff/every stop
+  // in a different portal/session, so this page needs a Realtime nudge to
+  // notice — any change to delivery_requests refreshes, same pattern
+  // HelperDeliveries.jsx already uses for its own subscription.
+  useEffect(() => {
+    const channel = supabase
+      .channel('driver-delivery-requests-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'delivery_requests' }, () => {
+        loadDeliveries()
+      })
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [loadDeliveries])
 
   useEffect(() => {
     if (!completionNotice) return undefined
@@ -2009,73 +2126,68 @@ function DriverDeliveries() {
     }
   }
 
+  // Only ever reachable for ASSIGNED -> FOR_PICKUP (Start Pickup) now —
+  // Confirm Pickup and Complete Delivery moved to the Helper (2026-08-12,
+  // 02B_MULTI_STOP_DELIVERIES.md), so statusCfg.nextStage is null for every
+  // other status and no button renders to call this. Kept as advanceStage
+  // rather than renaming to startPickup since the confirm-modal plumbing
+  // below (runTripAction, confirmingStageAdvance) is still generic.
   const advanceStage = async () => {
     if (!active || !statusCfg || !statusCfg.nextStage) return
     const nextDbStatus = DRIVER_STATUS_TO_DB[statusCfg.nextStage]
+
+    // Driving -- and therefore monitoring -- starts now. Called BEFORE the
+    // status update below (reordered 2026-08-12, see 09_EDGE_CASES.md gap
+    // notes): calling start-trip first, while delivery_requests.status is
+    // still ASSIGNED (start-trip accepts ASSIGNED or OUT_FOR_PICKUP), means
+    // a guardrail rejection (e.g. "you already have a paused trip in
+    // progress") never leaves the delivery stuck showing an advanced
+    // status with no Session behind it -- status is only ever advanced
+    // once a Session genuinely exists.
+    const { data: tripData, error: tripError } = await supabase.functions.invoke('driver-trip', {
+      body: { action: 'start-trip', deliveryRequestId: active.id },
+    })
+    if (tripError) {
+      // Surface the Edge Function's actual rejection reason (e.g. "you
+      // already have a paused trip in progress") instead of a generic
+      // message -- a driver blocked by a real guardrail needs to know
+      // *why*, since "please try again" would just fail the same way
+      // again. tripError is a FunctionsHttpError whose .context is the raw
+      // Response; falls back to the generic message if that shape ever
+      // changes or the body isn't the expected { error } JSON.
+      const serverMessage = await tripError.context?.json?.().then((b) => b?.error).catch(() => null)
+      alert(serverMessage || 'Failed to start the trip. Please try again.')
+      return
+    }
+    // Pressing Start Trip is the driver's first interaction on the page,
+    // which browsers require before any audio can autoplay later — see
+    // 06_DROWSINESS_ALERT_PIPELINE.md's "Driver-Facing Audio Alert" section.
+    unlockAlertAudio(usualAlertAudioRef.current)
+    unlockAlertAudio(multipleAlertAudioRef.current)
+    const newSessionId = tripData?.session?.session_id || null
+    setLiveAlerts([])
+    setIsAlertHistoryExpanded(false)
+
     const { error } = await supabase.functions.invoke('admin-users', {
       body: { action: 'update-driver-delivery', deliveryId: active.id, status: nextDbStatus },
     })
     if (error) {
+      // The Session is already Active at this point -- monitoring is
+      // genuinely running, just the displayed stage label is one step
+      // behind. A plain status-write failure (rare), not a guardrail
+      // rejection, and retrying Start Pickup is safe since a Session
+      // already exists.
       alert('Failed to update the delivery. Please try again.')
       return
     }
-    if (statusCfg.nextStage === 'DELIVERED') {
-      // Handing over the cargo finishes the driver's job — closes the trip's Session
-      // (end_time/duration/mileage) same as Start Pickup opens one. Sequenced after
-      // the status update above per STATUS.md's handoff plan: if this call fails, the
-      // delivery status is already correct and this can just be retried.
-      const { error: tripError } = await supabase.functions.invoke('driver-trip', {
-        body: { action: 'end-trip', deliveryRequestId: active.id },
-      })
-      if (tripError) {
-        alert('Delivery status updated, but ending the trip session failed. Please try again.')
-        return
-      }
-      // Handing over the cargo finishes the driver's job — archive it right away instead of
-      // asking for a separate "complete" tap. Customer confirmation happens later, on its own.
-      setData((prev) => ({
-        active: null,
-        upcoming: prev.upcoming || [],
-        completed: [{ ...prev.active, status: 'DELIVERED' }, ...(prev.completed || [])],
-      }))
-      // The live feed is per-trip and this trip just ended — its history now
-      // lives in the archived report instead, so clear it for the next trip.
-      setLiveAlerts([])
-      setIsAlertHistoryExpanded(false)
-      setCompletionNotice({ id: active.id, customerName: active.customerName })
-      return
-    }
-    let newSessionId = null
-    if (statusCfg.nextStage === 'FOR_PICKUP') {
-      // Driving — and therefore monitoring — starts now. Sequenced after the
-      // status update above per STATUS.md's handoff plan: if this call fails,
-      // the delivery status is already correct and this can just be retried.
-      const { data: tripData, error: tripError } = await supabase.functions.invoke('driver-trip', {
-        body: { action: 'start-trip', deliveryRequestId: active.id },
-      })
-      if (tripError) {
-        alert('Delivery status updated, but starting the trip session failed. Please try again.')
-        return
-      }
-      // Pressing Start Trip is the driver's first interaction on the page,
-      // which browsers require before any audio can autoplay later — see
-      // 06_DROWSINESS_ALERT_PIPELINE.md's "Driver-Facing Audio Alert" section.
-      unlockAlertAudio(usualAlertAudioRef.current)
-      unlockAlertAudio(multipleAlertAudioRef.current)
-      newSessionId = tripData?.session?.session_id || null
-      setLiveAlerts([])
-      setIsAlertHistoryExpanded(false)
-    }
-    if (statusCfg.nextStage === 'OUT_FOR_DELIVERY') {
-      setIsAlertHistoryExpanded(false)
-    }
+
     setData((prev) => ({
       ...prev,
       active: {
         ...prev.active,
         status: statusCfg.nextStage,
-        hasOpenSession: statusCfg.nextStage === 'FOR_PICKUP' ? true : prev.active.hasOpenSession,
-        sessionId: statusCfg.nextStage === 'FOR_PICKUP' ? newSessionId : prev.active.sessionId,
+        hasOpenSession: true,
+        sessionId: newSessionId,
       },
     }))
   }
@@ -2263,6 +2375,7 @@ function DriverDeliveries() {
                 <LiveNavigationMap
                   origin={activeNavOrigin}
                   destination={activeNavTarget}
+                  stops={activeNavStops}
                   livePosition={livePosition}
                   isPaused={isPausedTrip}
                   onOpenDirections={() => openDirections(activeNavOrigin, activeNavTarget)}

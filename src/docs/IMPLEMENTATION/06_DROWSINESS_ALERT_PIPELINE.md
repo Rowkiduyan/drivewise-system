@@ -52,6 +52,16 @@ Mechanism: the Driver Web Application subscribes (Supabase Realtime) to new rows
 
 One browser-specific caveat to design around: browsers block audio from autoplaying without a prior user interaction on the page. Pressing Start Trip counts as that interaction, so audio playback should be "unlocked" (e.g. play-and-immediately-pause a silent clip) at that point, rather than assuming the first real alert can just play on its own.
 
+## Helper visibility
+
+**Decided 2026-08-12, not built.** Same precedent as the Helper visibility note in `03_START_TRIP_AND_SESSION.md`: Helper never triggers anything and this adds no new action, only read access to data the Driver's own page already shows.
+
+Give the Helper portal a read-only view of the same `alerts` feed the Driver's `LiveMonitoringCard` shows (alert count/history for the current Trip) — reusing that exact Realtime pattern (seed-fetch the session's existing `alerts` rows, then subscribe to `postgres_changes` `INSERT`s filtered by `session_id`, same as `DriverDeliveries.jsx` already does), rendered into `HelperDeliveries.jsx` alongside the realtime status upgrade planned in `03_START_TRIP_AND_SESSION.md`.
+
+**No audio for the Helper.** The Driver's page plays an audible clip per alert (`Usual Alert.mp3`/`5+ Multiple Alert.mp3`, see `STATUS.md`'s Phase 6 completion entry); the Helper's device should not also play it. The Helper is physically riding in the same cab as the Driver, so the Driver's own device audio is already audible to them — a second `<audio>` element on a second device would double the sound, not add information. Show the count/history visually only.
+
+**No separate GPS/position source either** — see `05_GPS_PIPELINE.md`'s Helper note, same reasoning (one truck, one Pi, one real position per Trip).
+
 ## Deliverable
 
 Implement alert uploads only.

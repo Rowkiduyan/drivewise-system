@@ -1,9 +1,8 @@
 // Supabase Edge Function: driver-trip
-// Handles Driver-initiated Trip lifecycle actions (Start/Pause/Resume/End Trip
-// — End Trip is not implemented yet). Authenticates the caller's own
-// session (same pattern as admin-users), then uses service_role server-side
-// to read/write delivery_requests/sessions/devices/trucks/driver_records past
-// RLS.
+// Handles Driver-initiated Trip lifecycle actions: Start/Pause/Resume/End
+// Trip. Authenticates the caller's own session (same pattern as
+// admin-users), then uses service_role server-side to read/write
+// delivery_requests/sessions/devices/trucks/driver_records past RLS.
 //
 // Deploy:   npx supabase functions deploy driver-trip
 // Secrets:  SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY
@@ -18,6 +17,7 @@
 //   grant select on public.devices to service_role;
 //   grant select, update on public.trucks to service_role;  -- update added 2026-08-08 for Pause Trip's mileage write
 //   grant select on public.driver_records to service_role;
+//   grant select on public.helper_records to service_role;  -- added 2026-08-12, end-trip is now also Helper-callable
 //   grant select on public.users to service_role;
 //   grant select on public.gps_logs to service_role;  -- added 2026-08-08 for Pause Trip's mileage sum
 
@@ -90,27 +90,50 @@ Deno.serve(async (req) => {
     return json({ error: "Forbidden" }, 403);
   }
 
-  if (callerRow.role !== "Driver") {
+  const body = await req.json();
+  const { action } = body;
+
+  // Every action here is Driver-only except end-trip, which the Helper who
+  // completes the final item of the Pickup -> Dropoff -> Stops chain also
+  // needs to call (closes the Session, computes mileage) — see admin-users'
+  // complete-dropoff/complete-stop and 02B_MULTI_STOP_DELIVERIES.md.
+  const isHelperEndTrip = callerRow.role === "Helper" && action === "end-trip";
+
+  if (callerRow.role !== "Driver" && !isHelperEndTrip) {
     return json({ error: "Forbidden" }, 403);
   }
 
-  // Every action here needs the caller's driver_records.id (not their auth
-  // uuid) — delivery_requests.assigned_driver_id and sessions.driver_id both
-  // use that text id, matching the rest of this schema's convention.
-  const { data: driverRow, error: driverRowError } = await adminClient
-    .from("driver_records")
-    .select("id")
-    .eq("auth_id", callerData.user.id)
-    .single();
+  let driverId = "";
+  let helperId = "";
 
-  if (driverRowError || !driverRow) {
-    return json({ error: "Driver profile not found" }, 400);
+  if (isHelperEndTrip) {
+    const { data: helperRow, error: helperRowError } = await adminClient
+      .from("helper_records")
+      .select("id")
+      .eq("auth_id", callerData.user.id)
+      .single();
+
+    if (helperRowError || !helperRow) {
+      return json({ error: "Helper profile not found" }, 400);
+    }
+
+    helperId = helperRow.id as string;
+  } else {
+    // Every action here needs the caller's driver_records.id (not their auth
+    // uuid) — delivery_requests.assigned_driver_id and sessions.driver_id both
+    // use that text id, matching the rest of this schema's convention.
+    const { data: driverRow, error: driverRowError } = await adminClient
+      .from("driver_records")
+      .select("id")
+      .eq("auth_id", callerData.user.id)
+      .single();
+
+    if (driverRowError || !driverRow) {
+      return json({ error: "Driver profile not found" }, 400);
+    }
+
+    driverId = driverRow.id as string;
   }
-
-  const driverId = driverRow.id as string;
-
-  const body = await req.json();
-  const { action } = body;
 
   if (action === "start-trip") {
     const deliveryRequestId = typeof body.deliveryRequestId === "string" ? body.deliveryRequestId : "";
@@ -146,10 +169,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    // One Active trip per driver (PROJECT_CONSTRAINTS.md). Full Active-or-
-    // Paused enforcement across every delivery a driver might have is Phase 9
-    // (Edge Cases) scope — this covers the direct case of an already-open
-    // session, which is what actually matters for Start Trip itself.
+    // One Active trip per driver (PROJECT_CONSTRAINTS.md).
     const { data: existingActive, error: existingActiveError } = await adminClient
       .from("sessions")
       .select("session_id")
@@ -163,6 +183,36 @@ Deno.serve(async (req) => {
 
     if (existingActive) {
       return json({ error: "You already have an active trip in progress" }, 409);
+    }
+
+    // Full Active-or-Paused enforcement (PROJECT_CONSTRAINTS.md's "one Active
+    // or Paused Trip per driver at a time", 09_EDGE_CASES.md). The check
+    // above already rules out an Active session on *any* delivery for this
+    // driver, so by this point we know there is none anywhere — what's left
+    // is a *Paused* Trip elsewhere: a different delivery_requests row already
+    // assigned to this driver whose milestone status is past ASSIGNED (so a
+    // Session existed and was later closed) but not yet DELIVERED/COMPLETED/
+    // CANCELLED. "Paused" is never a stored value (03B_PAUSE_AND_RESUME_TRIP.md)
+    // — this is the same past-ASSIGNED-with-no-open-Session definition
+    // get-driver-deliveries' hasOpenSession already uses, just applied here
+    // to every OTHER delivery instead of only this one.
+    const { data: otherInProgress, error: otherInProgressError } = await adminClient
+      .from("delivery_requests")
+      .select("id")
+      .eq("assigned_driver_id", driverId)
+      .neq("id", deliveryRequestId)
+      .in("status", ["OUT_FOR_PICKUP", "ARRIVED_PICKUP", "OUT_FOR_DROPOFF", "ARRIVED_DROPOFF"])
+      .limit(1);
+
+    if (otherInProgressError) {
+      return json({ error: otherInProgressError.message }, 400);
+    }
+
+    if (otherInProgress && otherInProgress.length > 0) {
+      return json(
+        { error: "You already have a paused trip in progress — resume or end it before starting a new one" },
+        409,
+      );
     }
 
     // Determine the Raspberry Pi assigned to the truck (devices.plate_number
@@ -439,7 +489,7 @@ Deno.serve(async (req) => {
 
     const { data: delivery, error: deliveryError } = await adminClient
       .from("delivery_requests")
-      .select("id, assigned_driver_id")
+      .select("id, assigned_driver_id, assigned_helper_ids")
       .eq("id", deliveryRequestId)
       .single();
 
@@ -447,7 +497,11 @@ Deno.serve(async (req) => {
       return json({ error: "Delivery request not found" }, 400);
     }
 
-    if (delivery.assigned_driver_id !== driverId) {
+    const isOwner = isHelperEndTrip
+      ? ((delivery.assigned_helper_ids as string[]) || []).includes(helperId)
+      : delivery.assigned_driver_id === driverId;
+
+    if (!isOwner) {
       return json({ error: "This delivery is not assigned to you" }, 403);
     }
 

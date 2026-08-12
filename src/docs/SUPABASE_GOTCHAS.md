@@ -147,4 +147,55 @@ select grantee, privilege_type from information_schema.role_table_grants where t
 
 **Takeaway:** a table meant to be `service_role`-only needs an explicit `REVOKE ALL ... FROM anon, authenticated`, not just the absence of a `GRANT` statement for those roles — Supabase's schema-level default privileges fill that gap in silently. Check every new table this way, not just the ones an Edge Function writes to.
 
+---
+
+## 9. Realtime `postgres_changes` silently drops every event if the RLS policy's `USING` clause joins to another table
+
+**Symptom:** Building Helper-portal Realtime subscriptions on `sessions` and `delivery_requests` (read-only mirrors of Driver's own working `alerts`/`gps_logs` subscriptions), the channel joined fine (`"Subscribed to PostgreSQL"` reply, correct `postgres_changes` filter echoed back) and the underlying data was correct on every fresh fetch — but a change made while the tab was already open (a Driver pressing Pause Trip, a stage advance) never arrived on the open Realtime connection. No error anywhere — client, Edge Function, and Postgres logs were all clean. Confirmed via raw websocket frame inspection (Playwright's `page.on('websocket')`), not just UI symptoms: the `alerts` channel reliably delivered a `postgres_changes` data frame on `INSERT` in the same live session; the `sessions`/`delivery_requests` channels never did, no matter how long the wait.
+
+**Cause:** The new RLS policies written for these two tables (scoping a Driver/Helper to their own assigned rows) used an inline `exists (select 1 from other_table where ...)` join directly inside the `USING` clause — e.g. `exists (select 1 from helper_records where helper_records.auth_id = auth.uid() and helper_records.id = any(assigned_helper_ids))`. This evaluates correctly for ordinary REST `select`s (confirmed: manual client-side queries against the same tables returned the right rows), but Supabase Realtime's per-subscriber authorization check for `postgres_changes` does not reliably evaluate policies that reference a second table inline — it silently excludes the row from the broadcast rather than erroring. The two Admin/Supervisor-only policies already on `users`/`sessions` that use a bare function call (`current_user_role() = 'Admin'`) were unaffected, since a function call is opaque to this check even though the function body itself queries another table.
+
+**Fix:** Move the cross-table logic into a `SECURITY DEFINER` SQL function that takes the row's own columns as arguments, so the policy's visible predicate is a single opaque function call — same pattern already established for `current_user_role()`/`is_admin()` on `users`:
+```sql
+create or replace function public.session_visible_to_caller(p_driver_id text, p_delivery_request_id text)
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select
+    p_driver_id = (select id from driver_records where auth_id = auth.uid())
+    or exists (
+      select 1 from delivery_requests dr
+      where dr.id = p_delivery_request_id
+        and (select id from helper_records where auth_id = auth.uid()) = any(dr.assigned_helper_ids)
+    )
+$$;
+
+create policy "assigned crew can read own sessions" on public.sessions
+for select to authenticated
+using (public.session_visible_to_caller(driver_id, delivery_request_id));
+```
+The function body can still contain joins/subqueries freely — only the policy's own `USING`/`WITH CHECK` expression needs to stay join-free for Realtime to authorize correctly.
+
+**How it was diagnosed:** confirmed the publication (`select * from pg_publication_tables where pubname = 'supabase_realtime'`), replica identity, and the actual live policy definitions (`select policyname, cmd, roles, qual, with_check from pg_policies where tablename = 'sessions'` — this also caught `RLS.md` being stale/wrong about this table's policies, see that file). Isolated the join-vs-function distinction empirically: a temporary `using (true)` debug policy made events flow immediately, proving the RLS layer itself (not the publication or client code) was the point of failure, then narrowed it to the join specifically by comparing against the one already-working function-based policy on the same table.
+
+**Takeaway:** any RLS policy meant to gate a `postgres_changes` subscription should be a bare column comparison or a single function call — never an inline join/`exists` against another table, even though that exact same policy works fine for ordinary `select` queries via REST/Edge Functions. This is easy to miss because everything except the live subscription itself (fetch, publication membership, channel join) looks correct.
+
+---
+
+## 10. `select('*')` 403s the whole request if a column-scoped grant excludes even one column
+
+**Symptom:** Building Phase 8's Supervisor Dashboard (`08_REALTIME_DASHBOARD.md`), a plain `supabase.from('devices').select('*')` from a Supervisor's browser session returned `403 Forbidden` on the REST `GET`, even after confirming (via `pg_policies`) that a correct SELECT policy existed covering `Supervisor`.
+
+**Cause:** Same root mechanism as gotcha #1 (grant checked before RLS), but via a *column*-scoped grant instead of a missing table-level one. `devices`' `authenticated` grant is deliberately column-scoped — `select` on `id, device_id, plate_number, device_status, created_at, last_ping` only, excluding `device_secret_hash` (a live auth credential, see `DATABASE.md`'s `devices` "Grants" note). `select('*')` asks Postgres to read every column, including the excluded one — and unlike RLS (which silently filters *rows*), a missing column grant fails the *entire* request with `403`, not just omitting that one column.
+
+**Fix:** Select an explicit column list instead of `*` on any table with a column-scoped grant:
+```js
+supabase.from('devices').select('id, device_id, plate_number, device_status, created_at, last_ping')
+```
+
+**Takeaway:** `select('*')` is only safe against a table where `authenticated`/`anon` has an unrestricted (whole-row) grant. Before querying a new table client-side, check `information_schema.role_table_grants` for a `column_name` restriction (or check `DATABASE.md`'s Grants note for that table) — RLS being correct doesn't rule this out, since it's a separate, earlier check.
+
 

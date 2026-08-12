@@ -6,7 +6,7 @@ Implement GPS uploads.
 
 ## Required Schema
 
-Resolved 2026-08-08, updated 2026-08-10: `gps_logs` now exists (id, `session_id` text FK to `sessions.session_id` — nullable, `delivery_request_id` text FK to `delivery_requests.id` — not null, latitude, longitude, timestamp, created_at — see `DATABASE.md`). Locked to `service_role` only for now; a Supervisor-dashboard read path is a decision for `08_REALTIME_DASHBOARD.md`, not this phase.
+Resolved 2026-08-08, updated 2026-08-10: `gps_logs` now exists (id, `session_id` text FK to `sessions.session_id` — nullable, `delivery_request_id` text FK to `delivery_requests.id` — not null, latitude, longitude, timestamp, created_at — see `DATABASE.md`). Originally locked to `service_role` only; as of 2026-08-12, `authenticated` also has a `select` grant + RLS policy (added for the Driver-navigation live map, see `DATABASE.md`'s `gps_logs` entry for the full grant/RLS/Realtime-publication history) — a broader Supervisor-dashboard read path is still its own decision for `08_REALTIME_DASHBOARD.md`, not this phase.
 
 ## Rules
 
@@ -54,7 +54,9 @@ Resolved: `gps_logs.session_id` is now nullable, and a `delivery_request_id` col
 
 The alternative considered and rejected: not closing the Session on Pause at all, reintroducing a real "Paused" status on `sessions` instead of ending it. Rejected because it would reverse `03B_PAUSE_AND_RESUME_TRIP.md`'s "Paused isn't a stored value anywhere" decision and require reworking the already-implemented/tested `pause-trip` mileage-on-close behavior, for no benefit over the chosen approach.
 
-Downstream of this: whether a truck observed moving while its Trip is Paused should be flagged to a Supervisor as an anomaly is a separate, still-undecided question — see `03B_PAUSE_AND_RESUME_TRIP.md`'s note (deferred to Phase 8, `08_REALTIME_DASHBOARD.md` scope).
+Downstream of this: whether a truck observed moving while its Trip is Paused should be flagged to a Supervisor as an anomaly is a separate question, now decided — see `08_REALTIME_DASHBOARD.md`'s Map Display section (decided 2026-08-12).
+
+**Helper never gets its own GPS source (decided 2026-08-12, not built — planned alongside the Helper alert-visibility note in `06_DROWSINESS_ALERT_PIPELINE.md`):** if a live-position/map view is ever built for the Helper portal, it must read the *same* `gps_logs` rows the Driver's own `LiveNavigationMap` already reads (same `delivery_request_id`/`session_id`, same Realtime subscription pattern) — never a second, independently-sourced position for the Helper's own device. Reasoning: the Helper rides along in the same physical truck as the Driver for the whole Trip (see `UI/LAYOUT.md`'s Mobile section), so there is exactly one real position per Trip, already produced by the one Raspberry Pi mounted in that truck; a second GPS source would be redundant at best and a source of drift/disagreement at worst, and `gps_logs` itself has no concept of "whose device" a reading came from — it's scoped to the truck/device, not a user. This mirrors the existing rule that only the Driver ever triggers Start/Pause/Resume/End Trip — Helper is a read-only passenger on this Trip's data in every other respect too.
 
 ## Deliverable
 

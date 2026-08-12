@@ -2175,6 +2175,9 @@ function mapDbRequest(row, clientName, fleet) {
     dropoffTime: row.dropoff_time,
     pickupAddress: row.pickup_location,
     deliveryAddress: row.dropoff_location,
+    // Reference-only intermediate stops between pickup/dropoff, customer-entered
+    // at booking time — read-only here (02B_MULTI_STOP_DELIVERIES.md).
+    stops: Array.isArray(row.stops) ? row.stops : [],
     budgetMin: row.budget_min,
     budgetMax: row.budget_max,
     notes: row.notes,
@@ -3207,6 +3210,23 @@ function SupDeliveries() {
                     <div className="mb-3">
                       <Row label="Total Distance (2-way)" value={getTotalDistance(selectedRequest)} />
                     </div>
+                    {selectedRequest.stops && selectedRequest.stops.length > 0 && (
+                      <div className="mb-3">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block mb-1.5">
+                          Stops ({selectedRequest.stops.length})
+                        </span>
+                        <ol className="space-y-1">
+                          {selectedRequest.stops.map((stop, index) => (
+                            <li key={index} className="flex items-start gap-2 text-sm text-slate-700">
+                              <span className="h-5 w-5 shrink-0 rounded-full bg-amber-100 flex items-center justify-center text-[10px] font-bold text-amber-700 mt-0.5">
+                                {index + 1}
+                              </span>
+                              <span className="min-w-0 truncate">{stop.location}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="space-y-2">
                         <div className="flex items-start gap-2">

@@ -60,6 +60,23 @@ export default function EditDeviceModal({ device, onClose, onSave }) {
     setLoading(true);
     setError(null);
     try {
+      const isReassigningAway =
+        device.plate_number && plateNumber !== device.plate_number;
+      if (isReassigningAway) {
+        const { data: activeSessions, error: sessionError } = await supabase
+          .from("sessions")
+          .select("session_id")
+          .eq("device_id", device.device_id)
+          .eq("status", "Active")
+          .limit(1);
+        if (sessionError) throw sessionError;
+        if (activeSessions && activeSessions.length > 0) {
+          throw new Error(
+            "This device is powering an active trip — end or pause the trip before reassigning it."
+          );
+        }
+      }
+
       const updates = {
         plate_number: plateNumber || null,
         device_status: status,

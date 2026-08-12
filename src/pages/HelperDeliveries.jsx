@@ -1,26 +1,149 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   Calendar,
+  Camera,
+  CameraOff,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Clock,
+  EyeOff,
+  Loader2,
   MapPin,
   Navigation,
   Pause,
+  Repeat,
   Search,
   Truck,
   Wallet,
+  X,
 } from 'lucide-react'
 import HelperLayout from '../layout/HelperLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
+import { resizeProofPhotoToBase64 } from '../lib/proofPhoto.js'
+
+// Same alert taxonomy DriverDeliveries.jsx uses (06_DROWSINESS_ALERT_PIPELINE.md)
+// — kept in sync manually since the two pages don't share a module today.
+const ALERT_TYPE_LABELS = {
+  prolonged_eye_closure: 'Prolonged Eye Closure',
+  pattern_eye_closure_yawn: 'Eye Closure + Yawn',
+  pattern_repeated_eye_closure: 'Repeated Eye Closure',
+  face_not_detected: 'Eyes Not Detected',
+}
+
+const ALERT_TYPE_ICONS = {
+  prolonged_eye_closure: EyeOff,
+  pattern_eye_closure_yawn: AlertTriangle,
+  pattern_repeated_eye_closure: Repeat,
+  face_not_detected: CameraOff,
+}
+
+function formatAlertDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '--'
+  const totalMinutes = Math.round(seconds / 60)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours === 0) return `${minutes}m`
+  return `${hours}h ${minutes}m`
+}
+
+function formatTimeOnly(value) {
+  if (!value) return '--'
+  const raw = String(value)
+  const match = raw.match(/[T ](\d{2}):(\d{2})/)
+  if (!match) return raw
+  const hour24 = Number(match[1])
+  const minute = match[2]
+  const hour12 = ((hour24 + 11) % 12) + 1
+  const suffix = hour24 >= 12 ? 'pm' : 'am'
+  return `${hour12}:${minute}${suffix}`
+}
+
+// Read-only mirror of DriverDeliveries.jsx's LiveMonitoringCard — same alert
+// count/history/risk framing, but no audio (see 06_DROWSINESS_ALERT_PIPELINE.md's
+// Helper visibility note: the Driver's own device audio is already audible to
+// a co-riding Helper, so a second <audio> element would just double the sound).
+function LiveAlertsCard({ alerts, isExpanded, onToggleExpanded }) {
+  const alertCount = alerts.length
+  const lastAlert = alerts[0] || null
+
+  return (
+    <section className="rounded-xl border border-teal-200/70 bg-white p-3 sm:p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+          <EyeOff className="h-4 w-4 shrink-0 text-teal-700" />
+          Drowsiness Monitoring
+        </h3>
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          Live
+        </span>
+      </div>
+
+      <div className="mt-2.5 flex items-center justify-between gap-2 rounded-lg bg-teal-50 px-2.5 py-2">
+        <div>
+          <p className="text-[10px] text-slate-500">Alerts this trip</p>
+          <p className="text-sm font-bold text-slate-900">{alertCount}</p>
+        </div>
+      </div>
+
+      {lastAlert ? (
+        <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-100 p-2 text-[11px]">
+          {(() => {
+            const LastAlertIcon = ALERT_TYPE_ICONS[lastAlert.type] || EyeOff
+            return <LastAlertIcon className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+          })()}
+          <span className="min-w-0 flex-1 truncate text-slate-700">
+            Last alert: {ALERT_TYPE_LABELS[lastAlert.type] || lastAlert.type}
+          </span>
+          <span className="shrink-0 text-[10px] text-slate-400">{formatTimeOnly(lastAlert.time)}</span>
+        </div>
+      ) : (
+        <p className="mt-2 text-[11px] text-slate-500">No drowsiness alerts detected yet this trip.</p>
+      )}
+
+      {alertCount > 0 && (
+        <button
+          onClick={onToggleExpanded}
+          className="mt-2 flex w-full items-center justify-between rounded-lg py-1 text-[11px] font-semibold text-teal-800"
+        >
+          {isExpanded ? 'Hide' : 'View'} alert history ({alertCount})
+          {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        </button>
+      )}
+
+      {isExpanded && alertCount > 0 && (
+        <div className="mt-1.5 space-y-1.5">
+          {alerts.map((alert) => {
+            const Icon = ALERT_TYPE_ICONS[alert.type] || EyeOff
+            return (
+              <div key={alert.id} className="flex items-center gap-2 rounded-lg border border-slate-100 p-2 text-[11px]">
+                <Icon className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                <span className="min-w-0 flex-1 truncate text-slate-700">
+                  {ALERT_TYPE_LABELS[alert.type] || alert.type}
+                </span>
+                <span className="shrink-0 text-[10px] text-slate-400">{formatAlertDuration(alert.duration)}</span>
+                <span className="shrink-0 text-[10px] text-slate-400">{formatTimeOnly(alert.time)}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
 
 // Helper-facing workflow: Assigned -> Heading to Pickup -> Out for Delivery ->
-// Delivered. Read-only — the Helper never presses Start/Pause/Resume/End
-// Trip (only the Driver does, see 03_START_TRIP_AND_SESSION.md's "Helper
-// visibility" note); this page just reflects the same delivery_requests
-// status and Active/Paused session state the Driver's screen drives.
+// Delivered. Trip/Session state (Active/Paused, Start/Pause/Resume/End Trip)
+// stays Driver-only — this page just reflects the same delivery_requests
+// status the Driver's screen drives. But since 2026-08-12 the Helper DOES
+// own completing each item in the chain (Confirm Pickup, dropoff, every
+// stop) with a required proof photo — see 03_START_TRIP_AND_SESSION.md's
+// "Helper visibility" note and 02B_MULTI_STOP_DELIVERIES.md.
 const statusConfig = {
   ASSIGNED: {
     label: 'Assigned',
@@ -118,8 +241,15 @@ function mapDelivery(d) {
     pickupTime: str(d.pickupTime),
     pickupAddress: str(d.pickupAddress),
     deliveryAddress: str(d.deliveryAddress),
+    // Pickup -> Dropoff -> Stops chain the Helper completes with a required
+    // proof photo per item — see 02B_MULTI_STOP_DELIVERIES.md.
+    stops: Array.isArray(d.stops) ? d.stops : [],
+    pickupPhotoUrl: d.pickupPhotoUrl || null,
+    dropoffPhotoUrl: d.dropoffPhotoUrl || null,
+    dropoffCompletedAt: d.dropoffCompletedAt || null,
     status: DB_TO_HELPER_STATUS[d.status] || str(d.status),
     hasOpenSession: Boolean(d.hasOpenSession),
+    sessionId: d.sessionId || null,
     assignedAt: formatAssignedAt(d.assignedAt),
     quotation: d.quotation ? { amount: Number(d.quotation.amount) } : null,
     crew: {
@@ -478,12 +608,28 @@ function HelperDeliveries() {
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState('today')
   const [currentHelperName, setCurrentHelperName] = useState('')
+  const [liveAlerts, setLiveAlerts] = useState([])
+  const [isAlertHistoryExpanded, setIsAlertHistoryExpanded] = useState(false)
+
+  // Photo-required chain completion (Pickup -> Dropoff -> Stops), see
+  // 02B_MULTI_STOP_DELIVERIES.md. confirmingChainItem identifies which row's
+  // modal is open: { type: 'pickup' } | { type: 'dropoff' } | { type: 'stop', index }.
+  const [confirmingChainItem, setConfirmingChainItem] = useState(null)
+  const [chainPhotoBase64, setChainPhotoBase64] = useState(null)
+  const [chainPhotoPreviewUrl, setChainPhotoPreviewUrl] = useState(null)
+  const [chainPhotoError, setChainPhotoError] = useState('')
+  const [isSubmittingChainAction, setIsSubmittingChainAction] = useState(false)
+  const chainPreviewUrlRef = useRef(null)
 
   const active = data.active
   const statusCfg = active ? statusConfig[active.status] : null
   const todayISO = localTodayISO()
-  const isActiveToday = active ? active.pickupDate === todayISO : false
-  const todayCount = isActiveToday ? 1 : 0
+  // Boolean(active), not a pickupDate === today check — a delivery with a
+  // genuinely open Session (see loadDeliveries' activeDelivery selection
+  // above) must still render as the active workspace even if its
+  // pickup_date isn't today. Mirrors DriverDeliveries.jsx's identical fix.
+  const hasActiveDelivery = Boolean(active)
+  const todayCount = hasActiveDelivery ? 1 : 0
   const upcomingCount = data.upcoming.length
   const pastCount = data.completed.length
 
@@ -491,9 +637,151 @@ function HelperDeliveries() {
   // past ASSIGNED with no open Session means the driver has paused the trip.
   const isDrivingStage = Boolean(active) && (active.status === 'FOR_PICKUP' || active.status === 'OUT_FOR_DELIVERY')
   const isPausedTrip = isDrivingStage && !active.hasOpenSession
+  const isMonitoring = isDrivingStage && active?.hasOpenSession
 
   const isCurrentHelper = (member) =>
     Boolean(currentHelperName) && member.name.trim().toLowerCase() === currentHelperName.trim().toLowerCase()
+
+  // The full completion chain for the active delivery, in the real order
+  // (Pickup -> Dropoff -> Stops, not "stops between a fixed pickup/dropoff")
+  // — see 02B_MULTI_STOP_DELIVERIES.md. Each item's Complete button is only
+  // actionable at the specific stage that item belongs to; once the whole
+  // delivery is DELIVERED every button disappears regardless of which
+  // individual items happened to get completed (no ordering is enforced
+  // server-side, so dropoff can end up never completed if the last stop
+  // was completed directly — that's accepted, not a bug).
+  const chainItems = active
+    ? [
+        {
+          type: 'pickup',
+          label: 'Pickup',
+          location: active.pickupAddress,
+          done: active.status !== 'FOR_PICKUP',
+          photoUrl: active.pickupPhotoUrl,
+          actionable: active.status === 'FOR_PICKUP',
+        },
+        {
+          type: 'dropoff',
+          label: 'Dropoff',
+          location: active.deliveryAddress,
+          done: Boolean(active.dropoffCompletedAt),
+          photoUrl: active.dropoffPhotoUrl,
+          actionable: active.status === 'OUT_FOR_DELIVERY' && !active.dropoffCompletedAt,
+        },
+        ...active.stops.map((stop, index) => ({
+          type: 'stop',
+          index,
+          label: `Stop ${index + 1}`,
+          location: stop.location,
+          done: Boolean(stop.completed),
+          photoUrl: stop.photoUrl,
+          actionable: active.status === 'OUT_FOR_DELIVERY' && !stop.completed,
+        })),
+      ]
+    : []
+
+  const chainItemKey = (item) => (item.type === 'stop' ? `stop-${item.index}` : item.type)
+
+  const openChainModal = (item) => {
+    setConfirmingChainItem(item)
+    setChainPhotoBase64(null)
+    setChainPhotoError('')
+    if (chainPreviewUrlRef.current) URL.revokeObjectURL(chainPreviewUrlRef.current)
+    chainPreviewUrlRef.current = null
+    setChainPhotoPreviewUrl(null)
+  }
+
+  const closeChainModal = () => {
+    if (isSubmittingChainAction) return
+    setConfirmingChainItem(null)
+    setChainPhotoBase64(null)
+    setChainPhotoError('')
+    if (chainPreviewUrlRef.current) URL.revokeObjectURL(chainPreviewUrlRef.current)
+    chainPreviewUrlRef.current = null
+    setChainPhotoPreviewUrl(null)
+  }
+
+  const handleChainPhotoChange = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setChainPhotoError('')
+    try {
+      const base64 = await resizeProofPhotoToBase64(file)
+      setChainPhotoBase64(base64)
+      if (chainPreviewUrlRef.current) URL.revokeObjectURL(chainPreviewUrlRef.current)
+      const previewUrl = URL.createObjectURL(file)
+      chainPreviewUrlRef.current = previewUrl
+      setChainPhotoPreviewUrl(previewUrl)
+    } catch (err) {
+      setChainPhotoError(err.message || 'Failed to process the photo. Please try another.')
+    }
+  }
+
+  const submitChainAction = async () => {
+    if (!confirmingChainItem || !chainPhotoBase64 || isSubmittingChainAction) return
+    setIsSubmittingChainAction(true)
+    setChainPhotoError('')
+    try {
+      let result
+      if (confirmingChainItem.type === 'pickup') {
+        result = await supabase.functions.invoke('admin-users', {
+          body: {
+            action: 'update-driver-delivery',
+            deliveryId: active.id,
+            status: 'OUT_FOR_DROPOFF',
+            fileBase64: chainPhotoBase64,
+            contentType: 'image/jpeg',
+          },
+        })
+      } else if (confirmingChainItem.type === 'dropoff') {
+        result = await supabase.functions.invoke('admin-users', {
+          body: {
+            action: 'complete-dropoff',
+            deliveryId: active.id,
+            fileBase64: chainPhotoBase64,
+            contentType: 'image/jpeg',
+          },
+        })
+      } else {
+        result = await supabase.functions.invoke('admin-users', {
+          body: {
+            action: 'complete-stop',
+            deliveryId: active.id,
+            stopIndex: confirmingChainItem.index,
+            fileBase64: chainPhotoBase64,
+            contentType: 'image/jpeg',
+          },
+        })
+      }
+
+      if (result.error) {
+        const serverMessage = await result.error.context?.json?.().then((b) => b?.error).catch(() => null)
+        setChainPhotoError(serverMessage || 'Failed to submit. Please try again.')
+        return
+      }
+
+      // Whichever action turns out to close the chain's last item also needs
+      // driver-trip's end-trip called next (closes the Session, computes
+      // mileage) — same two-call order DriverDeliveries.jsx's old Complete
+      // Delivery button used, just triggered dynamically now instead of by a
+      // fixed button (see admin-users' complete-dropoff/complete-stop).
+      if (result.data?.isFinal) {
+        const { error: endTripError } = await supabase.functions.invoke('driver-trip', {
+          body: { action: 'end-trip', deliveryRequestId: active.id },
+        })
+        if (endTripError) {
+          setChainPhotoError('Photo saved, but closing out the trip failed. Please try again.')
+          return
+        }
+      }
+
+      await loadDeliveries()
+      closeChainModal()
+    } finally {
+      setIsSubmittingChainAction(false)
+    }
+  }
 
   useEffect(() => {
     let isMounted = true
@@ -518,41 +806,135 @@ function HelperDeliveries() {
     }
   }, [])
 
-  useEffect(() => {
-    let isMounted = true
-
-    async function loadDeliveries() {
-      setIsLoadingDeliveries(true)
-      setDeliveriesError('')
-      const { data: result, error } = await supabase.functions.invoke('admin-users', {
-        body: { action: 'get-helper-deliveries' },
-      })
-      if (!isMounted) return
-      if (error) {
-        setDeliveriesError('Failed to load your deliveries. Please try again.')
-        setData({ active: null, upcoming: [], completed: [] })
-        setIsLoadingDeliveries(false)
-        return
-      }
-      const mapped = (result?.deliveries || []).map(mapDelivery)
-      const today = localTodayISO()
-      const nonArchived = mapped
-        .filter((d) => d.status !== 'DELIVERED' && d.status !== 'COMPLETED')
-        .sort((a, b) => String(a.pickupDate || '').localeCompare(String(b.pickupDate || '')))
-      const activeDelivery = nonArchived.find((d) => d.pickupDate === today) || null
-      setData({
-        active: activeDelivery,
-        upcoming: nonArchived.filter((d) => d.id !== (activeDelivery && activeDelivery.id)),
-        completed: mapped.filter((d) => d.status === 'DELIVERED' || d.status === 'COMPLETED'),
-      })
+  // Extracted so both the initial load and the Realtime subscription below
+  // (any change to delivery_requests re-runs this) can share it — same
+  // "refresh on change" pattern SupDeliveries.jsx already uses for its own
+  // delivery_requests subscription.
+  const loadDeliveries = useCallback(async () => {
+    setIsLoadingDeliveries(true)
+    setDeliveriesError('')
+    const { data: result, error } = await supabase.functions.invoke('admin-users', {
+      body: { action: 'get-helper-deliveries' },
+    })
+    if (error) {
+      setDeliveriesError('Failed to load your deliveries. Please try again.')
+      setData({ active: null, upcoming: [], completed: [] })
       setIsLoadingDeliveries(false)
+      return
     }
-
-    loadDeliveries()
-    return () => {
-      isMounted = false
-    }
+    const mapped = (result?.deliveries || []).map(mapDelivery)
+    const today = localTodayISO()
+    const nonArchived = mapped
+      .filter((d) => d.status !== 'DELIVERED' && d.status !== 'COMPLETED')
+      .sort((a, b) => String(a.pickupDate || '').localeCompare(String(b.pickupDate || '')))
+    // A delivery with a genuinely open Session takes priority over "today's"
+    // delivery — a stale open Session on a different pickup_date must still
+    // surface as Active so its chain-completion actions stay reachable. Same
+    // fix DriverDeliveries.jsx already got for this (see STATUS.md's
+    // 2026-08-11 incident, driver D002/DR-0015 stuck ~64h) — found here again
+    // 2026-08-12 while testing the new Helper-owned chain-completion actions,
+    // which were otherwise unreachable for any delivery not dated today.
+    const activeDelivery = nonArchived.find((d) => d.hasOpenSession) || nonArchived.find((d) => d.pickupDate === today) || null
+    setData({
+      active: activeDelivery,
+      upcoming: nonArchived.filter((d) => d.id !== (activeDelivery && activeDelivery.id)),
+      completed: mapped.filter((d) => d.status === 'DELIVERED' || d.status === 'COMPLETED'),
+    })
+    setIsLoadingDeliveries(false)
   }, [])
+
+  useEffect(() => {
+    // Initial fetch on mount, same shape as every other data-load effect in
+    // this file (see loadOwnProfile above) -- not a derived-state anti-pattern.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadDeliveries()
+  }, [loadDeliveries])
+
+  // Realtime status upgrade (03_START_TRIP_AND_SESSION.md's "Planned catch-up"
+  // note): any change to delivery_requests or sessions refreshes the list
+  // instead of requiring a page reload to pick up a milestone/Trip-state
+  // change the Driver made. Requires the "assigned crew can read own
+  // deliveries" RLS policy on delivery_requests (Helper/Driver previously
+  // had no direct read access to that table at all — see DATABASE.md).
+  useEffect(() => {
+    const channel = supabase
+      .channel('helper-delivery-requests-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'delivery_requests' }, () => {
+        loadDeliveries()
+      })
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [loadDeliveries])
+
+  useEffect(() => {
+    if (!active?.id) return undefined
+    const channel = supabase
+      .channel(`helper-sessions-${active.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'sessions', filter: `delivery_request_id=eq.${active.id}` },
+        () => {
+          loadDeliveries()
+        },
+      )
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [active?.id, loadDeliveries])
+
+  // Read-only alerts feed (06_DROWSINESS_ALERT_PIPELINE.md's Helper visibility
+  // note): same seed-fetch + postgres_changes INSERT pattern DriverDeliveries.jsx
+  // uses for its own LiveMonitoringCard, minus the audio.
+  useEffect(() => {
+    if (!isMonitoring || !active?.sessionId) return undefined
+    let cancelled = false
+
+    async function loadExistingAlerts() {
+      const { data, error } = await supabase
+        .from('alerts')
+        .select('id, event_type, duration, created_at')
+        .eq('session_id', active.sessionId)
+        .order('created_at', { ascending: false })
+      if (cancelled || error || !data) return
+      setLiveAlerts((prev) => {
+        const seenIds = new Set(prev.map((a) => a.id))
+        const fetched = data
+          .filter((row) => !seenIds.has(String(row.id)))
+          .map((row) => ({ id: String(row.id), type: row.event_type, duration: row.duration, time: row.created_at }))
+        return [...prev, ...fetched].sort((a, b) => new Date(b.time) - new Date(a.time))
+      })
+    }
+    loadExistingAlerts()
+
+    const channel = supabase
+      .channel(`helper-alerts-session-${active.sessionId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'alerts', filter: `session_id=eq.${active.sessionId}` },
+        (payload) => {
+          const row = payload.new
+          const newAlert = { id: String(row.id), type: row.event_type, duration: row.duration, time: row.created_at }
+          setLiveAlerts((prev) => [newAlert, ...prev])
+        },
+      )
+      .subscribe()
+    return () => {
+      cancelled = true
+      supabase.removeChannel(channel)
+    }
+  }, [isMonitoring, active?.sessionId])
+
+  useEffect(() => {
+    // Resets local alert state when the active session changes (e.g. a
+    // pause/resume cycle produces a new session_id) -- reacting to an
+    // external-system id change, not a derived-state anti-pattern.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLiveAlerts([])
+    setIsAlertHistoryExpanded(false)
+  }, [active?.sessionId])
 
   const openDirections = (origin, destination) => {
     window.open(`https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}&travelmode=driving`, '_blank')
@@ -605,7 +987,7 @@ function HelperDeliveries() {
         </div>
 
         {/* Today tab */}
-        {activeTab === 'today' && (active && isActiveToday ? (
+        {activeTab === 'today' && (hasActiveDelivery ? (
           <>
             <div className="flex flex-col gap-3">
               {isPausedTrip ? (
@@ -679,6 +1061,59 @@ function HelperDeliveries() {
                   </p>
                 </div>
               </section>
+
+              {/* Pickup -> Dropoff -> Stops chain, each item completed with a
+                  required proof photo — see 02B_MULTI_STOP_DELIVERIES.md. */}
+              {isDrivingStage && (
+                <section className="rounded-xl border border-teal-200/70 bg-white p-3 sm:p-4">
+                  <h3 className="text-xs font-bold text-slate-900">Delivery Chain</h3>
+                  <div className="mt-2.5 space-y-1.5">
+                    {chainItems.map((item, idx) => (
+                      <div
+                        key={chainItemKey(item)}
+                        className={`flex items-center gap-2.5 rounded-lg border p-2.5 ${
+                          item.done ? 'border-emerald-200 bg-emerald-50' : 'border-teal-200/70 bg-white'
+                        }`}
+                      >
+                        <span
+                          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                            item.done ? 'bg-emerald-600 text-white' : 'bg-teal-100 text-teal-700'
+                          }`}
+                        >
+                          {item.done ? <Check className="h-3 w-3" strokeWidth={3} /> : idx + 1}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+                          <p className="truncate text-xs font-medium text-slate-800">{item.location}</p>
+                        </div>
+                        {item.done && item.photoUrl && (
+                          <img
+                            src={item.photoUrl}
+                            alt={`${item.label} proof`}
+                            className="h-10 w-10 shrink-0 rounded-md border border-emerald-200 object-cover"
+                          />
+                        )}
+                        {item.actionable && (
+                          <button
+                            onClick={() => openChainModal(item)}
+                            className="shrink-0 rounded-md bg-teal-900 px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-teal-800"
+                          >
+                            Complete
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {isMonitoring && (
+                <LiveAlertsCard
+                  alerts={liveAlerts}
+                  isExpanded={isAlertHistoryExpanded}
+                  onToggleExpanded={() => setIsAlertHistoryExpanded((prev) => !prev)}
+                />
+              )}
 
               {/* Route & Navigation — helper sees the same live route the driver does. */}
               <section className="overflow-hidden rounded-xl border border-teal-200/70 bg-white">
@@ -854,6 +1289,77 @@ function HelperDeliveries() {
           </>
         )}
       </div>
+
+      {confirmingChainItem && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-chain-item-title"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-teal-200/70 bg-white p-4 shadow-xl">
+            <h2 id="confirm-chain-item-title" className="text-sm font-bold text-slate-900">
+              Complete {confirmingChainItem.type === 'pickup' ? 'Pickup' : confirmingChainItem.type === 'dropoff' ? 'Dropoff' : `Stop ${confirmingChainItem.index + 1}`}
+            </h2>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
+              A photo is required as proof before this can be marked complete.
+            </p>
+
+            <div className="mt-3">
+              {chainPhotoPreviewUrl ? (
+                <div className="relative">
+                  <img src={chainPhotoPreviewUrl} alt="Selected proof" className="h-40 w-full rounded-lg border border-teal-200 object-cover" />
+                  <label
+                    htmlFor="chain-photo-input"
+                    className="absolute bottom-2 right-2 inline-flex cursor-pointer items-center gap-1 rounded-md bg-white/90 px-2 py-1 text-[10px] font-semibold text-teal-800 shadow"
+                  >
+                    <Camera className="h-3 w-3" />
+                    Retake
+                  </label>
+                </div>
+              ) : (
+                <label
+                  htmlFor="chain-photo-input"
+                  className="flex h-32 w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-teal-200 bg-teal-50/60 text-teal-700 transition hover:bg-teal-50"
+                >
+                  <Camera className="h-5 w-5" />
+                  <span className="text-[11px] font-semibold">Take or choose a photo</span>
+                </label>
+              )}
+              <input
+                id="chain-photo-input"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                capture="environment"
+                onChange={handleChainPhotoChange}
+                disabled={isSubmittingChainAction}
+                className="sr-only"
+              />
+            </div>
+
+            {chainPhotoError && <p className="mt-2 text-[11px] text-red-600">{chainPhotoError}</p>}
+
+            <div className="mt-4 flex gap-1.5">
+              <button
+                onClick={closeChainModal}
+                disabled={isSubmittingChainAction}
+                className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+              >
+                <X className="mr-1 inline h-3.5 w-3.5" />
+                Cancel
+              </button>
+              <button
+                onClick={submitChainAction}
+                disabled={isSubmittingChainAction || !chainPhotoBase64}
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-teal-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:opacity-70"
+              >
+                {isSubmittingChainAction && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}
+                {isSubmittingChainAction ? 'Please wait…' : 'Complete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </HelperLayout>
   )
 }

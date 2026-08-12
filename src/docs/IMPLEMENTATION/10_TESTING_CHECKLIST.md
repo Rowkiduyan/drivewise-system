@@ -24,7 +24,7 @@ Verify every workflow and edge case described in Phases 1-9 before sign-off.
 - Raspberry Pi is powered off during a Pause: no heartbeat while paused; Trip unaffected; Resume Trip works normally when the Pi is powered back on.
 - Duplicate Start Trip is rejected/idempotent.
 - Device already has an Active session: new session is not created for a second concurrent Start Trip on the same device.
-- Device reassignment while a session is Active is handled without corrupting the active session's telemetry routing.
+- Device reassignment away from its current truck while that device has an Active session is rejected by `EditDeviceModal.jsx` ("This device is powering an active trip…"); succeeds normally once the trip is Paused or Ended (see `09_EDGE_CASES.md` gap #2).
 
 ## Heartbeat
 
@@ -54,6 +54,25 @@ Verify every workflow and edge case described in Phases 1-9 before sign-off.
 - Notification appears after 2 continuous hours of driving within a single active Session.
 - The 2-hour clock resets on Pause/Resume (measured from the current Session's `start_time`, not cumulative Trip time).
 - Dismissing/ignoring it never changes Trip or Session state.
+
+## Multi-Stop Deliveries
+
+- Booking form: stops can be added/removed, capped at 5, and unfilled rows are dropped on submit rather than stored.
+- Supervisor's request detail panel shows the customer-entered stops read-only, in order; no edit UI exists.
+- Driver navigation's dropoff leg renders a route through all stops in order via `DirectionsService` `waypoints`; the to-pickup leg never includes stops.
+- The "Stop X of Y" indicator advances as the driver's GPS position reaches each stop, and reads "Heading to Drop-off" on the final leg.
+- Rerouting after a deviation only re-includes stops not yet reached, not the full original list.
+- With stops present, `dropoff_location` routes as a waypoint (not the final destination) and the last stop is the actual navigation target; with no stops, `dropoff_location` is still the final destination (unchanged behavior).
+
+## Photo-Required Chain Completion
+
+- Driver can only Start Pickup — Confirm Pickup and Complete Delivery buttons/confirm-modals no longer exist on `DriverDeliveries.jsx`; it shows a read-only "waiting for the helper" banner during `FOR_PICKUP`/`OUT_FOR_DELIVERY` instead.
+- Helper cannot complete Pickup/Dropoff/any stop without selecting a photo first — the Complete button in each confirm-modal stays disabled until one is chosen.
+- **No-stops case:** Helper completes Pickup (photo → `pickup_photo_url` set, status → `OUT_FOR_DROPOFF`), then completes Dropoff (photo → `dropoff_photo_url`/`dropoff_completed_at` set, response `isFinal: true`, status → `DELIVERED`, Session closed via `end-trip`).
+- **With-stops case:** Helper completes Pickup, then Dropoff (response `isFinal: false`, status stays `OUT_FOR_DROPOFF`), then each stop in turn (`isFinal: false` until the last one, which returns `isFinal: true` and triggers `DELIVERED`/`end-trip`).
+- Completing stops out of order (e.g. stop 2 before stop 1) is allowed — no ordering enforced server-side.
+- `DriverDeliveries.jsx` picks up the Helper-driven `DELIVERED` transition live (Realtime subscription on `delivery_requests`) and shows the same completion toast/archiving its old Complete Delivery button used to trigger directly, without needing a page reload.
+- `end-trip` succeeds when called by an assigned Helper (not just the Driver); still rejects a Helper not assigned to that delivery, and still rejects any caller for `start-trip`/`pause-trip`/`resume-trip`.
 
 ## Dashboard
 

@@ -1,7 +1,10 @@
 import SupLayout from "../layout/SupLayout.jsx";
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { AlertTriangle, LocateFixed, Loader2, MapPin } from "lucide-react";
+import { GoogleMap, Marker as GoogleMapMarker, useJsApiLoader } from "@react-google-maps/api";
 import DateRangeFilter from "../components/DateRangeFilter.jsx";
+import { supabase } from "../lib/supabaseClient.js";
 
 const background = null;
 
@@ -113,50 +116,468 @@ function StatTile({ label, value, to, tone }) {
   );
 }
 
-// ----- Active deliveries (live ops) -----
-const DELIVERY_STATUS_TONE = {
-  FOR_PICKUP: { label: "For Pickup", tone: "sky" },
-  OUT_FOR_DELIVERY: { label: "Out for Delivery", tone: "blue" },
-  DELIVERED: { label: "Delivered", tone: "emerald" },
+// ---------------------------------------------------------------------------
+// Phase 8 — Realtime Dashboard constants/helpers (08_REALTIME_DASHBOARD.md).
+// ---------------------------------------------------------------------------
+
+// PROJECT_CONSTRAINTS.md
+const DEVICE_OFFLINE_TIMEOUT_MS = 30_000;
+// 08_REALTIME_DASHBOARD.md's "Deferred here from 03B..." section — not yet
+// tuned against real drift data.
+const PAUSED_MOVE_THRESHOLD_M = 100;
+
+// A delivery whose milestone status is past ASSIGNED but not yet DELIVERED —
+// the window in which a Trip (Session) can be Active or Paused.
+const IN_PROGRESS_STATUSES = ["OUT_FOR_PICKUP", "ARRIVED_PICKUP", "OUT_FOR_DROPOFF", "ARRIVED_DROPOFF"];
+
+const MILESTONE_TONE = {
+  OUT_FOR_PICKUP: { label: "Out for Pickup", tone: "sky" },
+  ARRIVED_PICKUP: { label: "Arrived Pickup", tone: "sky" },
+  OUT_FOR_DROPOFF: { label: "Out for Dropoff", tone: "blue" },
+  ARRIVED_DROPOFF: { label: "Arrived Dropoff", tone: "blue" },
 };
 
-function ActiveDeliveries({ data }) {
+const TRIP_STATE_TONE = { Active: "emerald", Paused: "amber" };
+
+const DEVICE_STATE_TONE = {
+  Online: "emerald",
+  Offline: "red",
+  "Waiting for Device": "sky",
+  "Monitoring Unavailable": "amber",
+};
+
+// 06_DROWSINESS_ALERT_PIPELINE.md's four event types. No `severity` column
+// exists anywhere in the schema (DATABASE.md's `alerts` entry) — this is a
+// UI-only judgment call, consistent with face_not_detected already being
+// treated as the least urgent of the four elsewhere (DriverDeliveries.jsx
+// skips its audio clip for the same reason).
+const ALERT_TYPE_LABELS = {
+  prolonged_eye_closure: "Prolonged Eye Closure",
+  pattern_eye_closure_yawn: "Eye Closure + Yawn",
+  pattern_repeated_eye_closure: "Repeated Eye Closure",
+  face_not_detected: "Eyes Not Detected",
+};
+const ALERT_SEVERITY = {
+  prolonged_eye_closure: "High",
+  pattern_repeated_eye_closure: "High",
+  pattern_eye_closure_yawn: "Medium",
+  face_not_detected: "Low",
+};
+
+const GOOGLE_MAP_CONTAINER_STYLE = { width: "100%", height: "100%" };
+// Metro Manila fallback center, used only until at least one truck reports a
+// live position.
+const FLEET_MAP_DEFAULT_CENTER = { lat: 14.5995, lng: 120.9842 };
+
+// Haversine distance in meters — mirrors `driver-trip`'s `distanceKm` (same
+// formula, kept in km there for mileage) since Edge Functions and the
+// frontend don't share modules in this repo.
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatAgo(isoString, now) {
+  if (!isoString) return "Never";
+  const diffMs = now - new Date(isoString).getTime();
+  if (diffMs < 0) return "Just now";
+  const s = Math.floor(diffMs / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return `${h}h ago`;
+}
+
+// Resolves a delivery's Device state (Online/Offline/Waiting for
+// Device/Monitoring Unavailable) and Trip state (Active/Paused) per
+// 08_REALTIME_DASHBOARD.md's "Monitoring Status"/"Important Rules" sections.
+function resolveOpsState({ openSession, closedSessions, device, now }) {
+  const hasEverHadSession = openSession || closedSessions.length > 0;
+  if (!hasEverHadSession) return null;
+
+  if (openSession) {
+    const hasHeartbeatForSession =
+      device?.last_ping && new Date(device.last_ping).getTime() >= new Date(openSession.start_time).getTime();
+    let deviceState;
+    if (!hasHeartbeatForSession) {
+      const sinceStart = now - new Date(openSession.start_time).getTime();
+      deviceState = sinceStart > DEVICE_OFFLINE_TIMEOUT_MS ? "Monitoring Unavailable" : "Waiting for Device";
+    } else {
+      const sincePing = now - new Date(device.last_ping).getTime();
+      deviceState = sincePing <= DEVICE_OFFLINE_TIMEOUT_MS ? "Online" : "Offline";
+    }
+    return { tripState: "Active", deviceState, pauseStartedAt: null };
+  }
+
+  // Paused: past ASSIGNED, no open Active session, but at least one Session
+  // has existed for this delivery (hasOpenSession's false branch, same
+  // computation as get-driver-deliveries/get-helper-deliveries).
+  let deviceState;
+  if (!device?.last_ping) {
+    deviceState = "Monitoring Unavailable";
+  } else {
+    const sincePing = now - new Date(device.last_ping).getTime();
+    deviceState = sincePing <= DEVICE_OFFLINE_TIMEOUT_MS ? "Online" : "Offline";
+  }
+  const lastClosed = [...closedSessions].sort(
+    (a, b) => new Date(b.end_time || b.created_at) - new Date(a.end_time || a.created_at),
+  )[0];
+  return { tripState: "Paused", deviceState, pauseStartedAt: lastClosed?.end_time || null };
+}
+
+// ---------------------------------------------------------------------------
+// Live fleet-ops data hook — seed-fetch + Realtime subscriptions against
+// devices/sessions/delivery_requests/alerts/gps_logs, all readable directly
+// by a Supervisor session per the schema/access check already done in
+// 08_REALTIME_DASHBOARD.md's Implementation Plan.
+// ---------------------------------------------------------------------------
+function useFleetOps() {
+  const [trucks, setTrucks] = useState([]);
+  const [driverNameById, setDriverNameById] = useState({});
+  const [clientNameById, setClientNameById] = useState({});
+  const [devices, setDevices] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [deliveries, setDeliveries] = useState([]);
+  const [recentAlerts, setRecentAlerts] = useState([]);
+  const [positionsByDeliveryId, setPositionsByDeliveryId] = useState({});
+  const [movementByDeliveryId, setMovementByDeliveryId] = useState({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  // Live-updating clock so Online/Offline/Waiting/Monitoring-Unavailable and
+  // "last heartbeat" freshness advance even with no new Realtime events.
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Static-ish reference data (crew names, client names, truck roster) —
+  // fetched once; nothing in this phase's spec requires these to be live.
+  useEffect(() => {
+    let isMounted = true;
+    async function loadRefs() {
+      const [{ data: crewData }, { data: clientsData }, { data: trucksData }] = await Promise.all([
+        supabase.functions.invoke("admin-users", { body: { action: "list-crew" } }),
+        supabase.functions.invoke("admin-users", { body: { action: "list-clients" } }),
+        supabase.from("trucks").select("*"),
+      ]);
+      if (!isMounted) return;
+      const names = {};
+      for (const m of crewData?.crew || []) {
+        if (!m.record_id) continue;
+        names[m.record_id.trim()] = [m.first_name, m.middle_name, m.last_name].filter(Boolean).join(" ").trim();
+      }
+      setDriverNameById(names);
+      const clients = {};
+      for (const c of clientsData?.clients || []) clients[c.id] = c.name;
+      setClientNameById(clients);
+      setTrucks(trucksData || []);
+    }
+    loadRefs();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // devices/sessions/delivery_requests — the three tables whose changes
+  // actually move Device/Trip state. Reloaded together on any change to any
+  // of the three, same "just refetch" pattern SupDeliveries.jsx already uses
+  // for its own delivery_requests subscription.
+  const loadOps = useCallback(async () => {
+    const [{ data: devicesData }, { data: sessionsData }, { data: deliveriesData }] = await Promise.all([
+      // Explicit column list, not select('*') -- `authenticated`'s grant on
+      // devices is column-scoped and deliberately excludes
+      // device_secret_hash (DATABASE.md's devices "Grants" note); selecting
+      // '*' tries to read that column too and Postgres 403s the whole
+      // request rather than just omitting it (SUPABASE_GOTCHAS.md #1's same
+      // grant-checked-before-RLS mechanism, hit here via a column grant
+      // instead of a table grant).
+      supabase.from("devices").select("id, device_id, plate_number, device_status, created_at, last_ping"),
+      supabase.from("sessions").select("*").order("created_at", { ascending: false }).limit(300),
+      supabase.from("delivery_requests").select("*").in("status", IN_PROGRESS_STATUSES),
+    ]);
+    setDevices(devicesData || []);
+    setSessions(sessionsData || []);
+    setDeliveries(deliveriesData || []);
+    setIsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    // Seed-fetch on mount, same external-system-sync shape already accepted
+    // elsewhere in this codebase (DriverDeliveries.jsx/HelperDeliveries.jsx)
+    // — not a derived-state anti-pattern.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadOps();
+    const channel = supabase
+      .channel("sup-dashboard-ops")
+      .on("postgres_changes", { event: "*", schema: "public", table: "devices" }, loadOps)
+      .on("postgres_changes", { event: "*", schema: "public", table: "sessions" }, loadOps)
+      .on("postgres_changes", { event: "*", schema: "public", table: "delivery_requests" }, loadOps)
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadOps]);
+
+  // Latest Alerts feed — seed-fetch + append on INSERT, same shape as
+  // DriverDeliveries.jsx's own alerts subscription.
+  useEffect(() => {
+    let isMounted = true;
+    supabase
+      .from("alerts")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(50)
+      .then(({ data }) => {
+        if (isMounted) setRecentAlerts(data || []);
+      });
+    const channel = supabase
+      .channel("sup-dashboard-alerts")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "alerts" }, (payload) => {
+        setRecentAlerts((prev) => [payload.new, ...prev].slice(0, 50));
+      })
+      .subscribe();
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Deliveries currently Paused (no open Session, at least one closed one) —
+  // drives both the paused-but-moving movement seed below and the anomaly
+  // banner. Recomputed whenever deliveries/sessions change.
+  const pausedInfo = useMemo(() => {
+    const map = {};
+    for (const d of deliveries) {
+      const deliverySessions = sessions.filter((s) => s.delivery_request_id === d.id);
+      const openSession = deliverySessions.find((s) => s.status === "Active");
+      if (!openSession && deliverySessions.length > 0) {
+        const lastClosed = [...deliverySessions].sort(
+          (a, b) => new Date(b.end_time || b.created_at) - new Date(a.end_time || a.created_at),
+        )[0];
+        if (lastClosed?.end_time) map[d.id] = lastClosed.end_time;
+      }
+    }
+    return map;
+  }, [deliveries, sessions]);
+
+  // Kept in sync via effect (not during render) so the gps_logs INSERT
+  // handler below can read the latest position without becoming a
+  // dependency of that subscription effect — same pattern as
+  // DriverDeliveries.jsx's liveAlertsRef.
+  const positionsRef = useRef(positionsByDeliveryId);
+  useEffect(() => {
+    positionsRef.current = positionsByDeliveryId;
+  }, [positionsByDeliveryId]);
+
+  // Seed current position (any in-progress delivery) and cumulative
+  // paused-movement (Paused deliveries only) for anything not seeded yet.
+  //
+  // Both use `session_id is null` as the "this reading happened during a
+  // Pause" signal, not a locally-cached pause-start timestamp -- per the
+  // GPS-during-Pause design (DATABASE.md), the real gps-upload Edge
+  // Function itself already leaves session_id null exactly when a reading
+  // lands during a Pause, so it's a race-free signal straight from the row.
+  // An earlier version compared row.timestamp against a pauseStart value
+  // cached in a ref (synced via its own effect off the sessions table); live
+  // testing caught a real gap in that approach -- a GPS reading arriving
+  // right after Pause could beat the sessions-Realtime-event -> refetch ->
+  // ref-sync chain, silently dropping that reading's distance from the
+  // anomaly total even though the position itself still updated correctly.
+  const seededPositionIds = useRef(new Set());
+  const seededMovementIds = useRef(new Set());
+  useEffect(() => {
+    for (const d of deliveries) {
+      if (seededPositionIds.current.has(d.id)) continue;
+      seededPositionIds.current.add(d.id);
+      supabase
+        .from("gps_logs")
+        .select("latitude, longitude, created_at")
+        .eq("delivery_request_id", d.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .then(({ data }) => {
+          if (data?.length) {
+            setPositionsByDeliveryId((prev) => ({ ...prev, [d.id]: { lat: data[0].latitude, lng: data[0].longitude } }));
+          }
+        });
+    }
+    for (const deliveryId of Object.keys(pausedInfo)) {
+      if (seededMovementIds.current.has(deliveryId)) continue;
+      seededMovementIds.current.add(deliveryId);
+      supabase
+        .from("gps_logs")
+        .select("latitude, longitude, created_at")
+        .eq("delivery_request_id", deliveryId)
+        .is("session_id", null)
+        .order("created_at", { ascending: true })
+        .then(({ data }) => {
+          if (!data || data.length < 2) return;
+          let total = 0;
+          for (let i = 1; i < data.length; i++) {
+            total += distanceMeters(data[i - 1].latitude, data[i - 1].longitude, data[i].latitude, data[i].longitude);
+          }
+          setMovementByDeliveryId((prev) => ({ ...prev, [deliveryId]: total }));
+        });
+    }
+  }, [deliveries, pausedInfo]);
+
+  // Fleet-wide GPS live position — one subscription, not per-truck, since the
+  // dashboard needs every truck's position, not just one. Also extends the
+  // paused-movement accumulator incrementally whenever the reading itself
+  // (session_id null) marks it as having happened during a Pause.
+  useEffect(() => {
+    const channel = supabase
+      .channel("sup-dashboard-gps")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "gps_logs" }, (payload) => {
+        const row = payload.new;
+        const deliveryId = row.delivery_request_id;
+        const prevPos = positionsRef.current[deliveryId];
+        if (row.session_id == null && prevPos) {
+          const delta = distanceMeters(prevPos.lat, prevPos.lng, row.latitude, row.longitude);
+          setMovementByDeliveryId((prev) => ({ ...prev, [deliveryId]: (prev[deliveryId] || 0) + delta }));
+        }
+        setPositionsByDeliveryId((prev) => ({ ...prev, [deliveryId]: { lat: row.latitude, lng: row.longitude } }));
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // ----- Derived: one row per in-progress delivery with a real Session
+  // history (skips a delivery whose status advanced but never actually had
+  // Start Trip pressed — "no session at all" per the doc's state table). -----
+  const fleetOps = useMemo(() => {
+    return deliveries
+      .map((d) => {
+        const deliverySessions = sessions.filter((s) => s.delivery_request_id === d.id);
+        const openSession = deliverySessions.find((s) => s.status === "Active");
+        const closedSessions = deliverySessions.filter((s) => s.status !== "Active");
+        const truck = trucks.find((t) => t.plate_number === d.assigned_truck_plate) || null;
+        const device = devices.find((dev) => dev.plate_number === d.assigned_truck_plate) || null;
+        const state = resolveOpsState({ openSession, closedSessions, device, now: nowTick });
+        if (!state) return null;
+        return {
+          id: d.id,
+          driver: driverNameById[d.assigned_driver_id] || d.assigned_driver_id || "Unassigned",
+          truckPlate: d.assigned_truck_plate || "—",
+          truckLabel: truck ? `${truck.brand} ${truck.model}` : "",
+          client: clientNameById[d.customer_auth_id] || "Client",
+          milestone: d.status,
+          tripState: state.tripState,
+          deviceState: state.deviceState,
+          lastHeartbeat: device?.last_ping || null,
+          position: positionsByDeliveryId[d.id] || null,
+          movementMeters: movementByDeliveryId[d.id] || 0,
+          isAnomalous: state.tripState === "Paused" && (movementByDeliveryId[d.id] || 0) > PAUSED_MOVE_THRESHOLD_M,
+        };
+      })
+      .filter(Boolean);
+  }, [deliveries, sessions, trucks, devices, driverNameById, clientNameById, positionsByDeliveryId, movementByDeliveryId, nowTick]);
+
+  // ----- Derived: Latest Alerts feed, joined to driver/truck via the
+  // session cache already loaded above. -----
+  const alertFeed = useMemo(() => {
+    const sessionById = new Map(sessions.map((s) => [s.session_id, s]));
+    const countBySession = {};
+    for (const a of recentAlerts) countBySession[a.session_id] = (countBySession[a.session_id] || 0) + 1;
+    return recentAlerts.map((a) => {
+      const session = sessionById.get(a.session_id);
+      const truck = trucks.find((t) => t.plate_number === session?.truck_plate);
+      return {
+        id: a.id,
+        name: driverNameById[session?.driver_id] || session?.driver_id || "Unknown driver",
+        truck: truck?.plate_number || session?.truck_plate || "—",
+        alertType: ALERT_TYPE_LABELS[a.event_type] || a.event_type,
+        time: new Date(a.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        severity: ALERT_SEVERITY[a.event_type] || "Medium",
+        tripAlerts: countBySession[a.session_id] || 1,
+      };
+    });
+  }, [recentAlerts, sessions, trucks, driverNameById]);
+
+  return { fleetOps, alertFeed, isLoading, now: nowTick };
+}
+
+// ----- Active deliveries (live ops) -----
+function ActiveDeliveries({ data, isLoading, now, focusedTruckId, onFocusTruck }) {
   return (
     <Panel title="Active Deliveries" action={<ViewAllLink to="/supervisor/deliveries" />}>
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-xs">
-          <thead>
-            <tr className="text-left text-[10.5px] uppercase tracking-wide text-slate-400">
-              <th className="pb-1.5 pr-2 font-medium">Driver</th>
-              <th className="pb-1.5 pr-2 font-medium">Truck</th>
-              <th className="pb-1.5 pr-2 font-medium">Client</th>
-              <th className="pb-1.5 pr-2 font-medium">Status</th>
-              <th className="pb-1.5 font-medium">ETA</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {data.map((row) => {
-              const status = DELIVERY_STATUS_TONE[row.status];
-              return (
-                <tr key={row.id} className="hover:bg-slate-50">
-                  <td className="py-1.5 pr-2 font-medium text-slate-800">{row.driver}</td>
-                  <td className="py-1.5 pr-2 text-slate-600">{row.truck}</td>
-                  <td className="py-1.5 pr-2 text-slate-600">{row.client}</td>
-                  <td className="py-1.5 pr-2">
-                    <Badge tone={status.tone}>{status.label}</Badge>
-                  </td>
-                  <td className="py-1.5 text-slate-600">{row.eta}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      {isLoading ? (
+        <div className="flex items-center gap-2 py-6 text-xs text-slate-400">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading live fleet…
+        </div>
+      ) : data.length === 0 ? (
+        <p className="py-6 text-center text-xs text-slate-400">No deliveries in progress right now.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-xs">
+            <thead>
+              <tr className="text-left text-[10.5px] uppercase tracking-wide text-slate-400">
+                <th className="pb-1.5 pr-2 font-medium">Driver</th>
+                <th className="pb-1.5 pr-2 font-medium">Truck</th>
+                <th className="pb-1.5 pr-2 font-medium">Client</th>
+                <th className="pb-1.5 pr-2 font-medium">Status</th>
+                <th className="pb-1.5 pr-2 font-medium">Trip</th>
+                <th className="pb-1.5 pr-2 font-medium">Device</th>
+                <th className="pb-1.5 font-medium" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {data.map((row) => {
+                const milestone = MILESTONE_TONE[row.milestone] || { label: row.milestone, tone: "slate" };
+                const isFocused = row.id === focusedTruckId;
+                return (
+                  <tr key={row.id} className={isFocused ? "bg-blue-50/60" : "hover:bg-slate-50"}>
+                    <td className="py-1.5 pr-2 font-medium text-slate-800">{row.driver}</td>
+                    <td className="py-1.5 pr-2 text-slate-600">{row.truckPlate}</td>
+                    <td className="py-1.5 pr-2 text-slate-600">{row.client}</td>
+                    <td className="py-1.5 pr-2">
+                      <Badge tone={milestone.tone}>{milestone.label}</Badge>
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      <Badge tone={TRIP_STATE_TONE[row.tripState]}>{row.tripState}</Badge>
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      <Badge tone={DEVICE_STATE_TONE[row.deviceState]}>{row.deviceState}</Badge>
+                      <p className="mt-0.5 text-[10px] text-slate-400">Heartbeat: {formatAgo(row.lastHeartbeat, now)}</p>
+                    </td>
+                    <td className="py-1.5">
+                      {row.position && (
+                        <button
+                          type="button"
+                          onClick={() => onFocusTruck(row.id)}
+                          title={`Center map on ${row.truckPlate}`}
+                          className={`rounded-md border p-1 transition-colors ${
+                            isFocused
+                              ? "border-blue-300 bg-blue-100 text-blue-700"
+                              : "border-slate-200 text-slate-400 hover:border-blue-200 hover:text-blue-600"
+                          }`}
+                        >
+                          <LocateFixed className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Panel>
   );
 }
 
-// ----- Live fleet: trucks + crew status, one compact panel -----
+// ----- Live fleet: trucks + crew status, one compact panel (mock — left
+// untouched per 08_REALTIME_DASHBOARD.md's reuse decision, out of scope). -----
 function StatusBar({ segments, total }) {
   return (
     <div className="flex h-2 w-full overflow-hidden rounded-full bg-slate-100">
@@ -214,59 +635,196 @@ function LiveFleet({ trucks, crew }) {
   );
 }
 
+// ----- Live GPS map: one marker per truck currently on an in-progress
+// delivery. Net-new per 08_REALTIME_DASHBOARD.md's Map Display section —
+// simpler than Driver nav's LiveNavigationMap: no tilt/rotation/turn-by-turn/
+// route rendering, just a live position per truck. -----
+function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
+  const { isLoaded } = useJsApiLoader({
+    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
+  });
+  const withPosition = data.filter((row) => row.position);
+  // Captured once, never reactive -- a `center` prop that changes on every
+  // GPS tick would call map.setCenter() constantly and fight the
+  // fitBounds/panTo effect below (same lesson as LiveNavigationMap's
+  // initialCenter in DriverDeliveries.jsx, minus the tilt/heading angle).
+  const [initialCenter] = useState(() => withPosition[0]?.position || FLEET_MAP_DEFAULT_CENTER);
+  const mapRef = useRef(null);
+  const [isMapReady, setIsMapReady] = useState(false);
+  // Only the set of truck ids, not their positions -- refitting the camera
+  // on every single GPS tick (as often as once a second per truck) would
+  // constantly yank the view out from under a supervisor manually panning
+  // it. Only reframes when a truck newly appears/disappears from the view.
+  const truckIdsKey = withPosition.map((row) => row.id).sort().join(",");
+
+  useEffect(() => {
+    if (!isMapReady || !mapRef.current || withPosition.length === 0) return;
+    if (withPosition.length === 1) {
+      mapRef.current.panTo(withPosition[0].position);
+      mapRef.current.setZoom(17);
+    } else {
+      const bounds = new window.google.maps.LatLngBounds();
+      for (const row of withPosition) bounds.extend(row.position);
+      mapRef.current.fitBounds(bounds, 60);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMapReady, truckIdsKey]);
+
+  // "Center on this truck" (the locate icon in ActiveDeliveries' Device
+  // column) -- a deliberate one-shot user action, so it's its own effect,
+  // not folded into the fitBounds effect above. Keyed on focusToken (a
+  // counter bumped on every click), not just focusedTruckId -- clicking the
+  // *same* truck a second time after manually panning away sets the same id
+  // both times, which React treats as no change and the effect would never
+  // re-fire; the token guarantees a dependency change on every click
+  // regardless of whether the id repeats.
+  useEffect(() => {
+    if (!isMapReady || !mapRef.current || !focusedTruckId) return;
+    const row = withPosition.find((r) => r.id === focusedTruckId);
+    if (!row) return;
+    mapRef.current.panTo(row.position);
+    mapRef.current.setZoom(17);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMapReady, focusToken]);
+
+  return (
+    <Panel title="Live GPS" action={<MapPin className="h-3.5 w-3.5 text-slate-400" />}>
+      {/* Explicit height here, not on Panel's own outer div -- Panel's base
+          classes already set h-full there, and this component isn't inside
+          a grid row with a sibling to stretch against, so a conflicting
+          height override on Panel itself resolves against an auto-height
+          ancestor and silently collapses to ~0 (found live-testing this
+          panel: it rendered completely empty, no spinner or empty-state text
+          visible, despite the data/logic all being correct). */}
+      {isLoading ? (
+        <div className="flex h-80 items-center justify-center text-xs text-slate-400">
+          <Loader2 className="h-4 w-4 animate-spin" />
+        </div>
+      ) : !isLoaded ? (
+        <div className="flex h-80 items-center justify-center text-slate-400">
+          <Loader2 className="h-5 w-5 animate-spin" />
+        </div>
+      ) : withPosition.length === 0 ? (
+        <div className="flex h-80 items-center justify-center text-center text-xs text-slate-400">
+          No live GPS positions yet.
+        </div>
+      ) : (
+        <div className="h-80 w-full overflow-hidden rounded-md">
+          <GoogleMap
+            mapContainerStyle={GOOGLE_MAP_CONTAINER_STYLE}
+            center={initialCenter}
+            zoom={17}
+            onLoad={(map) => {
+              mapRef.current = map;
+              setIsMapReady(true);
+            }}
+            options={{ disableDefaultUI: true, gestureHandling: "greedy", mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID }}
+          >
+            {withPosition.map((row) => (
+              <GoogleMapMarker
+                key={row.id}
+                position={row.position}
+                title={`${row.truckPlate} — ${row.driver}`}
+                icon={{
+                  path: window.google.maps.SymbolPath.CIRCLE,
+                  scale: 7,
+                  fillColor: row.isAnomalous ? "#dc2626" : row.tripState === "Paused" ? "#d97706" : "#2563eb",
+                  fillOpacity: 1,
+                  strokeColor: "#fff",
+                  strokeWeight: 2,
+                }}
+              />
+            ))}
+          </GoogleMap>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+// ----- Paused-but-moving anomaly banner: its own visual state, distinct from
+// the Latest Alerts feed (drowsiness) per 08_REALTIME_DASHBOARD.md's
+// "Decided 2026-08-12" note — a security/theft concern, not driver-attention. -----
+function PausedMovementBanner({ data }) {
+  const anomalies = data.filter((row) => row.isAnomalous);
+  if (anomalies.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
+      {anomalies.map((row) => (
+        <div key={row.id} className="flex items-start gap-2 text-xs text-red-800">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+          <span>
+            <span className="font-semibold">{row.truckPlate}</span> ({row.driver}) moved{" "}
+            <span className="font-semibold">{Math.round(row.movementMeters)}m</span> while Paused — possible
+            unauthorized movement.
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ----- Driver safety: drowsiness priority list (replaces the old chart) -----
 const SEVERITY_RANK = { High: 3, Medium: 2, Low: 1 };
 const SEVERITY_TONE = { High: "red", Medium: "amber", Low: "emerald" };
 
-function DriverSafetyList({ data }) {
+function DriverSafetyList({ data, isLoading }) {
   const sorted = [...data].sort(
     (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.tripAlerts - a.tripAlerts
   );
   return (
     <Panel title="Driver Safety — Drowsiness Alerts" action={<ViewAllLink to="/supervisor/deliveries" />}>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-left text-[10.5px] uppercase tracking-wide text-slate-400">
-              <th className="pb-1.5 pr-3 font-medium">Driver</th>
-              <th className="pb-1.5 pr-3 font-medium">Alert</th>
-              <th className="pb-1.5 pr-3 font-medium">Time</th>
-              <th className="pb-1.5 pr-3 font-medium">Severity</th>
-              <th className="pb-1.5 pr-3 font-medium">This Trip</th>
-              <th className="pb-1.5 font-medium" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {sorted.map((d) => (
-              <tr key={d.id} className="hover:bg-slate-50">
-                <td className="py-2 pr-3">
-                  <div className="flex items-center gap-2.5">
-                    <Avatar name={d.name} />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-800">{d.name}</p>
-                      <p className="truncate text-[11px] text-slate-500">{d.truck}</p>
-                    </div>
-                  </div>
-                </td>
-                <td className="py-2 pr-3 text-slate-700">{d.alertType}</td>
-                <td className="py-2 pr-3 text-slate-400">{d.time}</td>
-                <td className="py-2 pr-3">
-                  <Badge tone={SEVERITY_TONE[d.severity]}>{d.severity}</Badge>
-                </td>
-                <td className="whitespace-nowrap py-2 pr-3 text-slate-500">{d.tripAlerts} alerts</td>
-                <td className="py-2">
-                  <Link
-                    to="/supervisor/deliveries"
-                    className="whitespace-nowrap rounded-md border border-blue-100 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50"
-                  >
-                    View Trip
-                  </Link>
-                </td>
+      {isLoading ? (
+        <div className="flex items-center gap-2 py-6 text-xs text-slate-400">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading alerts…
+        </div>
+      ) : sorted.length === 0 ? (
+        <p className="py-6 text-center text-xs text-slate-400">No drowsiness alerts recorded yet.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[10.5px] uppercase tracking-wide text-slate-400">
+                <th className="pb-1.5 pr-3 font-medium">Driver</th>
+                <th className="pb-1.5 pr-3 font-medium">Alert</th>
+                <th className="pb-1.5 pr-3 font-medium">Time</th>
+                <th className="pb-1.5 pr-3 font-medium">Severity</th>
+                <th className="pb-1.5 pr-3 font-medium">This Trip</th>
+                <th className="pb-1.5 font-medium" />
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {sorted.map((d) => (
+                <tr key={d.id} className="hover:bg-slate-50">
+                  <td className="py-2 pr-3">
+                    <div className="flex items-center gap-2.5">
+                      <Avatar name={d.name} />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-800">{d.name}</p>
+                        <p className="truncate text-[11px] text-slate-500">{d.truck}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-2 pr-3 text-slate-700">{d.alertType}</td>
+                  <td className="py-2 pr-3 text-slate-400">{d.time}</td>
+                  <td className="py-2 pr-3">
+                    <Badge tone={SEVERITY_TONE[d.severity]}>{d.severity}</Badge>
+                  </td>
+                  <td className="whitespace-nowrap py-2 pr-3 text-slate-500">{d.tripAlerts} alerts</td>
+                  <td className="py-2">
+                    <Link
+                      to="/supervisor/deliveries"
+                      className="whitespace-nowrap rounded-md border border-blue-100 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50"
+                    >
+                      View Trip
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Panel>
   );
 }
@@ -319,9 +877,18 @@ function WeeklySafetySummary({ data, dateRange, onDateRangeChange }) {
 
 function SupDashboard() {
   const [dateRange, setDateRange] = useState("7 Days");
+  const { fleetOps, alertFeed, isLoading, now } = useFleetOps();
+  const [focusedTruckId, setFocusedTruckId] = useState(null);
+  const [focusToken, setFocusToken] = useState(0);
+  const handleFocusTruck = (id) => {
+    setFocusedTruckId(id);
+    setFocusToken((t) => t + 1);
+  };
 
   // ----- KPI strip: doubles as the "needs attention" summary — each tile
-  // routes to the page that resolves it, so there's no separate task list. -----
+  // routes to the page that resolves it, so there's no separate task list.
+  // Left as mock per 08_REALTIME_DASHBOARD.md's reuse decision (out of scope
+  // for this phase). -----
   const kpis = [
     { label: "Active Deliveries", value: 18, to: "/supervisor/deliveries" },
     { label: "Pending Assignments", value: 5, to: "/supervisor/deliveries", tone: "amber" },
@@ -329,23 +896,6 @@ function SupDashboard() {
     { label: "Alerts Today", value: 14, to: "/supervisor/deliveries", tone: "amber" },
     { label: "High-Risk Drivers", value: 3, to: "/supervisor/delivery-crew", tone: "red" },
     { label: "Fleet Available", value: "22/48", to: "/supervisor/trucks" },
-  ];
-
-  // ----- Live/current-state mock data (not tied to the date-range filter) -----
-  const liveDeliveries = [
-    { id: 1, driver: "J. Doe", truck: "TR-12", client: "SM Supply Co.", status: "OUT_FOR_DELIVERY", eta: "12 min" },
-    { id: 2, driver: "M. Lee", truck: "TR-27", client: "Ortigas Retail", status: "FOR_PICKUP", eta: "28 min" },
-    { id: 3, driver: "A. Smith", truck: "TR-33", client: "Pasig Logistics", status: "OUT_FOR_DELIVERY", eta: "9 min" },
-    { id: 4, driver: "S. Park", truck: "TR-45", client: "Shaw Traders", status: "DELIVERED", eta: "Arrived" },
-    { id: 5, driver: "M. Tan", truck: "TR-19", client: "C5 Distribution", status: "FOR_PICKUP", eta: "41 min" },
-  ];
-
-  const driverSafety = [
-    { id: 1, name: "J. Doe", truck: "TR-12", alertType: "Prolonged Eye Closure", time: "10:12", severity: "High", tripAlerts: 4 },
-    { id: 2, name: "A. Smith", truck: "TR-33", alertType: "Eye Closure + Yawn", time: "09:48", severity: "Medium", tripAlerts: 2 },
-    { id: 3, name: "M. Tan", truck: "TR-19", alertType: "Repeated Eye Closure", time: "09:10", severity: "Medium", tripAlerts: 2 },
-    { id: 4, name: "S. Park", truck: "TR-45", alertType: "Eye Closure + Yawn", time: "08:22", severity: "Low", tripAlerts: 1 },
-    { id: 5, name: "M. Lee", truck: "TR-27", alertType: "No alerts this trip", time: "—", severity: "Low", tripAlerts: 0 },
   ];
 
   const fleetStatus = { available: 22, onDelivery: 18, maintenance: 5, offline: 3 };
@@ -359,7 +909,7 @@ function SupDashboard() {
     { id: 5, text: "Trip cancelled — Pasig Logistics", time: "2h ago", tone: "red" },
   ];
 
-  // ----- Historical rollup, keyed by date range -----
+  // ----- Historical rollup, keyed by date range (mock — out of scope). -----
   const topRiskDriversByRange = {
     Today: [{ name: "J. Doe", alerts: 10, risk: "High Risk" }],
     "7 Days": [
@@ -421,15 +971,23 @@ function SupDashboard() {
         >
           Live Operations
         </SectionHeader>
+        <PausedMovementBanner data={fleetOps} />
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
           <div className="lg:col-span-8">
-            <ActiveDeliveries data={liveDeliveries} />
+            <ActiveDeliveries
+              data={fleetOps}
+              isLoading={isLoading}
+              now={now}
+              focusedTruckId={focusedTruckId}
+              onFocusTruck={handleFocusTruck}
+            />
           </div>
           <div className="lg:col-span-4">
             <LiveFleet trucks={fleetStatus} crew={crewStatus} />
           </div>
         </div>
-        <DriverSafetyList data={driverSafety} />
+        <LiveFleetMap data={fleetOps} isLoading={isLoading} focusedTruckId={focusedTruckId} focusToken={focusToken} />
+        <DriverSafetyList data={alertFeed} isLoading={isLoading} />
 
         {/* Bottom: recent activity + performance summary (secondary) */}
         <SectionHeader muted>Recent Activity &amp; Performance</SectionHeader>

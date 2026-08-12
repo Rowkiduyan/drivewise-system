@@ -45,6 +45,17 @@ const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
   "image/webp": "webp",
 };
 
+// Proof-of-pickup/dropoff/stop photos, uploaded by the Helper as each item in
+// the Pickup -> Dropoff -> Stops chain is completed (see
+// 02B_MULTI_STOP_DELIVERIES.md). Same public-bucket pattern as
+// PROFILE_PICTURE_BUCKET, keyed by delivery id + item instead of user id.
+// Bucket must exist and be public (see DATABASE.md "Storage buckets").
+const DELIVERY_PROOF_BUCKET = "delivery-proof-photos";
+// Not cropped/resized client-side to a fixed small square the way profile
+// pictures are (a package or doorway isn't square), so this cap is larger
+// than MAX_PROFILE_PICTURE_BYTES — still a backstop, not a normal ceiling.
+const MAX_PROOF_PHOTO_BYTES = 2 * 1024 * 1024;
+
 function decodeBase64(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -52,6 +63,39 @@ function decodeBase64(base64: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+// Shared by the three Helper-owned proof-photo actions below (pickup,
+// dropoff, each stop) — validates, uploads to DELIVERY_PROOF_BUCKET, returns
+// a cache-busted public URL. `pathWithoutExtension` gets the content type's
+// extension appended (e.g. "DR-0011/pickup" -> "DR-0011/pickup.jpg").
+async function uploadProofPhoto(
+  adminClient: ReturnType<typeof createClient>,
+  pathWithoutExtension: string,
+  fileBase64: string,
+  contentType: string,
+): Promise<{ url: string } | { error: string }> {
+  const extension = EXTENSION_BY_CONTENT_TYPE[contentType];
+  if (!extension) {
+    return { error: "contentType must be image/jpeg, image/png, or image/webp" };
+  }
+
+  const bytes = decodeBase64(fileBase64);
+  if (bytes.byteLength > MAX_PROOF_PHOTO_BYTES) {
+    return { error: "Image is too large (max 2MB)" };
+  }
+
+  const path = `${pathWithoutExtension}.${extension}`;
+  const { error: uploadError } = await adminClient.storage
+    .from(DELIVERY_PROOF_BUCKET)
+    .upload(path, bytes, { contentType, upsert: true });
+
+  if (uploadError) {
+    return { error: uploadError.message };
+  }
+
+  const { data: publicUrlData } = adminClient.storage.from(DELIVERY_PROOF_BUCKET).getPublicUrl(path);
+  return { url: `${publicUrlData.publicUrl}?v=${Date.now()}` };
 }
 
 // Every role has its own profile table (see DATABASE.md "Per-role profile
@@ -653,12 +697,11 @@ Deno.serve(async (req) => {
       return json({ error: "Unable to find your driver profile" }, 400);
     }
 
+    // Confirm Pickup (->OUT_FOR_DROPOFF) and Complete Delivery (->DELIVERED)
+    // moved to the Helper block below (photo-required chain completion, see
+    // 02B_MULTI_STOP_DELIVERIES.md) — Driver only ever starts the trip now.
     const DRIVER_STATUS_TRANSITIONS: Record<string, string[]> = {
       ASSIGNED: ["OUT_FOR_PICKUP"],
-      OUT_FOR_PICKUP: ["OUT_FOR_DROPOFF"],
-      ARRIVED_PICKUP: ["OUT_FOR_DROPOFF"],
-      OUT_FOR_DROPOFF: ["DELIVERED"],
-      ARRIVED_DROPOFF: ["DELIVERED"],
     };
 
     const formatCrewName = (rec: Record<string, unknown>) =>
@@ -765,6 +808,10 @@ Deno.serve(async (req) => {
           dropoffTime: r.dropoff_time ? String(r.dropoff_time).slice(0, 5) : null,
           pickupAddress: r.pickup_location,
           deliveryAddress: r.dropoff_location,
+          // Reference-only intermediate stops between pickup/dropoff,
+          // customer-entered at booking time — read-only for the driver, used
+          // to build the dropoff leg's route waypoints (02B_MULTI_STOP_DELIVERIES.md).
+          stops: Array.isArray(r.stops) ? r.stops : [],
           cargoWeight: r.cargo_weight,
           status: r.status,
           hasOpenSession: openSessionDeliveryIds.has(r.id as string),
@@ -830,11 +877,13 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Helper deliveries: read-only visibility into the Trip/Session state the
-  // Driver drives. Helpers never press Start/Pause/Resume/End Trip (see
-  // 03_START_TRIP_AND_SESSION.md's "Helper visibility" note) — so unlike the
-  // Driver block above, there is no update-helper-delivery action, only this
-  // read. hasOpenSession is computed the same way get-driver-deliveries does.
+  // Helper deliveries. Read-only visibility into Trip/Session state (Driver
+  // still starts/pauses/resumes/ends the actual driving Session — see
+  // driver-trip's end-trip auth for the one Helper-callable exception),
+  // plus (2026-08-12, reopening the prior read-only-only design) write
+  // actions for photo-required chain completion — see the three actions
+  // below and 03_START_TRIP_AND_SESSION.md's "Helper visibility" note.
+  // hasOpenSession is computed the same way get-driver-deliveries does.
   if (callerRow.role === "Helper") {
     const { data: helperRecord, error: helperRecordError } = await adminClient
       .from("helper_records")
@@ -921,14 +970,19 @@ Deno.serve(async (req) => {
       // Same open-Session computation get-driver-deliveries uses above — Helper
       // visibility into Active/Paused mirrors the Driver's, read-only.
       const openSessionDeliveryIds = new Set<string>();
+      // Also needed for the Helper's read-only Realtime alerts feed (see
+      // 06_DROWSINESS_ALERT_PIPELINE.md's Helper visibility note): the
+      // subscription filters by session_id, same as the Driver UI's.
+      const sessionIdByDelivery = new Map<string, string>();
       if (deliveryIds.length > 0) {
         const { data: openSessions } = await adminClient
           .from("sessions")
-          .select("delivery_request_id")
+          .select("session_id, delivery_request_id")
           .in("delivery_request_id", deliveryIds)
           .eq("status", "Active");
         for (const s of openSessions || []) {
           openSessionDeliveryIds.add(s.delivery_request_id as string);
+          sessionIdByDelivery.set(s.delivery_request_id as string, s.session_id as string);
         }
       }
 
@@ -949,8 +1003,16 @@ Deno.serve(async (req) => {
           pickupTime: r.pickup_time ? String(r.pickup_time).slice(0, 5) : null,
           pickupAddress: r.pickup_location,
           deliveryAddress: r.dropoff_location,
+          // Reference-only intermediate stops between dropoff and the end of
+          // the chain, plus proof-photo state for each item in the Pickup ->
+          // Dropoff -> Stops sequence the Helper completes (02B_MULTI_STOP_DELIVERIES.md).
+          stops: Array.isArray(r.stops) ? r.stops : [],
+          pickupPhotoUrl: r.pickup_photo_url || null,
+          dropoffPhotoUrl: r.dropoff_photo_url || null,
+          dropoffCompletedAt: r.dropoff_completed_at || null,
           status: r.status,
           hasOpenSession: openSessionDeliveryIds.has(r.id as string),
+          sessionId: sessionIdByDelivery.get(r.id as string) || null,
           assignedAt: r.assigned_at,
           driver: driver
             ? { id: r.assigned_driver_id, name: formatCrewName(driver) || "Driver", phone: driver.contact_number ?? "" }
@@ -968,6 +1030,208 @@ Deno.serve(async (req) => {
       });
 
       return json({ ok: true, deliveries });
+    }
+
+    // The Helper now owns photo-required completion of every item past Start
+    // Pickup — Confirm Pickup, the customer's dropoff, and each stop — as one
+    // continuous chain (Pickup -> Dropoff -> Stop 1 -> ... -> Stop N).
+    // Completing the last item in that chain (dynamically determined below,
+    // never stored) is what actually finalizes the delivery: sets
+    // delivery_requests.status to DELIVERED. The Driver keeps only Start
+    // Pickup and Pause/Resume Trip — see 03_START_TRIP_AND_SESSION.md's
+    // Helper visibility note and 02B_MULTI_STOP_DELIVERIES.md.
+
+    // Confirm Pickup (item 1 -> item 2 of the chain). Never final by itself.
+    if (action === "update-driver-delivery") {
+      const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
+      const nextStatus = typeof body.status === "string" ? body.status : "";
+      const fileBase64 = typeof body.fileBase64 === "string" ? body.fileBase64 : "";
+      const contentType = typeof body.contentType === "string" ? body.contentType : "";
+
+      if (!deliveryId || !nextStatus) {
+        return json({ error: "deliveryId and status are required" }, 400);
+      }
+
+      if (!fileBase64) {
+        return json({ error: "A proof-of-pickup photo is required" }, 400);
+      }
+
+      const HELPER_STATUS_TRANSITIONS: Record<string, string[]> = {
+        OUT_FOR_PICKUP: ["OUT_FOR_DROPOFF"],
+        ARRIVED_PICKUP: ["OUT_FOR_DROPOFF"],
+      };
+
+      const { data: row, error: rowError } = await adminClient
+        .from("delivery_requests")
+        .select("id, status, assigned_helper_ids")
+        .eq("id", deliveryId)
+        .maybeSingle();
+
+      if (rowError || !row) {
+        return json({ error: "Delivery not found" }, 400);
+      }
+
+      if (!((row.assigned_helper_ids as string[]) || []).includes(helperRecord.id as string)) {
+        return json({ error: "Forbidden" }, 403);
+      }
+
+      const allowed = HELPER_STATUS_TRANSITIONS[row.status as string] || [];
+      if (!allowed.includes(nextStatus)) {
+        return json({ error: `Cannot move a delivery from ${row.status} to ${nextStatus}` }, 400);
+      }
+
+      const upload = await uploadProofPhoto(adminClient, `${deliveryId}/pickup`, fileBase64, contentType);
+      if ("error" in upload) {
+        return json({ error: upload.error }, 400);
+      }
+
+      const { error: updateError } = await adminClient
+        .from("delivery_requests")
+        .update({ status: nextStatus, pickup_photo_url: upload.url, updated_at: new Date().toISOString() })
+        .eq("id", deliveryId);
+
+      if (updateError) {
+        return json({ error: updateError.message }, 400);
+      }
+
+      return json({ ok: true, status: nextStatus, pickupPhotoUrl: upload.url });
+    }
+
+    // The customer's dropoff (item 2 of the chain) — final only when there
+    // are no stops after it.
+    if (action === "complete-dropoff") {
+      const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
+      const fileBase64 = typeof body.fileBase64 === "string" ? body.fileBase64 : "";
+      const contentType = typeof body.contentType === "string" ? body.contentType : "";
+
+      if (!deliveryId) {
+        return json({ error: "deliveryId is required" }, 400);
+      }
+
+      if (!fileBase64) {
+        return json({ error: "A proof-of-delivery photo is required" }, 400);
+      }
+
+      const { data: row, error: rowError } = await adminClient
+        .from("delivery_requests")
+        .select("id, status, assigned_helper_ids, stops")
+        .eq("id", deliveryId)
+        .maybeSingle();
+
+      if (rowError || !row) {
+        return json({ error: "Delivery not found" }, 400);
+      }
+
+      if (!((row.assigned_helper_ids as string[]) || []).includes(helperRecord.id as string)) {
+        return json({ error: "Forbidden" }, 403);
+      }
+
+      if (row.status !== "OUT_FOR_DROPOFF" && row.status !== "ARRIVED_DROPOFF") {
+        return json({ error: `Cannot complete the dropoff from status ${row.status}` }, 400);
+      }
+
+      const upload = await uploadProofPhoto(adminClient, `${deliveryId}/dropoff`, fileBase64, contentType);
+      if ("error" in upload) {
+        return json({ error: upload.error }, 400);
+      }
+
+      const stops = Array.isArray(row.stops) ? row.stops : [];
+      // Dropoff is the final item in the chain only when nothing follows it
+      // — see 02B_MULTI_STOP_DELIVERIES.md's Pickup -> Dropoff -> Stops order.
+      const isFinal = stops.length === 0;
+
+      const updates: Record<string, unknown> = {
+        dropoff_photo_url: upload.url,
+        dropoff_completed_at: new Date().toISOString(),
+      };
+      if (isFinal) {
+        updates.status = "DELIVERED";
+        updates.updated_at = new Date().toISOString();
+      }
+
+      const { error: updateError } = await adminClient
+        .from("delivery_requests")
+        .update(updates)
+        .eq("id", deliveryId);
+
+      if (updateError) {
+        return json({ error: updateError.message }, 400);
+      }
+
+      return json({ ok: true, isFinal, dropoffPhotoUrl: upload.url });
+    }
+
+    // A customer-added stop (item 3+ of the chain) — final only when it's
+    // the last entry in the stops array.
+    if (action === "complete-stop") {
+      const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
+      const stopIndex = typeof body.stopIndex === "number" ? body.stopIndex : -1;
+      const fileBase64 = typeof body.fileBase64 === "string" ? body.fileBase64 : "";
+      const contentType = typeof body.contentType === "string" ? body.contentType : "";
+
+      if (!deliveryId || stopIndex < 0) {
+        return json({ error: "deliveryId and stopIndex are required" }, 400);
+      }
+
+      if (!fileBase64) {
+        return json({ error: "A proof-of-delivery photo is required" }, 400);
+      }
+
+      const { data: row, error: rowError } = await adminClient
+        .from("delivery_requests")
+        .select("id, status, assigned_helper_ids, stops")
+        .eq("id", deliveryId)
+        .maybeSingle();
+
+      if (rowError || !row) {
+        return json({ error: "Delivery not found" }, 400);
+      }
+
+      if (!((row.assigned_helper_ids as string[]) || []).includes(helperRecord.id as string)) {
+        return json({ error: "Forbidden" }, 403);
+      }
+
+      if (row.status !== "OUT_FOR_DROPOFF" && row.status !== "ARRIVED_DROPOFF") {
+        return json({ error: `Cannot complete a stop from status ${row.status}` }, 400);
+      }
+
+      const stops = Array.isArray(row.stops) ? [...row.stops] : [];
+      if (stopIndex >= stops.length) {
+        return json({ error: "stopIndex out of range" }, 400);
+      }
+
+      const upload = await uploadProofPhoto(adminClient, `${deliveryId}/stop-${stopIndex}`, fileBase64, contentType);
+      if ("error" in upload) {
+        return json({ error: upload.error }, 400);
+      }
+
+      stops[stopIndex] = {
+        ...stops[stopIndex],
+        completed: true,
+        completedAt: new Date().toISOString(),
+        photoUrl: upload.url,
+      };
+
+      // The last entry in stops is the final item in the whole chain — see
+      // 02B_MULTI_STOP_DELIVERIES.md.
+      const isFinal = stopIndex === stops.length - 1;
+
+      const updates: Record<string, unknown> = { stops };
+      if (isFinal) {
+        updates.status = "DELIVERED";
+        updates.updated_at = new Date().toISOString();
+      }
+
+      const { error: updateError } = await adminClient
+        .from("delivery_requests")
+        .update(updates)
+        .eq("id", deliveryId);
+
+      if (updateError) {
+        return json({ error: updateError.message }, 400);
+      }
+
+      return json({ ok: true, isFinal, stops });
     }
   }
 

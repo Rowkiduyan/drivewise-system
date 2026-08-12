@@ -30,6 +30,10 @@ L.Icon.Default.mergeOptions({
 
 const background = null
 
+// Intermediate stops between Pick Up and Drop Off — capped to keep the form
+// and the driver navigation's waypoints request simple (02B_MULTI_STOP_DELIVERIES.md).
+const MAX_STOPS = 5
+
 // Photon (Komoot) geocoding — free, no API key, CORS-enabled, and not rate
 // limited like the public Nominatim endpoint. Search is scoped to the
 // Philippines bounding box to match the app's service area.
@@ -412,6 +416,7 @@ function CustomerRequestDelivery() {
     dropoffTime: '',
     pickupLocation: '',
     dropoffLocation: '',
+    stops: [],
     truckType: '',
     itemType: '',
     otherItemType: '',
@@ -468,6 +473,26 @@ function CustomerRequestDelivery() {
     setTruckSelectionError('')
   }
 
+  // Stops are intermediate locations visited between Pick Up and Drop Off —
+  // reference-only (no per-stop status), capped at MAX_STOPS to keep the
+  // form and the route/waypoints request simple (02B_MULTI_STOP_DELIVERIES.md).
+  const addStop = () => {
+    if (formData.stops.length >= MAX_STOPS) return
+    setFormData(prev => ({ ...prev, stops: [...prev.stops, ''] }))
+  }
+
+  const removeStop = (index) => {
+    setFormData(prev => ({ ...prev, stops: prev.stops.filter((_, i) => i !== index) }))
+  }
+
+  const handleStopChange = (index, e) => {
+    const { value } = e.target
+    setFormData(prev => ({
+      ...prev,
+      stops: prev.stops.map((stop, i) => (i === index ? value : stop))
+    }))
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setSubmitError('')
@@ -509,6 +534,9 @@ function CustomerRequestDelivery() {
       dropoff_time: formData.dropoffTime,
       pickup_location: formData.pickupLocation,
       dropoff_location: formData.dropoffLocation,
+      stops: formData.stops
+        .filter((location) => location.trim())
+        .map((location) => ({ location })),
       truck_type: formData.truckType,
       item_type: formData.itemType,
       other_item_type: formData.itemType === 'other' ? formData.otherItemType : null,
@@ -655,6 +683,41 @@ function CustomerRequestDelivery() {
                   required
                 />
               </div>
+
+              {formData.stops.length > 0 && (
+                <div className="space-y-4">
+                  {formData.stops.map((stop, index) => (
+                    <div key={index} className="flex items-end gap-2">
+                      <div className="flex-1">
+                        <LocationInput
+                          id={`stop-${index}`}
+                          label={`Stop ${index + 1}`}
+                          value={stop}
+                          onChange={(e) => handleStopChange(index, e)}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeStop(index)}
+                        className="mb-0.5 flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+                        title="Remove stop"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {formData.stops.length < MAX_STOPS && (
+                <button
+                  type="button"
+                  onClick={addStop}
+                  className="text-sm font-medium text-emerald-700 hover:text-emerald-800"
+                >
+                  + Add a stop between Pick Up and Drop Off
+                </button>
+              )}
             </div>
 
             {/* Cargo Details Section */}

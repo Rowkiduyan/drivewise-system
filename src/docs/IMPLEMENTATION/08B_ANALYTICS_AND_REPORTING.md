@@ -8,7 +8,11 @@ This is distinct from `08_REALTIME_DASHBOARD.md`, which covers live status for a
 
 ## Required Schema
 
-`sessions` does not yet have `driver_id` (already flagged in `02_BOOKING_AND_TRIP_CREATION.md`). This phase cannot filter "this driver's sessions" or group alerts by driver without it — confirm/add it before implementing, per `00_IMPLEMENTATION_RULES.md`.
+~~`sessions` does not yet have `driver_id`.~~ Stale — corrected 2026-08-12 while prepping Phase 9: `sessions.driver_id` was added 2026-08-08 (see `DATABASE.md`'s `sessions` entry) and is already relied on elsewhere (`SupDashboard.jsx`'s Phase 8 work reads it directly). No schema blocker remains for this phase.
+
+## Overlap with Phase 8 (found 2026-08-12, not resolved here)
+
+`08_REALTIME_DASHBOARD.md` (built 2026-08-12) already wired `SupDashboard.jsx`'s `ActiveDeliveries` ("Live Deliveries list" below) and `DriverSafetyList` ("Alerts Today / Driver Safety list" below) to real, live, current-state data — the same two bullets this doc lists as its own scope. Whoever picks this phase up should treat those two as **already done from the live-status angle**; this phase's remaining genuinely-unique scope is the KPI aggregate tiles, the historical/date-range High-Risk Drivers ranking, the Recent Activity feed (still blocked, see below), and the entirely separate `SupAnalysisIndiv.jsx` page. Not resolved which phase "owns" the overlapping bullets going forward — flagged for a decision, not silently merged.
 
 ## SupAnalysisIndiv (per-driver)
 
