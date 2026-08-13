@@ -3,7 +3,14 @@
 // destination) that DriverDeliveries.jsx's LiveNavigationMap computes for a
 // driver's active delivery, by patching window.google.maps.DirectionsService
 // before the app loads. Prints one JSON array of legs (each leg an array of
-// {lat, lng} step end-points) to stdout — feed it to gps-route-simulate.py.
+// {lat, lng} points) to stdout — feed it to gps-route-simulate.py.
+//
+// Captures every point along each step's actual road-following path
+// (step.path), not just each step's end_location -- using only end-points
+// (one per turn/maneuver) made replayed GPS ticks visibly "jump" between far-
+// apart points instead of gliding along the drawn route, especially across
+// long straight segments between turns. step.path already traces the real
+// road geometry, so replaying it at a short interval looks like driving.
 //
 // Reassigning DirectionsService.prototype.route directly is silently ignored
 // by Google's SDK; replacing the whole class via a poll-and-swap works.
@@ -38,7 +45,7 @@ await page.addInitScript(() => {
           return super.route(req, (result, status) => {
             if (status === 'OK' && result) {
               const legs = JSON.parse(JSON.stringify(result.routes[0].legs.map((leg) =>
-                leg.steps.map((s) => ({ lat: s.end_location.lat(), lng: s.end_location.lng() }))
+                leg.steps.flatMap((s) => s.path.map((p) => ({ lat: p.lat(), lng: p.lng() })))
               )))
               if (legs.length > 1) window.__capturedRoute = legs
             }

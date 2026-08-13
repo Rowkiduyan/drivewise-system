@@ -56,6 +56,75 @@ const DELIVERY_PROOF_BUCKET = "delivery-proof-photos";
 // than MAX_PROFILE_PICTURE_BYTES — still a backstop, not a normal ceiling.
 const MAX_PROOF_PHOTO_BYTES = 2 * 1024 * 1024;
 
+// Proximity gate on Confirm Pickup/Complete Dropoff/Complete Stop: the Helper
+// must actually be at the location to complete it. There's no Helper-owned
+// GPS device (only the truck's Raspberry Pi reports position, see
+// 01_SYSTEM_ARCHITECTURE.md's Raspberry Pi Responsibilities), so "current
+// location" is read from the delivery's own gps_logs -- the truck's most
+// recent reading, since Driver and Helper ride together. Decided
+// 2026-08-13, see 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md.
+const PROOF_LOCATION_RADIUS_METERS = 200;
+
+// Mirrors DriverDeliveries.jsx's client-side parseCoords -- some pickup/
+// dropoff/stop locations are stored as a "lat, lng" pair rather than a
+// street address; only those can be geofence-checked.
+function parseCoords(value: string | null | undefined): { lat: number; lng: number } | null {
+  if (!value) return null;
+  const m = String(value).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const lat = parseFloat(m[1]);
+  const lng = parseFloat(m[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
+}
+
+function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const h = sinLat * sinLat + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinLng * sinLng;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// Checks the Helper is within PROOF_LOCATION_RADIUS_METERS of `targetLocation`
+// before letting a proof-photo action through. Fails OPEN (returns null =
+// "no objection") in two cases, both deliberate: the target address isn't in
+// parseable "lat, lng" form (most booked addresses are plain street text --
+// same limitation the route/marker rendering already has, see
+// 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md), or the delivery has no GPS
+// reading yet (e.g. the Raspberry Pi was never powered on -- 09_EDGE_CASES.md
+// already establishes that Trip functionality must not block on Pi absence).
+// Returns an error string when it fails CLOSED (target parses, GPS exists,
+// but they're too far apart).
+async function checkProofLocation(
+  adminClient: ReturnType<typeof createClient>,
+  deliveryId: string,
+  targetLocation: string | null | undefined,
+): Promise<string | null> {
+  const target = parseCoords(targetLocation);
+  if (!target) return null;
+
+  const { data: lastFix } = await adminClient
+    .from("gps_logs")
+    .select("latitude, longitude")
+    .eq("delivery_request_id", deliveryId)
+    .order("timestamp", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!lastFix) return null;
+
+  const distance = haversineMeters(target, { lat: lastFix.latitude as number, lng: lastFix.longitude as number });
+  if (distance > PROOF_LOCATION_RADIUS_METERS) {
+    return `You're too far from the location to complete this (about ${Math.round(distance)}m away, must be within ${PROOF_LOCATION_RADIUS_METERS}m)`;
+  }
+  return null;
+}
+
 function decodeBase64(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -812,6 +881,13 @@ Deno.serve(async (req) => {
           // customer-entered at booking time — read-only for the driver, used
           // to build the dropoff leg's route waypoints (02B_MULTI_STOP_DELIVERIES.md).
           stops: Array.isArray(r.stops) ? r.stops : [],
+          // Proof-photo state for the first two items in the chain (Pickup,
+          // Dropoff), written by the Helper-gated completion actions above —
+          // read-only for the Driver, mirrors get-helper-deliveries'
+          // equivalent fields (02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
+          pickupPhotoUrl: r.pickup_photo_url || null,
+          dropoffPhotoUrl: r.dropoff_photo_url || null,
+          dropoffCompletedAt: r.dropoff_completed_at || null,
           cargoWeight: r.cargo_weight,
           status: r.status,
           hasOpenSession: openSessionDeliveryIds.has(r.id as string),
@@ -1063,7 +1139,7 @@ Deno.serve(async (req) => {
 
       const { data: row, error: rowError } = await adminClient
         .from("delivery_requests")
-        .select("id, status, assigned_helper_ids")
+        .select("id, status, assigned_helper_ids, pickup_location")
         .eq("id", deliveryId)
         .maybeSingle();
 
@@ -1078,6 +1154,11 @@ Deno.serve(async (req) => {
       const allowed = HELPER_STATUS_TRANSITIONS[row.status as string] || [];
       if (!allowed.includes(nextStatus)) {
         return json({ error: `Cannot move a delivery from ${row.status} to ${nextStatus}` }, 400);
+      }
+
+      const locationError = await checkProofLocation(adminClient, deliveryId, row.pickup_location as string);
+      if (locationError) {
+        return json({ error: locationError }, 400);
       }
 
       const upload = await uploadProofPhoto(adminClient, `${deliveryId}/pickup`, fileBase64, contentType);
@@ -1114,7 +1195,7 @@ Deno.serve(async (req) => {
 
       const { data: row, error: rowError } = await adminClient
         .from("delivery_requests")
-        .select("id, status, assigned_helper_ids, stops")
+        .select("id, status, assigned_helper_ids, stops, dropoff_location")
         .eq("id", deliveryId)
         .maybeSingle();
 
@@ -1128,6 +1209,11 @@ Deno.serve(async (req) => {
 
       if (row.status !== "OUT_FOR_DROPOFF" && row.status !== "ARRIVED_DROPOFF") {
         return json({ error: `Cannot complete the dropoff from status ${row.status}` }, 400);
+      }
+
+      const locationError = await checkProofLocation(adminClient, deliveryId, row.dropoff_location as string);
+      if (locationError) {
+        return json({ error: locationError }, 400);
       }
 
       const upload = await uploadProofPhoto(adminClient, `${deliveryId}/dropoff`, fileBase64, contentType);
@@ -1198,6 +1284,11 @@ Deno.serve(async (req) => {
       const stops = Array.isArray(row.stops) ? [...row.stops] : [];
       if (stopIndex >= stops.length) {
         return json({ error: "stopIndex out of range" }, 400);
+      }
+
+      const locationError = await checkProofLocation(adminClient, deliveryId, stops[stopIndex]?.location as string);
+      if (locationError) {
+        return json({ error: locationError }, 400);
       }
 
       const upload = await uploadProofPhoto(adminClient, `${deliveryId}/stop-${stopIndex}`, fileBase64, contentType);

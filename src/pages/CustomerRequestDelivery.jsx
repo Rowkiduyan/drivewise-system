@@ -691,7 +691,7 @@ function CustomerRequestDelivery() {
                       <div className="flex-1">
                         <LocationInput
                           id={`stop-${index}`}
-                          label={`Stop ${index + 1}`}
+                          label={`Dropoff ${index + 2}`}
                           value={stop}
                           onChange={(e) => handleStopChange(index, e)}
                         />
@@ -700,7 +700,7 @@ function CustomerRequestDelivery() {
                         type="button"
                         onClick={() => removeStop(index)}
                         className="mb-0.5 flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
-                        title="Remove stop"
+                        title="Remove dropoff"
                       >
                         <X className="h-4 w-4" />
                       </button>
@@ -715,7 +715,7 @@ function CustomerRequestDelivery() {
                   onClick={addStop}
                   className="text-sm font-medium text-emerald-700 hover:text-emerald-800"
                 >
-                  + Add a stop between Pick Up and Drop Off
+                  + Add another dropoff after Drop Off
                 </button>
               )}
             </div>

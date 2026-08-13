@@ -62,6 +62,10 @@ Give the Helper portal a read-only view of the same `alerts` feed the Driver's `
 
 **No separate GPS/position source either** — see `05_GPS_PIPELINE.md`'s Helper note, same reasoning (one truck, one Pi, one real position per Trip).
 
+## Related, not this phase
+
+Rest-stop recommendations (distance/time-based, not drowsiness-triggered) are a separate, unbuilt feature — see `12_REST_STOP_RECOMMENDATIONS.md`. Do not add a fifth `event_type` to this table for it; that doc explains why.
+
 ## Deliverable
 
 Implement alert uploads only.

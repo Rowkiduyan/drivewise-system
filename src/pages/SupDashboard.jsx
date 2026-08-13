@@ -5,6 +5,7 @@ import { AlertTriangle, LocateFixed, Loader2, MapPin } from "lucide-react";
 import { GoogleMap, Marker as GoogleMapMarker, useJsApiLoader } from "@react-google-maps/api";
 import DateRangeFilter from "../components/DateRangeFilter.jsx";
 import { supabase } from "../lib/supabaseClient.js";
+import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
 
 const background = null;
 
@@ -163,6 +164,7 @@ const ALERT_SEVERITY = {
   pattern_eye_closure_yawn: "Medium",
   face_not_detected: "Low",
 };
+const SEVERITY_RANK = { High: 3, Medium: 2, Low: 1 };
 
 const GOOGLE_MAP_CONTAINER_STYLE = { width: "100%", height: "100%" };
 // Metro Manila fallback center, used only until at least one truck reports a
@@ -499,11 +501,35 @@ function useFleetOps() {
         time: new Date(a.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         severity: ALERT_SEVERITY[a.event_type] || "Medium",
         tripAlerts: countBySession[a.session_id] || 1,
+        deliveryId: session?.delivery_request_id || null,
       };
     });
   }, [recentAlerts, sessions, trucks, driverNameById]);
 
-  return { fleetOps, alertFeed, isLoading, now: nowTick };
+  // ----- Derived: real per-driver alert rollup, same shape as
+  // WeeklySafetySummary's mock rows ({ name, alerts, risk }) -- computed
+  // from the same real alertFeed above, not a separate query. No date-range
+  // filtering yet (recentAlerts is just "last 50, most recent"), so this
+  // rolls up the same real totals into Today/7 Days/30 Days alike; a real
+  // per-range breakdown is 08B_ANALYTICS_AND_REPORTING.md's job, not this
+  // dashboard's.
+  const realDriverSafety = useMemo(() => {
+    const byDriver = new Map();
+    for (const a of alertFeed) {
+      const key = a.name;
+      const entry = byDriver.get(key) || { name: key, alerts: 0, highest: "Low" };
+      entry.alerts += 1;
+      if (SEVERITY_RANK[a.severity] > SEVERITY_RANK[entry.highest]) entry.highest = a.severity;
+      byDriver.set(key, entry);
+    }
+    return Array.from(byDriver.values()).map((entry) => ({
+      name: entry.name,
+      alerts: entry.alerts,
+      risk: entry.highest === "High" ? "High Risk" : entry.highest === "Medium" ? "Moderate" : "Safe",
+    }));
+  }, [alertFeed]);
+
+  return { fleetOps, alertFeed, realDriverSafety, isLoading, now: nowTick };
 }
 
 // ----- Active deliveries (live ops) -----
@@ -640,9 +666,7 @@ function LiveFleet({ trucks, crew }) {
 // simpler than Driver nav's LiveNavigationMap: no tilt/rotation/turn-by-turn/
 // route rendering, just a live position per truck. -----
 function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
-  const { isLoaded } = useJsApiLoader({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
-  });
+  const { isLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS);
   const withPosition = data.filter((row) => row.position);
   // Captured once, never reactive -- a `center` prop that changes on every
   // GPS tick would call map.setCenter() constantly and fight the
@@ -765,7 +789,6 @@ function PausedMovementBanner({ data }) {
 }
 
 // ----- Driver safety: drowsiness priority list (replaces the old chart) -----
-const SEVERITY_RANK = { High: 3, Medium: 2, Low: 1 };
 const SEVERITY_TONE = { High: "red", Medium: "amber", Low: "emerald" };
 
 function DriverSafetyList({ data, isLoading }) {
@@ -813,7 +836,7 @@ function DriverSafetyList({ data, isLoading }) {
                   <td className="whitespace-nowrap py-2 pr-3 text-slate-500">{d.tripAlerts} alerts</td>
                   <td className="py-2">
                     <Link
-                      to="/supervisor/deliveries"
+                      to={d.deliveryId ? `/supervisor/deliveries?deliveryId=${d.deliveryId}` : "/supervisor/deliveries"}
                       className="whitespace-nowrap rounded-md border border-blue-100 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50"
                     >
                       View Trip
@@ -877,7 +900,7 @@ function WeeklySafetySummary({ data, dateRange, onDateRangeChange }) {
 
 function SupDashboard() {
   const [dateRange, setDateRange] = useState("7 Days");
-  const { fleetOps, alertFeed, isLoading, now } = useFleetOps();
+  const { fleetOps, alertFeed, realDriverSafety, isLoading, now } = useFleetOps();
   const [focusedTruckId, setFocusedTruckId] = useState(null);
   const [focusToken, setFocusToken] = useState(0);
   const handleFocusTruck = (id) => {
@@ -915,7 +938,7 @@ function SupDashboard() {
     "7 Days": [
       { name: "J. Doe", alerts: 10, risk: "High Risk" },
       { name: "M. Lee", alerts: 8, risk: "High Risk" },
-      { name: "A. Smith", alerts: 6, risk: "Moderate" },
+      { name: "A. Smith", alerts: 6, risk: "High Risk" },
     ],
     "30 Days": [
       { name: "J. Doe", alerts: 30, risk: "High Risk" },
@@ -923,7 +946,16 @@ function SupDashboard() {
       { name: "A. Smith", alerts: 22, risk: "Moderate" },
     ],
   };
-  const topRiskDrivers = topRiskDriversByRange[dateRange];
+  // Real per-driver alert data (e.g. DR-0020's driver) layered on top of the
+  // mock rollup above, not replacing it -- same "real data if present,
+  // otherwise the existing mock" precedent used elsewhere on this page.
+  // De-duped by name (a real driver already present in the mock list keeps
+  // the mock's row rather than double-counting).
+  const mockRiskDrivers = topRiskDriversByRange[dateRange];
+  const topRiskDrivers = [
+    ...realDriverSafety.filter((real) => !mockRiskDrivers.some((mock) => mock.name === real.name)),
+    ...mockRiskDrivers,
+  ].sort((a, b) => b.alerts - a.alerts);
 
   return (
     <SupLayout title="Supervisor Dashboard" background={background} bg="bg-[#F6F7FB]">

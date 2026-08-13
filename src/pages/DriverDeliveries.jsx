@@ -25,6 +25,7 @@ import {
   Wallet,
   Activity,
   X,
+  Camera,
   CameraOff,
   Volume2,
   VolumeX,
@@ -43,13 +44,8 @@ import {
 } from '@react-google-maps/api'
 import DriverLayout from '../layout/DriverLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
-
-// Module-level, not recreated per render -- @react-google-maps/api's own
-// useJsApiLoader warns against passing a fresh array each render (it treats
-// a new array reference as "libraries changed" and reloads the SDK).
-// 'geometry' is needed for computeDistanceBetween (step-advance) and
-// isLocationOnEdge (deviation/reroute detection) below.
-const GOOGLE_MAPS_LIBRARIES = ['geometry']
+import { GOOGLE_MAPS_LOADER_OPTIONS } from '../lib/googleMapsLoaderOptions.js'
+import { useResolvedAddress } from '../lib/reverseGeocode.js'
 
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -345,9 +341,45 @@ const NAV_REROUTE_DEBOUNCE_MS = 12000
 // outside dense city centers), so this is close to the real usable ceiling
 // most places already.
 const NAV_ZOOM = 21
+// One color per leg of the Pickup -> Dropoff -> Stop 1 -> ... chain (cycles
+// if a chain somehow has more legs than colors), per 02C_ROUTE_STYLING's
+// per-leg design -- index 0 is reserved for the to-pickup leg specifically
+// (its own separate DirectionsService call, always exactly one leg), so the
+// post-pickup chain's legs start at index 1 (pickup->dropoff = blue, not red,
+// so it's visually distinct from the to-pickup leg that preceded it).
+const NAV_LEG_COLORS = ['#DC2626', '#2563EB', '#059669', '#7C3AED', '#EA580C', '#DB2777']
 
 function stripHtml(html) {
   return String(html || '').replace(/<[^>]+>/g, '')
+}
+
+function isCurrentNavTarget(coords, legEnd) {
+  if (!coords || !legEnd) return false
+  return Math.abs(coords.lat - legEnd.lat()) < 0.0005 && Math.abs(coords.lng - legEnd.lng()) < 0.0005
+}
+
+// A proper map-pin silhouette (the classic "location" teardrop glyph, 24x24
+// viewBox) for Dropoff/Stop markers, instead of a plain filled circle -- per
+// user feedback, a circle alone didn't read as "you're supposed to drop off
+// here" the way a pin shape immediately does. Pickup deliberately keeps the
+// plain circle (see the Pickup <Marker> above) since it isn't a "drop
+// something off" point conceptually. anchor/labelOrigin are set explicitly
+// because a custom SVG path's natural anchor is (0,0), not its visual
+// center/tip the way SymbolPath.CIRCLE's is -- without these the marker
+// would sit shifted and its numeric label would float off the pin entirely.
+const DROPOFF_PIN_PATH =
+  'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z'
+function dropoffPinIcon(fillColor, isCurrent) {
+  return {
+    path: DROPOFF_PIN_PATH,
+    fillColor,
+    fillOpacity: isCurrent ? 1 : 0.65,
+    strokeColor: '#fff',
+    strokeWeight: 1.5,
+    scale: isCurrent ? 1.7 : 1.25,
+    anchor: new window.google.maps.Point(12, 22),
+    labelOrigin: new window.google.maps.Point(12, 9),
+  }
 }
 
 // Live in-app turn-by-turn navigation (capstone requirement: built on the
@@ -367,6 +399,10 @@ function LiveNavigationMap({
   origin,
   destination,
   stops,
+  needsPickup,
+  pickupCoords,
+  dropoffCoords,
+  allStops,
   livePosition,
   isPaused,
   onOpenDirections,
@@ -378,10 +414,7 @@ function LiveNavigationMap({
   onResume,
   onStageAdvance,
 }) {
-  const { isLoaded } = useJsApiLoader({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
-    libraries: GOOGLE_MAPS_LIBRARIES,
-  })
+  const { isLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS)
 
   const [directions, setDirections] = useState(null)
   const [currentStepIndex, setCurrentStepIndex] = useState(0)
@@ -391,7 +424,9 @@ function LiveNavigationMap({
   // written back — stops are reference-only, no per-stop status
   // (02B_MULTI_STOP_DELIVERIES.md).
   const [currentLegIndex, setCurrentLegIndex] = useState(0)
-  const [isMuted, setIsMuted] = useState(false)
+  // Persisted across refreshes/remounts -- a driver who mutes voice guidance
+  // mid-trip shouldn't have it come back on just because the page reloaded.
+  const [isMuted, setIsMuted] = useState(() => localStorage.getItem('driverNavMuted') === 'true')
   const [routeError, setRouteError] = useState(false)
   // Purely a layout toggle (fixed-position overlay over the whole viewport,
   // see the section's className below) -- doesn't unmount or remount
@@ -586,6 +621,16 @@ function LiveNavigationMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [livePosition, directions, isPaused, isLoaded, currentLegIndex])
 
+  // Immediately silence an in-flight announcement the moment Mute is
+  // pressed -- toggling isMuted alone only prevents *future* .speak() calls
+  // below; the browser keeps reading out whatever utterance was already
+  // queued/speaking until it finishes on its own otherwise.
+  useEffect(() => {
+    if (isMuted && typeof window.speechSynthesis !== 'undefined') {
+      window.speechSynthesis.cancel()
+    }
+  }, [isMuted])
+
   // Announce the current step once via speech synthesis -- once per step
   // index, not on every GPS tick that happens to land within the same step.
   useEffect(() => {
@@ -606,6 +651,12 @@ function LiveNavigationMap({
   // one leg); legs.length === stops.length + 1 (final leg is to destination).
   const totalStopLegs = legs.length - 1
   const isOnFinalLeg = currentLegIndex >= totalStopLegs
+  // The point the driver is actually en route to right now -- the endpoint
+  // of whichever leg is current. Compared against each waypoint marker's
+  // coords (loose tolerance -- both sides ultimately come from the same
+  // geocoded address, but one's a LatLng object and the other a parsed
+  // {lat,lng}) to decide which pin gets the "current target" emphasis.
+  const legEnd = legs[currentLegIndex]?.end_location
 
   return (
     <section
@@ -629,7 +680,11 @@ function LiveNavigationMap({
             {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
           <button
-            onClick={() => setIsMuted((m) => !m)}
+            onClick={() => setIsMuted((m) => {
+              const next = !m
+              localStorage.setItem('driverNavMuted', String(next))
+              return next
+            })}
             aria-label={isMuted ? 'Unmute voice guidance' : 'Mute voice guidance'}
             className="rounded-md p-1 text-amber-800 hover:bg-amber-100"
           >
@@ -672,29 +727,81 @@ function LiveNavigationMap({
               mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID,
             }}
           >
-            {directions && (
-              // Rendered as a plain Polyline, not <DirectionsRenderer> --
-              // DirectionsRenderer calls map.fitBounds() internally to zoom
-              // out and fit the *entire* route on screen whenever it (re)sets
-              // directions, which fights the zoom/tilt moveCamera() sets
-              // above (this was the actual cause of the map looking flat and
-              // fully zoomed out to the whole route instead of a tilted,
-              // street-level, GPS-following view). `preserveViewport: true`
-              // was tried first to suppress that, but DirectionsRenderer is
-              // now a deprecated API (Feb 2026) whose "existing bugs...will
-              // not be addressed" per its own console warning, and the
-              // override kept recurring -- a Polyline never touches the
-              // camera at all, so there's nothing left to fight.
+            {/* Rendered as plain Polylines, not <DirectionsRenderer> --
+                DirectionsRenderer calls map.fitBounds() internally to zoom
+                out and fit the *entire* route on screen whenever it (re)sets
+                directions, which fights the zoom/tilt moveCamera() sets
+                above (this was the actual cause of the map looking flat and
+                fully zoomed out to the whole route instead of a tilted,
+                street-level, GPS-following view). `preserveViewport: true`
+                was tried first to suppress that, but DirectionsRenderer is
+                now a deprecated API (Feb 2026) whose "existing bugs...will
+                not be addressed" per its own console warning, and the
+                override kept recurring -- a Polyline never touches the
+                camera at all, so there's nothing left to fight.
+                Only the CURRENT leg is rendered, not the whole chain at
+                once (per user feedback -- showing every leg/pin
+                simultaneously read as cluttered; a turn-by-turn view should
+                show where the driver is headed right now, not the entire
+                future route). Still colored per its position in the chain
+                (02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md) so the color
+                still changes leg to leg as the driver progresses -- the
+                to-pickup call is always a single leg, pinned to color index
+                0; the post-pickup chain's legs shift one color over so they
+                never repeat the to-pickup color. */}
+            {legs[currentLegIndex] && (
               <GoogleMapPolyline
-                path={directions.routes[0]?.overview_path || []}
+                path={(legs[currentLegIndex].steps || []).flatMap((step) => step.path || [])}
                 options={{
-                  strokeColor: '#7C3AED',
+                  strokeColor: needsPickup
+                    ? NAV_LEG_COLORS[0]
+                    : NAV_LEG_COLORS[(currentLegIndex + 1) % NAV_LEG_COLORS.length],
                   strokeOpacity: 0.9,
                   strokeWeight: 7,
                   zIndex: 1,
                 }}
               />
             )}
+            {/* Only the pin for wherever the driver is actually heading
+                right now (matched by comparing coords to the current leg's
+                end point) -- same "current leg only" reasoning as the
+                polyline above, not every Pickup/Dropoff/Stop pin at once. */}
+            {pickupCoords && isCurrentNavTarget(pickupCoords, legEnd) && (
+              <GoogleMapMarker
+                position={pickupCoords}
+                label={{ text: 'P', color: '#fff', fontSize: '11px', fontWeight: '700' }}
+                icon={{
+                  path: window.google.maps.SymbolPath.CIRCLE,
+                  scale: 12,
+                  fillColor: '#0284c7',
+                  fillOpacity: 1,
+                  strokeColor: '#fff',
+                  strokeWeight: 2,
+                }}
+                zIndex={10}
+              />
+            )}
+            {dropoffCoords && isCurrentNavTarget(dropoffCoords, legEnd) && (
+              <GoogleMapMarker
+                position={dropoffCoords}
+                label={{ text: 'D', color: '#fff', fontSize: '11px', fontWeight: '700' }}
+                icon={dropoffPinIcon('#059669', true)}
+                zIndex={10}
+              />
+            )}
+            {(allStops || []).map((stop, i) => {
+              const coords = parseCoords(stop.location)
+              if (!coords || !isCurrentNavTarget(coords, legEnd)) return null
+              return (
+                <GoogleMapMarker
+                  key={i}
+                  position={coords}
+                  label={{ text: String(i + 2), color: '#fff', fontSize: '11px', fontWeight: '700' }}
+                  icon={dropoffPinIcon('#d97706', true)}
+                  zIndex={10}
+                />
+              )
+            })}
             {livePosition && (
               <GoogleMapMarker
                 position={livePosition}
@@ -1301,6 +1408,12 @@ function mapDelivery(d) {
     // at booking time — feeds LiveNavigationMap's dropoff-leg waypoints only,
     // never delivery_requests.status (02B_MULTI_STOP_DELIVERIES.md).
     stops: Array.isArray(d.stops) ? d.stops : [],
+    // Proof-photo state for the first two items in the chain (Pickup,
+    // Dropoff) — read-only here, written by the Helper's completion actions
+    // (02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
+    pickupPhotoUrl: d.pickupPhotoUrl || null,
+    dropoffPhotoUrl: d.dropoffPhotoUrl || null,
+    dropoffCompletedAt: d.dropoffCompletedAt || null,
     status: DB_TO_DRIVER_STATUS[d.status] || str(d.status),
     hasOpenSession: Boolean(d.hasOpenSession),
     sessionId: d.sessionId || null,
@@ -1431,6 +1544,51 @@ function DeliveryRow({ delivery, showTime, todayISO, onSelect }) {
   )
 }
 
+// Proof-of-delivery photos for a completed chain (Pickup -> Dropoff ->
+// Stops) — one small block per portal file rather than a shared component,
+// matching this codebase's existing per-portal convention (see
+// 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md's "On a shared component" note).
+// Only renders items that actually have a photo -- a delivery with stops
+// still in progress has photos for the items completed so far only.
+function ProofOfDeliverySection({ delivery }) {
+  const items = [
+    delivery.pickupPhotoUrl && { label: 'Pickup', photoUrl: delivery.pickupPhotoUrl, completedAt: null },
+    delivery.dropoffPhotoUrl && { label: 'Drop-off', photoUrl: delivery.dropoffPhotoUrl, completedAt: delivery.dropoffCompletedAt },
+    ...(delivery.stops || [])
+      .map((stop, i) => stop.completed && stop.photoUrl && { label: `Dropoff ${i + 2}`, photoUrl: stop.photoUrl, completedAt: stop.completedAt }),
+  ].filter(Boolean)
+
+  if (items.length === 0) return null
+
+  return (
+    <section className="rounded-xl border border-amber-200/70 bg-white p-3 sm:p-4">
+      <h3 className="flex items-center gap-2 text-xs font-bold text-slate-900">
+        <Camera className="h-4 w-4 text-amber-700" />
+        Proof of Delivery
+      </h3>
+      <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+        {items.map((item, i) => (
+          <a
+            key={i}
+            href={item.photoUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="group overflow-hidden rounded-lg border border-amber-200/70"
+          >
+            <img src={item.photoUrl} alt={`${item.label} proof of delivery`} className="h-20 w-full object-cover transition group-hover:opacity-90" />
+            <div className="px-1.5 py-1">
+              <p className="truncate text-[10px] font-semibold text-slate-900">{item.label}</p>
+              {item.completedAt && (
+                <p className="truncate text-[9px] text-slate-500">{formatAssignedAt(item.completedAt)}</p>
+              )}
+            </div>
+          </a>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 // The Upcoming/Past "detail" screen — replaces the list in place (same tab) instead of a modal,
 // since this is a lot of information to read inside a small overlay. Everything the old modal
 // showed is still here, just laid out as page sections with a Back action instead of dialog chrome.
@@ -1498,6 +1656,12 @@ function DeliveryDetailView({ delivery, onBack, isReportExpanded, onToggleReport
               </div>
             </div>
           </section>
+
+          {/* Proof of Delivery — ProofOfDeliverySection self-gates on
+              whichever chain items actually have a photo, so a Trip still
+              in progress shows just what's been captured so far rather than
+              waiting for isArchived (DELIVERED/COMPLETED). */}
+          <ProofOfDeliverySection delivery={delivery} />
 
           {/* Delivery Fee — always visible */}
           {delivery.quotation && (
@@ -1794,6 +1958,22 @@ function DriverDeliveries() {
   }, [liveAlerts])
 
   const active = data.active
+  // Resolves a "lat, lng"-shaped pickup/dropoff (e.g. DR-0020's fixture data)
+  // into a human-readable address for the status/Summary card -- a no-op for
+  // deliveries that already store a real street address.
+  const resolvedPickupAddress = useResolvedAddress(active?.pickupAddress || '')
+  const resolvedDeliveryAddress = useResolvedAddress(active?.deliveryAddress || '')
+  // Current dropoff target in the chain (Pickup -> Dropoff -> Stops) -- the
+  // main dropoff until it's completed, then whichever stop is next
+  // incomplete, matching HelperDeliveries.jsx's chain-item ordering. Falls
+  // back to the main dropoff once every stop is done too (nothing left to
+  // point "To").
+  const currentDropoffRaw = active
+    ? active.dropoffCompletedAt
+      ? (active.stops || []).find((s) => !s.completed)?.location || active.deliveryAddress
+      : active.deliveryAddress
+    : ''
+  const resolvedCurrentDropoffAddress = useResolvedAddress(currentDropoffRaw || '')
   const statusCfg = active ? statusConfig[active.status] : null
   const todayISO = localTodayISO()
   // "active" already prioritizes an open Session over pickupDate === today
@@ -2312,8 +2492,8 @@ function DriverDeliveries() {
                     <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[9px] font-bold text-emerald-700">D</span>
                   </div>
                   <div className="flex flex-1 min-w-0 flex-col justify-between gap-1.5">
-                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{active.pickupAddress}</p>
-                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{active.deliveryAddress}</p>
+                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{resolvedPickupAddress}</p>
+                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{resolvedDeliveryAddress}</p>
                   </div>
                 </div>
 
@@ -2345,9 +2525,7 @@ function DriverDeliveries() {
 
                 <div className="mt-1.5 flex items-center gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5">
                   <span className="shrink-0 text-[9px] font-medium uppercase tracking-wide text-slate-400">To</span>
-                  <p className="truncate text-xs font-semibold text-slate-900">
-                    {active.customerName} <span className="font-normal text-slate-500">&bull; {active.companyName}</span>
-                  </p>
+                  <p className="truncate text-xs font-semibold text-slate-900">{resolvedCurrentDropoffAddress}</p>
                 </div>
               </section>
 
@@ -2376,6 +2554,10 @@ function DriverDeliveries() {
                   origin={activeNavOrigin}
                   destination={activeNavTarget}
                   stops={activeNavStops}
+                  needsPickup={activeNeedsPickup}
+                  pickupCoords={active?.pickupCoords}
+                  dropoffCoords={active?.destinationCoords}
+                  allStops={active?.stops}
                   livePosition={livePosition}
                   isPaused={isPausedTrip}
                   onOpenDirections={() => openDirections(activeNavOrigin, activeNavTarget)}
@@ -2488,6 +2670,11 @@ function DriverDeliveries() {
                     </div>
                   </div>
                 </section>
+
+                {/* Proof of Delivery — same self-gating section as
+                    DeliveryDetailView, shown here too so it's visible on the
+                    active-trip dashboard without navigating into history. */}
+                <ProofOfDeliverySection delivery={active} />
 
                 {/* Delivery Fee — always visible */}
                 {active.quotation && (

@@ -25,6 +25,7 @@ import {
 import HelperLayout from '../layout/HelperLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 import { resizeProofPhotoToBase64 } from '../lib/proofPhoto.js'
+import { useResolvedAddress } from '../lib/reverseGeocode.js'
 
 // Same alert taxonomy DriverDeliveries.jsx uses (06_DROWSINESS_ALERT_PIPELINE.md)
 // — kept in sync manually since the two pages don't share a module today.
@@ -405,6 +406,51 @@ function CrewMemberCard({ member, badgeLabel, isHighlighted = false }) {
   )
 }
 
+// Proof-of-delivery photos for a completed chain (Pickup -> Dropoff ->
+// Stops) — one small block per portal file rather than a shared component,
+// matching this codebase's existing per-portal convention (see
+// 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md's "On a shared component" note).
+// Only renders items that actually have a photo -- a delivery with stops
+// still in progress has photos for the items completed so far only.
+function ProofOfDeliverySection({ delivery }) {
+  const items = [
+    delivery.pickupPhotoUrl && { label: 'Pickup', photoUrl: delivery.pickupPhotoUrl, completedAt: null },
+    delivery.dropoffPhotoUrl && { label: 'Drop-off', photoUrl: delivery.dropoffPhotoUrl, completedAt: delivery.dropoffCompletedAt },
+    ...(delivery.stops || [])
+      .map((stop, i) => stop.completed && stop.photoUrl && { label: `Dropoff ${i + 2}`, photoUrl: stop.photoUrl, completedAt: stop.completedAt }),
+  ].filter(Boolean)
+
+  if (items.length === 0) return null
+
+  return (
+    <section className="rounded-xl border border-teal-200/70 bg-white p-3 sm:p-4">
+      <h3 className="flex items-center gap-2 text-xs font-bold text-slate-900">
+        <Camera className="h-4 w-4 text-teal-700" />
+        Proof of Delivery
+      </h3>
+      <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+        {items.map((item, i) => (
+          <a
+            key={i}
+            href={item.photoUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="group overflow-hidden rounded-lg border border-teal-200/70"
+          >
+            <img src={item.photoUrl} alt={`${item.label} proof of delivery`} className="h-20 w-full object-cover transition group-hover:opacity-90" />
+            <div className="px-1.5 py-1">
+              <p className="truncate text-[10px] font-semibold text-slate-900">{item.label}</p>
+              {item.completedAt && (
+                <p className="truncate text-[9px] text-slate-500">{formatAssignedAt(item.completedAt)}</p>
+              )}
+            </div>
+          </a>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 // Detail screen for a delivery — same layout as the driver's, minus the
 // Delivery Report section (driver behavior/route analysis is not part of the
 // helper module).
@@ -471,6 +517,12 @@ function DeliveryDetailView({ delivery, onBack, onOpenDirections, currentHelperN
               </div>
             </div>
           </section>
+
+          {/* Proof of Delivery — ProofOfDeliverySection self-gates on
+              whichever chain items actually have a photo, so a Trip still
+              in progress shows just what's been captured so far rather than
+              waiting for Delivered/Completed. */}
+          <ProofOfDeliverySection delivery={delivery} />
 
           {/* Delivery Fee — always visible */}
           {delivery.quotation && (
@@ -622,6 +674,11 @@ function HelperDeliveries() {
   const chainPreviewUrlRef = useRef(null)
 
   const active = data.active
+  // Resolves a "lat, lng"-shaped pickup/dropoff (e.g. DR-0020's fixture data)
+  // into a human-readable address for the status/Summary card -- a no-op for
+  // deliveries that already store a real street address.
+  const resolvedPickupAddress = useResolvedAddress(active?.pickupAddress || '')
+  const resolvedDeliveryAddress = useResolvedAddress(active?.deliveryAddress || '')
   const statusCfg = active ? statusConfig[active.status] : null
   const todayISO = localTodayISO()
   // Boolean(active), not a pickupDate === today check — a delivery with a
@@ -671,7 +728,11 @@ function HelperDeliveries() {
         ...active.stops.map((stop, index) => ({
           type: 'stop',
           index,
-          label: `Stop ${index + 1}`,
+          // "Dropoff N" naming, not "Stop N" -- every point after Pickup is
+          // conceptually another dropoff (Dropoff itself is implicitly
+          // "Dropoff 1"), keeps the chain's vocabulary consistent end to end
+          // (Delivery Chain list, confirm modal, Proof of Delivery labels).
+          label: `Dropoff ${index + 2}`,
           location: stop.location,
           done: Boolean(stop.completed),
           photoUrl: stop.photoUrl,
@@ -1023,8 +1084,8 @@ function HelperDeliveries() {
                     <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[9px] font-bold text-emerald-700">D</span>
                   </div>
                   <div className="flex flex-1 min-w-0 flex-col justify-between gap-1.5">
-                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{active.pickupAddress}</p>
-                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{active.deliveryAddress}</p>
+                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{resolvedPickupAddress}</p>
+                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{resolvedDeliveryAddress}</p>
                   </div>
                 </div>
 
@@ -1086,7 +1147,7 @@ function HelperDeliveries() {
                           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
                           <p className="truncate text-xs font-medium text-slate-800">{item.location}</p>
                         </div>
-                        {item.done && item.photoUrl && (
+                        {item.photoUrl && (
                           <img
                             src={item.photoUrl}
                             alt={`${item.label} proof`}
@@ -1299,7 +1360,7 @@ function HelperDeliveries() {
         >
           <div className="w-full max-w-sm rounded-2xl border border-teal-200/70 bg-white p-4 shadow-xl">
             <h2 id="confirm-chain-item-title" className="text-sm font-bold text-slate-900">
-              Complete {confirmingChainItem.type === 'pickup' ? 'Pickup' : confirmingChainItem.type === 'dropoff' ? 'Dropoff' : `Stop ${confirmingChainItem.index + 1}`}
+              Complete {confirmingChainItem.type === 'pickup' ? 'Pickup' : confirmingChainItem.type === 'dropoff' ? 'Dropoff' : `Dropoff ${confirmingChainItem.index + 2}`}
             </h2>
             <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
               A photo is required as proof before this can be marked complete.
@@ -1330,7 +1391,6 @@ function HelperDeliveries() {
                 id="chain-photo-input"
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
-                capture="environment"
                 onChange={handleChainPhotoChange}
                 disabled={isSubmittingChainAction}
                 className="sr-only"

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  AlertTriangle, ArrowLeft, Calendar, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardList, Clock, FileText, MapPin, MessageSquare, Package, Search, Send, Truck, Users, X
+  AlertTriangle, ArrowLeft, Calendar, Camera, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardList, Clock, FileText, MapPin, MessageSquare, Package, Search, Send, Truck, Users, X
 } from 'lucide-react'
 import CustomerLayout from '../layout/CustomerLayout.jsx'
 import { truckTypes, itemTypes } from '../lib/deliveryOptions.js'
@@ -721,6 +721,55 @@ function MobileDetailCard({ children }) {
 // to read inside a small dialog, especially on a phone. Everything the old
 // modal showed is still here, just laid out as page sections with a Back
 // action instead of dialog chrome.
+// Proof-of-delivery photos for a completed chain (Pickup -> Dropoff ->
+// Stops) — one small block per portal file rather than a shared component,
+// matching this codebase's existing per-portal convention (see
+// 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md's "On a shared component" note).
+// Gated on the delivery having actually reached Delivered/Completed — a
+// Pending/In-Transit request has no photos yet. Only renders items that
+// actually have a photo -- a delivery with stops still in progress has
+// photos for the items completed so far only.
+function ProofOfDeliverySection({ request }) {
+  if (request.dbStatus !== 'DELIVERED' && request.dbStatus !== 'COMPLETED') return null
+
+  const items = [
+    request.pickupPhotoUrl && { label: 'Pickup', photoUrl: request.pickupPhotoUrl, completedAt: null },
+    request.dropoffPhotoUrl && { label: 'Drop-off', photoUrl: request.dropoffPhotoUrl, completedAt: request.dropoffCompletedAt },
+    ...(request.stops || [])
+      .map((stop, i) => stop.completed && stop.photoUrl && { label: `Dropoff ${i + 2}`, photoUrl: stop.photoUrl, completedAt: stop.completedAt }),
+  ].filter(Boolean)
+
+  if (items.length === 0) return null
+
+  return (
+    <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+      <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+        <Camera className="h-3.5 w-3.5 text-slate-400" />
+        Proof of Delivery
+      </h4>
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        {items.map((item, i) => (
+          <a
+            key={i}
+            href={item.photoUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="group overflow-hidden rounded-lg border border-slate-200 bg-white"
+          >
+            <img src={item.photoUrl} alt={`${item.label} proof of delivery`} className="h-20 w-full object-cover transition group-hover:opacity-90" />
+            <div className="px-1.5 py-1">
+              <p className="truncate text-[10px] font-semibold text-slate-900">{item.label}</p>
+              {item.completedAt && (
+                <p className="truncate text-[9px] text-slate-500">{new Date(item.completedAt).toLocaleString()}</p>
+              )}
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onCancellation, onReceivedConfirmation, onIssueReport }) {
   const [showQuotationResponse, setShowQuotationResponse] = useState(false)
   const [quotationAction, setQuotationAction] = useState(null)
@@ -1094,6 +1143,10 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
               </div>
             </div>
 
+            <div className="mt-3 md:hidden">
+              <ProofOfDeliverySection request={request} />
+            </div>
+
             {/* Desktop (md+) — original 4-row icon + stacked label/value layout, untouched. */}
             <div className="hidden mt-2 space-y-2 text-xs md:mt-3 md:block md:space-y-3 md:text-sm">
               <div className="flex items-center gap-2">
@@ -1424,6 +1477,10 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                       />
                     </div>
                   </div>
+                </div>
+
+                <div className="mt-3">
+                  <ProofOfDeliverySection request={request} />
                 </div>
               </div>
             )}
@@ -2467,6 +2524,14 @@ function mapDeliveryRow(row) {
     budgetMin: row.budget_min,
     budgetMax: row.budget_max,
     notes: row.notes || '',
+    // Reference-only intermediate stops between pickup/dropoff, plus
+    // proof-photo state for each item in the Pickup -> Dropoff -> Stops
+    // chain, written by the Helper's completion actions — read-only here
+    // (02B_MULTI_STOP_DELIVERIES.md, 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
+    stops: Array.isArray(row.stops) ? row.stops : [],
+    pickupPhotoUrl: row.pickup_photo_url || null,
+    dropoffPhotoUrl: row.dropoff_photo_url || null,
+    dropoffCompletedAt: row.dropoff_completed_at || null,
     status: CUSTOMER_STATUS_MAP[row.status] || row.status,
     dbStatus: row.status,
     customerCounterMin: row.customer_counter_min,

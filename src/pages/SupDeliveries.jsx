@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Check,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   FileText,
   Handshake,
@@ -40,8 +41,10 @@ import {
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
+import { useSearchParams } from 'react-router-dom'
 import SupLayout from '../layout/SupLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
+import { useResolvedAddress } from '../lib/reverseGeocode.js'
 import { customer_deliveries, delivery_drivers, delivery_helpers, delivery_trucks, delivery_quotations, delivery_cancellations, delivery_monitoring, delivery_alert_monitoring, delivery_supervisor_data, completed_delivery_reports } from '../lib/mockDeliveriesData.js'
 
 delete L.Icon.Default.prototype._getIconUrl
@@ -206,8 +209,32 @@ function getTotalDays(r) {
 }
 function getPickupCoords(r) {
   if (r.currentLocation) return r.currentLocation
+  if (r.pickupAddress) {
+    const parsed = parseCoords(r.pickupAddress)
+    if (parsed) return parsed
+  }
   if (r.destinationCoords) return { lat: r.destinationCoords.lat + 0.01, lng: r.destinationCoords.lng - 0.01 }
   return null
+}
+function getDropoffCoords(r) {
+  if (r.destinationCoords) return r.destinationCoords
+  if (r.deliveryAddress) return parseCoords(r.deliveryAddress)
+  return null
+}
+// Some pickup/dropoff locations are stored as a "lat, lng" coordinate pair
+// rather than a street address (e.g. a manually created test delivery like
+// DR-0020) -- parse those back into coords for the maps. Mirrors
+// DriverDeliveries.jsx's identical helper (not shared, per this codebase's
+// existing per-portal convention).
+function parseCoords(value) {
+  if (!value) return null
+  const m = String(value).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/)
+  if (!m) return null
+  const lat = parseFloat(m[1])
+  const lng = parseFloat(m[2])
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null
+  return { lat, lng }
 }
 function Row({ label, value }) {
   return (
@@ -878,19 +905,16 @@ const monitoringByDelivery = delivery_monitoring.reduce((map, row) => {
 const alertsByDelivery = delivery_alert_monitoring.reduce((map, row) => {
   map[row.delivery_id] = {
     deliveryId: row.delivery_id,
-    cameraStatus: row.camera_status,
-    eyeDetection: row.eye_detection,
+    deviceOnline: row.camera_status === 'ACTIVE',
     drowsinessLevel: row.drowsiness_level,
     prolongedEyeClosure: row.prolonged_eye_closure,
     repeatedEyeClosure: row.repeated_eye_closure,
     yawnCount: row.yawn_count,
     eyeDetectionFailures: row.eye_detection_failures,
-    avgClosureDurationMs: row.avg_closure_duration_ms,
-    seatVibration: row.seat_vibration,
-    audioAlert: row.audio_alert,
+    avgClosureDurationLabel: `${row.avg_closure_duration_ms} ms`,
     lastAlert: row.last_alert,
     lastAlertAt: row.last_alert_at,
-    drivingHours: row.driving_hours,
+    drivingHoursLabel: `${row.driving_hours} hrs`,
     drivingDistanceKm: row.driving_distance_km,
     recommendedRestStop: row.recommended_rest_stop,
     restStopDistanceKm: row.rest_stop_distance_km,
@@ -909,6 +933,71 @@ const ALERT_SEVERITY_DOTS = {
   INFO: 'bg-sky-400',
   WARNING: 'bg-amber-400',
   CRITICAL: 'bg-rose-500',
+}
+
+// Real DB `alerts` rows (event_type/duration/session_id/created_at) only
+// carry a fraction of the mock's fields -- no camera/vibration/audio device
+// state, no rest-stop recommendation (driving hours is now real, see
+// drivingHoursLabel below; distance/rest-stop still has no data source --
+// see IMPLEMENTATION/12_REST_STOP_RECOMMENDATIONS.md for the plan). This builds
+// the same alertsByDelivery-shaped object from real rows for a delivery that
+// actually has DB alerts, filling the unavailable fields with a simple
+// "ACTIVE" (device state is implied by an alert having fired at all, per
+// DATABASE.md's alerts note that vibration/audio fire immediately on trigger)
+// rather than fabricating numbers with no backing data.
+const DB_ALERT_TYPE_LABELS = {
+  prolonged_eye_closure: 'Prolonged Eye Closure',
+  pattern_eye_closure_yawn: 'Eye Closure + Yawn',
+  pattern_repeated_eye_closure: 'Repeated Eye Closure',
+  face_not_detected: 'Eyes Not Detected',
+}
+const DB_ALERT_TYPE_SEVERITY = {
+  prolonged_eye_closure: 'CRITICAL',
+  pattern_repeated_eye_closure: 'CRITICAL',
+  pattern_eye_closure_yawn: 'WARNING',
+  face_not_detected: 'INFO',
+}
+
+function buildRealAlertSummary(deliveryId, rows, sessionStartTime) {
+  if (!rows.length) return null
+  const counts = { prolongedEyeClosure: 0, repeatedEyeClosure: 0, yawnCount: 0, eyeDetectionFailures: 0 }
+  let closureDurationTotal = 0
+  let closureDurationCount = 0
+  let worst = 'LOW'
+  const formatTime = (iso) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const alertHistory = rows.map((row) => {
+    const severity = DB_ALERT_TYPE_SEVERITY[row.event_type] || 'INFO'
+    if (row.event_type === 'prolonged_eye_closure' || row.event_type === 'pattern_repeated_eye_closure') {
+      closureDurationTotal += row.duration || 0
+      closureDurationCount += 1
+    }
+    if (row.event_type === 'prolonged_eye_closure') counts.prolongedEyeClosure += 1
+    else if (row.event_type === 'pattern_repeated_eye_closure') counts.repeatedEyeClosure += 1
+    else if (row.event_type === 'pattern_eye_closure_yawn') counts.yawnCount += 1
+    else if (row.event_type === 'face_not_detected') counts.eyeDetectionFailures += 1
+    if (severity === 'CRITICAL') worst = 'HIGH'
+    else if (severity === 'WARNING' && worst !== 'HIGH') worst = 'MODERATE'
+    return { type: DB_ALERT_TYPE_LABELS[row.event_type] || row.event_type, time: formatTime(row.created_at), severity }
+  })
+  const latest = rows[0]
+  // Real hours-driven: elapsed time since the Session started (matches
+  // useFleetOps' own no-separate-column approach in SupDashboard.jsx) --
+  // there's no `driving_distance_km` equivalent to derive without adding a
+  // GPS-route-distance computation, so distance stays mock-only.
+  const drivingHoursLabel = sessionStartTime
+    ? `${((Date.now() - new Date(sessionStartTime).getTime()) / 3_600_000).toFixed(1)} hrs`
+    : '—'
+  return {
+    deliveryId,
+    deviceOnline: true,
+    drowsinessLevel: worst,
+    ...counts,
+    drivingHoursLabel,
+    avgClosureDurationLabel: closureDurationCount ? `${(closureDurationTotal / closureDurationCount).toFixed(1)}s` : '—',
+    lastAlert: DB_ALERT_TYPE_LABELS[latest.event_type] || latest.event_type,
+    lastAlertAt: formatTime(latest.created_at),
+    alertHistory,
+  }
 }
 
 function getDefaultDriverForTruck(truck) {
@@ -1035,6 +1124,160 @@ function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoo
   )
 }
 
+// One switchable map for the full Pickup -> Dropoff -> Stops chain, instead
+// of two side-by-side (and, for stops, map-less) blocks -- lets a
+// Supervisor step through every point in the chain, not just the first two,
+// and zooms in further per-point (z=16) since the previous z=14 read as too
+// far out for a single-address view. Each point's address is resolved via
+// useResolvedAddress so a "lat, lng"-shaped location (e.g. DR-0020's fixture
+// data) shows a real address instead of raw coordinates.
+function LocationSwitcher({ request }) {
+  const points = [
+    {
+      key: 'pickup',
+      badge: 'P',
+      badgeBg: 'bg-blue-100',
+      badgeText: 'text-blue-600',
+      label: 'Pick-up Location',
+      address: request.pickupAddress,
+      coords: getPickupCoords(request),
+    },
+    {
+      key: 'dropoff',
+      badge: 'D',
+      badgeBg: 'bg-rose-100',
+      badgeText: 'text-rose-600',
+      label: 'Drop-off Location',
+      address: request.deliveryAddress,
+      coords: getDropoffCoords(request),
+    },
+    ...(request.stops || []).map((stop, index) => ({
+      key: `stop-${index}`,
+      badge: String(index + 2),
+      badgeBg: 'bg-amber-100',
+      badgeText: 'text-amber-700',
+      label: `Dropoff ${index + 2}`,
+      address: stop.location,
+      coords: parseCoords(stop.location),
+    })),
+  ]
+
+  const [index, setIndex] = useState(0)
+  const safeIndex = Math.min(index, points.length - 1)
+  const point = points[safeIndex]
+  const resolvedAddress = useResolvedAddress(point.address || '')
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {points.map((p, i) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => setIndex(i)}
+            className={`flex h-6 items-center gap-1 rounded-full pl-1 pr-2 text-[11px] font-semibold transition ${
+              i === safeIndex ? 'bg-slate-900 text-white' : 'bg-white text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${p.badgeBg} ${p.badgeText}`}>
+              {p.badge}
+            </span>
+            {p.label.replace('Pick-up Location', 'Pickup').replace('Drop-off Location', 'Dropoff')}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex items-start gap-2">
+        <div className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center mt-0.5 ${point.badgeBg}`}>
+          <span className={`text-[10px] font-bold ${point.badgeText}`}>{point.badge}</span>
+        </div>
+        <div className="min-w-0 flex-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">{point.label}</span>
+          <span className="text-sm font-medium text-slate-900 block truncate">{resolvedAddress}</span>
+        </div>
+        {points.length > 1 && (
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setIndex((safeIndex - 1 + points.length) % points.length)}
+              className="rounded-md border border-slate-200 p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setIndex((safeIndex + 1) % points.length)}
+              className="rounded-md border border-slate-200 p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {point.coords ? (
+        <iframe
+          key={point.key}
+          title={`${point.label} - Google Map`}
+          src={toGoogleMapEmbed(point.coords, 17)}
+          className="h-72 w-full rounded-lg border border-slate-200"
+          loading="lazy"
+          referrerPolicy="no-referrer-when-downgrade"
+        />
+      ) : (
+        <div className="flex h-72 w-full items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-400">
+          This location doesn't have parseable coordinates.
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Proof-of-delivery photos for a completed chain (Pickup -> Dropoff ->
+// Stops) — one small block per portal file rather than a shared component,
+// matching this codebase's existing per-portal convention (see
+// 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md's "On a shared component" note).
+// Only renders items that actually have a photo -- a delivery with stops
+// still in progress has photos for the items completed so far only.
+function ProofOfDeliverySection({ request }) {
+  const items = [
+    request.pickupPhotoUrl && { label: 'Pickup', photoUrl: request.pickupPhotoUrl, completedAt: null },
+    request.dropoffPhotoUrl && { label: 'Drop-off', photoUrl: request.dropoffPhotoUrl, completedAt: request.dropoffCompletedAt },
+    ...(request.stops || [])
+      .map((stop, i) => stop.completed && stop.photoUrl && { label: `Dropoff ${i + 2}`, photoUrl: stop.photoUrl, completedAt: stop.completedAt }),
+  ].filter(Boolean)
+
+  if (items.length === 0) return null
+
+  return (
+    <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+      <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+        <Camera className="h-3.5 w-3.5 text-slate-400" />
+        Proof of Delivery
+      </h4>
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        {items.map((item, i) => (
+          <a
+            key={i}
+            href={item.photoUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="group overflow-hidden rounded-lg border border-slate-200 bg-white"
+          >
+            <img src={item.photoUrl} alt={`${item.label} proof of delivery`} className="h-20 w-full object-cover transition group-hover:opacity-90" />
+            <div className="px-1.5 py-1">
+              <p className="truncate text-[10px] font-semibold text-slate-900">{item.label}</p>
+              {item.completedAt && (
+                <p className="truncate text-[9px] text-slate-500">{formatIsoDateTime(item.completedAt)}</p>
+              )}
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function DeliveryRequestDetails({ request }) {
   return (
     <div>
@@ -1119,45 +1362,10 @@ function DeliveryRequestDetails({ request }) {
         <div className="mb-3">
           <Row label="Total Distance (2-way)" value={getTotalDistance(request)} />
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="space-y-2">
-            <div className="flex items-start gap-2">
-              <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-100">
-                <span className="text-[10px] font-bold text-blue-600">P</span>
-              </div>
-              <div className="min-w-0">
-                <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Pick-up Location</span>
-                <span className="block truncate text-sm font-medium text-slate-900">{request.pickupAddress}</span>
-              </div>
-            </div>
-            <iframe
-              title="Pickup - Google Map"
-              src={toGoogleMapEmbed(getPickupCoords(request))}
-              className="h-36 w-full rounded-lg border border-slate-200"
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-            />
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-start gap-2">
-              <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100">
-                <span className="text-[10px] font-bold text-rose-600">D</span>
-              </div>
-              <div className="min-w-0">
-                <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Drop-off Location</span>
-                <span className="block truncate text-sm font-medium text-slate-900">{request.deliveryAddress}</span>
-              </div>
-            </div>
-            <iframe
-              title="Drop-off - Google Map"
-              src={toGoogleMapEmbed(request.destinationCoords)}
-              className="h-36 w-full rounded-lg border border-slate-200"
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-            />
-          </div>
-        </div>
+        <LocationSwitcher request={request} />
       </div>
+
+      <ProofOfDeliverySection request={request} />
     </div>
   )
 }
@@ -1995,9 +2203,9 @@ function IssueDetailView({ delivery, onResolve, onSendMessage }) {
   )
 }
 
-function toGoogleMapEmbed(coords) {
+function toGoogleMapEmbed(coords, zoom = 14) {
   if (!coords) return 'https://maps.google.com/maps?q=14.5995,120.9842&z=12&output=embed'
-  return `https://maps.google.com/maps?q=${coords.lat},${coords.lng}&z=14&output=embed`
+  return `https://maps.google.com/maps?q=${coords.lat},${coords.lng}&z=${zoom}&output=embed`
 }
 
 function filterDeliveryList(list, q) {
@@ -2178,6 +2386,12 @@ function mapDbRequest(row, clientName, fleet) {
     // Reference-only intermediate stops between pickup/dropoff, customer-entered
     // at booking time — read-only here (02B_MULTI_STOP_DELIVERIES.md).
     stops: Array.isArray(row.stops) ? row.stops : [],
+    // Proof-photo state for the first two items in the chain (Pickup,
+    // Dropoff), written by the Helper's completion actions — read-only here
+    // (02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
+    pickupPhotoUrl: row.pickup_photo_url || null,
+    dropoffPhotoUrl: row.dropoff_photo_url || null,
+    dropoffCompletedAt: row.dropoff_completed_at || null,
     budgetMin: row.budget_min,
     budgetMax: row.budget_max,
     notes: row.notes,
@@ -2231,6 +2445,24 @@ function SupDeliveries() {
   const [isLoading, setIsLoading] = useState(true)
   const [activeModule, setActiveModule] = useState('inbox')
   const [monitoredDeliveryId, setMonitoredDeliveryId] = useState(null)
+  // Real DriveWise telemetry per delivery, fetched from the `alerts` table
+  // (via its session) on demand -- keyed by delivery id, `null` once fetched
+  // if that delivery genuinely has no DB alerts (falls back to mock below).
+  const [realAlertsByDelivery, setRealAlertsByDelivery] = useState({})
+  const fetchedAlertDeliveryIds = useRef(new Set())
+  // Deep-link from SupDashboard's "View Trip" (Driver Safety list) --
+  // ?deliveryId=DR-0020 opens straight to the In Transit tab with that
+  // delivery already selected in Real-time Monitoring / DriveWise Alerts.
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    const deliveryId = searchParams.get('deliveryId')
+    if (!deliveryId) return
+    // Reacting to an external source (the URL), same as this file's own
+    // loadInbox effect below.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveModule('transit')
+    setMonitoredDeliveryId(deliveryId)
+  }, [searchParams])
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('ALL')
   const [selectedRequest, setSelectedRequest] = useState(null)
@@ -2538,6 +2770,39 @@ function SupDeliveries() {
     const preferred = filteredTransit.find((r) => r.id === monitoredDeliveryId)
     return preferred || filteredTransit[0] || ongoingDeliveries[0] || null
   }, [filteredTransit, monitoredDeliveryId, ongoingDeliveries])
+
+  // Real telemetry for the monitored delivery, fetched once per delivery id
+  // (its session, then that session's alerts) and cached -- falls back to
+  // the mock alertsByDelivery lookup for deliveries with no real DB alerts.
+  useEffect(() => {
+    const id = monitoredDelivery?.id
+    if (!id || fetchedAlertDeliveryIds.current.has(id)) return
+    fetchedAlertDeliveryIds.current.add(id)
+    ;(async () => {
+      const { data: sessionRows } = await supabase
+        .from('sessions')
+        .select('session_id, start_time')
+        .eq('delivery_request_id', id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      const session = sessionRows?.[0]
+      if (!session?.session_id) {
+        setRealAlertsByDelivery((prev) => ({ ...prev, [id]: null }))
+        return
+      }
+      const { data: alertRows } = await supabase
+        .from('alerts')
+        .select('*')
+        .eq('session_id', session.session_id)
+        .order('created_at', { ascending: false })
+      setRealAlertsByDelivery((prev) => ({ ...prev, [id]: buildRealAlertSummary(id, alertRows || [], session.start_time) }))
+    })()
+  }, [monitoredDelivery?.id])
+
+  const monitoredAlert = useMemo(() => {
+    if (!monitoredDelivery) return null
+    return realAlertsByDelivery[monitoredDelivery.id] || alertsByDelivery[monitoredDelivery.id] || null
+  }, [monitoredDelivery, realAlertsByDelivery])
 
   const completedDeliveries = useMemo(
     () => dbRequests.filter((r) => r.status === 'COMPLETED'),
@@ -3210,60 +3475,10 @@ function SupDeliveries() {
                     <div className="mb-3">
                       <Row label="Total Distance (2-way)" value={getTotalDistance(selectedRequest)} />
                     </div>
-                    {selectedRequest.stops && selectedRequest.stops.length > 0 && (
-                      <div className="mb-3">
-                        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block mb-1.5">
-                          Stops ({selectedRequest.stops.length})
-                        </span>
-                        <ol className="space-y-1">
-                          {selectedRequest.stops.map((stop, index) => (
-                            <li key={index} className="flex items-start gap-2 text-sm text-slate-700">
-                              <span className="h-5 w-5 shrink-0 rounded-full bg-amber-100 flex items-center justify-center text-[10px] font-bold text-amber-700 mt-0.5">
-                                {index + 1}
-                              </span>
-                              <span className="min-w-0 truncate">{stop.location}</span>
-                            </li>
-                          ))}
-                        </ol>
-                      </div>
-                    )}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="space-y-2">
-                        <div className="flex items-start gap-2">
-                          <div className="h-5 w-5 shrink-0 rounded-full bg-blue-100 flex items-center justify-center mt-0.5">
-                            <span className="text-[10px] font-bold text-blue-600">P</span>
-                          </div>
-                          <div className="min-w-0">
-                            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">Pick-up Location</span>
-                            <span className="text-sm font-medium text-slate-900 block truncate">{selectedRequest.pickupAddress}</span>
-                          </div>
-                        </div>
-                        <iframe
-                          title="Pickup - Google Map"
-                          src={toGoogleMapEmbed(getPickupCoords(selectedRequest))}
-                          className="h-36 w-full rounded-lg border border-slate-200"
-                          loading="lazy"
-                          referrerPolicy="no-referrer-when-downgrade"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex items-start gap-2">
-                          <div className="h-5 w-5 shrink-0 rounded-full bg-rose-100 flex items-center justify-center mt-0.5">
-                            <span className="text-[10px] font-bold text-rose-600">D</span>
-                          </div>
-                          <div className="min-w-0">
-                            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">Drop-off Location</span>
-                            <span className="text-sm font-medium text-slate-900 block truncate">{selectedRequest.deliveryAddress}</span>
-                          </div>
-                        </div>
-                        <iframe
-                          title="Drop-off - Google Map"
-                          src={toGoogleMapEmbed(selectedRequest.destinationCoords)}
-                          className="h-36 w-full rounded-lg border border-slate-200"
-                          loading="lazy"
-                          referrerPolicy="no-referrer-when-downgrade"
-                        />
-                      </div>
+                    <LocationSwitcher request={selectedRequest} />
+
+                    <div className="mt-3">
+                      <ProofOfDeliverySection request={selectedRequest} />
                     </div>
                   </div>
                 </div>}
@@ -4620,7 +4835,7 @@ function SupDeliveries() {
                       </h3>
                       <p className="text-xs text-slate-500">AI driver monitoring • drowsiness & rest safety</p>
                     </div>
-                    {alertsByDelivery[monitoredDelivery?.id] ? (
+                    {monitoredAlert ? (
                       <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700 ring-1 ring-inset ring-emerald-200">
                         <span className="relative flex h-2 w-2">
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
@@ -4631,12 +4846,10 @@ function SupDeliveries() {
                     ) : null}
                   </div>
 
-                  {monitoredDelivery && alertsByDelivery[monitoredDelivery.id] ? (
+                  {monitoredDelivery && monitoredAlert ? (
                     (() => {
-                      const alert = alertsByDelivery[monitoredDelivery.id]
+                      const alert = monitoredAlert
                       const tone = DROWSINESS_TONES[alert.drowsinessLevel] || DROWSINESS_TONES.LOW
-                      const cameraOk = alert.cameraStatus === 'ACTIVE'
-                      const eyesOk = alert.eyeDetection === 'DETECTED'
                       return (
                         <div className="space-y-3 p-4">
                           <div className={`rounded-xl p-3 ${tone.box}`}>
@@ -4648,7 +4861,7 @@ function SupDeliveries() {
                               <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${tone.badge}`}>{alert.drowsinessLevel}</span>
                             </div>
                             <p className="mt-1 text-xs opacity-80">
-                              Driving {alert.drivingHours} hrs • {alert.drivingDistanceKm} km • Avg. eye closure {alert.avgClosureDurationMs} ms
+                              Avg. eye closure {alert.avgClosureDurationLabel}
                             </p>
                           </div>
 
@@ -4656,45 +4869,19 @@ function SupDeliveries() {
                             <div className="rounded-xl bg-slate-50 p-3">
                               <p className="flex items-center gap-1.5 text-xs text-slate-500">
                                 <Camera className="h-3.5 w-3.5" />
-                                Camera Feed
+                                Device
                               </p>
-                              <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${cameraOk ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                <span className={`h-2 w-2 rounded-full ${cameraOk ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                                {alert.cameraStatus}
-                              </p>
-                            </div>
-                            <div className="rounded-xl bg-slate-50 p-3">
-                              <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                <EyeOff className="h-3.5 w-3.5" />
-                                Eye Detection
-                              </p>
-                              <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${eyesOk ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                <span className={`h-2 w-2 rounded-full ${eyesOk ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                                {alert.eyeDetection}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="rounded-xl bg-slate-50 p-3">
-                              <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                <Vibrate className="h-3.5 w-3.5" />
-                                Seat Vibration
-                              </p>
-                              <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${alert.seatVibration === 'ACTIVE' ? 'text-emerald-600' : 'text-slate-500'}`}>
-                                <span className={`h-2 w-2 rounded-full ${alert.seatVibration === 'ACTIVE' ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                                {alert.seatVibration}
+                              <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${alert.deviceOnline ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                <span className={`h-2 w-2 rounded-full ${alert.deviceOnline ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                {alert.deviceOnline ? 'Online' : 'Offline'}
                               </p>
                             </div>
                             <div className="rounded-xl bg-slate-50 p-3">
                               <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                <Volume2 className="h-3.5 w-3.5" />
-                                Audio Alert
+                                <Timer className="h-3.5 w-3.5" />
+                                Driving Hours
                               </p>
-                              <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${alert.audioAlert === 'ACTIVE' ? 'text-emerald-600' : 'text-slate-500'}`}>
-                                <span className={`h-2 w-2 rounded-full ${alert.audioAlert === 'ACTIVE' ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                                {alert.audioAlert}
-                              </p>
+                              <p className="mt-1 text-sm font-bold text-slate-900">{alert.drivingHoursLabel}</p>
                             </div>
                           </div>
 
@@ -4765,18 +4952,6 @@ function SupDeliveries() {
                                 )}
                               </div>
                             )}
-                          </div>
-
-                          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-                            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-800">
-                              <Coffee className="h-3.5 w-3.5" />
-                              Recommended Rest Stop
-                            </p>
-                            <p className="mt-1 text-sm font-bold text-slate-900">{alert.recommendedRestStop}</p>
-                            <p className="mt-0.5 flex items-center gap-1.5 text-xs text-amber-700">
-                              <Navigation className="h-3.5 w-3.5" />
-                              {alert.restStopDistanceKm} km ahead • Driving {alert.drivingHours} hrs / {alert.drivingDistanceKm} km
-                            </p>
                           </div>
                         </div>
                       )

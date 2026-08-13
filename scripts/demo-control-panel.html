@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>DR-0020 Demo Control Panel</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 32px auto; padding: 0 16px; color: #1e293b; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  p.sub { color: #64748b; font-size: 13px; margin-top: 0; }
+  fieldset { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
+  legend { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; padding: 0 6px; }
+  label { display: block; font-size: 12px; font-weight: 600; margin: 8px 0 3px; }
+  input[type=text], input[type=password] { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }
+  .row { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+  button { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-play { background: #059669; color: #fff; }
+  .btn-stop { background: #dc2626; color: #fff; }
+  .btn-next { background: #2563eb; color: #fff; }
+  .btn-reset { background: #d97706; color: #fff; }
+  .btn-secondary { background: #f1f5f9; color: #334155; }
+  #log { margin-top: 16px; background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 10px 12px; font-family: ui-monospace, monospace; font-size: 12px; height: 260px; overflow-y: auto; white-space: pre-wrap; }
+  .status { margin-top: 6px; font-size: 12px; color: #475569; }
+  .point-label { display: inline-block; min-width: 90px; font-weight: 700; }
+</style>
+</head>
+<body>
+  <h1>DR-0020 Demo Control Panel</h1>
+  <p class="sub">
+    Local-only tool -- open this file directly in a browser on your own machine, never deploy it.
+    Mirrors <code>scripts/simulate-dr0020.sh</code> / <code>scripts/set-dr0020-location.sh</code> /
+    <code>scripts/prep-proof-photos-test.sh</code>, just with buttons instead of a terminal.
+    See <code>src/docs/IMPLEMENTATION/02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md</code>.
+  </p>
+
+  <fieldset>
+    <legend>Credentials (never sent anywhere except your own Supabase project)</legend>
+    <label for="url">Supabase URL</label>
+    <input id="url" type="text" />
+    <label for="anon">Anon key</label>
+    <input id="anon" type="text" />
+    <label for="service">Service role key <span style="font-weight:400;color:#94a3b8;">(saved to this browser's localStorage only -- never written to any file, never committed)</span></label>
+    <input id="service" type="password" placeholder="paste service_role key here" />
+  </fieldset>
+
+  <fieldset>
+    <legend>Part 1 -- Route color simulation</legend>
+    <p class="sub" style="margin-top:0;">Open the Driver portal's Live Navigation for DR-0020 in another tab/window first, then Play.</p>
+    <div class="row">
+      <button class="btn-play" id="playBtn">&#9654; Play GPS Route</button>
+      <button class="btn-stop" id="stopBtn" disabled>&#9632; Stop</button>
+    </div>
+    <div class="status" id="playStatus">Idle.</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Part 2/3 -- Photo upload demo</legend>
+    <div class="row">
+      <button class="btn-reset" id="resetBtn">&#8635; Reset Chain (assigns Helper, resets to Pickup)</button>
+    </div>
+    <p class="sub">Then in the Helper app: Confirm Pickup with a real photo. Before each next step below, click Next here, then complete that step in the Helper app.</p>
+    <div class="row">
+      <button class="btn-next" id="nextBtn"><span class="point-label" id="nextLabel">&#9193; Next: Dropoff</span></button>
+      <button class="btn-secondary" id="restartPointsBtn">Restart from Pickup</button>
+    </div>
+    <div class="status" id="nextStatus">Not started -- click Reset Chain first.</div>
+  </fieldset>
+
+  <div id="log"></div>
+
+<script>
+const DELIVERY_ID = 'DR-0020'
+const DRIVER_EMAIL = 'ayroque01@drivewise.local'
+const DRIVER_PASSWORD = 'Temp13dpjkd1opm3chztfhlxa0haeq!'
+const HELPER_ID = 'H003'
+
+const LEGS = [[{"lat":14.5904,"lng":120.98221000000001},{"lat":14.5904,"lng":120.98246},{"lat":14.5904,"lng":120.98312000000001},{"lat":14.5904,"lng":120.98360000000001},{"lat":14.5904,"lng":120.98374000000001},{"lat":14.5904,"lng":120.98374000000001},{"lat":14.590330000000002,"lng":120.98382000000001},{"lat":14.590300000000001,"lng":120.98385},{"lat":14.590270000000002,"lng":120.98388000000001},{"lat":14.590240000000001,"lng":120.9839},{"lat":14.59017,"lng":120.98393000000002},{"lat":14.589820000000001,"lng":120.98409000000001},{"lat":14.589530000000002,"lng":120.98423000000001},{"lat":14.58942,"lng":120.98428000000001},{"lat":14.589010000000002,"lng":120.98446000000001},{"lat":14.588730000000002,"lng":120.98460000000001},{"lat":14.588730000000002,"lng":120.98460000000001},{"lat":14.5888,"lng":120.98465000000002},{"lat":14.58933,"lng":120.98503000000001},{"lat":14.58941,"lng":120.98509000000001},{"lat":14.589440000000002,"lng":120.98511},{"lat":14.58956,"lng":120.9852},{"lat":14.589720000000002,"lng":120.98532000000002},{"lat":14.58974,"lng":120.98537},{"lat":14.58975,"lng":120.98538},{"lat":14.589760000000002,"lng":120.98538},{"lat":14.589860000000002,"lng":120.98547},{"lat":14.58989,"lng":120.98548000000001},{"lat":14.589920000000001,"lng":120.98551},{"lat":14.58994,"lng":120.98554000000001},{"lat":14.59002,"lng":120.98563000000001},{"lat":14.59007,"lng":120.98568000000002},{"lat":14.590140000000002,"lng":120.98578},{"lat":14.590240000000001,"lng":120.98588000000001},{"lat":14.59049,"lng":120.98610000000001},{"lat":14.590560000000002,"lng":120.98615000000001},{"lat":14.59059,"lng":120.98617000000002},{"lat":14.59063,"lng":120.98619000000001},{"lat":14.591130000000001,"lng":120.98645},{"lat":14.591270000000002,"lng":120.98652000000001},{"lat":14.591410000000002,"lng":120.98659},{"lat":14.591410000000002,"lng":120.98660000000001},{"lat":14.59172,"lng":120.98676},{"lat":14.59185,"lng":120.98682000000001},{"lat":14.591930000000001,"lng":120.98687000000001},{"lat":14.59209,"lng":120.98696000000001},{"lat":14.59219,"lng":120.98702000000002},{"lat":14.59247,"lng":120.98717},{"lat":14.592780000000001,"lng":120.98735},{"lat":14.593100000000002,"lng":120.98754000000001},{"lat":14.59327,"lng":120.98764000000001},{"lat":14.593420000000002,"lng":120.98773000000001},{"lat":14.593490000000001,"lng":120.98777000000001},{"lat":14.59368,"lng":120.98788},{"lat":14.594180000000001,"lng":120.98817000000001},{"lat":14.594360000000002,"lng":120.98831000000001},{"lat":14.594690000000002,"lng":120.98850000000002},{"lat":14.594980000000001,"lng":120.98867000000001},{"lat":14.595180000000001,"lng":120.98880000000001},{"lat":14.595220000000001,"lng":120.98880000000001},{"lat":14.5957,"lng":120.98908000000002},{"lat":14.59575,"lng":120.98911000000001},{"lat":14.595970000000001,"lng":120.98924000000001},{"lat":14.596110000000001,"lng":120.98933000000001},{"lat":14.596160000000001,"lng":120.98935000000002},{"lat":14.596250000000001,"lng":120.9894},{"lat":14.596400000000001,"lng":120.98951000000001},{"lat":14.596530000000001,"lng":120.98960000000001},{"lat":14.596700000000002,"lng":120.98962000000002},{"lat":14.596900000000002,"lng":120.98963},{"lat":14.597240000000001,"lng":120.98960000000001},{"lat":14.59734,"lng":120.98959},{"lat":14.59744,"lng":120.98959},{"lat":14.597470000000001,"lng":120.98959},{"lat":14.597510000000002,"lng":120.98959},{"lat":14.59754,"lng":120.98959},{"lat":14.597570000000001,"lng":120.98960000000001},{"lat":14.597590000000002,"lng":120.98960000000001},{"lat":14.597620000000001,"lng":120.98961000000001},{"lat":14.597660000000001,"lng":120.98963},{"lat":14.59782,"lng":120.98970000000001},{"lat":14.598250000000002,"lng":120.98992000000001},{"lat":14.59852,"lng":120.99003},{"lat":14.598680000000002,"lng":120.99011000000002},{"lat":14.598880000000001,"lng":120.99021},{"lat":14.59895,"lng":120.99024000000001},{"lat":14.59908,"lng":120.9903},{"lat":14.599250000000001,"lng":120.99043},{"lat":14.599310000000001,"lng":120.99047000000002},{"lat":14.599420000000002,"lng":120.99052},{"lat":14.599750000000002,"lng":120.99066},{"lat":14.599770000000001,"lng":120.99067000000001},{"lat":14.599920000000001,"lng":120.99074000000002},{"lat":14.599940000000002,"lng":120.99074000000002},{"lat":14.60007,"lng":120.99081000000001},{"lat":14.600100000000001,"lng":120.99083000000002},{"lat":14.600150000000001,"lng":120.99086000000001},{"lat":14.60021,"lng":120.99091000000001},{"lat":14.60025,"lng":120.99094000000001},{"lat":14.60025,"lng":120.99094000000001},{"lat":14.600320000000002,"lng":120.99101},{"lat":14.600470000000001,"lng":120.99113000000001},{"lat":14.60063,"lng":120.99124},{"lat":14.60077,"lng":120.99139000000001},{"lat":14.600880000000002,"lng":120.99152000000001},{"lat":14.600990000000001,"lng":120.99167000000001},{"lat":14.60105,"lng":120.99179000000001},{"lat":14.601090000000001,"lng":120.99186000000002},{"lat":14.601160000000002,"lng":120.99196},{"lat":14.601320000000001,"lng":120.99226000000002},{"lat":14.60143,"lng":120.99242000000001},{"lat":14.60148,"lng":120.99251000000001},{"lat":14.601540000000002,"lng":120.99260000000001},{"lat":14.601560000000001,"lng":120.99270000000001},{"lat":14.601550000000001,"lng":120.99287000000001},{"lat":14.60147,"lng":120.99322000000001},{"lat":14.60138,"lng":120.99354000000001},{"lat":14.601320000000001,"lng":120.9937},{"lat":14.601280000000001,"lng":120.99372000000001},{"lat":14.601250000000002,"lng":120.99375},{"lat":14.601250000000002,"lng":120.99376000000001},{"lat":14.601220000000001,"lng":120.99389000000001},{"lat":14.60082,"lng":120.99519000000001},{"lat":14.600600000000002,"lng":120.99570000000001},{"lat":14.600570000000001,"lng":120.99579000000001},{"lat":14.600550000000002,"lng":120.99588000000001},{"lat":14.60054,"lng":120.9959},{"lat":14.60054,"lng":120.99596000000001},{"lat":14.600530000000001,"lng":120.99597000000001},{"lat":14.600520000000001,"lng":120.99614000000001},{"lat":14.600520000000001,"lng":120.99616},{"lat":14.60054,"lng":120.99633000000001},{"lat":14.60059,"lng":120.99651000000001},{"lat":14.600760000000001,"lng":120.99708000000001},{"lat":14.60078,"lng":120.99717000000001},{"lat":14.600790000000002,"lng":120.99725000000001},{"lat":14.600790000000002,"lng":120.99725000000001},{"lat":14.600810000000001,"lng":120.99732000000002},{"lat":14.60082,"lng":120.99739000000001},{"lat":14.600850000000001,"lng":120.99754000000001},{"lat":14.600900000000001,"lng":120.99774000000001},{"lat":14.600970000000002,"lng":120.99804},{"lat":14.601040000000001,"lng":120.99834000000001},{"lat":14.60105,"lng":120.99843000000001},{"lat":14.601070000000002,"lng":120.99853000000002},{"lat":14.601080000000001,"lng":120.99859000000001},{"lat":14.601080000000001,"lng":120.99868000000001},{"lat":14.6011,"lng":120.99883000000001},{"lat":14.601110000000002,"lng":120.99888000000001},{"lat":14.601130000000001,"lng":120.99908},{"lat":14.60115,"lng":120.99929000000002},{"lat":14.601160000000002,"lng":120.99947000000002},{"lat":14.601170000000002,"lng":120.99964000000001},{"lat":14.601180000000001,"lng":120.99994000000001},{"lat":14.60119,"lng":121.00015},{"lat":14.601210000000002,"lng":121.00039000000001},{"lat":14.601250000000002,"lng":121.00076000000001},{"lat":14.601270000000001,"lng":121.00097000000001},{"lat":14.601310000000002,"lng":121.00125000000001},{"lat":14.60133,"lng":121.00145},{"lat":14.601350000000002,"lng":121.00162000000002},{"lat":14.60138,"lng":121.00185},{"lat":14.60139,"lng":121.00191000000001},{"lat":14.60139,"lng":121.00193000000002},{"lat":14.601370000000001,"lng":121.00200000000001},{"lat":14.601400000000002,"lng":121.00231000000001},{"lat":14.60143,"lng":121.00265000000002},{"lat":14.60143,"lng":121.00268000000001},{"lat":14.601450000000002,"lng":121.00292},{"lat":14.60148,"lng":121.00312000000001},{"lat":14.601490000000002,"lng":121.00325000000001},{"lat":14.601500000000001,"lng":121.00342},{"lat":14.60152,"lng":121.00361000000001},{"lat":14.601550000000001,"lng":121.00394000000001},{"lat":14.601580000000002,"lng":121.00435000000002},{"lat":14.60157,"lng":121.00446000000001},{"lat":14.60157,"lng":121.00447000000001},{"lat":14.601650000000001,"lng":121.00520000000002},{"lat":14.60171,"lng":121.00579},{"lat":14.601730000000002,"lng":121.00598000000001},{"lat":14.601740000000001,"lng":121.00615},{"lat":14.601790000000001,"lng":121.00661000000001},{"lat":14.6018,"lng":121.00682},{"lat":14.601820000000002,"lng":121.00695},{"lat":14.60185,"lng":121.00722},{"lat":14.601890000000001,"lng":121.00764000000001},{"lat":14.601910000000002,"lng":121.00788000000001},{"lat":14.601930000000001,"lng":121.00806000000001},{"lat":14.601980000000001,"lng":121.00858000000001},{"lat":14.60199,"lng":121.00873000000001},{"lat":14.602,"lng":121.00891000000001},{"lat":14.602010000000002,"lng":121.00907000000001},{"lat":14.602020000000001,"lng":121.00917000000001},{"lat":14.602110000000001,"lng":121.01003000000001},{"lat":14.60213,"lng":121.01029000000001},{"lat":14.60214,"lng":121.01037000000001},{"lat":14.602150000000002,"lng":121.01048000000002},{"lat":14.602160000000001,"lng":121.01055000000001},{"lat":14.602160000000001,"lng":121.01056000000001},{"lat":14.602190000000002,"lng":121.01102000000002},{"lat":14.602210000000001,"lng":121.01121},{"lat":14.602250000000002,"lng":121.01176000000001},{"lat":14.602340000000002,"lng":121.01270000000001},{"lat":14.602340000000002,"lng":121.01279000000001},{"lat":14.602380000000002,"lng":121.01331},{"lat":14.602400000000001,"lng":121.01353},{"lat":14.602430000000002,"lng":121.01387000000001},{"lat":14.602490000000001,"lng":121.01449000000001},{"lat":14.602520000000002,"lng":121.01485000000001},{"lat":14.60255,"lng":121.01507000000001},{"lat":14.602580000000001,"lng":121.01523000000002},{"lat":14.602630000000001,"lng":121.01537},{"lat":14.602710000000002,"lng":121.01556000000001},{"lat":14.602800000000002,"lng":121.01579000000001},{"lat":14.60283,"lng":121.01586},{"lat":14.60288,"lng":121.01594000000001},{"lat":14.603100000000001,"lng":121.01618},{"lat":14.603860000000001,"lng":121.01696000000001},{"lat":14.604000000000001,"lng":121.01710000000001},{"lat":14.604400000000002,"lng":121.01752},{"lat":14.604510000000001,"lng":121.01764000000001},{"lat":14.604540000000002,"lng":121.01767000000001},{"lat":14.605020000000001,"lng":121.01817000000001},{"lat":14.60551,"lng":121.01865000000001},{"lat":14.605670000000002,"lng":121.01881000000002},{"lat":14.605830000000001,"lng":121.01898000000001},{"lat":14.606420000000002,"lng":121.01959000000001},{"lat":14.60659,"lng":121.01976},{"lat":14.60692,"lng":121.02011000000002},{"lat":14.606930000000002,"lng":121.02012},{"lat":14.60706,"lng":121.02024000000002},{"lat":14.607090000000001,"lng":121.02028000000001},{"lat":14.607140000000001,"lng":121.02033000000002},{"lat":14.607350000000002,"lng":121.02054000000001},{"lat":14.607540000000002,"lng":121.02073000000001},{"lat":14.607660000000001,"lng":121.02085000000001},{"lat":14.607830000000002,"lng":121.02103000000001},{"lat":14.60795,"lng":121.02115},{"lat":14.60804,"lng":121.02124},{"lat":14.60832,"lng":121.02151},{"lat":14.608630000000002,"lng":121.02181000000002},{"lat":14.608870000000001,"lng":121.02207000000001},{"lat":14.608910000000002,"lng":121.02213},{"lat":14.60908,"lng":121.02231}],[{"lat":14.60908,"lng":121.02231},{"lat":14.609200000000001,"lng":121.02246000000001},{"lat":14.609320000000002,"lng":121.02267},{"lat":14.60945,"lng":121.02295000000001},{"lat":14.60945,"lng":121.02295000000001},{"lat":14.60955,"lng":121.02291000000001},{"lat":14.609470000000002,"lng":121.02272},{"lat":14.6094,"lng":121.02260000000001},{"lat":14.609290000000001,"lng":121.02242000000001},{"lat":14.609200000000001,"lng":121.02228000000001},{"lat":14.60899,"lng":121.02204},{"lat":14.6087,"lng":121.02174000000001},{"lat":14.60819,"lng":121.02119},{"lat":14.608110000000002,"lng":121.0211},{"lat":14.607460000000001,"lng":121.02042000000002},{"lat":14.607180000000001,"lng":121.02012},{"lat":14.606770000000001,"lng":121.01971},{"lat":14.606710000000001,"lng":121.01965000000001},{"lat":14.606340000000001,"lng":121.01928000000001},{"lat":14.605950000000002,"lng":121.01889000000001},{"lat":14.605900000000002,"lng":121.01884000000001},{"lat":14.605780000000001,"lng":121.01870000000001},{"lat":14.605620000000002,"lng":121.01853000000001},{"lat":14.60542,"lng":121.01834000000001},{"lat":14.605160000000001,"lng":121.01808000000001},{"lat":14.604880000000001,"lng":121.01779},{"lat":14.60453,"lng":121.01743},{"lat":14.6041,"lng":121.01696000000001},{"lat":14.603980000000002,"lng":121.01685},{"lat":14.60397,"lng":121.01683000000001},{"lat":14.603710000000001,"lng":121.01657000000002},{"lat":14.603200000000001,"lng":121.01604},{"lat":14.603040000000002,"lng":121.01584000000001},{"lat":14.60298,"lng":121.01578},{"lat":14.602940000000002,"lng":121.01571000000001},{"lat":14.60288,"lng":121.01562000000001},{"lat":14.602860000000002,"lng":121.01556000000001},{"lat":14.602810000000002,"lng":121.01544000000001},{"lat":14.60274,"lng":121.01526000000001},{"lat":14.60269,"lng":121.01507000000001},{"lat":14.602680000000001,"lng":121.01503000000001},{"lat":14.602660000000002,"lng":121.01486000000001},{"lat":14.602620000000002,"lng":121.01443},{"lat":14.60261,"lng":121.01427000000001},{"lat":14.602590000000001,"lng":121.01408},{"lat":14.602580000000001,"lng":121.01392000000001},{"lat":14.60255,"lng":121.01353},{"lat":14.602540000000001,"lng":121.01339000000002},{"lat":14.602520000000002,"lng":121.01322},{"lat":14.602500000000001,"lng":121.01297000000001},{"lat":14.602490000000001,"lng":121.01280000000001},{"lat":14.602490000000001,"lng":121.01279000000001},{"lat":14.602470000000002,"lng":121.0126},{"lat":14.602390000000002,"lng":121.01169000000002},{"lat":14.60232,"lng":121.01083000000001},{"lat":14.602310000000001,"lng":121.01062},{"lat":14.602300000000001,"lng":121.01055000000001},{"lat":14.602300000000001,"lng":121.01049},{"lat":14.602290000000002,"lng":121.01037000000001},{"lat":14.60228,"lng":121.01029000000001},{"lat":14.60228,"lng":121.01026000000002},{"lat":14.602240000000002,"lng":121.01},{"lat":14.602190000000002,"lng":121.00936000000002},{"lat":14.60218,"lng":121.00926000000001},{"lat":14.602160000000001,"lng":121.00905000000002},{"lat":14.60214,"lng":121.00879},{"lat":14.60214,"lng":121.00869000000002},{"lat":14.602120000000001,"lng":121.00856000000002},{"lat":14.602120000000001,"lng":121.00847000000002},{"lat":14.602100000000002,"lng":121.00831000000001},{"lat":14.602100000000002,"lng":121.00823000000001},{"lat":14.60209,"lng":121.00814000000001},{"lat":14.60208,"lng":121.00806000000001},{"lat":14.602070000000001,"lng":121.00797000000001},{"lat":14.602060000000002,"lng":121.0078},{"lat":14.60204,"lng":121.00762},{"lat":14.602030000000001,"lng":121.00745},{"lat":14.602020000000001,"lng":121.00737000000001},{"lat":14.601970000000001,"lng":121.00689000000001},{"lat":14.601930000000001,"lng":121.00657000000001},{"lat":14.6019,"lng":121.00615},{"lat":14.601830000000001,"lng":121.00542000000002},{"lat":14.6018,"lng":121.00516},{"lat":14.601780000000002,"lng":121.00489},{"lat":14.60176,"lng":121.00469000000001},{"lat":14.601740000000001,"lng":121.00450000000001},{"lat":14.601730000000002,"lng":121.0044},{"lat":14.60171,"lng":121.00428000000001},{"lat":14.601630000000002,"lng":121.00357000000001},{"lat":14.601600000000001,"lng":121.00328},{"lat":14.601510000000001,"lng":121.00236000000001},{"lat":14.601500000000001,"lng":121.00223000000001},{"lat":14.601500000000001,"lng":121.00223000000001},{"lat":14.60147,"lng":121.00201000000001},{"lat":14.601450000000002,"lng":121.00185},{"lat":14.60138,"lng":121.00130000000001},{"lat":14.601310000000002,"lng":121.00073},{"lat":14.601270000000001,"lng":121.00038},{"lat":14.601250000000002,"lng":121.00001},{"lat":14.601230000000001,"lng":120.99957},{"lat":14.601220000000001,"lng":120.99944},{"lat":14.601210000000002,"lng":120.99926},{"lat":14.60119,"lng":120.99909000000001},{"lat":14.601170000000002,"lng":120.99884000000002},{"lat":14.601130000000001,"lng":120.99853000000002},{"lat":14.601120000000002,"lng":120.99843000000001},{"lat":14.601090000000001,"lng":120.99828000000001},{"lat":14.601030000000002,"lng":120.998},{"lat":14.600970000000002,"lng":120.99774000000001},{"lat":14.60092,"lng":120.99756000000001},{"lat":14.60092,"lng":120.99755},{"lat":14.600850000000001,"lng":120.9972},{"lat":14.60086,"lng":120.9971},{"lat":14.600700000000002,"lng":120.99662000000001},{"lat":14.600660000000001,"lng":120.99649000000001},{"lat":14.60063,"lng":120.99635},{"lat":14.600620000000001,"lng":120.99624000000001},{"lat":14.600620000000001,"lng":120.99614000000001},{"lat":14.600620000000001,"lng":120.99604000000001},{"lat":14.600640000000002,"lng":120.99596000000001},{"lat":14.600640000000002,"lng":120.99593000000002},{"lat":14.600650000000002,"lng":120.99587000000001},{"lat":14.60068,"lng":120.99577000000001},{"lat":14.601170000000002,"lng":120.99437},{"lat":14.60129,"lng":120.99392},{"lat":14.601310000000002,"lng":120.99381000000001},{"lat":14.601320000000001,"lng":120.99377000000001},{"lat":14.60133,"lng":120.99373000000001},{"lat":14.601320000000001,"lng":120.9937},{"lat":14.60138,"lng":120.99354000000001},{"lat":14.60147,"lng":120.99322000000001},{"lat":14.601550000000001,"lng":120.99287000000001},{"lat":14.601560000000001,"lng":120.99270000000001},{"lat":14.601540000000002,"lng":120.99260000000001},{"lat":14.60148,"lng":120.99251000000001},{"lat":14.60143,"lng":120.99242000000001},{"lat":14.601320000000001,"lng":120.99226000000002},{"lat":14.601160000000002,"lng":120.99196},{"lat":14.601130000000001,"lng":120.99182},{"lat":14.601090000000001,"lng":120.99173},{"lat":14.601040000000001,"lng":120.99163000000001},{"lat":14.600930000000002,"lng":120.99148000000001},{"lat":14.600850000000001,"lng":120.99139000000001},{"lat":14.600710000000001,"lng":120.99122000000001},{"lat":14.600410000000002,"lng":120.99091000000001},{"lat":14.600410000000002,"lng":120.99091000000001},{"lat":14.600530000000001,"lng":120.99078000000002},{"lat":14.60059,"lng":120.99063000000001},{"lat":14.60073,"lng":120.99045000000001},{"lat":14.600840000000002,"lng":120.99020000000002},{"lat":14.601320000000001,"lng":120.98915000000001},{"lat":14.60152,"lng":120.98873},{"lat":14.601770000000002,"lng":120.98814000000002},{"lat":14.602010000000002,"lng":120.98763000000001},{"lat":14.60204,"lng":120.98756000000002},{"lat":14.602200000000002,"lng":120.98723000000001},{"lat":14.602240000000002,"lng":120.98715000000001},{"lat":14.602310000000001,"lng":120.98700000000001},{"lat":14.60279,"lng":120.98595000000002},{"lat":14.602960000000001,"lng":120.98558000000001},{"lat":14.602970000000001,"lng":120.98557000000001},{"lat":14.603100000000001,"lng":120.98528},{"lat":14.60317,"lng":120.98514000000002},{"lat":14.60322,"lng":120.98502},{"lat":14.603320000000002,"lng":120.98481000000001},{"lat":14.603340000000001,"lng":120.98476000000001},{"lat":14.60336,"lng":120.98471},{"lat":14.603380000000001,"lng":120.98461},{"lat":14.603430000000001,"lng":120.98436000000001},{"lat":14.60354,"lng":120.98371000000002},{"lat":14.60354,"lng":120.98371000000002},{"lat":14.603560000000002,"lng":120.98360000000001},{"lat":14.603410000000002,"lng":120.98357000000001},{"lat":14.6034,"lng":120.98367},{"lat":14.603320000000002,"lng":120.98433000000001},{"lat":14.603290000000001,"lng":120.98449000000001},{"lat":14.603280000000002,"lng":120.98456000000002},{"lat":14.603250000000001,"lng":120.98464000000001},{"lat":14.60316,"lng":120.98486000000001},{"lat":14.60316,"lng":120.98486000000001},{"lat":14.60312,"lng":120.98487000000002},{"lat":14.603090000000002,"lng":120.98488},{"lat":14.603050000000001,"lng":120.98488},{"lat":14.602770000000001,"lng":120.98483000000002},{"lat":14.602260000000001,"lng":120.98471},{"lat":14.601830000000001,"lng":120.98463000000001},{"lat":14.60166,"lng":120.98464000000001},{"lat":14.60166,"lng":120.98464000000001},{"lat":14.601590000000002,"lng":120.98463000000001},{"lat":14.601450000000002,"lng":120.98460000000001},{"lat":14.60105,"lng":120.98453},{"lat":14.600660000000001,"lng":120.98445000000001},{"lat":14.599530000000001,"lng":120.98415000000001},{"lat":14.59951,"lng":120.98414000000001}],[{"lat":14.59951,"lng":120.98414000000001},{"lat":14.598320000000001,"lng":120.9839},{"lat":14.597980000000002,"lng":120.98383000000001},{"lat":14.59787,"lng":120.98380000000002},{"lat":14.59787,"lng":120.98380000000002},{"lat":14.597840000000001,"lng":120.98376},{"lat":14.597790000000002,"lng":120.98373000000001},{"lat":14.59767,"lng":120.98370000000001},{"lat":14.597430000000001,"lng":120.98364000000001},{"lat":14.597030000000002,"lng":120.98355000000001},{"lat":14.596860000000001,"lng":120.98349},{"lat":14.596770000000001,"lng":120.98343000000001},{"lat":14.596670000000001,"lng":120.98335000000002},{"lat":14.596670000000001,"lng":120.98335000000002},{"lat":14.596420000000002,"lng":120.98363},{"lat":14.596420000000002,"lng":120.98363},{"lat":14.596560000000002,"lng":120.98378000000001},{"lat":14.596610000000002,"lng":120.98381},{"lat":14.596670000000001,"lng":120.98385},{"lat":14.596720000000001,"lng":120.98387000000001},{"lat":14.596770000000001,"lng":120.98389000000002},{"lat":14.597410000000002,"lng":120.98402000000002},{"lat":14.597990000000001,"lng":120.98415000000001},{"lat":14.598090000000001,"lng":120.98414000000001},{"lat":14.59814,"lng":120.98412},{"lat":14.598210000000002,"lng":120.98410000000001},{"lat":14.598210000000002,"lng":120.98410000000001},{"lat":14.598640000000001,"lng":120.98418000000001},{"lat":14.598860000000002,"lng":120.98424000000001},{"lat":14.59946,"lng":120.98436000000001},{"lat":14.59964,"lng":120.98439},{"lat":14.599820000000001,"lng":120.98443},{"lat":14.599990000000002,"lng":120.98446000000001},{"lat":14.60017,"lng":120.98450000000001},{"lat":14.60035,"lng":120.98453},{"lat":14.6004,"lng":120.98454000000001},{"lat":14.600500000000002,"lng":120.98456000000002},{"lat":14.600640000000002,"lng":120.98458000000001},{"lat":14.600750000000001,"lng":120.98461},{"lat":14.601110000000002,"lng":120.98469000000001},{"lat":14.601590000000002,"lng":120.98481000000001},{"lat":14.60176,"lng":120.98485000000001},{"lat":14.60176,"lng":120.98485000000001},{"lat":14.602110000000001,"lng":120.98490000000001},{"lat":14.602920000000001,"lng":120.98507000000001},{"lat":14.60298,"lng":120.98507000000001},{"lat":14.603040000000002,"lng":120.98508000000001},{"lat":14.603130000000002,"lng":120.98510000000002},{"lat":14.603240000000001,"lng":120.98512000000001},{"lat":14.603850000000001,"lng":120.98524},{"lat":14.60458,"lng":120.98538},{"lat":14.60458,"lng":120.98538},{"lat":14.60462,"lng":120.98540000000001},{"lat":14.60466,"lng":120.98544000000001},{"lat":14.604690000000002,"lng":120.98547},{"lat":14.60472,"lng":120.98550000000002},{"lat":14.604740000000001,"lng":120.98553000000001},{"lat":14.60476,"lng":120.98558000000001},{"lat":14.604780000000002,"lng":120.98566000000001},{"lat":14.605120000000001,"lng":120.98712},{"lat":14.60519,"lng":120.98746000000001},{"lat":14.605220000000001,"lng":120.98764000000001},{"lat":14.605250000000002,"lng":120.98776000000001},{"lat":14.60527,"lng":120.98785000000001},{"lat":14.60528,"lng":120.98793},{"lat":14.60528,"lng":120.98796000000002},{"lat":14.605260000000001,"lng":120.98804000000001},{"lat":14.605300000000002,"lng":120.98808000000001},{"lat":14.605360000000001,"lng":120.98813000000001},{"lat":14.605450000000001,"lng":120.98824},{"lat":14.605630000000001,"lng":120.98844000000001},{"lat":14.605770000000001,"lng":120.98859000000002},{"lat":14.605900000000002,"lng":120.98872000000001},{"lat":14.606130000000002,"lng":120.98897000000001},{"lat":14.606420000000002,"lng":120.98929000000001},{"lat":14.606630000000001,"lng":120.98952000000001},{"lat":14.606910000000001,"lng":120.98986000000001},{"lat":14.60711,"lng":120.99008},{"lat":14.607610000000001,"lng":120.99063000000001},{"lat":14.607850000000001,"lng":120.99089000000001},{"lat":14.607980000000001,"lng":120.99104000000001},{"lat":14.6081,"lng":120.99117000000001},{"lat":14.608580000000002,"lng":120.99173},{"lat":14.60903,"lng":120.99219000000001},{"lat":14.60908,"lng":120.99224000000001},{"lat":14.60946,"lng":120.99264000000001},{"lat":14.609580000000001,"lng":120.99277000000001},{"lat":14.609650000000002,"lng":120.99286000000001},{"lat":14.610030000000002,"lng":120.99325},{"lat":14.610180000000001,"lng":120.99342000000001},{"lat":14.610360000000002,"lng":120.99358000000001},{"lat":14.61049,"lng":120.99372000000001},{"lat":14.61067,"lng":120.99394000000001},{"lat":14.610930000000002,"lng":120.99423000000002},{"lat":14.611160000000002,"lng":120.99450000000002},{"lat":14.611650000000001,"lng":120.99505},{"lat":14.611650000000001,"lng":120.99505},{"lat":14.610610000000001,"lng":120.99606000000001},{"lat":14.609580000000001,"lng":120.99717000000001},{"lat":14.608530000000002,"lng":120.99820000000001},{"lat":14.608150000000002,"lng":120.99854},{"lat":14.6081,"lng":120.99859000000001},{"lat":14.607960000000002,"lng":120.99871000000002},{"lat":14.60772,"lng":120.99893000000002},{"lat":14.60758,"lng":120.99906000000001},{"lat":14.60753,"lng":120.99912},{"lat":14.60743,"lng":120.99919000000001},{"lat":14.60673,"lng":120.99986000000001},{"lat":14.606370000000002,"lng":121.0002},{"lat":14.605950000000002,"lng":121.00061000000001},{"lat":14.605910000000002,"lng":121.00064},{"lat":14.605760000000002,"lng":121.00080000000001},{"lat":14.605720000000002,"lng":121.00083000000001},{"lat":14.605690000000001,"lng":121.00086},{"lat":14.605630000000001,"lng":121.00092000000001},{"lat":14.605630000000001,"lng":121.00092000000001},{"lat":14.60556,"lng":121.00082},{"lat":14.605440000000002,"lng":121.00061000000001},{"lat":14.60532,"lng":121.00044000000001},{"lat":14.605220000000001,"lng":121.00029},{"lat":14.605,"lng":120.99999000000001}]]
+
+const CHAIN_POINTS = [
+  { key: 'dropoff', label: 'Dropoff', lat: 14.6091, lng: 121.0223 },
+  { key: 'stop1', label: 'Dropoff 2 (first extra stop)', lat: 14.5995, lng: 120.9842 },
+  { key: 'stop2', label: 'Dropoff 3 (second extra stop)', lat: 14.6050, lng: 121.0000 },
+]
+const PICKUP_POINT = { key: 'pickup', label: 'Pickup', lat: 14.5906, lng: 120.9822 }
+
+const $ = (id) => document.getElementById(id)
+const logEl = $('log')
+function log(msg) {
+  const time = new Date().toLocaleTimeString()
+  logEl.textContent += `[${time}] ${msg}\n`
+  logEl.scrollTop = logEl.scrollHeight
+}
+
+// Prefill from localStorage, falling back to this project's known public values.
+$('url').value = localStorage.getItem('dcp_url') || 'https://tcoschnsmttpnzuhmdko.supabase.co'
+$('anon').value = localStorage.getItem('dcp_anon') || 'sb_publishable_Dc5LzgRTh80Rzik12MUMcg_V_Y5mpWF'
+$('service').value = localStorage.getItem('dcp_service') || ''
+;['url', 'anon', 'service'].forEach((id) => {
+  $(id).addEventListener('change', () => localStorage.setItem(`dcp_${id}`, $(id).value.trim()))
+})
+
+function cfg() {
+  return {
+    url: $('url').value.trim().replace(/\/$/, ''),
+    anon: $('anon').value.trim(),
+    service: $('service').value.trim(),
+  }
+}
+
+async function supaFetch(path, { method = 'GET', role = 'service', body, headers = {} } = {}) {
+  const { url, anon, service } = cfg()
+  const key = role === 'service' ? service : anon
+  if (role === 'service' && !key) throw new Error('Service role key is required for this action')
+  const res = await fetch(`${url}${path}`, {
+    method,
+    headers: {
+      apikey: role === 'service' ? key : anon,
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      ...headers,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const text = await res.text()
+  let data = null
+  try { data = text ? JSON.parse(text) : null } catch { data = text }
+  if (!res.ok) throw new Error(typeof data === 'object' ? (data?.error || data?.message || JSON.stringify(data)) : String(data))
+  return data
+}
+
+async function signInDriver() {
+  const { anon } = cfg()
+  const data = await supaFetch('/auth/v1/token?grant_type=password', {
+    role: 'anon',
+    method: 'POST',
+    body: { email: DRIVER_EMAIL, password: DRIVER_PASSWORD },
+  })
+  return data.access_token
+}
+
+// session_id matters, not just delivery_request_id: DriverDeliveries.jsx's
+// Live Navigation subscribes to gps_logs INSERTs filtered by
+// `session_id=eq.<active session>` (see LiveNavigationMap's Realtime
+// subscription), not delivery_request_id. A row inserted with session_id
+// left null still saves fine (the column's nullable, for GPS-during-Pause)
+// but is invisible to that subscription -- the map's position just never
+// updates. Always resolve and pass the real session_id here.
+async function insertGpsLog(lat, lng, sessionId) {
+  await supaFetch('/rest/v1/gps_logs', {
+    role: 'service',
+    method: 'POST',
+    headers: { Prefer: 'return=minimal' },
+    body: { delivery_request_id: DELIVERY_ID, session_id: sessionId || null, latitude: lat, longitude: lng, timestamp: new Date().toISOString() },
+  })
+}
+
+async function resolveActiveSessionId() {
+  const sessions = await supaFetch(
+    `/rest/v1/sessions?delivery_request_id=eq.${DELIVERY_ID}&status=eq.Active&select=session_id`,
+    { role: 'service' },
+  )
+  return sessions?.[0]?.session_id || null
+}
+
+// ---- Part 1: Play GPS route ----
+let playAbort = null
+$('playBtn').addEventListener('click', async () => {
+  $('playBtn').disabled = true
+  $('stopBtn').disabled = false
+  playAbort = { stopped: false }
+  try {
+    $('playStatus').textContent = 'Checking for an existing Active session...'
+    let sessionId = await resolveActiveSessionId()
+
+    if (!sessionId) {
+      log('No Active session -- resetting to ASSIGNED and starting a fresh trip.')
+      await supaFetch(`/rest/v1/delivery_requests?id=eq.${DELIVERY_ID}`, {
+        role: 'service', method: 'PATCH', body: { status: 'ASSIGNED' },
+      })
+      const token = await signInDriver()
+      const startRes = await fetch(`${cfg().url}/functions/v1/driver-trip`, {
+        method: 'POST',
+        headers: { apikey: cfg().anon, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start-trip', deliveryRequestId: DELIVERY_ID }),
+      }).then((r) => r.json())
+      sessionId = startRes?.session?.session_id
+      if (!sessionId) throw new Error('start-trip did not return a session id: ' + JSON.stringify(startRes))
+    } else {
+      log(`Reusing existing Active session: ${sessionId}`)
+    }
+
+    // Always force OUT_FOR_DROPOFF, whether the session was reused or just
+    // started -- a reused session's delivery could still be sitting at
+    // OUT_FOR_PICKUP (e.g. left there by Reset Chain below), and
+    // LiveNavigationMap only renders the multi-color post-pickup chain once
+    // status is actually past pickup. Without this, Play silently shows just
+    // the single to-pickup leg/color instead of the full chain.
+    await supaFetch(`/rest/v1/delivery_requests?id=eq.${DELIVERY_ID}`, {
+      role: 'service', method: 'PATCH', body: { status: 'OUT_FOR_DROPOFF' },
+    })
+
+    const points = LEGS.flat()
+    // Dense capture (every point along each step's actual road-following
+    // path, not just each turn's end point) -- short interval so ~550+
+    // points still finishes in a reasonable demo time. Logging is throttled
+    // to every 10th point so the log panel stays readable.
+    log(`Replaying ${points.length} points across ${LEGS.length} legs against session ${sessionId}...`)
+    for (let i = 0; i < points.length; i++) {
+      if (playAbort.stopped) { log('Stopped by user.'); break }
+      const p = points[i]
+      await insertGpsLog(p.lat, p.lng, sessionId)
+      $('playStatus').textContent = `Tick ${i + 1}/${points.length}: ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`
+      if (i % 10 === 0 || i === points.length - 1) log(`tick ${i}: ${p.lat.toFixed(6)},${p.lng.toFixed(6)}`)
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    $('playStatus').textContent = playAbort.stopped ? 'Stopped.' : 'Done.'
+  } catch (err) {
+    log(`ERROR: ${err.message}`)
+    $('playStatus').textContent = `Error: ${err.message}`
+  } finally {
+    $('playBtn').disabled = false
+    $('stopBtn').disabled = true
+    playAbort = null
+  }
+})
+$('stopBtn').addEventListener('click', () => { if (playAbort) playAbort.stopped = true })
+
+// ---- Part 2/3: Reset chain + Next location nudge ----
+let pointIndex = -1 // -1 = not started; 0 = pickup already set by Reset; 1..N = CHAIN_POINTS index
+let currentSessionId = null // resolved by Reset, reused by Next -- see insertGpsLog's comment
+
+function updateNextLabel() {
+  const upcoming = CHAIN_POINTS[pointIndex] // next one to move to
+  $('nextLabel').textContent = upcoming ? `⏭ Next: ${upcoming.label}` : '✓ Chain complete'
+  $('nextBtn').disabled = !upcoming
+}
+
+$('resetBtn').addEventListener('click', async () => {
+  $('resetBtn').disabled = true
+  try {
+    $('nextStatus').textContent = 'Assigning Helper and resetting chain state...'
+    await supaFetch(`/rest/v1/delivery_requests?id=eq.${DELIVERY_ID}`, {
+      role: 'service', method: 'PATCH', body: { assigned_helper_ids: [HELPER_ID] },
+    })
+
+    currentSessionId = await resolveActiveSessionId()
+    if (!currentSessionId) {
+      log('No Active session -- resetting to ASSIGNED and starting a fresh trip.')
+      await supaFetch(`/rest/v1/delivery_requests?id=eq.${DELIVERY_ID}`, {
+        role: 'service', method: 'PATCH', body: { status: 'ASSIGNED' },
+      })
+      const token = await signInDriver()
+      const startRes = await fetch(`${cfg().url}/functions/v1/driver-trip`, {
+        method: 'POST',
+        headers: { apikey: cfg().anon, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start-trip', deliveryRequestId: DELIVERY_ID }),
+      }).then((r) => r.json())
+      currentSessionId = startRes?.session?.session_id
+      if (!currentSessionId) throw new Error('start-trip did not return a session id: ' + JSON.stringify(startRes))
+    }
+
+    await supaFetch(`/rest/v1/delivery_requests?id=eq.${DELIVERY_ID}`, {
+      role: 'service',
+      method: 'PATCH',
+      body: {
+        status: 'OUT_FOR_PICKUP',
+        pickup_photo_url: null,
+        dropoff_photo_url: null,
+        dropoff_completed_at: null,
+        stops: [{ location: '14.5995, 120.9842' }, { location: '14.6050, 121.0000' }],
+      },
+    })
+    await insertGpsLog(PICKUP_POINT.lat, PICKUP_POINT.lng, currentSessionId)
+    pointIndex = 0
+    updateNextLabel()
+    log('Reset done. Crew positioned at Pickup. Ready for Confirm Pickup in the Helper app.')
+    $('nextStatus').textContent = 'Ready. Complete Confirm Pickup in the Helper app now, then click Next above.'
+  } catch (err) {
+    log(`ERROR: ${err.message}`)
+    $('nextStatus').textContent = `Error: ${err.message}`
+  } finally {
+    $('resetBtn').disabled = false
+  }
+})
+
+$('nextBtn').addEventListener('click', async () => {
+  if (pointIndex < 0 || pointIndex >= CHAIN_POINTS.length) return
+  $('nextBtn').disabled = true
+  const target = CHAIN_POINTS[pointIndex]
+  try {
+    await insertGpsLog(target.lat, target.lng, currentSessionId)
+    log(`Moved crew to ${target.label} (${target.lat}, ${target.lng}).`)
+    pointIndex += 1
+    $('nextStatus').textContent = `At ${target.label}. Complete that step in the Helper app, then click Next again.`
+    updateNextLabel()
+  } catch (err) {
+    log(`ERROR: ${err.message}`)
+    $('nextStatus').textContent = `Error: ${err.message}`
+    $('nextBtn').disabled = false
+  }
+})
+
+$('restartPointsBtn').addEventListener('click', () => {
+  pointIndex = pointIndex < 0 ? -1 : 0
+  updateNextLabel()
+  log('Point cursor reset to Pickup (click Reset Chain to actually move the GPS position too).')
+  $('nextStatus').textContent = 'Cursor reset. Click Reset Chain to fully restart, or Next to continue nudging.'
+})
+
+updateNextLabel()
+log('Ready. Fill in your service_role key above, then use the buttons.')
+</script>
+</body>
+</html>
