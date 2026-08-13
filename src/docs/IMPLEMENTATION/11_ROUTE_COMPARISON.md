@@ -24,12 +24,11 @@ Per `00_IMPLEMENTATION_RULES.md`, this needs a new column before any of this can
 
 No other schema is missing — `gps_logs` already carries everything needed to reconstruct the actual route.
 
-## Open decision: when is the suggested route generated?
+## Decision: when is the suggested route generated (decided 2026-08-13)
 
-This determines what "suggested route" even means, and needs a decision before implementing, not an assumption:
+**At trip creation/assignment** — matches `02_BOOKING_AND_TRIP_CREATION.md`'s original, never-built plan: one fixed route from `pickup_location` to `dropoff_location` (through `stops`), generated the moment the Supervisor assigns driver/truck/plate. Chosen specifically so drivers and other users can see the planned route *before* the trip starts, not only after the fact — this was the deciding factor over the Start Trip alternative.
 
-- **At trip creation/assignment** (matches `02_BOOKING_AND_TRIP_CREATION.md`'s original, never-built plan) — one fixed route from `pickup_location` to `dropoff_location` (through `stops`), generated the moment the Supervisor assigns driver/truck/plate. Pro: matches what was already decided once. Con: the driver may not start from the depot — the live nav's pickup leg already starts from wherever the driver actually is when driving begins, which this wouldn't capture.
-- **At Start Trip** (recommended) — generate and freeze the route at the moment `driver-trip`'s `start-trip` action fires, using the driver's most recent known position (or `pickup_location` if none yet) as the pickup leg's origin, then `pickup_location → dropoff_location → stops[...]` for the rest of the chain — same waypoint shape `LiveNavigationMap` already builds (`DriverDeliveries.jsx:484`), just computed once server-side (or client-side by the Driver app, written back) instead of continuously. This is the point that actually answers "what route did we suggest for this Trip," since it's frozen at the moment driving began, and reuses the exact waypoint-building logic that already exists rather than inventing a second one.
+Known trade-off, accepted: the driver may not actually start from the depot — `LiveNavigationMap`'s pickup leg starts from wherever the driver's live position is when driving begins (`DriverDeliveries.jsx:497`), which this fixed route won't capture. `suggested_route`'s pickup leg will originate from `pickup_location`, not the driver's real starting point, so a driver who begins far from the depot will show deviation on the first leg by construction. Acceptable per this decision — flagging here so it isn't mistaken for a bug later.
 
 Either way: reuse `DirectionsService`, not the Routes API — `01_SYSTEM_ARCHITECTURE.md`'s Route Comparison section already corrected `02_BOOKING_AND_TRIP_CREATION.md`'s Routes-API assumption once (`02B_MULTI_STOP_DELIVERIES.md`'s "Real contradiction found and corrected"); building fresh code against the Routes API here would reintroduce the same already-resolved contradiction.
 
@@ -60,4 +59,4 @@ Both are additive to the existing `DirectionsService`/`@react-google-maps/api` s
 
 ## Deliverable
 
-Not implemented yet — this document is the plan. Before writing code: confirm the trigger-point decision above (trip-creation vs. Start Trip), add the `suggested_route` migration, then wire `RouteDeviationMap` to real `delivery_requests.suggested_route` + reconstructed `gps_logs` data per delivery, extending it for multi-leg chains. Traffic-aware `drivingOptions` and `TrafficLayer` are small, independent additions that can land separately from the persistence work above.
+Not implemented yet — this document is the plan. Trigger-point decision is now locked (trip creation/assignment, above). Still needed before code: add the `suggested_route` migration (schema gap, requires explicit approval per `00_IMPLEMENTATION_RULES.md`), generate it via `DirectionsService` at assignment time, then wire `RouteDeviationMap` to real `delivery_requests.suggested_route` + reconstructed `gps_logs` data per delivery, extending it for multi-leg chains. Traffic-aware `drivingOptions` and `TrafficLayer` are small, independent additions that can land separately from the persistence work above.

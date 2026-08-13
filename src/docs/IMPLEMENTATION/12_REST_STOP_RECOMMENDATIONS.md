@@ -20,12 +20,12 @@ Two pieces of the underlying math already exist elsewhere in the codebase, just 
 
 ### Threshold rule
 
-Recommend a rest stop once **either** of the following is true, since the later of Trip start or the last recommendation:
+Recommend a rest stop once **either** of the following is true, since Trip start:
 
 - Distance traveled ≥ 200 miles (321.9 km)
 - Elapsed driving time ≥ 2 hours
 
-"Since the last recommendation" (reset the counters after each rest-stop suggestion, so a long multi-leg Trip can recommend more than once) vs. "since Trip start only" (simpler, one-shot) is an open decision — flagging rather than assuming, since it changes whether this needs its own small piece of state (a `last_rest_stop_at`-style marker) or can be purely derived from `sessions.start_time` + `gps_logs` with no new column.
+**Decided 2026-08-13: Trip-start only, one-shot** — no reset-after-recommendation behavior. This is purely derived from `sessions.start_time` + `gps_logs`, no new column or state needed. A given Trip recommends at most once (per the multi-session summation rule below, not per-Session).
 
 Driving *time* should track actual driving, not wall-clock Trip duration — a Paused Trip (`03B_PAUSE_AND_RESUME_TRIP.md`) closes its Session, so `sessions.start_time` naturally excludes Paused time already (a new Session starts fresh on Resume); a multi-Session Trip should sum each Session's own active duration rather than using the first Session's `start_time` against "now," the same reasoning `01_SYSTEM_ARCHITECTURE.md`'s Route Comparison section already applies to combining multiple Sessions' GPS logs into one Trip.
 
@@ -38,15 +38,12 @@ Recommend computing this **client-side in the Driver app**, not a new backend jo
 
 ### Finding an actual rest stop location
 
-Threshold detection ("time to recommend a break") is separate from "recommend *where*" — the second half needs a live nearby-place lookup (e.g. Google Places API "gas_station"/"rest_area" search around the driver's current position), which is its own scope decision (search radius, place-type filtering, which Places API tier — `02_BOOKING_AND_TRIP_CREATION.md`'s Google Maps Platform Setup already has Places API (New) enabled for booking-form autocomplete, but a nearby-search call is a different API method/billing line than autocomplete, and hasn't been confirmed enabled). Not resolved here — report before assuming a specific Places call is already covered by existing setup.
+**Decided 2026-08-13: out of scope.** This feature is a pure threshold recommendation — "you've been driving 200mi / 2hr, consider a rest stop" — with no suggested location attached. No Places API call, no nearby-search, no place-type filtering. This removes the only open question that would have required confirming additional Google Maps Platform billing/API enablement. If a "where" component is wanted later, it's a separate follow-up phase, not part of this one.
 
 ### Whether this becomes a stored alert
 
-Open decision, not assumed: `06_DROWSINESS_ALERT_PIPELINE.md`'s `alerts` table is schema-locked to the four drowsiness `event_type` values (`00_IMPLEMENTATION_RULES.md`'s "never rename/repurpose existing columns" spirit extends to not silently overloading `event_type` with an unrelated fatigue-break concern). Two options:
-
-- **Ephemeral, client-side only** (recommended for a first version) — the Driver app computes the threshold locally and shows a banner/toast; nothing persisted, no audit trail. Matches that nothing today needs to answer "was this driver ever told to rest on this Trip" historically.
-- **Persisted** — if an audit trail is wanted (e.g. a Supervisor should see *whether* a recommendation fired, not just whether the driver was speeding/drowsy), that needs a new table or column, reported as a schema gap before building, not added silently.
+**Decided 2026-08-13: Ephemeral, client-side only.** The Driver app computes the threshold locally and shows a banner/toast; nothing persisted, no audit trail, no new table/column, no use of the schema-locked `alerts` table (`06_DROWSINESS_ALERT_PIPELINE.md`'s four drowsiness `event_type` values are untouched).
 
 ## Deliverable
 
-Not implemented — this document is the plan. Building it means: (1) decide the reset-on-recommendation vs. Trip-start-only question, (2) add the client-side distance/time accumulator to the Driver app (reusing existing GPS-subscription and Session `start_time` data, no new backend), (3) decide and confirm the Places lookup for an actual nearby location, (4) decide whether a recommendation is ephemeral or persisted. Once real numbers exist, the already-built "Recommended Rest Stop" UI slot in `SupDeliveries.jsx`'s DriveWise Alerts card and Route Deviation Report tab can be restored for real Trips (currently intentionally hidden for real-alert deliveries, mock-only for report entries), rather than building new UI.
+Not implemented — this document was the plan; all open decisions are now resolved (2026-08-13): Trip-start-only threshold, no location lookup, ephemeral client-side only. Building it means: add the client-side distance/time accumulator to the Driver app (reusing existing GPS-subscription and Session `start_time` data, no new backend, no schema changes at all for this phase). Once real numbers exist, the already-built "Recommended Rest Stop" UI slot in `SupDeliveries.jsx`'s DriveWise Alerts card and Route Deviation Report tab can be restored for real Trips — though note it currently also displays `rest_stop_distance_km` (a location-derived field); since this phase produces no location, that field should be dropped or left blank for real (non-mock) recommendations rather than fabricated.
