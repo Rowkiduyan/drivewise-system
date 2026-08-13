@@ -44,6 +44,38 @@ either), override it:
 export DRIVEWISE_VIBE_MOTOR_PIN=17
 ```
 
+**GPS module wired to the GPIO UART pins (not a USB dongle) needs two checks
+before it'll work at all**, confirmed the hard way on real hardware
+2026-08-13:
+
+1. **`/dev/serial0` must resolve to `ttyAMA0`, not `ttyS0`.** By default,
+   Bluetooth holds the Pi's one full hardware UART (`ttyAMA0`), leaving
+   `/dev/serial0` aliased to the mini-UART (`ttyS0`) instead — clock-coupled
+   to the GPU/core clock, unreliable for continuous serial reads (symptom:
+   `gps_reader_thread` either throws `could not open serial port` or opens
+   fine but never receives a single byte). Check with `readlink -f
+   /dev/serial0`; if it prints `/dev/ttyS0`, add this to
+   `/boot/firmware/config.txt` under the `[all]` section:
+   ```
+   dtoverlay=disable-bt
+   ```
+   then `sudo reboot` and re-check. (`hciuart.service`, the older mechanism
+   for this, doesn't exist on Debian 13/trixie-based Pi OS images — the
+   `dtoverlay` alone is sufficient there, nothing else to disable.)
+2. **Baud rate and NMEA sentence prefix vary by module.** This script
+   defaults to `DRIVEWISE_GPS_BAUD_RATE=38400` and matches both `$GPRMC`
+   (GPS-only) and `$GNRMC` (combined-constellation) sentences — confirmed
+   against one real module on 2026-08-13 after the stock `9600`/`$GPRMC`-only
+   assumption silently received nothing even with the UART fixed. If a
+   different unit's module uses a different rate, override it:
+   ```
+   export DRIVEWISE_GPS_BAUD_RATE=9600
+   ```
+   To sanity-check what your specific module actually needs before trusting
+   this script, a quick standalone test (open `/dev/serial0` directly, print
+   raw lines, try common rates like `9600`/`38400`) is faster to iterate on
+   than debugging through the full script's threads.
+
 Then:
 
 ```

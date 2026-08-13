@@ -424,6 +424,17 @@ function LiveNavigationMap({
   // written back — stops are reference-only, no per-stop status
   // (02B_MULTI_STOP_DELIVERIES.md).
   const [currentLegIndex, setCurrentLegIndex] = useState(0)
+  // How many real-world legs were already completed before the CURRENT
+  // `directions` object's own leg numbering started at 0 -- a reroute
+  // recomputes the route from the driver's live position through only the
+  // remaining stops, so its legs[] always restarts at index 0 regardless of
+  // how far into the trip the driver actually is. Without this offset,
+  // colors/labels (which key off currentLegIndex) would jump backwards to
+  // "leg 0" on every reroute instead of continuing forward -- looked like a
+  // different/earlier leg's route reappearing. currentLegIndex itself stays
+  // relative (it has to, since it indexes into the current directions
+  // object's legs[]/steps[]); this offset makes color/label math absolute.
+  const [completedLegsOffset, setCompletedLegsOffset] = useState(0)
   // Persisted across refreshes/remounts -- a driver who mutes voice guidance
   // mid-trip shouldn't have it come back on just because the page reloaded.
   const [isMuted, setIsMuted] = useState(() => localStorage.getItem('driverNavMuted') === 'true')
@@ -456,7 +467,11 @@ function LiveNavigationMap({
   // through moveCamera() below instead, which doesn't have that problem.
   const [initialCenter] = useState(() => origin || destination)
 
-  const computeRoute = (routeOrigin, routeDestination, routeWaypoints) => {
+  // legOffset is how many real-world legs are already behind this route
+  // before its own legs[0] -- 0 for a fresh mount/destination change, or
+  // completedLegsOffset + currentLegIndex when called from the reroute
+  // effect (see completedLegsOffset's own comment above).
+  const computeRoute = (routeOrigin, routeDestination, routeWaypoints, legOffset = 0) => {
     if (!window.google || !routeOrigin || !routeDestination) return
     new window.google.maps.DirectionsService().route(
       {
@@ -470,6 +485,7 @@ function LiveNavigationMap({
           setDirections(result)
           setCurrentStepIndex(0)
           setCurrentLegIndex(0)
+          setCompletedLegsOffset(legOffset)
           setRouteError(false)
         } else {
           setRouteError(true)
@@ -616,8 +632,9 @@ function LiveNavigationMap({
     // passed (indices before currentLegIndex) are dropped rather than
     // re-inserted into the new route. computeRoute resets currentLegIndex to
     // 0 on success, which correctly means "0 stops remaining before this one"
-    // for the new, shorter waypoints list.
-    computeRoute(livePosition, destination, waypoints.slice(currentLegIndex))
+    // for the new, shorter waypoints list -- legOffset carries the real
+    // absolute progress forward so color/label math doesn't reset with it.
+    computeRoute(livePosition, destination, waypoints.slice(currentLegIndex), completedLegsOffset + currentLegIndex)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [livePosition, directions, isPaused, isLoaded, currentLegIndex])
 
@@ -647,10 +664,16 @@ function LiveNavigationMap({
   const legs = directions?.routes[0]?.legs || []
   const steps = legs[currentLegIndex]?.steps || []
   const currentStep = steps[currentStepIndex]
+  // Absolute progress across the whole trip, not just this (possibly
+  // reroute-shortened) directions object -- see completedLegsOffset's comment.
+  const absoluteLegIndex = completedLegsOffset + currentLegIndex
   // "Stop 2 of 4"-style indicator -- only meaningful with stops (more than
-  // one leg); legs.length === stops.length + 1 (final leg is to destination).
-  const totalStopLegs = legs.length - 1
-  const isOnFinalLeg = currentLegIndex >= totalStopLegs
+  // one leg). Deliberately sourced from the stable `stops` prop, not
+  // `legs.length - 1`: a reroute recomputes the route through only the
+  // remaining stops, so legs.length shrinks each time one, which would make
+  // the total count itself count down instead of staying fixed.
+  const totalStopLegs = (stops || []).length
+  const isOnFinalLeg = absoluteLegIndex >= totalStopLegs
   // The point the driver is actually en route to right now -- the endpoint
   // of whichever leg is current. Compared against each waypoint marker's
   // coords (loose tolerance -- both sides ultimately come from the same
@@ -755,7 +778,7 @@ function LiveNavigationMap({
                 options={{
                   strokeColor: needsPickup
                     ? NAV_LEG_COLORS[0]
-                    : NAV_LEG_COLORS[(currentLegIndex + 1) % NAV_LEG_COLORS.length],
+                    : NAV_LEG_COLORS[(absoluteLegIndex + 1) % NAV_LEG_COLORS.length],
                   strokeOpacity: 0.9,
                   strokeWeight: 7,
                   zIndex: 1,
@@ -837,7 +860,7 @@ function LiveNavigationMap({
           <p className="font-semibold text-amber-800">
             {isOnFinalLeg
               ? 'Heading to Drop-off'
-              : `Stop ${currentLegIndex + 1} of ${totalStopLegs}`}
+              : `Stop ${absoluteLegIndex + 1} of ${totalStopLegs}`}
           </p>
         )}
         {routeError ? (
@@ -2771,7 +2794,14 @@ function DriverDeliveries() {
               </div>
             )}
 
-            {!isPausedTrip && statusCfg.nextLabel && (
+            {/* Gated on isMonitoring OR nextLabel, not just nextLabel --
+                FOR_PICKUP/OUT_FOR_DELIVERY (the driving stages, when
+                LiveNavigationMap is on screen) both have nextLabel: null
+                since Confirm Pickup/Complete Delivery moved to the Helper,
+                which previously hid this entire bar including Pause Trip --
+                the only way to pause was LiveNavigationMap's own duplicate
+                fullscreen-footer button. */}
+            {!isPausedTrip && (isMonitoring || statusCfg.nextLabel) && (
               <div className="sticky bottom-0 z-10 -mx-4 border-t border-amber-200/70 bg-white/95 px-4 py-2.5 backdrop-blur-sm sm:-mx-6 sm:px-6 md:-mx-8 md:px-8 lg:-mx-12 lg:px-12">
                 <div className="mx-auto flex w-full flex-col gap-1.5 sm:w-auto sm:min-w-[280px] sm:flex-row">
                   {isMonitoring && (
@@ -2783,13 +2813,15 @@ function DriverDeliveries() {
                       Pause Trip
                     </button>
                   )}
-                  <button
-                    onClick={() => setConfirmingStageAdvance(true)}
-                    className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-xs font-bold text-white transition ${statusCfg.nextColor}`}
-                  >
-                    <statusCfg.nextIcon className="h-4 w-4" />
-                    {statusCfg.nextLabel}
-                  </button>
+                  {statusCfg.nextLabel && (
+                    <button
+                      onClick={() => setConfirmingStageAdvance(true)}
+                      className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-xs font-bold text-white transition ${statusCfg.nextColor}`}
+                    >
+                      <statusCfg.nextIcon className="h-4 w-4" />
+                      {statusCfg.nextLabel}
+                    </button>
+                  )}
                 </div>
               </div>
             )}

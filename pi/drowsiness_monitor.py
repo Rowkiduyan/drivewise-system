@@ -99,6 +99,14 @@ HTTP_TIMEOUT_SEC = 8.0
 # differs from this one.
 VIBE_MOTOR_PIN = int(os.environ.get("DRIVEWISE_VIBE_MOTOR_PIN", "4"))
 
+# GPS module baud rate -- confirmed via live hardware testing 2026-08-13 that
+# this unit's module talks at 38400, not the more common NMEA default of
+# 9600 (gps_test.py, a separate diagnostic script, confirmed this by
+# actually locking a fix at 38400 while this script's hardcoded 9600 read
+# nothing but noise off the same wiring). Override via env var if a
+# different unit's module uses a different rate.
+GPS_BAUD_RATE = int(os.environ.get("DRIVEWISE_GPS_BAUD_RATE", "38400"))
+
 # --- AI & KPI THRESHOLDS (carried over from the dlib prototypes as a
 # starting point -- see the recalibration note above) ---
 EYE_AR_THRESH = 0.25
@@ -229,7 +237,9 @@ _gps_saw_fix = False
 def parse_gps_nmea(line):
     global current_lat, current_lon, _gps_saw_any_sentence, _gps_saw_fix
     try:
-        if line.startswith("$GPRMC"):
+        # $GNRMC (combined-constellation GNSS) alongside $GPRMC (GPS-only) --
+        # confirmed 2026-08-13 this unit's module prefixes with GN, not GP.
+        if line.startswith("$GPRMC") or line.startswith("$GNRMC"):
             if not _gps_saw_any_sentence:
                 _gps_saw_any_sentence = True
                 print("[GPS] receiving NMEA data from module")
@@ -263,7 +273,7 @@ def parse_gps_nmea(line):
 
 def gps_reader_thread():
     try:
-        ser = serial.Serial("/dev/serial0", baudrate=9600, timeout=1)
+        ser = serial.Serial("/dev/serial0", baudrate=GPS_BAUD_RATE, timeout=1)
         while running:
             if ser.in_waiting > 0:
                 line = ser.readline().decode("ascii", errors="replace").strip()
