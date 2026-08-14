@@ -888,6 +888,11 @@ Deno.serve(async (req) => {
           pickupPhotoUrl: r.pickup_photo_url || null,
           dropoffPhotoUrl: r.dropoff_photo_url || null,
           dropoffCompletedAt: r.dropoff_completed_at || null,
+          // Frozen planned-route (Pickup -> Dropoff -> Stops), if the
+          // pre-trip screen has already computed+saved it -- lets the
+          // client skip recomputing/re-saving on a remount
+          // (11_ROUTE_COMPARISON.md, `driver-trip`'s save-suggested-route).
+          suggestedRoute: r.suggested_route || null,
           cargoWeight: r.cargo_weight,
           status: r.status,
           hasOpenSession: openSessionDeliveryIds.has(r.id as string),

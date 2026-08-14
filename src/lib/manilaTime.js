@@ -120,6 +120,16 @@ export function getManilaWeekday(value) {
   return f ? f.weekday : '--'
 }
 
+// "2026-08-14" -- Manila calendar-date key, for grouping timestamps into
+// per-day buckets (e.g. a 7-day trend chart) rather than per-row bars.
+export function getManilaDateKey(value) {
+  const f = getManilaFields(value)
+  if (!f) return null
+  const month = String(f.month).padStart(2, '0')
+  const day = String(f.day).padStart(2, '0')
+  return `${f.year}-${month}-${day}`
+}
+
 // Today's date as "YYYY-MM-DD" in Manila time -- for comparing against
 // plain calendar-date columns (pickup_date/dropoff_date have no time
 // component). Replaces each portal's own `localTodayISO()`, which used the

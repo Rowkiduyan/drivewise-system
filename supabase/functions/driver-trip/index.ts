@@ -265,6 +265,51 @@ Deno.serve(async (req) => {
     return json({ ok: true, session });
   }
 
+  if (action === "save-suggested-route") {
+    const deliveryRequestId = typeof body.deliveryRequestId === "string" ? body.deliveryRequestId : "";
+    const suggestedRoute = Array.isArray(body.suggestedRoute) ? body.suggestedRoute : null;
+
+    if (!deliveryRequestId) {
+      return json({ error: "deliveryRequestId is required" }, 400);
+    }
+
+    if (!suggestedRoute) {
+      return json({ error: "suggestedRoute is required" }, 400);
+    }
+
+    const { data: delivery, error: deliveryError } = await adminClient
+      .from("delivery_requests")
+      .select("id, assigned_driver_id, suggested_route")
+      .eq("id", deliveryRequestId)
+      .single();
+
+    if (deliveryError || !delivery) {
+      return json({ error: "Delivery request not found" }, 400);
+    }
+
+    if (delivery.assigned_driver_id !== driverId) {
+      return json({ error: "This delivery is not assigned to you" }, 403);
+    }
+
+    // Frozen once written (11_ROUTE_COMPARISON.md) -- a second call (e.g. the
+    // pre-trip screen remounting before the first write's response lands)
+    // silently no-ops instead of overwriting an already-saved route.
+    if (delivery.suggested_route) {
+      return json({ ok: true, suggestedRoute: delivery.suggested_route });
+    }
+
+    const { error: updateError } = await adminClient
+      .from("delivery_requests")
+      .update({ suggested_route: suggestedRoute })
+      .eq("id", deliveryRequestId);
+
+    if (updateError) {
+      return json({ error: updateError.message }, 400);
+    }
+
+    return json({ ok: true, suggestedRoute });
+  }
+
   if (action === "pause-trip") {
     const deliveryRequestId = typeof body.deliveryRequestId === "string" ? body.deliveryRequestId : "";
 

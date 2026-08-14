@@ -198,4 +198,16 @@ supabase.from('devices').select('id, device_id, plate_number, device_status, cre
 
 **Takeaway:** `select('*')` is only safe against a table where `authenticated`/`anon` has an unrestricted (whole-row) grant. Before querying a new table client-side, check `information_schema.role_table_grants` for a `column_name` restriction (or check `DATABASE.md`'s Grants note for that table) — RLS being correct doesn't rule this out, since it's a separate, earlier check.
 
+---
+
+## 11. `service_role` had `insert`/`update` on `sessions` but no `delete` at all
+
+**Symptom:** Found 2026-08-14 while writing a disposable test script (`scripts/repro-real-gps-pipeline.mjs`) that needed to clean up a test session it had created: `admin.from('sessions').delete().eq('session_id', ...)` (using `service_role`) failed with `permission denied for table sessions`, `hint: "Grant the required privileges to the current role with: GRANT DELETE ON public.sessions TO service_role;"` — a direct Postgres grants error, not an app bug.
+
+**Cause:** Same root shape as gotcha #2/#7 (`service_role` grants are per-table and per-verb, never assumed) — every real Trip-lifecycle action this codebase has ever written (`start-trip`/`pause-trip`/`resume-trip`/`end-trip` in `driver-trip`) only ever `insert`s or `update`s a `sessions` row, never deletes one, so a missing `delete` grant had no way to surface until something (in this case, disposable test-fixture cleanup) actually tried to delete a session row.
+
+**Fix:** Not fixed — this is a schema/grants change, which needs explicit approval per `00_IMPLEMENTATION_RULES.md`, not something to run ad hoc from a test script. Worked around instead: `UPDATE`d the leftover session's `device_id` to `null` (which *is* granted) to free the `sessions_device_id_fkey` reference blocking the unrelated device row's own deletion, and left the now-harmless session row in place rather than deleting it.
+
+**Takeaway:** A missing grant can hide indefinitely if nothing in the existing codebase happens to exercise that specific verb — `insert`/`update`/`select` all being granted on a table is no guarantee `delete` is too. If a future feature genuinely needs to delete a `sessions` row (not just test cleanup), `grant delete on public.sessions to service_role;` needs to be proposed and approved first, per this table's precedent above.
+
 

@@ -996,6 +996,14 @@ function buildRealAlertSummary(deliveryId, rows, sessionStartTime) {
 // driver-trip's pause-trip/end-trip Edge Function already does server-side,
 // just recomputed here for display since that result only ever gets added
 // to trucks.current_mileage, never stored per-delivery).
+// Same per-leg palette/order as DriverDeliveries.jsx's NAV_LEG_COLORS
+// (02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md) -- not shared/imported, per
+// this codebase's existing per-portal duplication convention (see
+// parseCoords above). Used by RouteDeviationMap's planned-route legs so a
+// Supervisor sees the same leg->color language the Driver's own nav view
+// already uses.
+const NAV_LEG_COLORS = ['#DC2626', '#2563EB', '#059669', '#7C3AED', '#EA580C', '#DB2777']
+
 function distanceMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000
   const dLat = ((lat2 - lat1) * Math.PI) / 180
@@ -1133,6 +1141,65 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
       ? `The DriveWise system monitored this trip across ${sorted.length} ${sessionWord} totaling ${formatAlertDuration(totalDurationSec)} with no drowsiness alerts recorded${totalAlerts > drowsinessAlertCount ? ` (${totalAlerts - drowsinessAlertCount} eyes-not-detected event${totalAlerts - drowsinessAlertCount === 1 ? '' : 's'} logged separately, not counted toward risk)` : ''}. Overall risk for this trip was Safe.`
       : `The DriveWise system monitored this trip across ${sorted.length} ${sessionWord} totaling ${formatAlertDuration(totalDurationSec)}. ${drowsinessAlertCount} drowsiness alert${drowsinessAlertCount === 1 ? ' was' : 's were'} recorded, most frequently ${topDrowsinessType?.label || 'an unspecified type'}${topDrowsinessType ? ` (${topDrowsinessType.count} occurrence${topDrowsinessType.count === 1 ? '' : 's'})` : ''}. Overall risk for this trip was ${riskLevel.label}.`
 
+  // Route Deviation Report (11_ROUTE_COMPARISON.md) -- only when the Driver
+  // app actually saved a planned route (PlannedRouteMap's one-time write,
+  // DriverDeliveries.jsx). Real deliveries that predate this feature simply
+  // don't get this tab at all (see CompletedDeliveryReport's tab filter),
+  // same "don't fabricate" rule as the rest of this function -- no AI
+  // narrative/deviation-segments/schedule/fuel-impact fields are invented
+  // for it, since no real analysis pipeline produces those.
+  const suggestedRoute = Array.isArray(delivery.suggestedRoute) ? delivery.suggestedRoute : null
+  let routeDeviation = null
+  if (suggestedRoute && suggestedRoute.length > 0) {
+    // Leg 0 is Warehouse -> Pickup, matching NAV_LEG_COLORS' own documented
+    // convention (index 0 reserved for the to-pickup leg) -- no `+1` offset
+    // needed, unlike before this leg existed.
+    const plannedLegs = suggestedRoute.map((leg, i) => ({
+      path: leg.path,
+      color: NAV_LEG_COLORS[i % NAV_LEG_COLORS.length],
+    }))
+    // suggestedRoute now covers Warehouse -> Pickup -> Dropoff -> Stops (the
+    // Warehouse leg added per explicit user instruction), matching
+    // `totalMeters` above (the *whole* trip's gps_logs) far more closely
+    // than before that leg existed -- both now genuinely start from the same
+    // real-world point. Not a perfect match regardless: the driver's actual
+    // starting GPS fix may not be exactly at the Warehouse address itself
+    // (e.g. first fix acquired a block away), so a small deviation on this
+    // leg is still expected, just no longer a large, structural one.
+    const plannedMeters = suggestedRoute.reduce((sum, leg) => {
+      let legMeters = 0
+      for (let i = 1; i < leg.path.length; i += 1) {
+        legMeters += distanceMeters(leg.path[i - 1][0], leg.path[i - 1][1], leg.path[i][0], leg.path[i][1])
+      }
+      return sum + legMeters
+    }, 0)
+    const deviationMeters = Math.abs(totalMeters - plannedMeters)
+    // Derived from the legs' own real (geocoded) path points, not
+    // getPickupCoords/getDropoffCoords -- those only resolve a "lat, lng"-
+    // shaped fixture value via parseCoords and return null for a real,
+    // human-entered address, which silently dropped the map's pickup/
+    // dropoff pins for any normal booking. suggested_route's paths are
+    // always real coordinates either way (DirectionsService geocodes
+    // whatever address it was given), so this works unconditionally.
+    // leg[0] is now Warehouse -> Pickup (PlannedRouteMap's fixed
+    // WAREHOUSE_ADDRESS origin), not Pickup -> Dropoff -- so pickupPoint is
+    // that leg's END, not its start.
+    const pickupLeg = suggestedRoute.find((leg) => leg.to === 'pickup')
+    const pickupPoint = pickupLeg ? pickupLeg.path[pickupLeg.path.length - 1] : null
+    const dropoffLeg = suggestedRoute.find((leg) => leg.to === 'dropoff')
+    const dropoffPoint = dropoffLeg ? dropoffLeg.path[dropoffLeg.path.length - 1] : null
+    routeDeviation = {
+      plannedLegs,
+      actualRoute: sorted.flatMap((s) => (bySessionId[s.session_id] || []).map((p) => [p.latitude, p.longitude])),
+      pickupCoords: pickupPoint ? { lat: pickupPoint[0], lng: pickupPoint[1] } : null,
+      dropoffCoords: dropoffPoint ? { lat: dropoffPoint[0], lng: dropoffPoint[1] } : null,
+      plannedDistance: plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : '—',
+      actualDistance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : '—',
+      deviationDistance: `${(deviationMeters / 1000).toFixed(1)} km`,
+      deviationPercent: plannedMeters > 0 ? Math.round((deviationMeters / plannedMeters) * 100) : 0,
+    }
+  }
+
   return {
     trip: {
       pickupLocation: delivery.pickupAddress,
@@ -1165,6 +1232,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
       analysis,
     },
     delivery: { totalAlerts },
+    routeDeviation,
   }
 }
 
@@ -1237,8 +1305,23 @@ function formatAlertTimestamp(value) {
   return formatManilaTimestamp(value)
 }
 
-function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoords }) {
-  const allPoints = [...plannedRoute, ...actualRoute]
+// `plannedLegs` is an array of `{path: [[lat,lng],...], color}` -- one entry
+// per leg of the chain (Pickup -> Dropoff -> Stops for real data; a single
+// synthetic leg for the legacy mock fixtures, see RouteDeviationTab). Each
+// leg renders as its own dashed polyline in its own color so a Supervisor
+// sees the same per-leg color language the Driver's own live-nav view uses
+// (NAV_LEG_COLORS, 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md) -- extended
+// 2026-08-14 from a single flat planned/actual pair per 11_ROUTE_COMPARISON.md.
+// `actualRoute` stays one continuous polyline (no leg-splitting -- there's
+// no reliable per-leg arrival timestamp to split the real GPS trace on).
+// Deliberately near-black/neutral, not another hue from NAV_LEG_COLORS --
+// per user feedback, reusing a leg color for "actual" (previously the same
+// blue as a planned leg, distinguished only by dashed-vs-solid) read as too
+// similar at a glance. A dark, solid, haloed line reads unambiguously as
+// "the real path," distinct from every colorful dashed "option."
+const ACTUAL_ROUTE_COLOR = '#0F172A'
+function RouteDeviationMap({ plannedLegs, actualRoute, pickupCoords, dropoffCoords }) {
+  const allPoints = [...plannedLegs.flatMap((leg) => leg.path), ...actualRoute]
   const lats = allPoints.map((p) => p[0])
   const lngs = allPoints.map((p) => p[1])
   const minLat = Math.min(...lats)
@@ -1248,7 +1331,7 @@ function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoo
   const center = [(minLat + maxLat) / 2, (minLng + maxLng) / 2]
 
   return (
-    <div className="rounded-lg border border-slate-200 overflow-hidden" style={{ height: 320 }}>
+    <div className="rounded-lg border border-slate-200 overflow-hidden" style={{ height: 480 }}>
       <MapContainer
         center={center}
         zoom={13}
@@ -1260,20 +1343,28 @@ function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoo
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        <Polyline
-          positions={plannedRoute}
-          pathOptions={{ color: '#059669', weight: 4, dashArray: '8 6' }}
-        />
-        <Polyline
-          positions={actualRoute}
-          pathOptions={{ color: '#2563eb', weight: 4, opacity: 0.7 }}
-        />
-        <Marker position={pickupCoords} icon={startIcon}>
-          <Popup>Pickup Location</Popup>
-        </Marker>
-        <Marker position={dropoffCoords} icon={endIcon}>
-          <Popup>Drop-off Location</Popup>
-        </Marker>
+        {plannedLegs.map((leg, i) => (
+          <Polyline
+            key={i}
+            positions={leg.path}
+            pathOptions={{ color: leg.color, weight: 4, dashArray: '8 6' }}
+          />
+        ))}
+        {/* White halo underneath the actual-route line for contrast against
+            busy tiles and the colorful planned legs, same technique real
+            mapping products use to make one line pop over everything else. */}
+        <Polyline positions={actualRoute} pathOptions={{ color: '#ffffff', weight: 8, opacity: 0.9 }} />
+        <Polyline positions={actualRoute} pathOptions={{ color: ACTUAL_ROUTE_COLOR, weight: 4 }} />
+        {pickupCoords && (
+          <Marker position={pickupCoords} icon={startIcon}>
+            <Popup>Pickup Location</Popup>
+          </Marker>
+        )}
+        {dropoffCoords && (
+          <Marker position={dropoffCoords} icon={endIcon}>
+            <Popup>Drop-off Location</Popup>
+          </Marker>
+        )}
       </MapContainer>
     </div>
   )
@@ -2031,14 +2122,27 @@ function DriveWiseAnalysisTab({ report }) {
 
 function RouteDeviationTab({ report }) {
   const r = report.routeDeviation
+  // Two shapes feed this tab: the legacy mock fixtures (`planned`/`actual`,
+  // flat single-leg arrays), and the real one built by
+  // buildRealTripAndBehaviorReport (`plannedLegs`/`actualRoute`/
+  // `pickupCoords`/`dropoffCoords` already in RouteDeviationMap's shape).
+  // Normalized here so RouteDeviationMap only ever deals with one shape.
+  const plannedLegs = r.plannedLegs || [{ path: r.planned, color: '#059669' }]
+  const actualRoute = r.actualRoute || r.actual || []
+  const pickupCoords = r.pickupCoords || r.planned?.[0]
+  const dropoffCoords = r.dropoffCoords || r.planned?.[r.planned.length - 1]
+  // Only the legacy mock fixtures carry an AI narrative -- no real analysis
+  // pipeline produces one, so this stays unguarded-absent rather than
+  // showing a fabricated "AI Route Analysis: undefined" for real deliveries.
+  const hasAiAnalysis = Boolean(r.aiVerdict)
   const red = r.aiVerdictTone === 'red'
   return (
     <div className="space-y-4">
       <RouteDeviationMap
-        plannedRoute={r.planned}
-        actualRoute={r.actual}
-        pickupCoords={r.planned[0]}
-        dropoffCoords={r.planned[r.planned.length - 1]}
+        plannedLegs={plannedLegs}
+        actualRoute={actualRoute}
+        pickupCoords={pickupCoords}
+        dropoffCoords={dropoffCoords}
       />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -2048,15 +2152,17 @@ function RouteDeviationTab({ report }) {
         <Metric label="Deviation %" value={`${r.deviationPercent}%`} />
       </div>
 
-      <div className={`flex items-start gap-3 rounded-xl border p-4 ${red ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'}`}>
-        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white ${red ? 'bg-red-500' : 'bg-amber-500'}`}>
-          {red ? <ShieldAlert className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+      {hasAiAnalysis && (
+        <div className={`flex items-start gap-3 rounded-xl border p-4 ${red ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'}`}>
+          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white ${red ? 'bg-red-500' : 'bg-amber-500'}`}>
+            {red ? <ShieldAlert className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className={`font-semibold ${red ? 'text-red-800' : 'text-amber-800'}`}>AI Route Analysis: {r.aiVerdict}</p>
+            <p className={`mt-1 text-sm leading-relaxed ${red ? 'text-red-700' : 'text-amber-700'}`}>{r.aiSummary}</p>
+          </div>
         </div>
-        <div className="min-w-0 flex-1">
-          <p className={`font-semibold ${red ? 'text-red-800' : 'text-amber-800'}`}>AI Route Analysis: {r.aiVerdict}</p>
-          <p className={`mt-1 text-sm leading-relaxed ${red ? 'text-red-700' : 'text-amber-700'}`}>{r.aiSummary}</p>
-        </div>
-      </div>
+      )}
 
       {r.deviationSegments?.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -2078,24 +2184,26 @@ function RouteDeviationTab({ report }) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <p className="flex items-center gap-1.5 text-xs text-slate-500">
-            <Timer className="h-3.5 w-3.5" />
-            Schedule Impact
-          </p>
-          <p className={`mt-1 text-sm font-bold ${r.scheduleImpact && r.scheduleImpact.toLowerCase().includes('delay') ? 'text-rose-600' : 'text-emerald-600'}`}>
-            {r.scheduleImpact || '—'}
-          </p>
+      {(r.scheduleImpact || r.fuelImpact) && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Timer className="h-3.5 w-3.5" />
+              Schedule Impact
+            </p>
+            <p className={`mt-1 text-sm font-bold ${r.scheduleImpact && r.scheduleImpact.toLowerCase().includes('delay') ? 'text-rose-600' : 'text-emerald-600'}`}>
+              {r.scheduleImpact || '—'}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Fuel className="h-3.5 w-3.5" />
+              Fuel Impact
+            </p>
+            <p className="mt-1 text-sm font-bold text-slate-900">{r.fuelImpact || '—'}</p>
+          </div>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <p className="flex items-center gap-1.5 text-xs text-slate-500">
-            <Fuel className="h-3.5 w-3.5" />
-            Fuel Impact
-          </p>
-          <p className="mt-1 text-sm font-bold text-slate-900">{r.fuelImpact || '—'}</p>
-        </div>
-      </div>
+      )}
 
       {r.recommendations?.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -2111,13 +2219,25 @@ function RouteDeviationTab({ report }) {
         </div>
       )}
 
-      <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        {/* Multi-leg real routes get one swatch per leg (matching the map's
+            own per-leg colors); the legacy single-leg mock fixtures keep
+            the plain "Planned Route" label. */}
+        {plannedLegs.length > 1 ? (
+          plannedLegs.map((leg, i) => (
+            <div key={i} className="flex items-center gap-2 text-xs">
+              <span className="inline-block h-3 w-6 rounded-sm" style={{ background: leg.color }} />
+              <span className="text-slate-600">Planned — Leg {i + 1}</span>
+            </div>
+          ))
+        ) : (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: plannedLegs[0]?.color || '#059669' }} />
+            <span className="text-slate-600">Planned Route</span>
+          </div>
+        )}
         <div className="flex items-center gap-2 text-xs">
-          <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#059669' }} />
-          <span className="text-slate-600">Planned Route</span>
-        </div>
-        <div className="flex items-center gap-2 text-xs">
-          <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#2563eb' }} />
+          <span className="inline-block h-3 w-6 rounded-sm" style={{ background: ACTUAL_ROUTE_COLOR }} />
           <span className="text-slate-600">Actual Route</span>
         </div>
         <span className="ml-auto flex items-center gap-1 text-[10px] text-slate-400">
@@ -2184,10 +2304,12 @@ function CompletedDeliveryReport({ delivery }) {
   const mockReport = completed_delivery_reports[delivery.id]
   const report = realReport || mockReport
   // Telemetry tabs (trip/behavior) apply whenever a report (real or mock)
-  // exists. Route Deviation Report still needs a persisted planned route
-  // (Phase 11, not built yet -- see 11_ROUTE_COMPARISON.md), so it only
-  // shows for the legacy mock reports that already carry a routeDeviation
-  // field, not for real ones.
+  // exists. Route Deviation Report needs a persisted planned route
+  // (11_ROUTE_COMPARISON.md, built 2026-08-14) -- shows for a real delivery
+  // once its Driver-side pre-trip screen has saved one (see
+  // buildRealTripAndBehaviorReport's routeDeviation), and still shows for
+  // the legacy mock reports that carry their own routeDeviation field.
+  // Either way, gated on the same `Boolean(report.routeDeviation)` check.
   const tabs = report
     ? REPORT_TABS.filter((t) => t.id !== 'route' || Boolean(report.routeDeviation))
     : REPORT_TABS.filter((t) => t.id === 'details' || t.id === 'quotation')
@@ -2661,6 +2783,10 @@ function mapDbRequest(row, clientName, fleet) {
     pickupPhotoUrl: row.pickup_photo_url || null,
     dropoffPhotoUrl: row.dropoff_photo_url || null,
     dropoffCompletedAt: row.dropoff_completed_at || null,
+    // Frozen planned route (Pickup -> Dropoff -> Stops), if the Driver
+    // app's pre-trip screen already saved one — feeds the real Route
+    // Deviation Report (buildRealTripAndBehaviorReport, 11_ROUTE_COMPARISON.md).
+    suggestedRoute: Array.isArray(row.suggested_route) ? row.suggested_route : null,
     budgetMin: row.budget_min,
     budgetMax: row.budget_max,
     notes: row.notes,

@@ -47,7 +47,7 @@ import DriverLayout from '../layout/DriverLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 import { GOOGLE_MAPS_LOADER_OPTIONS } from '../lib/googleMapsLoaderOptions.js'
 import { useResolvedAddress } from '../lib/reverseGeocode.js'
-import { formatManilaTimestamp, formatManilaShortTime, manilaTodayISO, MANILA_TIMEZONE } from '../lib/manilaTime.js'
+import { formatManilaTimestamp, formatManilaShortTime, manilaTodayISO, MANILA_TIMEZONE, getManilaHour } from '../lib/manilaTime.js'
 
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -263,8 +263,19 @@ function formatTimeOnly(value) {
   return formatManilaShortTime(value)
 }
 
-function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoords }) {
-  const allPoints = [...plannedRoute, ...actualRoute]
+// `plannedLegs` is an array of `{path: [[lat,lng],...], color}` -- one entry
+// per leg of the chain (Pickup -> Dropoff -> Stops for real data; a single
+// synthetic leg for the legacy mock fixtures, see CompletedDeliveryReport's
+// route tab). Mirrors SupDeliveries.jsx's own RouteDeviationMap extension
+// (11_ROUTE_COMPARISON.md) -- kept as a separate copy per this codebase's
+// existing per-portal duplication convention, not shared/imported.
+// ACTUAL_ROUTE_COLOR deliberately near-black/neutral, not another hue from
+// NAV_LEG_COLORS -- per user feedback, reusing a leg color for "actual"
+// (previously the same blue as a planned leg, distinguished only by
+// dashed-vs-solid) read as too similar at a glance.
+const ACTUAL_ROUTE_COLOR = '#0F172A'
+function RouteDeviationMap({ plannedLegs, actualRoute, pickupCoords, dropoffCoords }) {
+  const allPoints = [...plannedLegs.flatMap((leg) => leg.path), ...actualRoute]
   const lats = allPoints.map((p) => p[0])
   const lngs = allPoints.map((p) => p[1])
   const minLat = Math.min(...lats)
@@ -274,7 +285,7 @@ function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoo
   const center = [(minLat + maxLat) / 2, (minLng + maxLng) / 2]
 
   return (
-    <div className="rounded-lg border border-slate-200 overflow-hidden" style={{ height: 280 }}>
+    <div className="rounded-lg border border-slate-200 overflow-hidden" style={{ height: 420 }}>
       <MapContainer
         center={center}
         zoom={13}
@@ -286,20 +297,27 @@ function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoo
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        <Polyline
-          positions={plannedRoute}
-          pathOptions={{ color: '#059669', weight: 4, dashArray: '8 6' }}
-        />
-        <Polyline
-          positions={actualRoute}
-          pathOptions={{ color: '#2563eb', weight: 4, opacity: 0.7 }}
-        />
-        <Marker position={pickupCoords} icon={startIcon}>
-          <Popup>Pickup Location</Popup>
-        </Marker>
-        <Marker position={dropoffCoords} icon={endIcon}>
-          <Popup>Drop-off Location</Popup>
-        </Marker>
+        {plannedLegs.map((leg, i) => (
+          <Polyline
+            key={i}
+            positions={leg.path}
+            pathOptions={{ color: leg.color, weight: 4, dashArray: '8 6' }}
+          />
+        ))}
+        {/* White halo underneath the actual-route line for contrast against
+            busy tiles and the colorful planned legs. */}
+        <Polyline positions={actualRoute} pathOptions={{ color: '#ffffff', weight: 8, opacity: 0.9 }} />
+        <Polyline positions={actualRoute} pathOptions={{ color: ACTUAL_ROUTE_COLOR, weight: 4 }} />
+        {pickupCoords && (
+          <Marker position={pickupCoords} icon={startIcon}>
+            <Popup>Pickup Location</Popup>
+          </Marker>
+        )}
+        {dropoffCoords && (
+          <Marker position={dropoffCoords} icon={endIcon}>
+            <Popup>Drop-off Location</Popup>
+          </Marker>
+        )}
       </MapContainer>
     </div>
   )
@@ -328,6 +346,23 @@ const NAV_ZOOM = 21
 // post-pickup chain's legs start at index 1 (pickup->dropoff = blue, not red,
 // so it's visually distinct from the to-pickup leg that preceded it).
 const NAV_LEG_COLORS = ['#DC2626', '#2563EB', '#059669', '#7C3AED', '#EA580C', '#DB2777']
+
+// Fixed depot/warehouse address every Trip starts from, per user instruction
+// -- PlannedRouteMap's whole-trip guide now leads with this Warehouse ->
+// Pickup leg (in addition to Pickup -> Dropoffs/Stops), so the map/
+// suggested_route matches the full real GPS trace, not just the Pickup-
+// onward portion. Kept as a plain address string (not lat/lng) -- passed
+// straight to DirectionsService, same as any other address in this file.
+const WAREHOUSE_ADDRESS = '140 M. Suarez Avenue, Brgy. San Miguel, Pasig, Metro Manila'
+// WAREHOUSE_ADDRESS's own real geocoded position (captured from a live
+// DirectionsService response, `suggested_route`'s warehouse->pickup leg's
+// first point -- see scripts/repro-route-comparison-demo.mjs) -- reconciled
+// 2026-08-14 with `activeNavOrigin` below, which previously hardcoded a
+// *different* depot lat/lng ({lat: 14.5506, lng: 121.0471}) representing
+// the same real place under a different, never-reconciled guess. Anywhere
+// that needs actual coordinates (not a DirectionsService-geocodable string)
+// should use this constant instead of a second magic-number literal.
+const WAREHOUSE_COORDS = { lat: 14.57147, lng: 121.08762 }
 
 function stripHtml(html) {
   return String(html || '').replace(/<[^>]+>/g, '')
@@ -360,6 +395,237 @@ function dropoffPinIcon(fillColor, isCurrent) {
     anchor: new window.google.maps.Point(12, 22),
     labelOrigin: new window.google.maps.Point(12, 9),
   }
+}
+
+// Pickup/Dropoff markers specifically (not the numbered Stop pins above,
+// which keep the plain teardrop) -- per user feedback, even the pin-vs-circle
+// distinction above still didn't read clearly enough against the rest of the
+// map's markers (numbered stop pins, the live-position arrow). These render
+// as a full custom image (not a google.maps.Symbol, which only supports one
+// flat-color path) specifically so each can carry its own multi-part glyph
+// -- a package outline for "cargo picked up here", a checkered flag for
+// "trip ends here" -- the same shorthand delivery/nav apps use, rather than
+// relying on color or a single letter label to carry the meaning.
+function svgMarkerIcon(svg, size) {
+  return {
+    url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+    scaledSize: new window.google.maps.Size(size, size * 1.2),
+    anchor: new window.google.maps.Point(size / 2, size * 1.2),
+  }
+}
+
+function pickupMarkerIcon() {
+  return svgMarkerIcon(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="41" viewBox="0 0 34 41">
+      <path d="M17 1C8.4 1 1.5 7.9 1.5 16.4 1.5 27.6 17 40 17 40s15.5-12.4 15.5-23.6C32.5 7.9 25.6 1 17 1z" fill="#0284c7" stroke="#fff" stroke-width="2"/>
+      <g fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+        <path d="M9 12.5 17 8.5l8 4v9l-8 4-8-4v-9z"/>
+        <path d="M9 12.5 17 16.5l8-4"/>
+        <path d="M17 16.5V25.5"/>
+      </g>
+    </svg>`,
+    34,
+  )
+}
+
+function dropoffMarkerIcon() {
+  return svgMarkerIcon(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="41" viewBox="0 0 34 41">
+      <path d="M17 1C8.4 1 1.5 7.9 1.5 16.4 1.5 27.6 17 40 17 40s15.5-12.4 15.5-23.6C32.5 7.9 25.6 1 17 1z" fill="#059669" stroke="#fff" stroke-width="2"/>
+      <path d="M13 8v18" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M13 8.5h11l-3.4 3.75L24 16H13z" fill="#fff"/>
+    </svg>`,
+    34,
+  )
+}
+
+// The Warehouse leg's own starting point (PlannedRouteMap's new Warehouse ->
+// Pickup leg) -- a warehouse/building glyph, slate-colored so it reads as
+// "trip origin," distinct from the blue package (Pickup) and green flag
+// (Dropoff) icons above.
+function warehouseMarkerIcon() {
+  return svgMarkerIcon(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="41" viewBox="0 0 34 41">
+      <path d="M17 1C8.4 1 1.5 7.9 1.5 16.4 1.5 27.6 17 40 17 40s15.5-12.4 15.5-23.6C32.5 7.9 25.6 1 17 1z" fill="#475569" stroke="#fff" stroke-width="2"/>
+      <g fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+        <path d="M8 15.5 17 9l9 6.5V24H8z"/>
+        <path d="M8 15.5 17 22l9-6.5"/>
+        <path d="M14.5 24v-5h5v5"/>
+      </g>
+    </svg>`,
+    34,
+  )
+}
+
+// Whole-trip planned-route guide, shown before the driver taps "Start
+// Pickup" (replaces the old static single-point iframe embed at the call
+// site below). Draws every leg of Warehouse -> Pickup -> Dropoff -> Stops in
+// one view -- the Warehouse leg is always first (fixed WAREHOUSE_ADDRESS,
+// per user instruction), matching where the driver's Trip actually starts
+// from in real life, before the Pickup-onward chain. Dropoff/Stop order is
+// the same nearest-neighbor heuristic the live nav already uses for dynamic
+// dropoff ordering (`nearestDropoffOrder`), seeded from Pickup (not the
+// Warehouse) since that's genuinely where the driver will be once they
+// start making dropoff decisions. The first time this computes a route for
+// a delivery with no
+// `suggestedRoute` saved yet, it persists the result once via `driver-trip`'s
+// `save-suggested-route` action -- frozen from then on (this effect skips
+// recomputing entirely once `suggestedRoute` is present, both to match that
+// "frozen" contract and to avoid burning a fresh Directions API call every
+// time this screen is reopened before Start Pickup). Later read by the
+// Supervisor's planned-vs-actual Route Deviation Report
+// (11_ROUTE_COMPARISON.md). Google Maps, not Leaflet, to match the app's
+// live-nav map and reuse its pickup/dropoff/stop marker icons.
+function PlannedRouteMap({ pickupAddress, dropoffAddress, stops, suggestedRoute, deliveryRequestId, onSaved }) {
+  const { isLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS)
+  const [computedLegs, setComputedLegs] = useState(null)
+  const [routeError, setRouteError] = useState(false)
+  const savingRef = useRef(false)
+  const mapRef = useRef(null)
+
+  const stopsKey = (stops || []).map((s) => s.location).join('|')
+
+  useEffect(() => {
+    if (suggestedRoute) return
+    if (!isLoaded || !pickupAddress || !dropoffAddress || !window.google || savingRef.current) return
+
+    // parseCoords only matches a "lat, lng"-shaped fixture value -- a real,
+    // human-entered address (the normal case) won't parse, and that's fine:
+    // DirectionsService geocodes a plain address string directly, same as
+    // LiveNavigationMap's own waypoints already do (`parseCoords(x) || x`).
+    // Only nearestDropoffOrder needs actual coordinates to rank by distance;
+    // an un-parseable candidate just falls back to its original relative
+    // order (see that function's own handling of a null `coords`).
+    const pickupCoords = parseCoords(pickupAddress)
+    const orderedStops = nearestDropoffOrder(pickupCoords, [
+      { location: dropoffAddress, coords: parseCoords(dropoffAddress), key: 'dropoff' },
+      ...(stops || []).map((s) => ({ location: s.location, coords: parseCoords(s.location), key: 'stop' })),
+    ])
+    if (orderedStops.length === 0) return
+
+    const destination = orderedStops[orderedStops.length - 1]
+    // Pickup itself is now a waypoint (Warehouse is the origin), followed by
+    // every ordered dropoff/stop except the last, which becomes the request's
+    // own destination.
+    const waypointStops = [{ location: pickupAddress, coords: pickupCoords, key: 'pickup' }, ...orderedStops.slice(0, -1)]
+
+    new window.google.maps.DirectionsService().route(
+      {
+        origin: WAREHOUSE_ADDRESS,
+        destination: destination.coords || destination.location,
+        waypoints: waypointStops.map((s) => ({ location: s.coords || s.location, stopover: true })),
+        travelMode: window.google.maps.TravelMode.DRIVING,
+        drivingOptions: { departureTime: new Date(), trafficModel: 'bestguess' },
+      },
+      (result, status) => {
+        if (status !== 'OK' || !result) {
+          setRouteError(true)
+          return
+        }
+        setRouteError(false)
+        const fromKeys = ['warehouse', ...waypointStops.map((s) => s.key)]
+        const toKeys = [...waypointStops.map((s) => s.key), destination.key]
+        const payload = result.routes[0].legs.map((leg, i) => ({
+          from: fromKeys[i],
+          to: toKeys[i],
+          path: leg.steps.flatMap((step) => step.path.map((p) => [p.lat(), p.lng()])),
+        }))
+        setComputedLegs(payload)
+        if (mapRef.current && result.routes[0].bounds) {
+          mapRef.current.fitBounds(result.routes[0].bounds, 16)
+        }
+
+        if (!savingRef.current) {
+          savingRef.current = true
+          supabase.functions
+            .invoke('driver-trip', {
+              body: { action: 'save-suggested-route', deliveryRequestId, suggestedRoute: payload },
+            })
+            .then(({ data, error }) => {
+              if (!error && data?.suggestedRoute) onSaved?.(data.suggestedRoute)
+            })
+        }
+      },
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded, suggestedRoute, pickupAddress, dropoffAddress, stopsKey])
+
+  const legs = suggestedRoute || computedLegs
+
+  // Marker positions are derived from the legs' own real (geocoded) path
+  // points, not from parseCoords -- works regardless of whether pickup/
+  // dropoff/stops were coordinate pairs or real addresses, since every leg's
+  // path is always real lat/lng either way (from DirectionsService's own
+  // geocoding, or already-real points once persisted to suggested_route).
+  const warehousePos = legs?.[0]?.path?.[0]
+  const pickupLeg = legs?.find((leg) => leg.to === 'pickup')
+  const pickupPos = pickupLeg ? pickupLeg.path[pickupLeg.path.length - 1] : null
+  const dropoffLeg = legs?.find((leg) => leg.to === 'dropoff')
+  const dropoffPos = dropoffLeg ? dropoffLeg.path[dropoffLeg.path.length - 1] : null
+  const stopPositions = (legs || []).filter((leg) => leg.to === 'stop').map((leg) => leg.path[leg.path.length - 1])
+
+  // Re-fits whenever `legs` becomes available from a route already saved as
+  // `suggestedRoute` (the DirectionsService success callback above already
+  // handles the freshly-computed case directly, since fitBounds needs the
+  // real google.maps.LatLngBounds from that response, not a re-derived one).
+  useEffect(() => {
+    if (!suggestedRoute || !mapRef.current || !window.google || !legs?.length) return
+    const bounds = new window.google.maps.LatLngBounds()
+    legs.forEach((leg) => leg.path.forEach(([lat, lng]) => bounds.extend({ lat, lng })))
+    mapRef.current.fitBounds(bounds, 16)
+  }, [suggestedRoute, legs])
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-amber-200/70 bg-white">
+      <div className="border-b border-amber-200/70 bg-amber-50 px-3 py-2">
+        <h3 className="text-xs font-bold text-slate-900">Planned Route</h3>
+      </div>
+      <div className="h-48 w-full sm:h-56">
+        {!isLoaded ? (
+          <div className="flex h-full items-center justify-center text-xs text-slate-400">Loading map…</div>
+        ) : routeError && !legs ? (
+          <div className="flex h-full items-center justify-center px-4 text-center text-xs text-slate-400">
+            Couldn't load a route preview right now — the "Navigate Now" button below still works.
+          </div>
+        ) : (
+          <GoogleMap
+            mapContainerStyle={GOOGLE_MAP_CONTAINER_STYLE}
+            onLoad={(map) => {
+              mapRef.current = map
+            }}
+            options={{ disableDefaultUI: true, zoomControl: true, gestureHandling: 'greedy' }}
+          >
+            {(legs || []).map((leg, i) => (
+              <GoogleMapPolyline
+                key={i}
+                path={leg.path.map(([lat, lng]) => ({ lat, lng }))}
+                options={{
+                  // Leg 0 is now genuinely the to-pickup leg (Warehouse ->
+                  // Pickup), matching NAV_LEG_COLORS' own documented
+                  // convention (index 0 reserved for it) -- no `+1` offset
+                  // needed anymore.
+                  strokeColor: NAV_LEG_COLORS[i % NAV_LEG_COLORS.length],
+                  strokeOpacity: 0.9,
+                  strokeWeight: 5,
+                }}
+              />
+            ))}
+            {warehousePos && <GoogleMapMarker position={{ lat: warehousePos[0], lng: warehousePos[1] }} icon={warehouseMarkerIcon()} />}
+            {pickupPos && <GoogleMapMarker position={{ lat: pickupPos[0], lng: pickupPos[1] }} icon={pickupMarkerIcon()} />}
+            {dropoffPos && <GoogleMapMarker position={{ lat: dropoffPos[0], lng: dropoffPos[1] }} icon={dropoffMarkerIcon()} />}
+            {stopPositions.map((pos, i) => (
+              <GoogleMapMarker
+                key={i}
+                position={{ lat: pos[0], lng: pos[1] }}
+                label={{ text: String(i + 2), color: '#fff', fontSize: '11px', fontWeight: '700' }}
+                icon={dropoffPinIcon('#d97706', true)}
+              />
+            ))}
+          </GoogleMap>
+        )}
+      </div>
+    </section>
+  )
 }
 
 // Live in-app turn-by-turn navigation (capstone requirement: built on the
@@ -779,27 +1045,10 @@ function LiveNavigationMap({
                 end point) -- same "current leg only" reasoning as the
                 polyline above, not every Pickup/Dropoff/Stop pin at once. */}
             {pickupCoords && isCurrentNavTarget(pickupCoords, legEnd) && (
-              <GoogleMapMarker
-                position={pickupCoords}
-                label={{ text: 'P', color: '#fff', fontSize: '11px', fontWeight: '700' }}
-                icon={{
-                  path: window.google.maps.SymbolPath.CIRCLE,
-                  scale: 12,
-                  fillColor: '#0284c7',
-                  fillOpacity: 1,
-                  strokeColor: '#fff',
-                  strokeWeight: 2,
-                }}
-                zIndex={10}
-              />
+              <GoogleMapMarker position={pickupCoords} icon={pickupMarkerIcon()} zIndex={10} />
             )}
             {dropoffCoords && isCurrentNavTarget(dropoffCoords, legEnd) && (
-              <GoogleMapMarker
-                position={dropoffCoords}
-                label={{ text: 'D', color: '#fff', fontSize: '11px', fontWeight: '700' }}
-                icon={dropoffPinIcon('#059669', true)}
-                zIndex={10}
-              />
+              <GoogleMapMarker position={dropoffCoords} icon={dropoffMarkerIcon()} zIndex={10} />
             )}
             {(allStops || []).map((stop, i) => {
               const coords = parseCoords(stop.location)
@@ -1074,7 +1323,213 @@ const COMPLETED_REPORT_DATA = {
   },
 }
 
-function CompletedDeliveryReport({ report }) {
+// Resolves a single "lat, lng"-shaped location (e.g. DR-0020-style fixture
+// data) into a real address inline -- its own component (not called inline
+// as a plain function) so `useResolvedAddress` can be called once per row
+// inside a `.map()` without violating the rules of hooks. Mirrors
+// SupDeliveries.jsx's identical helper, not shared, per this codebase's
+// existing per-portal convention.
+function ResolvedText({ value }) {
+  return useResolvedAddress(value || '')
+}
+
+// Real Delivery Report data for the Driver's own CompletedDeliveryReport
+// below, 2026-08-14 -- mirrors SupDeliveries.jsx's
+// buildRealTripAndBehaviorReport (same sessions/alerts/gps_logs sources,
+// same haversine distance/timeline/risk-tier logic), reshaped into this
+// file's own simpler report structure rather than sharing that function
+// directly (per-portal duplication, same reasoning as ResolvedText/
+// RouteDeviationMap above). Fields with no real backing anywhere in the
+// schema (an AI route-deviation narrative, precise pickup-confirmed
+// timestamps) are left out rather than fabricated, same rule that function
+// already established.
+function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
+  if (!sessions.length) return null
+
+  const sorted = [...sessions].sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
+  const firstSession = sorted[0]
+  const lastSession = sorted[sorted.length - 1]
+  const totalDurationSec = sorted.reduce((sum, s) => sum + (s.session_duration || 0), 0)
+
+  const bySessionId = {}
+  for (const row of gpsLogs) {
+    if (!bySessionId[row.session_id]) bySessionId[row.session_id] = []
+    bySessionId[row.session_id].push(row)
+  }
+  let totalMeters = 0
+  for (const points of Object.values(bySessionId)) {
+    for (let i = 1; i < points.length; i += 1) {
+      totalMeters += distanceMeters(points[i - 1].latitude, points[i - 1].longitude, points[i].latitude, points[i].longitude)
+    }
+  }
+
+  // Real per-item completion order -- dropoff_location isn't always last in
+  // the chain (02B_MULTI_STOP_DELIVERIES.md's Dynamic Nearest-Dropoff
+  // Ordering), so this sorts by each item's actual completedAt rather than
+  // assuming dropoff always precedes the stops.
+  const dropoffEvents = []
+  if (delivery.dropoffCompletedAt) {
+    dropoffEvents.push({ label: 'Dropoff Completed', location: delivery.deliveryAddress, at: delivery.dropoffCompletedAt })
+  }
+  ;(delivery.stops || []).forEach((s, i) => {
+    if (s.completed && s.completedAt) {
+      dropoffEvents.push({ label: `Dropoff ${i + 2} Completed`, location: s.location, at: s.completedAt })
+    }
+  })
+  dropoffEvents.sort((a, b) => new Date(a.at) - new Date(b.at))
+
+  // Pickup's own confirmation has no stored timestamp anywhere (only
+  // pickup_photo_url, essentially a boolean flag) -- shown as done without
+  // a time rather than an invented one, same as the Supervisor's version.
+  const timeline = [
+    delivery.assignedAt && { label: 'Assigned to Trip', time: delivery.assignedAt, completed: true },
+    { label: 'Pickup Trip Started', time: formatAlertTimestamp(firstSession.start_time), completed: true },
+    delivery.pickupPhotoUrl && { label: 'Pickup Confirmed', time: '—', completed: true },
+    ...dropoffEvents.map((e) => ({ label: e.label, time: formatAlertTimestamp(e.at), completed: true })),
+    { label: 'Delivery Completed', time: formatAlertTimestamp(lastSession.end_time), completed: true },
+  ].filter(Boolean)
+
+  const stops = [
+    { location: delivery.pickupAddress, time: formatAlertTimestamp(firstSession.start_time), action: 'Pickup / Departure' },
+    ...dropoffEvents.map((e) => ({ location: e.location, time: formatAlertTimestamp(e.at), action: e.label })),
+  ]
+
+  // History mirrors the Timeline's real events but with raw ISO timestamps
+  // (History's own row re-formats via formatAlertTimestamp) -- "Pickup
+  // Confirmed" is left out here specifically since it has no real timestamp
+  // to show (unlike Timeline's own "—" placeholder, a History row with no
+  // time at all would look broken).
+  const history = [
+    { event: 'Pickup Trip Started', at: firstSession.start_time },
+    ...dropoffEvents.map((e) => ({ event: e.label, at: e.at })),
+    { event: 'Delivery Completed', at: lastSession.end_time },
+  ].map((e) => ({ event: e.event, timestamp: e.at, actor: 'You' }))
+
+  // "Eye Closure Alerts" -- the three real drowsiness event types, not
+  // face_not_detected (camera-visibility issue, not a drowsiness signal --
+  // same distinction already applied throughout this app, e.g. the
+  // driver-facing audio alert gate and DriverPerformance.jsx's weekly card).
+  const eyeClosureAlerts = alerts
+    .filter((a) => a.event_type !== 'face_not_detected')
+    .map((a) => ({
+      id: a.id,
+      type: a.event_type,
+      time: a.created_at,
+      duration: a.duration,
+      severity: (a.duration || 0) >= 20 ? 'High' : 'Moderate',
+    }))
+  const avgClosureSec = eyeClosureAlerts.length
+    ? eyeClosureAlerts.reduce((sum, a) => sum + (a.duration || 0), 0) / eyeClosureAlerts.length
+    : null
+
+  const hourlyCounts = Array.from({ length: 24 }, () => 0)
+  alerts.forEach((a) => {
+    const hour = getManilaHour(a.created_at)
+    if (hour != null) hourlyCounts[hour] += 1
+  })
+  let peakHour = null
+  let peakCount = 0
+  hourlyCounts.forEach((count, hour) => {
+    if (count > peakCount) {
+      peakCount = count
+      peakHour = hour
+    }
+  })
+
+  const typeCounts = {}
+  alerts.forEach((a) => {
+    typeCounts[a.event_type] = (typeCounts[a.event_type] || 0) + 1
+  })
+  const alertsByType = Object.keys(ALERT_TYPE_LABELS).map((type) => ({
+    type,
+    label: ALERT_TYPE_LABELS[type],
+    count: typeCounts[type] || 0,
+  }))
+
+  // face_not_detected excluded from risk classification, not from the raw
+  // alert count -- same reasoning as eyeClosureAlerts above.
+  const drowsinessAlertCount = alerts.filter((a) => a.event_type !== 'face_not_detected').length
+  const riskLevel = getRiskLevel(drowsinessAlertCount)
+
+  // Route Deviation (11_ROUTE_COMPARISON.md) -- only when the pre-trip
+  // screen actually saved a planned route (PlannedRouteMap's one-time
+  // write). No AI narrative is fabricated for it, matching this function's
+  // "don't invent what has no real source" rule throughout.
+  const suggestedRoute = Array.isArray(delivery.suggestedRoute) ? delivery.suggestedRoute : null
+  let routeDeviation = null
+  if (suggestedRoute && suggestedRoute.length > 0) {
+    // Leg 0 is Warehouse -> Pickup (PlannedRouteMap's fixed WAREHOUSE_ADDRESS
+    // origin), matching NAV_LEG_COLORS' own documented convention (index 0
+    // reserved for the to-pickup leg) -- no `+1` offset needed.
+    const plannedLegs = suggestedRoute.map((leg, i) => ({
+      path: leg.path,
+      color: NAV_LEG_COLORS[i % NAV_LEG_COLORS.length],
+    }))
+    const plannedMeters = suggestedRoute.reduce((sum, leg) => {
+      let legMeters = 0
+      for (let i = 1; i < leg.path.length; i += 1) {
+        legMeters += distanceMeters(leg.path[i - 1][0], leg.path[i - 1][1], leg.path[i][0], leg.path[i][1])
+      }
+      return sum + legMeters
+    }, 0)
+    const deviationMeters = Math.abs(totalMeters - plannedMeters)
+    // Derived from the legs' own real (geocoded) path points, not
+    // delivery.pickupCoords/destinationCoords -- those only resolve a
+    // "lat, lng"-shaped fixture value via parseCoords and are null for a
+    // real, human-entered address, which silently dropped the map's
+    // pickup/dropoff pins for any normal booking. suggested_route's paths
+    // are always real coordinates either way (DirectionsService geocodes
+    // whatever address it was given), so this works unconditionally.
+    // leg[0] is Warehouse -> Pickup, not Pickup -> Dropoff, so pickupPoint
+    // is that leg's END, not its start.
+    const pickupLeg = suggestedRoute.find((leg) => leg.to === 'pickup')
+    const pickupPoint = pickupLeg ? pickupLeg.path[pickupLeg.path.length - 1] : null
+    const dropoffLeg = suggestedRoute.find((leg) => leg.to === 'dropoff')
+    const dropoffPoint = dropoffLeg ? dropoffLeg.path[dropoffLeg.path.length - 1] : null
+    routeDeviation = {
+      plannedLegs,
+      actualRoute: sorted.flatMap((s) => (bySessionId[s.session_id] || []).map((p) => [p.latitude, p.longitude])),
+      pickupCoords: pickupPoint ? { lat: pickupPoint[0], lng: pickupPoint[1] } : null,
+      dropoffCoords: dropoffPoint ? { lat: dropoffPoint[0], lng: dropoffPoint[1] } : null,
+      plannedDistance: plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : '—',
+      actualDistance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : '—',
+      deviationDistance: `${(deviationMeters / 1000).toFixed(1)} km`,
+      deviationPercent: plannedMeters > 0 ? Math.round((deviationMeters / plannedMeters) * 100) : 0,
+    }
+  }
+
+  return {
+    trip: {
+      distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : '—',
+      duration: formatAlertDuration(totalDurationSec),
+      stops,
+      timeline,
+    },
+    delivery: {
+      totalAlerts: alerts.length,
+      avgAlertDuration: avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : '—',
+      peakAlertTime: peakHour != null ? `${String(peakHour).padStart(2, '0')}:00` : '—',
+      eyeClosureAlerts,
+      history,
+    },
+    behavior: {
+      totalAlerts: alerts.length,
+      riskLevel,
+      alertsByType,
+      sessions: sorted.map((s) => ({
+        start: s.start_time,
+        end: s.end_time,
+        alerts: s.total_alerts ?? alerts.filter((a) => a.session_id === s.session_id).length,
+        duration: s.session_duration,
+      })),
+    },
+    routeDeviation,
+  }
+}
+
+function CompletedDeliveryReport({ report, delivery }) {
+  const resolvedPickup = useResolvedAddress(delivery?.pickupAddress || '')
+  const resolvedDropoff = useResolvedAddress(delivery?.deliveryAddress || '')
   const [reportTab, setReportTab] = useState('trip')
 
   if (!report) {
@@ -1085,6 +1540,17 @@ function CompletedDeliveryReport({ report }) {
     )
   }
 
+  // Real reports don't set `trip.route` (no single clean string to build --
+  // see buildRealDriverTripReport) -- resolved live here instead, via the
+  // same hook the rest of the app already uses for a "lat, lng"-shaped
+  // address. The legacy mock fixtures already provide a nice literal
+  // string, so that takes priority when present.
+  const routeLabel = report.trip.route || `${resolvedPickup} → ${resolvedDropoff}`
+  // Route tab needs a saved planned route to compare against -- real
+  // deliveries that predate PlannedRouteMap (or never had a parseable
+  // pickup/dropoff) simply don't get it, same as the Supervisor's version.
+  const tabs = REPORT_TABS.filter((tab) => tab.id !== 'route' || Boolean(report.routeDeviation))
+
   return (
     <div className="rounded-xl border border-amber-200/70 bg-amber-50/50 p-3 sm:p-4">
       <div className="flex items-center justify-between mb-3">
@@ -1093,8 +1559,8 @@ function CompletedDeliveryReport({ report }) {
 
       {/* A 3-up grid, not a horizontally-scrolling row — it always fits the viewport
           instead of requiring a swipe to reach the third tab. */}
-      <div className="mb-4 grid grid-cols-3 gap-1.5 border-b border-amber-200/70 pb-3">
-        {REPORT_TABS.map((tab) => {
+      <div className={`mb-4 grid gap-1.5 border-b border-amber-200/70 pb-3 ${tabs.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+        {tabs.map((tab) => {
           const Icon = tab.icon
           const isActive = reportTab === tab.id
           return (
@@ -1130,7 +1596,7 @@ function CompletedDeliveryReport({ report }) {
             <div className="col-span-2 rounded-lg bg-white border border-slate-200 p-2 text-center sm:col-span-1">
               <MapPin className="mx-auto h-3.5 w-3.5 text-slate-400" />
               <p className="mt-1 text-[10px] text-slate-500">Route</p>
-              <p className="text-xs font-bold text-slate-900 sm:truncate" title={report.trip.route}>{report.trip.route}</p>
+              <p className="text-xs font-bold text-slate-900 sm:truncate" title={routeLabel}>{routeLabel}</p>
             </div>
           </div>
 
@@ -1161,7 +1627,9 @@ function CompletedDeliveryReport({ report }) {
                     {i < report.trip.stops.length - 1 && <div className="mt-0.5 h-3 w-px bg-slate-200" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium text-slate-700">{stop.location}</p>
+                    <p className="font-medium text-slate-700">
+                      <ResolvedText value={stop.location} />
+                    </p>
                     <p className="text-[10px] text-slate-400">{stop.time} — {stop.action}</p>
                   </div>
                 </div>
@@ -1281,69 +1749,104 @@ function CompletedDeliveryReport({ report }) {
         </div>
       )}
 
-      {reportTab === 'route' && (
+      {reportTab === 'route' && report.routeDeviation && (
         <div className="space-y-2.5">
-          <RouteDeviationMap
-            plannedRoute={report.routeDeviation.planned}
-            actualRoute={report.routeDeviation.actual}
-            pickupCoords={report.routeDeviation.planned[0]}
-            dropoffCoords={report.routeDeviation.planned[report.routeDeviation.planned.length - 1]}
-          />
+          {(() => {
+            // Two shapes feed this tab: the legacy mock fixtures (`planned`/
+            // `actual`, flat single-leg arrays) and the real one built by
+            // buildRealDriverTripReport (`plannedLegs`/`actualRoute`/
+            // `pickupCoords`/`dropoffCoords` already in RouteDeviationMap's
+            // shape). Normalized here so RouteDeviationMap only ever deals
+            // with one shape -- same approach as SupDeliveries.jsx's
+            // equivalent tab.
+            const r = report.routeDeviation
+            const plannedLegs = r.plannedLegs || [{ path: r.planned, color: '#059669' }]
+            const actualRoute = r.actualRoute || r.actual || []
+            const pickupCoords = r.pickupCoords || r.planned?.[0]
+            const dropoffCoords = r.dropoffCoords || r.planned?.[r.planned.length - 1]
+            // Only the legacy mock fixtures carry an AI narrative -- no real
+            // analysis pipeline produces one, so this stays absent rather
+            // than showing "AI Route Analysis: undefined" for a real trip.
+            const hasAiAnalysis = Boolean(r.aiVerdict)
+            const red = r.aiVerdictTone === 'red'
+            return (
+              <>
+                <RouteDeviationMap
+                  plannedLegs={plannedLegs}
+                  actualRoute={actualRoute}
+                  pickupCoords={pickupCoords}
+                  dropoffCoords={dropoffCoords}
+                />
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
-              <p className="text-[10px] text-slate-500">Planned Distance</p>
-              <p className="text-xs font-bold text-slate-900">{report.routeDeviation.plannedDistance}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
-              <p className="text-[10px] text-slate-500">Actual Distance</p>
-              <p className="text-xs font-bold text-slate-900">{report.routeDeviation.actualDistance}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
-              <p className="text-[10px] text-slate-500">Deviation</p>
-              <p className="text-xs font-bold text-slate-900">{report.routeDeviation.deviationDistance}</p>
-            </div>
-            <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
-              <p className="text-[10px] text-slate-500">Deviation %</p>
-              <p className="text-xs font-bold text-slate-900">{report.routeDeviation.deviationPercent}%</p>
-            </div>
-          </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
+                    <p className="text-[10px] text-slate-500">Planned Distance</p>
+                    <p className="text-xs font-bold text-slate-900">{r.plannedDistance}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
+                    <p className="text-[10px] text-slate-500">Actual Distance</p>
+                    <p className="text-xs font-bold text-slate-900">{r.actualDistance}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
+                    <p className="text-[10px] text-slate-500">Deviation</p>
+                    <p className="text-xs font-bold text-slate-900">{r.deviationDistance}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
+                    <p className="text-[10px] text-slate-500">Deviation %</p>
+                    <p className="text-xs font-bold text-slate-900">{r.deviationPercent}%</p>
+                  </div>
+                </div>
 
-          <div className="flex items-center gap-2.5 rounded-lg border p-2.5"
-            style={{
-              borderColor: report.routeDeviation.aiVerdictTone === 'red' ? '#fecaca' : '#fde68a',
-              backgroundColor: report.routeDeviation.aiVerdictTone === 'red' ? '#fef2f2' : '#fffbeb',
-            }}
-          >
-            <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white ${
-              report.routeDeviation.aiVerdictTone === 'red' ? 'bg-red-500' : 'bg-amber-500'
-            }`}>
-              <Navigation className="h-3.5 w-3.5" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className={`text-xs font-semibold ${report.routeDeviation.aiVerdictTone === 'red' ? 'text-red-800' : 'text-amber-800'}`}>
-                AI Route Analysis: {report.routeDeviation.aiVerdict}
-              </p>
-              <p className={`mt-1 text-[11px] leading-relaxed ${report.routeDeviation.aiVerdictTone === 'red' ? 'text-red-700' : 'text-amber-700'}`}>
-                {report.routeDeviation.aiSummary}
-              </p>
-            </div>
-          </div>
+                {hasAiAnalysis && (
+                  <div className="flex items-center gap-2.5 rounded-lg border p-2.5"
+                    style={{
+                      borderColor: red ? '#fecaca' : '#fde68a',
+                      backgroundColor: red ? '#fef2f2' : '#fffbeb',
+                    }}
+                  >
+                    <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white ${red ? 'bg-red-500' : 'bg-amber-500'}`}>
+                      <Navigation className="h-3.5 w-3.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-xs font-semibold ${red ? 'text-red-800' : 'text-amber-800'}`}>
+                        AI Route Analysis: {r.aiVerdict}
+                      </p>
+                      <p className={`mt-1 text-[11px] leading-relaxed ${red ? 'text-red-700' : 'text-amber-700'}`}>
+                        {r.aiSummary}
+                      </p>
+                    </div>
+                  </div>
+                )}
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg bg-white border border-slate-200 p-2.5">
-            <div className="flex items-center gap-2 text-[11px]">
-              <span className="inline-block h-3 w-6 shrink-0 rounded-sm" style={{ background: '#059669' }} />
-              <span className="text-slate-600">Planned Route</span>
-            </div>
-            <div className="flex items-center gap-2 text-[11px]">
-              <span className="inline-block h-3 w-6 shrink-0 rounded-sm" style={{ background: '#2563eb' }} />
-              <span className="text-slate-600">Actual Route</span>
-            </div>
-            <span className="ml-auto flex items-center gap-1 text-[10px] text-slate-400">
-              <MapPin className="h-3 w-3 shrink-0" />
-              S = Start, E = End
-            </span>
-          </div>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg bg-white border border-slate-200 p-2.5">
+                  {/* Multi-leg real routes get one swatch per leg (matching
+                      the map's own per-leg colors); the legacy single-leg
+                      mock fixtures keep the plain "Planned Route" label. */}
+                  {plannedLegs.length > 1 ? (
+                    plannedLegs.map((leg, i) => (
+                      <div key={i} className="flex items-center gap-2 text-[11px]">
+                        <span className="inline-block h-3 w-6 shrink-0 rounded-sm" style={{ background: leg.color }} />
+                        <span className="text-slate-600">Planned — Leg {i + 1}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <span className="inline-block h-3 w-6 shrink-0 rounded-sm" style={{ background: plannedLegs[0]?.color || '#059669' }} />
+                      <span className="text-slate-600">Planned Route</span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="inline-block h-3 w-6 shrink-0 rounded-sm" style={{ background: ACTUAL_ROUTE_COLOR }} />
+                    <span className="text-slate-600">Actual Route</span>
+                  </div>
+                  <span className="ml-auto flex items-center gap-1 text-[10px] text-slate-400">
+                    <MapPin className="h-3 w-3 shrink-0" />
+                    S = Start, E = End
+                  </span>
+                </div>
+              </>
+            )
+          })()}
         </div>
       )}
     </div>
@@ -1482,6 +1985,10 @@ function mapDelivery(d) {
     pickupPhotoUrl: d.pickupPhotoUrl || null,
     dropoffPhotoUrl: d.dropoffPhotoUrl || null,
     dropoffCompletedAt: d.dropoffCompletedAt || null,
+    // Frozen planned route (Pickup -> Dropoff -> Stops), if the pre-trip
+    // screen already computed+saved it -- see PlannedRouteMap below and
+    // 11_ROUTE_COMPARISON.md. Null until the first successful save.
+    suggestedRoute: Array.isArray(d.suggestedRoute) ? d.suggestedRoute : null,
     status: DB_TO_DRIVER_STATUS[d.status] || str(d.status),
     hasOpenSession: Boolean(d.hasOpenSession),
     sessionId: d.sessionId || null,
@@ -1577,6 +2084,10 @@ function StageProgress({ status }) {
 }
 
 function DeliveryRow({ delivery, showTime, todayISO, onSelect }) {
+  // Resolves a "lat, lng"-shaped address (e.g. DR-0020-style fixture data)
+  // into a real address for the list preview -- one DeliveryRow instance per
+  // row already, so a single top-level hook call is safe here.
+  const resolvedDeliveryAddress = useResolvedAddress(delivery.deliveryAddress || '')
   return (
     <div
       role="button"
@@ -1595,7 +2106,7 @@ function DeliveryRow({ delivery, showTime, todayISO, onSelect }) {
           </p>
           {delivery.pickupDate === todayISO && <TodayBadge />}
         </div>
-        <p className="truncate text-[11px] text-slate-600">{delivery.deliveryAddress}</p>
+        <p className="truncate text-[11px] text-slate-600">{resolvedDeliveryAddress}</p>
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] text-slate-500">
           <span className="inline-flex items-center gap-1">
             <Truck className="h-3 w-3" />
@@ -1660,9 +2171,65 @@ function ProofOfDeliverySection({ delivery }) {
 // The Upcoming/Past "detail" screen — replaces the list in place (same tab) instead of a modal,
 // since this is a lot of information to read inside a small overlay. Everything the old modal
 // showed is still here, just laid out as page sections with a Back action instead of dialog chrome.
-function DeliveryDetailView({ delivery, onBack, isReportExpanded, onToggleReport, onOpenDirections }) {
+function DeliveryDetailView({ delivery, onBack, isReportExpanded, onToggleReport, onOpenDirections, onSuggestedRouteSaved }) {
   const isArchived = delivery.status === 'COMPLETED' || delivery.status === 'DELIVERED'
-  const report = isArchived ? COMPLETED_REPORT_DATA[delivery.id] : null
+  // Resolves a "lat, lng"-shaped address into a real address for the
+  // Pickup/Drop-off Address block and Route Overview below -- one delivery
+  // in view at a time, so top-level hook calls are safe here.
+  const resolvedPickupAddress = useResolvedAddress(delivery.pickupAddress || '')
+  const resolvedDeliveryAddress = useResolvedAddress(delivery.deliveryAddress || '')
+  // Real Delivery Report data (2026-08-14), fetched per delivery from
+  // sessions/alerts/gps_logs -- see buildRealDriverTripReport. Falls back to
+  // the legacy COMPLETED_REPORT_DATA mock only for the handful of fake ids
+  // that still use it; a real delivery with genuinely no sessions (e.g.
+  // completed with no Trip ever started) gets neither, same "No detailed
+  // report available" fallback CompletedDeliveryReport already had.
+  const [realReport, setRealReport] = useState(null)
+  useEffect(() => {
+    let isMounted = true
+    async function load() {
+      if (!isArchived) {
+        setRealReport(null)
+        return
+      }
+      const { data: sessionRows } = await supabase
+        .from('sessions')
+        .select('session_id, start_time, end_time, total_alerts, session_duration')
+        .eq('delivery_request_id', delivery.id)
+        .order('start_time', { ascending: true })
+      if (!isMounted) return
+      const sessions = sessionRows || []
+      if (sessions.length === 0) {
+        setRealReport(null)
+        return
+      }
+      const sessionIds = sessions.map((s) => s.session_id)
+      const [{ data: alertRows }, { data: gpsRows }] = await Promise.all([
+        supabase
+          .from('alerts')
+          .select('id, created_at, event_type, duration, session_id')
+          .in('session_id', sessionIds)
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('gps_logs')
+          .select('session_id, latitude, longitude, timestamp')
+          .in('session_id', sessionIds)
+          .order('timestamp', { ascending: true }),
+      ])
+      if (!isMounted) return
+      setRealReport(buildRealDriverTripReport(delivery, sessions, alertRows || [], gpsRows || []))
+    }
+    load()
+    return () => {
+      isMounted = false
+    }
+    // Keyed on delivery.id specifically, same reasoning as every other
+    // id-keyed effect in this file (e.g. the rest-stop accumulator) --
+    // refetching on every parent re-render (a new delivery object
+    // reference, same id) would be wasteful.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [delivery.id, isArchived])
+  const report = realReport || (isArchived ? COMPLETED_REPORT_DATA[delivery.id] : null)
 
   return (
     <div className="flex flex-col gap-3">
@@ -1712,14 +2279,14 @@ function DeliveryDetailView({ delivery, onBack, isReportExpanded, onToggleReport
                 <MapPin className="h-3.5 w-3.5 shrink-0 mt-0.5 text-slate-400" />
                 <div>
                   <p className="text-[10px] text-slate-500">Pickup Address</p>
-                  <p className="font-medium text-slate-900">{delivery.pickupAddress}</p>
+                  <p className="font-medium text-slate-900">{resolvedPickupAddress}</p>
                 </div>
               </div>
               <div className="flex items-start gap-2">
                 <MapPin className="h-3.5 w-3.5 shrink-0 mt-0.5 text-slate-400" />
                 <div>
                   <p className="text-[10px] text-slate-500">Drop-off Address</p>
-                  <p className="font-medium text-slate-900">{delivery.deliveryAddress}</p>
+                  <p className="font-medium text-slate-900">{resolvedDeliveryAddress}</p>
                 </div>
               </div>
             </div>
@@ -1833,36 +2400,42 @@ function DeliveryDetailView({ delivery, onBack, isReportExpanded, onToggleReport
               </p>
               {isReportExpanded && (
                 <div className="mt-3">
-                  <CompletedDeliveryReport report={report} />
+                  <CompletedDeliveryReport report={report} delivery={delivery} />
                 </div>
               )}
             </section>
           )}
 
-          {/* Route Overview — for deliveries still in progress */}
+          {/* Route Overview — for deliveries still in progress. Whole-trip
+              guide (Pickup -> Dropoff -> Stops in one map), same
+              PlannedRouteMap used on the active delivery's own workspace
+              view -- was a static single-point embed here (no route line at
+              all), same gap that view had before its own fix. PlannedRouteMap
+              already renders its own titled section (matching the active
+              view's layout exactly), so it isn't nested inside a second
+              "Route Overview"-titled wrapper here -- that would just double
+              up the header/border. */}
           {!isArchived && (
-            <section className="overflow-hidden rounded-xl border border-amber-200/70">
-              <div className="border-b border-amber-200/70 bg-amber-50 px-3 py-2">
-                <h3 className="text-xs font-bold text-slate-900">Route Overview</h3>
-              </div>
-              <iframe
-                title="Route Map"
-                src={toGoogleMapEmbed(delivery.destinationCoords)}
-                className="h-40 w-full sm:h-48"
-                loading="lazy"
-                referrerPolicy="no-referrer-when-downgrade"
+            <div className="space-y-2.5">
+              <PlannedRouteMap
+                pickupAddress={delivery.pickupAddress}
+                dropoffAddress={delivery.deliveryAddress}
+                stops={delivery.stops}
+                suggestedRoute={delivery.suggestedRoute}
+                deliveryRequestId={delivery.id}
+                onSaved={onSuggestedRouteSaved}
               />
-              <div className="space-y-1.5 border-t border-amber-200/70 bg-white px-3 py-2.5 text-[11px]">
+              <div className="space-y-1.5 rounded-xl border border-amber-200/70 bg-white px-3 py-2.5 text-[11px]">
                 <div className="flex items-center gap-2">
                   <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[8px] font-bold text-sky-700">P</span>
-                  <span className="truncate text-slate-600">{delivery.pickupAddress}</span>
+                  <span className="truncate text-slate-600">{resolvedPickupAddress}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[8px] font-bold text-emerald-700">D</span>
-                  <span className="truncate text-slate-600">{delivery.deliveryAddress}</span>
+                  <span className="truncate text-slate-600">{resolvedDeliveryAddress}</span>
                 </div>
               </div>
-            </section>
+            </div>
           )}
 
           {!isArchived && delivery.pickupCoords && delivery.destinationCoords && (
@@ -2047,7 +2620,10 @@ function DriverDeliveries() {
 
   // Before pickup, the relevant leg is "get to the pickup point"; after pickup, it's "get to drop-off."
   const activeNeedsPickup = active ? (active.status === 'ASSIGNED' || active.status === 'FOR_PICKUP') : true
-  const activeNavOrigin = active ? (activeNeedsPickup ? { lat: 14.5506, lng: 121.0471 } : active.pickupCoords) : null
+  // Reconciled 2026-08-14 with WAREHOUSE_COORDS (PlannedRouteMap's own
+  // warehouse-origin constant) -- previously a second, different hardcoded
+  // guess at the same real depot location.
+  const activeNavOrigin = active ? (activeNeedsPickup ? WAREHOUSE_COORDS : active.pickupCoords) : null
 
   // Greedy nearest-neighbor dropoff ordering (decided 2026-08-14, see
   // 02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering") --
@@ -2817,6 +3393,49 @@ function DriverDeliveries() {
                   onResume={() => setConfirmingResume(true)}
                   onStageAdvance={() => setConfirmingStageAdvance(true)}
                 />
+              ) : active.pickupAddress && active.deliveryAddress ? (
+                // Whole-trip guide (Pickup -> Dropoff -> Stops in one map),
+                // per user request -- replaces the old single-point static
+                // embed below, which only ever showed "here's the next
+                // stop," never the whole planned trip. Works off the raw
+                // addresses directly (PlannedRouteMap lets DirectionsService
+                // geocode them) rather than requiring a pre-parsed "lat, lng"
+                // pair, which real, human-entered addresses never are --
+                // that used to make this branch never actually fire for a
+                // real booking. Falls back to the original static embed
+                // (the branch below) only if pickup/dropoff are missing
+                // entirely.
+                <div className="space-y-2.5">
+                  <PlannedRouteMap
+                    pickupAddress={active.pickupAddress}
+                    dropoffAddress={active.deliveryAddress}
+                    stops={active.stops}
+                    suggestedRoute={active.suggestedRoute}
+                    deliveryRequestId={active.id}
+                    onSaved={(route) =>
+                      setData((prev) => ({ ...prev, active: { ...prev.active, suggestedRoute: route } }))
+                    }
+                  />
+                  <div className="rounded-xl border border-amber-200/70 bg-white p-2.5">
+                    <div className="space-y-1.5 text-[11px]">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[8px] font-bold text-sky-700">P</span>
+                        <span className="truncate text-slate-600">{active.pickupAddress}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[8px] font-bold text-emerald-700">D</span>
+                        <span className="truncate text-slate-600">{active.deliveryAddress}</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => openDirections(activeNavOrigin, activeNavTarget)}
+                      className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-amber-900 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-800"
+                    >
+                      <Navigation className="h-3.5 w-3.5" />
+                      Navigate Now
+                    </button>
+                  </div>
+                </div>
               ) : (
                 <section className="overflow-hidden rounded-xl border border-amber-200/70 bg-white">
                   <div className="border-b border-amber-200/70 bg-amber-50 px-3 py-2">
@@ -3074,6 +3693,9 @@ function DriverDeliveries() {
               isReportExpanded={expandedReport === selectedDelivery.id}
               onToggleReport={() => setExpandedReport(expandedReport === selectedDelivery.id ? null : selectedDelivery.id)}
               onOpenDirections={openDirections}
+              onSuggestedRouteSaved={(route) =>
+                setSelectedDelivery((prev) => (prev ? { ...prev, suggestedRoute: route } : prev))
+              }
             />
           ) : data.upcoming.length === 0 ? (
             <p className="rounded-xl border border-amber-200/70 bg-white p-5 text-center text-[11px] text-slate-500">
@@ -3097,6 +3719,9 @@ function DriverDeliveries() {
               isReportExpanded={expandedReport === selectedDelivery.id}
               onToggleReport={() => setExpandedReport(expandedReport === selectedDelivery.id ? null : selectedDelivery.id)}
               onOpenDirections={openDirections}
+              onSuggestedRouteSaved={(route) =>
+                setSelectedDelivery((prev) => (prev ? { ...prev, suggestedRoute: route } : prev))
+              }
             />
           ) : (
             <div>

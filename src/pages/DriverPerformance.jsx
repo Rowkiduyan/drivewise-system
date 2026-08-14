@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import DriverLayout from '../layout/DriverLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
-import { formatManilaTimestamp, formatManilaShortDate, formatManilaShortTime, getManilaHour, getManilaWeekday } from '../lib/manilaTime.js'
+import { formatManilaTimestamp, formatManilaShortDate, formatManilaShortTime, getManilaHour, getManilaWeekday, getManilaDateKey } from '../lib/manilaTime.js'
 import {
   ShieldCheck,
   ShieldAlert,
@@ -207,6 +207,10 @@ function useDriverPerformanceData() {
   const [isPerformanceLoading, setIsPerformanceLoading] = useState(true)
   const [performanceError, setPerformanceError] = useState('')
   const [isSampleData, setIsSampleData] = useState(false)
+  // Captured once on mount (an effect, not render, so `Date.now()` here is
+  // fine) -- the fixed "now" the 7-day trend chart's calendar-day buckets
+  // are built from, so render itself never calls Date.now() directly.
+  const [nowMs] = useState(() => Date.now())
 
   useEffect(() => {
     let isMounted = true
@@ -273,11 +277,11 @@ function useDriverPerformanceData() {
     }
   }, [])
 
-  return { alerts, sessions, isPerformanceLoading, performanceError, isSampleData }
+  return { alerts, sessions, isPerformanceLoading, performanceError, isSampleData, nowMs }
 }
 
 function DriverPerformance() {
-  const { alerts, sessions, isPerformanceLoading, performanceError, isSampleData } = useDriverPerformanceData()
+  const { alerts, sessions, isPerformanceLoading, performanceError, isSampleData, nowMs } = useDriverPerformanceData()
 
   const {
     performanceKpis,
@@ -289,8 +293,11 @@ function DriverPerformance() {
   } = useMemo(() => {
     const totalAlerts = alerts.length
     const sessionCount = sessions.length
-    const totalSessionAlerts = sessions.reduce((sum, session) => sum + (session.total_alerts || 0), 0)
-    const avgAlertsPerTrip = sessionCount ? (totalSessionAlerts / sessionCount).toFixed(1) : '0.0'
+    // Divides by live alert count, not `session.total_alerts` (only written
+    // when a session *ends* -- see the weekly-card fix above) -- an average
+    // built from that stale field reads 0.0 whenever this week's trips are
+    // still ongoing, even with real alerts already on record.
+    const avgAlertsPerTrip = sessionCount ? (totalAlerts / sessionCount).toFixed(1) : '0.0'
     const latestSession = sessions[0]
     const hasOngoingTrip = latestSession && !latestSession.end_time
     const tripStatusLabel = hasOngoingTrip ? 'Ongoing Trip' : 'Last Completed Trip'
@@ -386,11 +393,19 @@ function DriverPerformance() {
 
     const alertsByType = {}
     const hourlyCounts = Array.from({ length: 24 }, (_, hour) => ({ hour, alerts: 0 }))
+    // Separate from `hourlyCounts` above -- "Eyes Not Detected" means the
+    // camera lost the driver's face, not that drowsiness was observed, so
+    // it shouldn't skew *when* the driver tends to look drowsy (same
+    // reasoning already applied to the weekly card's chart/badge).
+    const drowsinessHourlyCounts = Array.from({ length: 24 }, (_, hour) => ({ hour, alerts: 0 }))
     alerts.forEach((item) => {
       // Manila-pinned (see lib/manilaTime.js) -- .getHours() reads the
       // browser's own local timezone, not necessarily Manila's.
       const hour = getManilaHour(item.created_at)
       hourlyCounts[hour].alerts += 1
+      if (item.event_type !== 'face_not_detected') {
+        drowsinessHourlyCounts[hour].alerts += 1
+      }
       if (item.event_type) {
         alertsByType[item.event_type] = (alertsByType[item.event_type] || 0) + 1
       }
@@ -399,7 +414,7 @@ function DriverPerformance() {
     const typesRows = Object.keys(ALERT_TYPE_LABELS).map((key) => {
       const count = alertsByType[key] || 0
       const percent = totalAlerts ? Math.round((count / totalAlerts) * 100) : 0
-      return { type: ALERT_TYPE_LABELS[key], count, share: `${percent}%`, percent }
+      return { key, type: ALERT_TYPE_LABELS[key], count, share: `${percent}%`, percent }
     })
 
     const recentRows = sessions.slice(0, 6).map((session) => ({
@@ -422,7 +437,11 @@ function DriverPerformance() {
       hour: `${String(entry.hour).padStart(2, '0')}:00`,
       alerts: entry.alerts,
     }))
-    const peakHourRow = hourlyRows.reduce(
+    const drowsinessHourlyRows = drowsinessHourlyCounts.map((entry) => ({
+      hour: `${String(entry.hour).padStart(2, '0')}:00`,
+      alerts: entry.alerts,
+    }))
+    const peakHourRow = drowsinessHourlyRows.reduce(
       (peak, row) => (row.alerts > peak.alerts ? row : peak),
       { hour: '--', alerts: 0 },
     )
@@ -456,12 +475,35 @@ function DriverPerformance() {
     { hour: '--', alerts: 0 },
   )
 
+  // `face_not_detected` ("Eyes Not Detected") means the camera couldn't see
+  // the driver's face at all -- it isn't a drowsiness signal the way the
+  // other three event types are (see the insight banner below, which
+  // already treats it separately), so the weekly-performance card (chart,
+  // Safe/Moderate/High Risk badge, "busiest trip" callout) excludes it.
+  const drowsinessAlerts = alerts.filter((alert) => alert.event_type !== 'face_not_detected')
+
+  // Live per-session alert counts, from the `alerts` table directly rather
+  // than `sessions.total_alerts` -- the drowsiness script (drowsines.py)
+  // only writes `total_alerts` once, when a session *ends*, but inserts each
+  // individual `alerts` row immediately as it happens. Reading the stale
+  // session-level counter meant an alert from a still-open (or since-ended
+  // but not yet synced) session silently didn't count anywhere on this card
+  // until the trip was closed out. Every other stat on this page already
+  // reads live from `alerts` (see totalAlerts/sortedAlertTypes/hourly
+  // above) -- this brings the weekly card in line with that.
+  const alertCountsBySession = drowsinessAlerts.reduce((counts, alert) => {
+    if (alert.session_id) {
+      counts[alert.session_id] = (counts[alert.session_id] || 0) + 1
+    }
+    return counts
+  }, {})
+
   // Weekly performance — how many of the driver's last-7-days trips fell into
   // each risk tier (same getRiskLevel thresholds as the per-trip badges), so
   // the driver can judge the week as a whole, not just the latest trip.
   const weeklyRiskCounts = sessions.reduce(
     (counts, session) => {
-      const tier = getRiskLevel(session.total_alerts || 0).label
+      const tier = getRiskLevel(alertCountsBySession[session.session_id] || 0).label
       counts[tier] += 1
       return counts
     },
@@ -474,21 +516,39 @@ function DriverPerformance() {
       ? { tone: 'amber', label: 'Moderate' }
       : { tone: 'emerald', label: 'Safe' }
 
-  // Day-by-day trend for the week card — oldest trip first, so the driver
-  // can see *when* alerts spiked instead of just an abstract tier count.
-  const weekTrend = [...sessions].reverse().map((session) => {
-    const tone = getRiskLevel(session.total_alerts || 0).tone
-    const dayLabel = session.start_time ? getManilaWeekday(session.start_time) : '--'
-    return { sessionId: session.session_id, alerts: session.total_alerts || 0, tone, dayLabel }
+  // Day-by-day trend for the week card — one bar per *calendar day* (today
+  // and the 6 before it, oldest first), bucketed from each alert's own
+  // `created_at` (not `sessions.total_alerts`, and not one bar per trip) so
+  // an alert shows up on the day it actually happened, immediately, instead
+  // of waiting for its session to end and being attributed to whatever day
+  // the session *started* on.
+  const weekTrendDays = Array.from({ length: 7 }, (_, idx) => {
+    const date = new Date(nowMs - (6 - idx) * 24 * 60 * 60 * 1000)
+    return {
+      dateKey: getManilaDateKey(date),
+      dayLabel: getManilaWeekday(date),
+      alerts: 0,
+    }
   })
+  const weekTrendByDateKey = Object.fromEntries(weekTrendDays.map((day) => [day.dateKey, day]))
+  drowsinessAlerts.forEach((alert) => {
+    const dateKey = alert.created_at ? getManilaDateKey(alert.created_at) : null
+    const bucket = dateKey ? weekTrendByDateKey[dateKey] : null
+    if (bucket) {
+      bucket.alerts += 1
+    }
+  })
+  const weekTrend = weekTrendDays.map((day) => ({ ...day, tone: getRiskLevel(day.alerts).tone }))
   const maxWeekAlerts = Math.max(...weekTrend.map((day) => day.alerts), 0)
 
   // The single riskiest trip this week, called out by name so the driver
   // knows exactly which trip drove the week's overall rating.
-  const worstSession = sessions.reduce(
-    (worst, session) => ((session.total_alerts || 0) > (worst?.total_alerts || 0) ? session : worst),
-    null,
-  )
+  const worstSession = sessions.reduce((worst, session) => {
+    const count = alertCountsBySession[session.session_id] || 0
+    const worstCount = worst ? alertCountsBySession[worst.session_id] || 0 : -1
+    return count > worstCount ? session : worst
+  }, null)
+  const worstSessionAlertCount = worstSession ? alertCountsBySession[worstSession.session_id] || 0 : 0
 
   const hasInsight = !isPerformanceLoading && maxAlerts > 0 && sortedAlertTypes[0]?.count > 0
 
@@ -567,18 +627,19 @@ function DriverPerformance() {
                   <p className="mt-1 text-[11px] text-slate-500 sm:text-xs">
                     {weeklyRisk.tone === 'red' && worstSession
                       ? `Your ${formatAlertTimestamp(worstSession.start_time)} trip had ${
-                          worstSession.total_alerts
+                          worstSessionAlertCount
                         } alerts — the most this week.`
                       : weeklyRisk.tone === 'amber' && worstSession
-                      ? `Your busiest trip this week had ${worstSession.total_alerts} alerts.`
+                      ? `Your busiest trip this week had ${worstSessionAlertCount} alerts.`
                       : 'No high-alert trips this week — keep it up.'}
                   </p>
 
-                  {/* Per-trip trend, oldest to newest — exactly 7 days, so a
+                  {/* Per-day trend, oldest to newest — exactly 7 calendar
+                      days (today's alerts summed with the 6 before it), so a
                       fixed 7-column grid always fits without needing to
                       scroll or force a min-width like the 24-hour chart. */}
                   <div className="mt-2.5 grid grid-cols-7 gap-1.5 sm:mt-3.5 sm:gap-2">
-                    {weekTrend.map((day, idx) => {
+                    {weekTrend.map((day) => {
                       const heightPct = day.alerts > 0 ? Math.max((day.alerts / maxWeekAlerts) * 100, 12) : 4
                       const barColor =
                         day.tone === 'red'
@@ -588,9 +649,9 @@ function DriverPerformance() {
                           : 'bg-emerald-400'
                       return (
                         <div
-                          key={day.sessionId || idx}
+                          key={day.dateKey}
                           className="flex flex-col items-center gap-1"
-                          title={`${day.dayLabel} — ${day.alerts} alert${day.alerts === 1 ? '' : 's'}`}
+                          title={`${day.dateKey} — ${day.alerts} alert${day.alerts === 1 ? '' : 's'}`}
                         >
                           <span className="text-[9px] font-semibold text-slate-500 sm:text-[10px]">
                             {day.alerts > 0 ? day.alerts : ''}
@@ -613,15 +674,30 @@ function DriverPerformance() {
         </div>
 
         {/* Insight — a plain-language read on the same data above, so drivers
-            don't have to interpret the chart/breakdown themselves. */}
+            don't have to interpret the chart/breakdown themselves.
+            `face_not_detected` ("Eyes Not Detected") means the camera can't
+            see the driver's face at all -- it isn't evidence of drowsiness
+            the way the other three event types are, so it gets its own
+            camera-positioning message instead of the "clustering / take a
+            break" drowsiness framing. */}
         {hasInsight ? (
           <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200/70 bg-amber-50 p-2.5 text-xs text-amber-900 sm:gap-3 sm:p-4 sm:text-sm">
             <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
             <p>
-              Most of your alerts this week were{' '}
-              <strong>{sortedAlertTypes[0].type}</strong>, clustering around{' '}
-              <strong>{peakHour.hour}</strong>. Consider a short break if you're driving
-              during that window.
+              {sortedAlertTypes[0].key === 'face_not_detected' ? (
+                <>
+                  Most of your alerts this week were <strong>Eyes Not Detected</strong>, clustering around{' '}
+                  <strong>{peakHour.hour}</strong>. Make sure your eyes can be seen properly, or pause the trip
+                  if you're not driving.
+                </>
+              ) : (
+                <>
+                  Most of your alerts this week were{' '}
+                  <strong>{sortedAlertTypes[0].type}</strong>, clustering around{' '}
+                  <strong>{peakHourKpi?.value}</strong>. Consider a short break if you're driving
+                  during that window.
+                </>
+              )}
             </p>
           </div>
         ) : null}
