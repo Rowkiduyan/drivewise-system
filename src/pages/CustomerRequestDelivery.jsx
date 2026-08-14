@@ -18,6 +18,7 @@ import {
   getScheduleErrors,
   getBudgetError
 } from '../lib/deliveryOptions.js'
+import { photonGeocode } from '../lib/forwardGeocode.js'
 import { supabase } from '../lib/supabaseClient.js'
 
 // Fix default marker icon for Leaflet in React
@@ -540,6 +541,34 @@ function CustomerRequestDelivery() {
       return
     }
 
+    setSubmitting(true)
+
+    // A customer who typed the address and submitted without ever clicking a
+    // suggestion or using the map picker never had lat/lng captured (see
+    // LocationInput's onChange handlers, which only pass lat/lng along from
+    // those two interactions, never from a raw keystroke) -- fall back to
+    // resolving the typed text via the same Photon geocoder those
+    // interactions already use, so the Supervisor/Driver maps aren't left
+    // showing "no parseable coordinates" for what's likely the common case.
+    let pickupLat = formData.pickupLat
+    let pickupLng = formData.pickupLng
+    if (pickupLat == null && formData.pickupLocation) {
+      const coords = await photonGeocode(formData.pickupLocation)
+      if (coords) {
+        pickupLat = coords.lat
+        pickupLng = coords.lng
+      }
+    }
+    let dropoffLat = formData.dropoffLat
+    let dropoffLng = formData.dropoffLng
+    if (dropoffLat == null && formData.dropoffLocation) {
+      const coords = await photonGeocode(formData.dropoffLocation)
+      if (coords) {
+        dropoffLat = coords.lat
+        dropoffLng = coords.lng
+      }
+    }
+
     const newRequest = {
       customer_auth_id: user.id,
       pickup_date: formData.pickupDate,
@@ -547,11 +576,11 @@ function CustomerRequestDelivery() {
       dropoff_date: formData.dropoffDate,
       dropoff_time: formData.dropoffTime,
       pickup_location: formData.pickupLocation,
-      pickup_lat: formData.pickupLat,
-      pickup_lng: formData.pickupLng,
+      pickup_lat: pickupLat,
+      pickup_lng: pickupLng,
       dropoff_location: formData.dropoffLocation,
-      dropoff_lat: formData.dropoffLat,
-      dropoff_lng: formData.dropoffLng,
+      dropoff_lat: dropoffLat,
+      dropoff_lng: dropoffLng,
       stops: formData.stops
         .filter((location) => location.trim())
         .map((location) => ({ location })),
@@ -565,7 +594,6 @@ function CustomerRequestDelivery() {
       status: 'PENDING_REQUEST'
     }
 
-    setSubmitting(true)
     const { error: insertError } = await supabase
       .from('delivery_requests')
       .insert(newRequest)

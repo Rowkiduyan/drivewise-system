@@ -602,7 +602,7 @@ function PlannedRouteMap({ pickupAddress, dropoffAddress, pickupCoordsProp, drop
           <div className="flex h-full items-center justify-center text-xs text-slate-400">Loading map…</div>
         ) : routeError && !legs ? (
           <div className="flex h-full items-center justify-center px-4 text-center text-xs text-slate-400">
-            Couldn't load a route preview right now — the "Navigate Now" button below still works.
+            Couldn't load a route preview right now — try reopening this screen in a moment.
           </div>
         ) : (
           <GoogleMap
@@ -665,15 +665,13 @@ function PlannedRouteMap({ pickupAddress, dropoffAddress, pickupCoordsProp, drop
 // Google Maps JavaScript API, not a static embed). Position comes from the
 // Raspberry Pi's gps_logs uploads (passed in as `livePosition`), not the
 // browser's own geolocation -- see 01_SYSTEM_ARCHITECTURE.md's Route
-// Comparison section. Only rendered while isDrivingStage (see call site);
-// the existing "Navigate Now" native-app deep-link (`onOpenDirections`) is
-// kept as a fallback, not replaced. isMonitoring/nextLabel/NextIcon/
-// nextColor/onPause/onResume/onStageAdvance mirror the page's own sticky
-// bottom action bar exactly (same fields as statusCfg + the same three
-// confirm-modal triggers) -- used only while fullscreen (see the footer
-// below), since fullscreen covers that action bar entirely and the driver
-// would otherwise have no way to Pause/advance the trip without backing out
-// of fullscreen first.
+// Comparison section. Only rendered while isDrivingStage (see call site).
+// isMonitoring/nextLabel/NextIcon/nextColor/onPause/onResume/onStageAdvance
+// mirror the page's own sticky bottom action bar exactly (same fields as
+// statusCfg + the same three confirm-modal triggers) -- used only while
+// fullscreen (see the footer below), since fullscreen covers that action bar
+// entirely and the driver would otherwise have no way to Pause/advance the
+// trip without backing out of fullscreen first.
 function LiveNavigationMap({
   origin,
   destination,
@@ -685,7 +683,6 @@ function LiveNavigationMap({
   allStops,
   livePosition,
   isPaused,
-  onOpenDirections,
   isMonitoring,
   nextLabel,
   NextIcon,
@@ -1159,7 +1156,7 @@ function LiveNavigationMap({
           </p>
         )}
         {routeError ? (
-          <p className="text-slate-500">Couldn't compute a route right now — use "Navigate Now" below instead.</p>
+          <p className="text-slate-500">Couldn't compute a route right now — retrying shortly.</p>
         ) : currentStep ? (
           <div dangerouslySetInnerHTML={{ __html: currentStep.instructions }} className="text-slate-700" />
         ) : (
@@ -1169,15 +1166,16 @@ function LiveNavigationMap({
       </div>
 
       {/* Fullscreen covers the page's own sticky bottom action bar (Pause
-          Trip/Confirm Pickup/etc) entirely, so it's reproduced here instead
-          of "Navigate Now" -- otherwise there'd be no way to advance the
-          trip without backing out of fullscreen first. Same structure as
-          that action bar: Resume Trip alone while paused, otherwise Pause
-          Trip (only while actually monitoring) next to the stage-advance
-          button. Not fullscreen: unchanged "Navigate Now" fallback link. */}
-      <div className="border-t border-amber-200/70 p-2.5">
-        {isFullscreen ? (
-          isPaused ? (
+          Trip/Confirm Pickup/etc) entirely, so it's reproduced here --
+          otherwise there'd be no way to advance the trip without backing out
+          of fullscreen first. Same structure as that action bar: Resume Trip
+          alone while paused, otherwise Pause Trip (only while actually
+          monitoring) next to the stage-advance button. Not fullscreen: the
+          page's own sticky action bar below is already reachable, so nothing
+          renders here. */}
+      {isFullscreen && (
+        <div className="border-t border-amber-200/70 p-2.5">
+          {isPaused ? (
             <button
               onClick={onResume}
               className="flex w-full items-center justify-center gap-1.5 rounded-md bg-amber-900 px-3 py-2 text-[11px] font-bold text-white transition hover:bg-amber-800"
@@ -1206,17 +1204,9 @@ function LiveNavigationMap({
                 </button>
               )}
             </div>
-          )
-        ) : (
-          <button
-            onClick={onOpenDirections}
-            className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-amber-900 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-800"
-          >
-            <Navigation className="h-3.5 w-3.5" />
-            Navigate Now
-          </button>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </section>
   )
 }
@@ -1997,6 +1987,46 @@ function nearestDropoffOrder(referencePos, candidates) {
   return ordered
 }
 
+// Full ordered legend -- Pickup, then every Dropoff/Stop in the same
+// nearest-first order a computed `legs` route actually visits them (walks
+// `legs` directly rather than recomputing nearestDropoffOrder, so it stays
+// correct for both a freshly computed route AND an already-frozen
+// suggestedRoute). A 'stop' leg's endpoint is matched back to its address
+// by nearest coordinate against the same points (parseCoords/stopCoords)
+// that fed the route computation. Falls back to a plain Pickup/Dropoff pair
+// when no route exists yet to derive an order from.
+function buildRouteLegend(legs, pickupAddress, dropoffAddress, stops, stopCoords) {
+  if (!legs) {
+    return [
+      { key: 'pickup', badge: 'P', badgeBg: 'bg-sky-100', badgeText: 'text-sky-700', address: pickupAddress },
+      { key: 'dropoff', badge: 'D', badgeBg: 'bg-emerald-100', badgeText: 'text-emerald-700', address: dropoffAddress },
+    ]
+  }
+  let stopNum = 1
+  return legs.map((leg) => {
+    if (leg.to === 'pickup') {
+      return { key: 'pickup', badge: 'P', badgeBg: 'bg-sky-100', badgeText: 'text-sky-700', address: pickupAddress }
+    }
+    if (leg.to === 'dropoff') {
+      return { key: 'dropoff', badge: 'D', badgeBg: 'bg-emerald-100', badgeText: 'text-emerald-700', address: dropoffAddress }
+    }
+    stopNum += 1
+    const [endLat, endLng] = leg.path[leg.path.length - 1]
+    let bestAddress = null
+    let bestDist = Infinity
+    for (const s of stops || []) {
+      const c = parseCoords(s.location) || stopCoords[s.location]
+      if (!c) continue
+      const d = (c.lat - endLat) ** 2 + (c.lng - endLng) ** 2
+      if (d < bestDist) {
+        bestDist = d
+        bestAddress = s.location
+      }
+    }
+    return { key: `stop-${stopNum}`, badge: String(stopNum), badgeBg: 'bg-amber-100', badgeText: 'text-amber-700', address: bestAddress || `Stop ${stopNum}` }
+  })
+}
+
 // Rest-stop recommendation thresholds (12_REST_STOP_RECOMMENDATIONS.md,
 // decided 2026-08-13): either crossing recommends a rest stop, whichever
 // comes first, since Trip start -- Trip-start-only, one-shot, no reset.
@@ -2065,10 +2095,6 @@ function mapDelivery(d) {
     pickupCoords: (d.pickupLat != null && d.pickupLng != null) ? { lat: d.pickupLat, lng: d.pickupLng } : parseCoords(d.pickupAddress),
     destinationCoords: (d.dropoffLat != null && d.dropoffLng != null) ? { lat: d.dropoffLat, lng: d.dropoffLng } : parseCoords(d.deliveryAddress),
   }
-}
-
-function toGoogleMapsDirections(origin, destination) {
-  return `https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}&travelmode=driving`
 }
 
 function toGoogleMapEmbed(coords) {
@@ -2232,7 +2258,7 @@ function ProofOfDeliverySection({ delivery }) {
 // The Upcoming/Past "detail" screen — replaces the list in place (same tab) instead of a modal,
 // since this is a lot of information to read inside a small overlay. Everything the old modal
 // showed is still here, just laid out as page sections with a Back action instead of dialog chrome.
-function DeliveryDetailView({ delivery, onBack, isReportExpanded, onToggleReport, onOpenDirections, onSuggestedRouteSaved }) {
+function DeliveryDetailView({ delivery, onBack, isReportExpanded, onToggleReport, onSuggestedRouteSaved }) {
   const isArchived = delivery.status === 'COMPLETED' || delivery.status === 'DELIVERED'
   // Resolves a "lat, lng"-shaped address into a real address for the
   // Pickup/Drop-off Address block and Route Overview below -- one delivery
@@ -2477,39 +2503,18 @@ function DeliveryDetailView({ delivery, onBack, isReportExpanded, onToggleReport
               "Route Overview"-titled wrapper here -- that would just double
               up the header/border. */}
           {!isArchived && (
-            <div className="space-y-2.5">
-              <PlannedRouteMap
-                pickupAddress={delivery.pickupAddress}
-                dropoffAddress={delivery.deliveryAddress}
-                pickupCoordsProp={delivery.pickupCoords}
-                dropoffCoordsProp={delivery.destinationCoords}
-                stops={delivery.stops}
-                suggestedRoute={delivery.suggestedRoute}
-                deliveryRequestId={delivery.id}
-                onSaved={onSuggestedRouteSaved}
-              />
-              <div className="space-y-1.5 rounded-xl border border-amber-200/70 bg-white px-3 py-2.5 text-[11px]">
-                <div className="flex items-center gap-2">
-                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[8px] font-bold text-sky-700">P</span>
-                  <span className="truncate text-slate-600">{resolvedPickupAddress}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[8px] font-bold text-emerald-700">D</span>
-                  <span className="truncate text-slate-600">{resolvedDeliveryAddress}</span>
-                </div>
-              </div>
-            </div>
+            <PlannedRouteMap
+              pickupAddress={delivery.pickupAddress}
+              dropoffAddress={delivery.deliveryAddress}
+              pickupCoordsProp={delivery.pickupCoords}
+              dropoffCoordsProp={delivery.destinationCoords}
+              stops={delivery.stops}
+              suggestedRoute={delivery.suggestedRoute}
+              deliveryRequestId={delivery.id}
+              onSaved={onSuggestedRouteSaved}
+            />
           )}
 
-          {!isArchived && delivery.pickupCoords && delivery.destinationCoords && (
-            <button
-              onClick={() => onOpenDirections(delivery.pickupCoords, delivery.destinationCoords)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-amber-800"
-            >
-              <Navigation className="h-3.5 w-3.5" />
-              Open Directions in Google Maps
-            </button>
-          )}
         </div>
       </div>
     </div>
@@ -2680,6 +2685,18 @@ function DriverDeliveries() {
   // deliveries that already store a real street address.
   const resolvedPickupAddress = useResolvedAddress(active?.pickupAddress || '')
   const resolvedDeliveryAddress = useResolvedAddress(active?.deliveryAddress || '')
+  // Stop coordinates for the Summary card's ordered legend below (see
+  // statusCardLegend) -- same Photon-based resolution PlannedRouteMap uses
+  // for its own route computation, needed here too so a 'stop' leg's
+  // endpoint can be matched back to its address.
+  const activeStopLocations = (active?.stops || []).map((s) => s.location)
+  const { coordsByLocation: activeStopCoords } = useResolvedStopCoords(activeStopLocations)
+  // Full ordered legend for the Summary card -- Pickup, then every
+  // Dropoff/Stop in the same nearest-first order Planned Route/Live
+  // Navigation actually visit them, not just a fixed Pickup/Dropoff pair.
+  const statusCardLegend = active
+    ? buildRouteLegend(active.suggestedRoute, resolvedPickupAddress, resolvedDeliveryAddress, active.stops, activeStopCoords)
+    : []
 
   // Before pickup, the relevant leg is "get to the pickup point"; after pickup, it's "get to drop-off."
   const activeNeedsPickup = active ? (active.status === 'ASSIGNED' || active.status === 'FOR_PICKUP') : true
@@ -2721,11 +2738,6 @@ function DriverDeliveries() {
   const isDropoffFinal = orderedRemainingDropoffs.length > 0
     && orderedRemainingDropoffs[orderedRemainingDropoffs.length - 1]?.key === 'dropoff'
 
-  // Current dropoff target in the chain -- the nearest remaining dropoff per
-  // the greedy ordering above, falling back to the main dropoff once every
-  // dropoff is done (nothing left to point "To").
-  const currentDropoffRaw = active ? (orderedRemainingDropoffs[0]?.location || active.deliveryAddress) : ''
-  const resolvedCurrentDropoffAddress = useResolvedAddress(currentDropoffRaw || '')
   const statusCfg = active ? statusConfig[active.status] : null
   const todayISO = localTodayISO()
   // "active" already prioritizes an open Session over pickupDate === today
@@ -3277,11 +3289,6 @@ function DriverDeliveries() {
     setData((prev) => ({ ...prev, active: { ...prev.active, hasOpenSession: true, sessionId: newSessionId } }))
   }
 
-  const openDirections = (origin, destination) => {
-    if (!origin || !destination) return
-    window.open(toGoogleMapsDirections(origin, destination), '_blank')
-  }
-
   const filteredHistory = data.completed.filter((d) => {
     const q = search.trim().toLowerCase()
     if (!q) return true
@@ -3383,13 +3390,20 @@ function DriverDeliveries() {
 
                 <div className="mt-3 flex items-stretch gap-2.5">
                   <div className="flex flex-col items-center justify-between">
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[9px] font-bold text-sky-700">P</span>
-                    <div className="my-0.5 w-px flex-1 bg-amber-200" />
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[9px] font-bold text-emerald-700">D</span>
+                    {statusCardLegend.flatMap((item, i) => [
+                      <span
+                        key={item.key}
+                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${item.badgeBg} ${item.badgeText}`}
+                      >
+                        {item.badge}
+                      </span>,
+                      i < statusCardLegend.length - 1 && <div key={`${item.key}-line`} className="my-0.5 w-px flex-1 bg-amber-200" />,
+                    ].filter(Boolean))}
                   </div>
                   <div className="flex flex-1 min-w-0 flex-col justify-between gap-1.5">
-                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{resolvedPickupAddress}</p>
-                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{resolvedDeliveryAddress}</p>
+                    {statusCardLegend.map((item) => (
+                      <p key={item.key} className="truncate text-xs font-medium leading-tight text-slate-800">{item.address}</p>
+                    ))}
                   </div>
                 </div>
 
@@ -3417,11 +3431,6 @@ function DriverDeliveries() {
                       {active.quotation ? `₱${Number(active.quotation.amount).toLocaleString()}` : '—'}
                     </p>
                   </div>
-                </div>
-
-                <div className="mt-1.5 flex items-center gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5">
-                  <span className="shrink-0 text-[9px] font-medium uppercase tracking-wide text-slate-400">To</span>
-                  <p className="truncate text-xs font-semibold text-slate-900">{resolvedCurrentDropoffAddress}</p>
                 </div>
               </section>
 
@@ -3457,7 +3466,6 @@ function DriverDeliveries() {
                   allStops={active?.stops}
                   livePosition={livePosition}
                   isPaused={isPausedTrip}
-                  onOpenDirections={() => openDirections(activeNavOrigin, activeNavTarget)}
                   isMonitoring={isMonitoring}
                   nextLabel={statusCfg.nextLabel}
                   NextIcon={statusCfg.nextIcon}
@@ -3478,39 +3486,18 @@ function DriverDeliveries() {
                 // real booking. Falls back to the original static embed
                 // (the branch below) only if pickup/dropoff are missing
                 // entirely.
-                <div className="space-y-2.5">
-                  <PlannedRouteMap
-                    pickupAddress={active.pickupAddress}
-                    dropoffAddress={active.deliveryAddress}
-                    pickupCoordsProp={active.pickupCoords}
-                    dropoffCoordsProp={active.destinationCoords}
-                    stops={active.stops}
-                    suggestedRoute={active.suggestedRoute}
-                    deliveryRequestId={active.id}
-                    onSaved={(route) =>
-                      setData((prev) => ({ ...prev, active: { ...prev.active, suggestedRoute: route } }))
-                    }
-                  />
-                  <div className="rounded-xl border border-amber-200/70 bg-white p-2.5">
-                    <div className="space-y-1.5 text-[11px]">
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[8px] font-bold text-sky-700">P</span>
-                        <span className="truncate text-slate-600">{active.pickupAddress}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[8px] font-bold text-emerald-700">D</span>
-                        <span className="truncate text-slate-600">{active.deliveryAddress}</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => openDirections(activeNavOrigin, activeNavTarget)}
-                      className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-amber-900 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-800"
-                    >
-                      <Navigation className="h-3.5 w-3.5" />
-                      Navigate Now
-                    </button>
-                  </div>
-                </div>
+                <PlannedRouteMap
+                  pickupAddress={active.pickupAddress}
+                  dropoffAddress={active.deliveryAddress}
+                  pickupCoordsProp={active.pickupCoords}
+                  dropoffCoordsProp={active.destinationCoords}
+                  stops={active.stops}
+                  suggestedRoute={active.suggestedRoute}
+                  deliveryRequestId={active.id}
+                  onSaved={(route) =>
+                    setData((prev) => ({ ...prev, active: { ...prev.active, suggestedRoute: route } }))
+                  }
+                />
               ) : (
                 <section className="overflow-hidden rounded-xl border border-amber-200/70 bg-white">
                   <div className="border-b border-amber-200/70 bg-amber-50 px-3 py-2">
@@ -3534,15 +3521,6 @@ function DriverDeliveries() {
                       <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[8px] font-bold text-emerald-700">D</span>
                       <span className="truncate text-slate-600">{active.deliveryAddress}</span>
                     </div>
-                  </div>
-                  <div className="border-t border-amber-200/70 p-2.5">
-                    <button
-                      onClick={() => openDirections(activeNavOrigin, activeNavTarget)}
-                      className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-amber-900 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-800"
-                    >
-                      <Navigation className="h-3.5 w-3.5" />
-                      Navigate Now
-                    </button>
                   </div>
                 </section>
               )}
@@ -3767,7 +3745,6 @@ function DriverDeliveries() {
               onBack={closeDeliveryDetail}
               isReportExpanded={expandedReport === selectedDelivery.id}
               onToggleReport={() => setExpandedReport(expandedReport === selectedDelivery.id ? null : selectedDelivery.id)}
-              onOpenDirections={openDirections}
               onSuggestedRouteSaved={(route) =>
                 setSelectedDelivery((prev) => (prev ? { ...prev, suggestedRoute: route } : prev))
               }
@@ -3793,7 +3770,6 @@ function DriverDeliveries() {
               onBack={closeDeliveryDetail}
               isReportExpanded={expandedReport === selectedDelivery.id}
               onToggleReport={() => setExpandedReport(expandedReport === selectedDelivery.id ? null : selectedDelivery.id)}
-              onOpenDirections={openDirections}
               onSuggestedRouteSaved={(route) =>
                 setSelectedDelivery((prev) => (prev ? { ...prev, suggestedRoute: route } : prev))
               }

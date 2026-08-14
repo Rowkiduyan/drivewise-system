@@ -16,10 +16,13 @@ const PH_BBOX = '116.9,4.6,126.6,21.1'
 // resolved to the Batasang Pambansa complex, ~9km off, flagged only by an
 // easy-to-miss `partial_match: true`), while Photon found the real place.
 // Reserved for text that has no already-captured coordinate of its own --
-// pickup/dropoff have pickup_lat/lng, dropoff_lat/lng DB columns; multi-stop
-// entries don't (no autocomplete/map picker on the booking form for them),
-// so this is what backs those instead.
-async function photonGeocode(address) {
+// multi-stop entries never do (no autocomplete/map picker on the booking
+// form for them), and pickup/dropoff don't either whenever the customer
+// typed an address and submitted without ever clicking a suggestion or
+// using the map picker (CustomerRequestDelivery.jsx's LocationInput only
+// captures lat/lng from those two interactions, not from free-typed text --
+// see its own submit-time fallback call to this function).
+export async function photonGeocode(address) {
   if (cache.has(address)) return cache.get(address)
   let coords = null
   try {

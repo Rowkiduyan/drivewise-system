@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  GoogleMap,
+  Marker as GoogleMapMarker,
+  Polyline as GoogleMapPolyline,
+  useJsApiLoader,
+} from '@react-google-maps/api'
+import {
   AlertTriangle,
   Calendar,
   Camera,
@@ -26,7 +32,9 @@ import HelperLayout from '../layout/HelperLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 import { resizeProofPhotoToBase64 } from '../lib/proofPhoto.js'
 import { useResolvedAddress } from '../lib/reverseGeocode.js'
+import { useResolvedStopCoords } from '../lib/forwardGeocode.js'
 import { formatManilaShortTime, manilaTodayISO, MANILA_TIMEZONE } from '../lib/manilaTime.js'
+import { GOOGLE_MAPS_LOADER_OPTIONS } from '../lib/googleMapsLoaderOptions.js'
 
 // Same alert taxonomy DriverDeliveries.jsx uses (06_DROWSINESS_ALERT_PIPELINE.md)
 // — kept in sync manually since the two pages don't share a module today.
@@ -208,6 +216,44 @@ function parseCoords(value) {
   return { lat, lng }
 }
 
+// Full ordered legend -- Pickup, then every Dropoff/Stop in the same
+// nearest-first order a computed `legs` route actually visits them. Mirrors
+// DriverDeliveries.jsx's own buildRouteLegend exactly (not shared, per this
+// codebase's existing per-portal convention) -- see its comment for why
+// this walks `legs` rather than recomputing the ordering here. Falls back
+// to a plain Pickup/Dropoff pair when no route exists yet.
+function buildRouteLegend(legs, pickupAddress, dropoffAddress, stops, stopCoords) {
+  if (!legs) {
+    return [
+      { key: 'pickup', badge: 'P', badgeBg: 'bg-sky-100', badgeText: 'text-sky-700', address: pickupAddress },
+      { key: 'dropoff', badge: 'D', badgeBg: 'bg-emerald-100', badgeText: 'text-emerald-700', address: dropoffAddress },
+    ]
+  }
+  let stopNum = 1
+  return legs.map((leg) => {
+    if (leg.to === 'pickup') {
+      return { key: 'pickup', badge: 'P', badgeBg: 'bg-sky-100', badgeText: 'text-sky-700', address: pickupAddress }
+    }
+    if (leg.to === 'dropoff') {
+      return { key: 'dropoff', badge: 'D', badgeBg: 'bg-emerald-100', badgeText: 'text-emerald-700', address: dropoffAddress }
+    }
+    stopNum += 1
+    const [endLat, endLng] = leg.path[leg.path.length - 1]
+    let bestAddress = null
+    let bestDist = Infinity
+    for (const s of stops || []) {
+      const c = parseCoords(s.location) || stopCoords[s.location]
+      if (!c) continue
+      const d = (c.lat - endLat) ** 2 + (c.lng - endLng) ** 2
+      if (d < bestDist) {
+        bestDist = d
+        bestAddress = s.location
+      }
+    }
+    return { key: `stop-${stopNum}`, badge: String(stopNum), badgeBg: 'bg-amber-100', badgeText: 'text-amber-700', address: bestAddress || `Stop ${stopNum}` }
+  })
+}
+
 // Plain-JS haversine, no google.maps dependency -- mirrors DriverDeliveries.jsx's
 // own distanceMeters helper exactly, used to pick which Delivery Chain item
 // is nearest the truck's live position (see the "Next" flag in chainItems
@@ -254,6 +300,9 @@ function mapDelivery(d) {
     // Pickup -> Dropoff -> Stops chain the Helper completes with a required
     // proof photo per item — see 02B_MULTI_STOP_DELIVERIES.md.
     stops: Array.isArray(d.stops) ? d.stops : [],
+    // Frozen planned route, if the Driver's pre-trip screen already
+    // computed+saved one -- read-only here, see RouteOverviewMap below.
+    suggestedRoute: Array.isArray(d.suggestedRoute) ? d.suggestedRoute : null,
     pickupPhotoUrl: d.pickupPhotoUrl || null,
     dropoffPhotoUrl: d.dropoffPhotoUrl || null,
     dropoffCompletedAt: d.dropoffCompletedAt || null,
@@ -277,6 +326,164 @@ function mapDelivery(d) {
 function toGoogleMapEmbed(coords) {
   if (!coords) return 'https://maps.google.com/maps?q=14.5995,120.9842&z=12&output=embed'
   return `https://maps.google.com/maps?q=${coords.lat},${coords.lng}&z=15&output=embed`
+}
+
+const GOOGLE_MAP_CONTAINER_STYLE = { width: '100%', height: '100%' }
+// Mirrors DriverDeliveries.jsx's own NAV_LEG_COLORS exactly (not shared, per
+// this codebase's existing per-portal convention) -- one color per leg of
+// the Warehouse -> Pickup -> Dropoff -> Stop 1 -> ... chain, index 0
+// reserved for the to-pickup leg.
+const NAV_LEG_COLORS = ['#DC2626', '#2563EB', '#059669', '#7C3AED', '#EA580C', '#DB2777']
+
+const DROPOFF_PIN_PATH =
+  'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z'
+function dropoffPinIcon(fillColor) {
+  return {
+    path: DROPOFF_PIN_PATH,
+    fillColor,
+    fillOpacity: 0.65,
+    strokeColor: '#fff',
+    strokeWeight: 1.5,
+    scale: 1.25,
+    anchor: new window.google.maps.Point(12, 22),
+    labelOrigin: new window.google.maps.Point(12, 9),
+  }
+}
+
+function svgMarkerIcon(svg, size) {
+  return {
+    url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+    scaledSize: new window.google.maps.Size(size, size * 1.2),
+    anchor: new window.google.maps.Point(size / 2, size * 1.2),
+  }
+}
+
+function pickupMarkerIcon() {
+  return svgMarkerIcon(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="41" viewBox="0 0 34 41">
+      <path d="M17 1C8.4 1 1.5 7.9 1.5 16.4 1.5 27.6 17 40 17 40s15.5-12.4 15.5-23.6C32.5 7.9 25.6 1 17 1z" fill="#0284c7" stroke="#fff" stroke-width="2"/>
+      <g fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+        <path d="M9 12.5 17 8.5l8 4v9l-8 4-8-4v-9z"/>
+        <path d="M9 12.5 17 16.5l8-4"/>
+        <path d="M17 16.5V25.5"/>
+      </g>
+    </svg>`,
+    34,
+  )
+}
+
+function dropoffMarkerIcon() {
+  return svgMarkerIcon(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="41" viewBox="0 0 34 41">
+      <path d="M17 1C8.4 1 1.5 7.9 1.5 16.4 1.5 27.6 17 40 17 40s15.5-12.4 15.5-23.6C32.5 7.9 25.6 1 17 1z" fill="#059669" stroke="#fff" stroke-width="2"/>
+      <path d="M13 8v18" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M13 8.5h11l-3.4 3.75L24 16H13z" fill="#fff"/>
+    </svg>`,
+    34,
+  )
+}
+
+function warehouseMarkerIcon() {
+  return svgMarkerIcon(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="41" viewBox="0 0 34 41">
+      <path d="M17 1C8.4 1 1.5 7.9 1.5 16.4 1.5 27.6 17 40 17 40s15.5-12.4 15.5-23.6C32.5 7.9 25.6 1 17 1z" fill="#475569" stroke="#fff" stroke-width="2"/>
+      <g fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+        <path d="M8 15.5 17 9l9 6.5V24H8z"/>
+        <path d="M8 15.5 17 22l9-6.5"/>
+        <path d="M14.5 24v-5h5v5"/>
+      </g>
+    </svg>`,
+    34,
+  )
+}
+
+// Read-only whole-trip route preview, mirroring DriverDeliveries.jsx's
+// PlannedRouteMap visually (same marker icons/leg colors) but never
+// computing or saving a route itself -- unlike the Driver, a Helper isn't
+// authorized to call driver-trip's save-suggested-route action (assigned
+// Driver only, would 403). Purely renders whatever suggestedRoute the
+// Driver's own pre-trip screen has already computed and saved; falls back
+// to the original static single-point embed until one exists.
+function RouteOverviewMap({ suggestedRoute, dropoffCoords }) {
+  const { isLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS)
+  const mapRef = useRef(null)
+  const legs = suggestedRoute
+
+  const warehousePos = legs?.[0]?.path?.[0]
+  const pickupLeg = legs?.find((leg) => leg.to === 'pickup')
+  const pickupPos = pickupLeg ? pickupLeg.path[pickupLeg.path.length - 1] : null
+  const dropoffLeg = legs?.find((leg) => leg.to === 'dropoff')
+  const dropoffPos = dropoffLeg ? dropoffLeg.path[dropoffLeg.path.length - 1] : null
+  // Whether the real dropoff is genuinely the last leg -- Dynamic
+  // Nearest-Dropoff Ordering (02B_MULTI_STOP_DELIVERIES.md) can place it
+  // before a stop instead, and the flag icon means "this is the actual end
+  // of the trip," which would be misleading then (mirrors DriverDeliveries.
+  // jsx's own PlannedRouteMap fix).
+  const isDropoffFinal = legs?.[legs.length - 1]?.to === 'dropoff'
+  const stopPositions = (legs || []).filter((leg) => leg.to === 'stop').map((leg) => leg.path[leg.path.length - 1])
+
+  useEffect(() => {
+    if (!mapRef.current || !window.google || !legs?.length) return
+    const bounds = new window.google.maps.LatLngBounds()
+    legs.forEach((leg) => leg.path.forEach(([lat, lng]) => bounds.extend({ lat, lng })))
+    mapRef.current.fitBounds(bounds, 16)
+  }, [legs])
+
+  if (!legs) {
+    return (
+      <iframe
+        title="Route Map"
+        src={toGoogleMapEmbed(dropoffCoords)}
+        className="h-48 w-full sm:h-56"
+        loading="lazy"
+        referrerPolicy="no-referrer-when-downgrade"
+      />
+    )
+  }
+
+  return (
+    <div className="h-48 w-full sm:h-56">
+      {!isLoaded ? (
+        <div className="flex h-full items-center justify-center text-xs text-slate-400">Loading map…</div>
+      ) : (
+        <GoogleMap
+          mapContainerStyle={GOOGLE_MAP_CONTAINER_STYLE}
+          onLoad={(map) => {
+            mapRef.current = map
+          }}
+          options={{ disableDefaultUI: true, zoomControl: true, gestureHandling: 'greedy' }}
+        >
+          {legs.map((leg, i) => (
+            <GoogleMapPolyline
+              key={i}
+              path={leg.path.map(([lat, lng]) => ({ lat, lng }))}
+              options={{
+                strokeColor: NAV_LEG_COLORS[i % NAV_LEG_COLORS.length],
+                strokeOpacity: 0.9,
+                strokeWeight: 5,
+              }}
+            />
+          ))}
+          {warehousePos && <GoogleMapMarker position={{ lat: warehousePos[0], lng: warehousePos[1] }} icon={warehouseMarkerIcon()} />}
+          {pickupPos && <GoogleMapMarker position={{ lat: pickupPos[0], lng: pickupPos[1] }} icon={pickupMarkerIcon()} />}
+          {dropoffPos && (
+            <GoogleMapMarker
+              position={{ lat: dropoffPos[0], lng: dropoffPos[1] }}
+              icon={isDropoffFinal ? dropoffMarkerIcon() : dropoffPinIcon('#059669')}
+            />
+          )}
+          {stopPositions.map((pos, i) => (
+            <GoogleMapMarker
+              key={i}
+              position={{ lat: pos[0], lng: pos[1] }}
+              label={{ text: String(i + 2), color: '#fff', fontSize: '11px', fontWeight: '700' }}
+              icon={dropoffPinIcon('#d97706')}
+            />
+          ))}
+        </GoogleMap>
+      )}
+    </div>
+  )
 }
 
 function StatusBadge({ status }) {
@@ -463,7 +670,7 @@ function ProofOfDeliverySection({ delivery }) {
 // Detail screen for a delivery — same layout as the driver's, minus the
 // Delivery Report section (driver behavior/route analysis is not part of the
 // helper module).
-function DeliveryDetailView({ delivery, onBack, onOpenDirections, currentHelperName }) {
+function DeliveryDetailView({ delivery, onBack, currentHelperName }) {
   const isCurrentHelper = (member) =>
     Boolean(currentHelperName) && member.name.trim().toLowerCase() === currentHelperName.trim().toLowerCase()
   return (
@@ -602,39 +809,18 @@ function DeliveryDetailView({ delivery, onBack, onOpenDirections, currentHelperN
             </div>
           </section>
 
-          {/* Route Overview */}
+          {/* Route Overview — same whole-trip guide DriverDeliveries.jsx's
+              pre-trip screen shows (Warehouse -> Pickup -> Dropoff -> Stops,
+              one colored polyline per leg), read-only here: renders whatever
+              the Driver's own PlannedRouteMap has already computed and
+              saved, falling back to the original static single-point embed
+              until one exists. */}
           <section className="overflow-hidden rounded-xl border border-teal-200/70">
             <div className="border-b border-teal-200/70 bg-teal-50 px-3 py-2">
               <h3 className="text-xs font-bold text-slate-900">Route Overview</h3>
             </div>
-            <iframe
-              title="Route Map"
-              src={toGoogleMapEmbed(delivery.destinationCoords)}
-              className="h-40 w-full sm:h-48"
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-            />
-            <div className="space-y-1.5 border-t border-teal-200/70 bg-white px-3 py-2.5 text-[11px]">
-              <div className="flex items-center gap-2">
-                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[8px] font-bold text-sky-700">P</span>
-                <span className="truncate text-slate-600">{delivery.pickupAddress}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[8px] font-bold text-emerald-700">D</span>
-                <span className="truncate text-slate-600">{delivery.deliveryAddress}</span>
-              </div>
-            </div>
+            <RouteOverviewMap suggestedRoute={delivery.suggestedRoute} dropoffCoords={delivery.destinationCoords} />
           </section>
-
-          {delivery.pickupCoords && delivery.destinationCoords && (
-            <button
-              onClick={() => onOpenDirections(delivery.pickupCoords, delivery.destinationCoords)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-teal-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-teal-800"
-            >
-              <Navigation className="h-3.5 w-3.5" />
-              Open Directions in Google Maps
-            </button>
-          )}
         </div>
       </div>
     </div>
@@ -699,6 +885,19 @@ function HelperDeliveries() {
   // deliveries that already store a real street address.
   const resolvedPickupAddress = useResolvedAddress(active?.pickupAddress || '')
   const resolvedDeliveryAddress = useResolvedAddress(active?.deliveryAddress || '')
+  // Stop coordinates for the Summary card's ordered legend below (see
+  // statusCardLegend) -- same Photon-based resolution the Driver's own
+  // PlannedRouteMap uses for its route computation, needed here too so a
+  // 'stop' leg's endpoint can be matched back to its address.
+  const activeStopLocations = (active?.stops || []).map((s) => s.location)
+  const { coordsByLocation: activeStopCoords } = useResolvedStopCoords(activeStopLocations)
+  // Full ordered legend for the Summary card -- Pickup, then every
+  // Dropoff/Stop in the same nearest-first order the Driver's Planned
+  // Route/Live Navigation actually visit them, not just a fixed
+  // Pickup/Dropoff pair.
+  const statusCardLegend = active
+    ? buildRouteLegend(active.suggestedRoute, resolvedPickupAddress, resolvedDeliveryAddress, active.stops, activeStopCoords)
+    : []
   const statusCfg = active ? statusConfig[active.status] : null
   const todayISO = localTodayISO()
   // Boolean(active), not a pickupDate === today check — a delivery with a
@@ -1103,10 +1302,6 @@ function HelperDeliveries() {
     setIsAlertHistoryExpanded(false)
   }, [active?.sessionId])
 
-  const openDirections = (origin, destination) => {
-    window.open(`https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}&travelmode=driving`, '_blank')
-  }
-
   const filteredHistory = data.completed.filter((d) => {
     const q = search.trim().toLowerCase()
     if (!q) return true
@@ -1185,13 +1380,20 @@ function HelperDeliveries() {
 
                 <div className="mt-3 flex items-stretch gap-2.5">
                   <div className="flex flex-col items-center justify-between">
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[9px] font-bold text-sky-700">P</span>
-                    <div className="my-0.5 w-px flex-1 bg-teal-200" />
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[9px] font-bold text-emerald-700">D</span>
+                    {statusCardLegend.flatMap((item, i) => [
+                      <span
+                        key={item.key}
+                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${item.badgeBg} ${item.badgeText}`}
+                      >
+                        {item.badge}
+                      </span>,
+                      i < statusCardLegend.length - 1 && <div key={`${item.key}-line`} className="my-0.5 w-px flex-1 bg-teal-200" />,
+                    ].filter(Boolean))}
                   </div>
                   <div className="flex flex-1 min-w-0 flex-col justify-between gap-1.5">
-                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{resolvedPickupAddress}</p>
-                    <p className="truncate text-xs font-medium leading-tight text-slate-800">{resolvedDeliveryAddress}</p>
+                    {statusCardLegend.map((item) => (
+                      <p key={item.key} className="truncate text-xs font-medium leading-tight text-slate-800">{item.address}</p>
+                    ))}
                   </div>
                 </div>
 
@@ -1219,13 +1421,6 @@ function HelperDeliveries() {
                       {active.quotation ? `₱${Number(active.quotation.amount).toLocaleString()}` : '—'}
                     </p>
                   </div>
-                </div>
-
-                <div className="mt-1.5 flex items-center gap-1.5 rounded-lg bg-teal-50 px-2.5 py-1.5">
-                  <span className="shrink-0 text-[9px] font-medium uppercase tracking-wide text-slate-400">To</span>
-                  <p className="truncate text-xs font-semibold text-slate-900">
-                    {active.customerName} <span className="font-normal text-slate-500">&bull; {active.companyName}</span>
-                  </p>
                 </div>
               </section>
 
@@ -1293,37 +1488,13 @@ function HelperDeliveries() {
                 />
               )}
 
-              {/* Route & Navigation — helper sees the same live route the driver does. */}
+              {/* Route Overview — same whole-trip guide DriverDeliveries.jsx's
+                  pre-trip screen shows, read-only here (see RouteOverviewMap). */}
               <section className="overflow-hidden rounded-xl border border-teal-200/70 bg-white">
                 <div className="border-b border-teal-200/70 bg-teal-50 px-3 py-2">
                   <h3 className="text-xs font-bold text-slate-900">Route Overview</h3>
                 </div>
-                <iframe
-                  title="Navigation Map"
-                  src={toGoogleMapEmbed(active.destinationCoords)}
-                  className="h-36 w-full sm:h-44"
-                  loading="lazy"
-                  referrerPolicy="no-referrer-when-downgrade"
-                />
-                <div className="space-y-1.5 border-t border-teal-200/70 px-3 py-2.5 text-[11px]">
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[8px] font-bold text-sky-700">P</span>
-                    <span className="truncate text-slate-600">{active.pickupAddress}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[8px] font-bold text-emerald-700">D</span>
-                    <span className="truncate text-slate-600">{active.deliveryAddress}</span>
-                  </div>
-                </div>
-                <div className="border-t border-teal-200/70 p-2.5">
-                  <button
-                    onClick={() => openDirections(active.pickupCoords, active.destinationCoords)}
-                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-teal-900 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-teal-800"
-                  >
-                    <Navigation className="h-3.5 w-3.5" />
-                    Navigate Now
-                  </button>
-                </div>
+                <RouteOverviewMap suggestedRoute={active.suggestedRoute} dropoffCoords={active.destinationCoords} />
               </section>
 
               {/* Delivery overview + fee + crew */}
@@ -1411,7 +1582,6 @@ function HelperDeliveries() {
             <DeliveryDetailView
               delivery={selectedDelivery}
               onBack={closeDeliveryDetail}
-              onOpenDirections={openDirections}
               currentHelperName={currentHelperName}
             />
           ) : data.upcoming.length === 0 ? (
@@ -1433,7 +1603,6 @@ function HelperDeliveries() {
             <DeliveryDetailView
               delivery={selectedDelivery}
               onBack={closeDeliveryDetail}
-              onOpenDirections={openDirections}
               currentHelperName={currentHelperName}
             />
           ) : (

@@ -1100,6 +1100,12 @@ Deno.serve(async (req) => {
           // the chain, plus proof-photo state for each item in the Pickup ->
           // Dropoff -> Stops sequence the Helper completes (02B_MULTI_STOP_DELIVERIES.md).
           stops: Array.isArray(r.stops) ? r.stops : [],
+          // Frozen planned route (Pickup -> Dropoff -> Stops), if the Driver
+          // app's pre-trip screen already computed+saved one -- read-only
+          // here, the Helper's Route Overview only ever renders it, never
+          // computes/saves its own (driver-trip's save-suggested-route is
+          // authorized for the assigned Driver only).
+          suggestedRoute: r.suggested_route || null,
           pickupPhotoUrl: r.pickup_photo_url || null,
           dropoffPhotoUrl: r.dropoff_photo_url || null,
           dropoffCompletedAt: r.dropoff_completed_at || null,
