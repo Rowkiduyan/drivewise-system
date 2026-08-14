@@ -1514,14 +1514,15 @@ function ProofOfDeliverySection({ request }) {
       .map((stop, i) => stop.completed && stop.photoUrl && { label: `Dropoff ${i + 2}`, photoUrl: stop.photoUrl, completedAt: stop.completedAt }),
   ].filter(Boolean)
 
-  if (items.length === 0) return null
-
   return (
     <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
       <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
         <Camera className="h-3.5 w-3.5 text-slate-400" />
         Proof of Delivery
       </h4>
+      {items.length === 0 ? (
+        <p className="text-xs text-slate-500">No Proof of Delivery</p>
+      ) : (
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {items.map((item, i) => (
           <a
@@ -1541,11 +1542,12 @@ function ProofOfDeliverySection({ request }) {
           </a>
         ))}
       </div>
+      )}
     </div>
   )
 }
 
-function DeliveryRequestDetails({ request, timeline }) {
+function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
   return (
     <div>
       <div className="grid grid-cols-2 gap-3">
@@ -1555,7 +1557,6 @@ function DeliveryRequestDetails({ request, timeline }) {
             Customer Details
           </h4>
           <div className="space-y-1.5">
-            <Row label="Name" value={request.customerName} />
             <Row label="Company" value={request.companyName} />
           </div>
         </div>
@@ -1627,7 +1628,15 @@ function DeliveryRequestDetails({ request, timeline }) {
           Location
         </h4>
         <div className="mb-3">
-          <Row label="Total Distance (2-way)" value={getTotalDistance(request)} />
+          {(() => {
+            const hasReal = realDistanceKm && realDistanceKm !== '—'
+            return (
+              <Row
+                label={hasReal ? 'Total Distance (Actual)' : 'Total Distance (2-way, Est.)'}
+                value={hasReal ? realDistanceKm : getTotalDistance(request)}
+              />
+            )
+          })()}
         </div>
         <LocationSwitcher request={request} />
       </div>
@@ -2353,7 +2362,7 @@ function CompletedDeliveryReport({ delivery }) {
       </div>
 
       <div className="p-4 md:p-5">
-        {reportTab === 'details' && <DeliveryRequestDetails request={delivery} timeline={report?.trip?.timeline} />}
+        {reportTab === 'details' && <DeliveryRequestDetails request={delivery} timeline={report?.trip?.timeline} realDistanceKm={report?.trip?.distance} />}
         {reportTab === 'quotation' && <QuotationTab delivery={delivery} />}
         {report && reportTab === 'trip' && <TripDetailsTab delivery={delivery} report={report} />}
         {report && reportTab === 'behavior' && <DriveWiseAnalysisTab report={report} />}
@@ -2583,7 +2592,7 @@ function IssueDetailView({ delivery, onResolve, onSendMessage }) {
       </div>
 
       <div className="p-4 md:p-5">
-        {reportTab === 'details' && <DeliveryRequestDetails request={delivery} />}
+        {reportTab === 'details' && <DeliveryRequestDetails request={delivery} realDistanceKm={report?.trip?.distance} />}
         {reportTab === 'quotation' && <QuotationTab delivery={delivery} />}
         {report && reportTab === 'trip' && <TripDetailsTab delivery={delivery} report={report} />}
         {report && reportTab === 'behavior' && <DriveWiseAnalysisTab report={report} />}
@@ -2847,10 +2856,20 @@ function SupDeliveries() {
   const [activeModule, setActiveModule] = useState('inbox')
   const [monitoredDeliveryId, setMonitoredDeliveryId] = useState(null)
   // Real DriveWise telemetry per delivery, fetched from the `alerts` table
-  // (via its session) on demand -- keyed by delivery id, `null` once fetched
-  // if that delivery genuinely has no DB alerts (falls back to mock below).
+  // (via its session) on demand -- keyed by delivery id, `null` if that
+  // delivery genuinely has no DB alerts yet (falls back to mock below).
   const [realAlertsByDelivery, setRealAlertsByDelivery] = useState({})
-  const fetchedAlertDeliveryIds = useRef(new Set())
+  // Real live position per delivery, from gps_logs -- see the polling effect
+  // below. Keyed by delivery id; `null` once fetched if that delivery has no
+  // GPS reading yet (falls back to the mock/default map below).
+  const [realLocationByDelivery, setRealLocationByDelivery] = useState({})
+  // Real driven distance for the delivery currently open in "View Details"
+  // (Inbox/Assign Vehicle/In Transit tabs), summed from gps_logs across
+  // every Session of the Trip -- see the effect below. `undefined` = not
+  // fetched yet for this id, `null` = fetched, genuinely no GPS data (falls
+  // back to the pricing-estimate figure the "Total Distance" Row used
+  // before).
+  const [realDistanceKmBySelected, setRealDistanceKmBySelected] = useState({})
   // Deep-link from SupDashboard's "View Trip" (Driver Safety list) --
   // ?deliveryId=DR-0020 opens straight to the In Transit tab with that
   // delivery already selected in Real-time Monitoring / DriveWise Alerts.
@@ -3172,33 +3191,137 @@ function SupDeliveries() {
     return preferred || filteredTransit[0] || ongoingDeliveries[0] || null
   }, [filteredTransit, monitoredDeliveryId, ongoingDeliveries])
 
-  // Real telemetry for the monitored delivery, fetched once per delivery id
-  // (its session, then that session's alerts) and cached -- falls back to
-  // the mock alertsByDelivery lookup for deliveries with no real DB alerts.
+  // Real telemetry for the monitored delivery: its session (for alerts) and
+  // its latest gps_logs fix (for the map pin). Re-fetched on a short poll
+  // (not just once per delivery id) while a delivery stays selected -- a
+  // plain one-shot fetch went stale forever whenever the Supervisor opened a
+  // delivery before its Trip had started or before new alerts had landed (no
+  // session yet -> cached `null` -> "No DriveWise telemetry" shown even
+  // after a real session/alerts arrived later, since nothing ever re-ran the
+  // fetch). Polling is the same pattern useDeactivationGuard already uses
+  // elsewhere in this codebase for "keep this fresh without a full
+  // Realtime wire-up" cases.
+  //
+  // The map pin itself was a separate, bigger gap: `monitoringByDelivery`/
+  // `currentLocation`/`destinationCoords` only ever exist on the legacy
+  // mock delivery objects (see mockDeliveriesData.js) -- a real delivery
+  // like one booked through CustomerRequestDelivery.jsx has none of those
+  // fields, so the map iframe below silently fell back to
+  // toGoogleMapEmbed's hardcoded Manila default (14.5995, 120.9842) with no
+  // indication it wasn't real. realLocationByDelivery below reads the
+  // delivery's actual gps_logs instead, the same source the Driver/Helper's
+  // own maps and the Helper's proximity gate already use.
   useEffect(() => {
     const id = monitoredDelivery?.id
-    if (!id || fetchedAlertDeliveryIds.current.has(id)) return
-    fetchedAlertDeliveryIds.current.add(id)
-    ;(async () => {
+    if (!id) return undefined
+    let cancelled = false
+    const load = async () => {
+      // All of the Trip's Sessions, not just the latest -- a Pause/Resume
+      // closes one Session and opens a new one (same delivery_request_id,
+      // still the same Trip), so alert history needs every session_id here
+      // or a Supervisor loses visibility into alerts from before a pause the
+      // moment the driver resumes. "Driving Hours" below still reflects only
+      // the latest (current) Session's start_time -- that's a live "how long
+      // has this leg been going" stat, not a history list, so it's kept as
+      // one Session's elapsed time on purpose.
       const { data: sessionRows } = await supabase
         .from('sessions')
         .select('session_id, start_time')
         .eq('delivery_request_id', id)
         .order('created_at', { ascending: false })
-        .limit(1)
-      const session = sessionRows?.[0]
-      if (!session?.session_id) {
+      if (cancelled) return
+      const latestSession = sessionRows?.[0]
+      if (!latestSession?.session_id) {
         setRealAlertsByDelivery((prev) => ({ ...prev, [id]: null }))
+      } else {
+        const sessionIds = sessionRows.map((s) => s.session_id)
+        const { data: alertRows } = await supabase
+          .from('alerts')
+          .select('*')
+          .in('session_id', sessionIds)
+          .order('created_at', { ascending: false })
+        if (cancelled) return
+        setRealAlertsByDelivery((prev) => ({
+          ...prev,
+          [id]: buildRealAlertSummary(id, alertRows || [], latestSession.start_time),
+        }))
+      }
+
+      const { data: gpsRows } = await supabase
+        .from('gps_logs')
+        .select('latitude, longitude, timestamp')
+        .eq('delivery_request_id', id)
+        .order('timestamp', { ascending: false })
+        .limit(1)
+      if (cancelled) return
+      const fix = gpsRows?.[0]
+      setRealLocationByDelivery((prev) => ({
+        ...prev,
+        [id]: fix ? { lat: fix.latitude, lng: fix.longitude, updatedAt: fix.timestamp } : null,
+      }))
+    }
+    load()
+    const intervalId = setInterval(load, 10000)
+    return () => {
+      cancelled = true
+      clearInterval(intervalId)
+    }
+  }, [monitoredDelivery?.id])
+
+  // Real driven distance for whichever delivery is open in "View Details"
+  // (Inbox/Assign Vehicle/In Transit -- selectedRequest, not monitoredDelivery
+  // above). "Total Distance (2-way)" previously always showed a hardcoded
+  // pricing-estimate fallback ('24.5 km' from getTotalDistance) for every
+  // real delivery, since currentLocation/destinationCoords only ever exist
+  // on the legacy mock data -- same class of gap as the monitoring map fix
+  // above. This sums gps_logs point-to-point across every Session of the
+  // Trip (Start Pickup through however far the crew has gotten, growing to
+  // the final total once Delivered), mirroring
+  // buildRealTripAndBehaviorReport's identical per-session summation used
+  // for Completed/Cancelled reports elsewhere in this file.
+  useEffect(() => {
+    const id = selectedRequest?.id
+    if (!id || realDistanceKmBySelected[id] !== undefined) return undefined
+    let cancelled = false
+    ;(async () => {
+      const { data: sessionRows } = await supabase
+        .from('sessions')
+        .select('session_id')
+        .eq('delivery_request_id', id)
+      if (cancelled) return
+      if (!sessionRows?.length) {
+        setRealDistanceKmBySelected((prev) => ({ ...prev, [id]: null }))
         return
       }
-      const { data: alertRows } = await supabase
-        .from('alerts')
-        .select('*')
-        .eq('session_id', session.session_id)
-        .order('created_at', { ascending: false })
-      setRealAlertsByDelivery((prev) => ({ ...prev, [id]: buildRealAlertSummary(id, alertRows || [], session.start_time) }))
+      const sessionIds = sessionRows.map((s) => s.session_id)
+      const { data: gpsRows } = await supabase
+        .from('gps_logs')
+        .select('session_id, latitude, longitude, timestamp')
+        .in('session_id', sessionIds)
+        .order('session_id', { ascending: true })
+        .order('timestamp', { ascending: true })
+      if (cancelled) return
+      let totalMeters = 0
+      let prevSessionId = null
+      let prev = null
+      for (const row of gpsRows || []) {
+        if (row.session_id !== prevSessionId) {
+          prevSessionId = row.session_id
+          prev = row
+          continue
+        }
+        totalMeters += distanceMeters(prev.latitude, prev.longitude, row.latitude, row.longitude)
+        prev = row
+      }
+      setRealDistanceKmBySelected((prev) => ({
+        ...prev,
+        [id]: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : null,
+      }))
     })()
-  }, [monitoredDelivery?.id])
+    return () => {
+      cancelled = true
+    }
+  }, [selectedRequest?.id, realDistanceKmBySelected])
 
   const monitoredAlert = useMemo(() => {
     if (!monitoredDelivery) return null
@@ -3798,7 +3921,6 @@ function SupDeliveries() {
                         Customer Details
                       </h4>
                       <div className="space-y-1.5">
-                        <Row label="Name" value={selectedRequest.customerName} />
                         <Row label="Company" value={selectedRequest.companyName} />
                       </div>
                     </div>
@@ -3876,7 +3998,10 @@ function SupDeliveries() {
                       Location
                     </h4>
                     <div className="mb-3">
-                      <Row label="Total Distance (2-way)" value={getTotalDistance(selectedRequest)} />
+                      <Row
+                        label={realDistanceKmBySelected[selectedRequest.id] ? 'Total Distance (Actual)' : 'Total Distance (2-way, Est.)'}
+                        value={realDistanceKmBySelected[selectedRequest.id] || getTotalDistance(selectedRequest)}
+                      />
                     </div>
                     <LocationSwitcher request={selectedRequest} />
 
@@ -5187,11 +5312,41 @@ function SupDeliveries() {
                     <div className="flex min-h-0 flex-1 flex-col p-4">
                       <iframe
                         title="Live Delivery Map"
-                        src={toGoogleMapEmbed(monitoringByDelivery[monitoredDelivery.id]?.currentLocation || monitoredDelivery.currentLocation || monitoredDelivery.destinationCoords)}
+                        src={toGoogleMapEmbed(
+                          realLocationByDelivery[monitoredDelivery.id] ||
+                            monitoringByDelivery[monitoredDelivery.id]?.currentLocation ||
+                            monitoredDelivery.currentLocation ||
+                            monitoredDelivery.destinationCoords,
+                        )}
                         className="min-h-[220px] w-full flex-1 rounded-xl"
                         loading="lazy"
                         referrerPolicy="no-referrer-when-downgrade"
                       />
+                      {!monitoringByDelivery[monitoredDelivery.id] && realLocationByDelivery[monitoredDelivery.id] && (
+                        <div className="mt-4 shrink-0 space-y-3">
+                          <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
+                              {getInitials(monitoredDelivery.crew?.driver?.name || '?')}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-slate-900">
+                                {monitoredDelivery.crew?.driver?.name || 'Driver TBA'}
+                              </p>
+                              <p className="truncate text-xs text-slate-500">
+                                <Truck className="mr-1 inline h-3.5 w-3.5" />
+                                {monitoredDelivery.crew?.truck?.plateNumber || 'Truck TBA'}
+                                {monitoredDelivery.crew?.truck && ` • ${monitoredDelivery.crew.truck.truckType}`}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="rounded-xl bg-slate-50 p-3">
+                            <p className="text-xs text-slate-500">Last GPS Update</p>
+                            <p className="text-sm font-bold text-slate-900">
+                              {formatManilaTimestamp(realLocationByDelivery[monitoredDelivery.id].updatedAt)}
+                            </p>
+                          </div>
+                        </div>
+                      )}
                       {monitoringByDelivery[monitoredDelivery.id] && (
                         <div className="mt-4 shrink-0 space-y-3">
                           <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">

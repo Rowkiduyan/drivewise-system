@@ -636,14 +636,15 @@ function ProofOfDeliverySection({ delivery }) {
       .map((stop, i) => stop.completed && stop.photoUrl && { label: `Dropoff ${i + 2}`, photoUrl: stop.photoUrl, completedAt: stop.completedAt }),
   ].filter(Boolean)
 
-  if (items.length === 0) return null
-
   return (
     <section className="rounded-xl border border-teal-200/70 bg-white p-3 sm:p-4">
       <h3 className="flex items-center gap-2 text-xs font-bold text-slate-900">
         <Camera className="h-4 w-4 text-teal-700" />
         Proof of Delivery
       </h3>
+      {items.length === 0 ? (
+        <p className="mt-2 text-xs text-slate-500">No Proof of Delivery</p>
+      ) : (
       <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
         {items.map((item, i) => (
           <a
@@ -663,6 +664,7 @@ function ProofOfDeliverySection({ delivery }) {
           </a>
         ))}
       </div>
+      )}
     </section>
   )
 }

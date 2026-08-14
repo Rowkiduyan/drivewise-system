@@ -748,14 +748,15 @@ function ProofOfDeliverySection({ request }) {
       .map((stop, i) => stop.completed && stop.photoUrl && { label: `Dropoff ${i + 2}`, photoUrl: stop.photoUrl, completedAt: stop.completedAt }),
   ].filter(Boolean)
 
-  if (items.length === 0) return null
-
   return (
     <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
       <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
         <Camera className="h-3.5 w-3.5 text-slate-400" />
         Proof of Delivery
       </h4>
+      {items.length === 0 ? (
+        <p className="text-xs text-slate-500">No Proof of Delivery</p>
+      ) : (
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {items.map((item, i) => (
           <a
@@ -775,6 +776,7 @@ function ProofOfDeliverySection({ request }) {
           </a>
         ))}
       </div>
+      )}
     </div>
   )
 }

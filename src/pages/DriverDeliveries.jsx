@@ -2224,14 +2224,15 @@ function ProofOfDeliverySection({ delivery }) {
       .map((stop, i) => stop.completed && stop.photoUrl && { label: `Dropoff ${i + 2}`, photoUrl: stop.photoUrl, completedAt: stop.completedAt }),
   ].filter(Boolean)
 
-  if (items.length === 0) return null
-
   return (
     <section className="rounded-xl border border-amber-200/70 bg-white p-3 sm:p-4">
       <h3 className="flex items-center gap-2 text-xs font-bold text-slate-900">
         <Camera className="h-4 w-4 text-amber-700" />
         Proof of Delivery
       </h3>
+      {items.length === 0 ? (
+        <p className="mt-2 text-xs text-slate-500">No Proof of Delivery</p>
+      ) : (
       <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
         {items.map((item, i) => (
           <a
@@ -2251,6 +2252,7 @@ function ProofOfDeliverySection({ delivery }) {
           </a>
         ))}
       </div>
+      )}
     </section>
   )
 }
@@ -2951,15 +2953,27 @@ function DriverDeliveries() {
     if (!isMonitoring || !active?.sessionId) return undefined
     let cancelled = false
 
-    // Seed with whatever's already in the table for this session — liveAlerts
-    // is otherwise pure client state, so a page reload/remount mid-trip would
+    // Seed with whatever's already in the table for this Trip — liveAlerts is
+    // otherwise pure client state, so a page reload/remount mid-trip would
     // otherwise silently show 0 alerts even though the real ones are safely
-    // in the database.
+    // in the database. Card says "Alerts this trip," so this seeds from every
+    // Session of the Trip (delivery_request_id), not just the current one --
+    // a Pause/Resume closes the old Session and opens a new one, and without
+    // this a driver who paused/resumed would lose visibility into alerts
+    // from before the pause the moment they reload. The live Realtime
+    // subscription below stays scoped to the current session's id, which is
+    // correct on its own -- new alerts only ever land against whichever
+    // session is currently Active.
     async function loadExistingAlerts() {
+      const { data: sessionRows, error: sessionsError } = await supabase
+        .from('sessions')
+        .select('session_id')
+        .eq('delivery_request_id', active.id)
+      if (cancelled || sessionsError || !sessionRows?.length) return
       const { data, error } = await supabase
         .from('alerts')
         .select('id, event_type, duration, created_at')
-        .eq('session_id', active.sessionId)
+        .in('session_id', sessionRows.map((s) => s.session_id))
         .order('created_at', { ascending: false })
       if (cancelled || error || !data) return
       setLiveAlerts((prev) => {
@@ -3000,7 +3014,7 @@ function DriverDeliveries() {
       cancelled = true
       supabase.removeChannel(channel)
     }
-  }, [isMonitoring, active?.sessionId])
+  }, [isMonitoring, active?.sessionId, active?.id])
 
   // Rest-stop recommendation setup (12_REST_STOP_RECOMMENDATIONS.md): once
   // per Trip (active.id), not per Session -- resets the one-shot banner and
