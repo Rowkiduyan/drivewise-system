@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import AdminLayout from "../layout/AdminLayout.jsx";
+import SupLayout from "../layout/SupLayout.jsx";
 // import AddTruckModal from "../components/AddTruckModal.jsx"; // Disabled for supervisor view
 import {
   ArrowLeft,
@@ -617,7 +617,7 @@ function AdminTruckProfile() {
 
   if (!truck) {
     return (
-      <AdminLayout title="Truck Profile" background={null} bg="bg-[#F6F7FB]">
+      <SupLayout title="Truck Profile" background={null} bg="bg-[#F6F7FB]">
         <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
           <p className="text-lg font-semibold text-slate-900">
             No truck selected
@@ -626,23 +626,23 @@ function AdminTruckProfile() {
             Open a profile by selecting a truck from the Trucks list.
           </p>
           <Link
-            to="/admin/trucks"
+            to="/supervisor/trucks"
             className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to Trucks
           </Link>
         </div>
-      </AdminLayout>
+      </SupLayout>
     );
   }
 
   return (
-    <AdminLayout title="Truck Profile" background={null} bg="bg-[#F6F7FB]">
+    <SupLayout title="Truck Profile" background={null} bg="bg-[#F6F7FB]">
       <div className="flex flex-col gap-4 pb-6">
         <div className="shrink-0 flex items-center justify-between border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
           <Link
-            to="/admin/trucks"
+            to="/supervisor/trucks"
             className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -1102,7 +1102,7 @@ function AdminTruckProfile() {
         />
       )}
       */}
-    </AdminLayout>
+    </SupLayout>
   );
 }
 

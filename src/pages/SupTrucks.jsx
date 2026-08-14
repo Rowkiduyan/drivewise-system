@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import AdminLayout from "../layout/AdminLayout.jsx";
+import SupLayout from "../layout/SupLayout.jsx";
 // import AddTruckModal from "../components/AddTruckModal.jsx"; // Not used in read‑only view
 // Import only the icons that are still needed (Search, ChevronRight, RefreshCw)
 import { Search, ChevronRight, RefreshCw } from "lucide-react";
@@ -215,7 +215,7 @@ const TRUCK_TYPE_ORDER = TRUCK_TYPES.reduce((order, type, index) => {
 }, {});
 const PAGE_SIZE = 10;
 
-function AdminTrucks() {
+function SupTrucks() {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedType, setSelectedType] = useState("All");
@@ -415,7 +415,7 @@ function AdminTrucks() {
   }, [toast]);
 
   return (
-    <AdminLayout title="Truck Management" background={null} bg="bg-[#F6F7FB]">
+    <SupLayout title="Truck Management" background={null} bg="bg-[#F6F7FB]">
       <div className="flex h-full min-h-0 flex-col gap-3">
         {/* Toolbar */}
         <section className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
@@ -594,8 +594,8 @@ function AdminTrucks() {
       </div>
       {/* Add Truck Modal */}
       {/* Modals disabled for supervisor view */}
-    </AdminLayout>
+    </SupLayout>
   );
 }
 
-export default AdminTrucks;
+export default SupTrucks;
