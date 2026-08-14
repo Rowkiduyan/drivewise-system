@@ -45,6 +45,7 @@ import { useSearchParams } from 'react-router-dom'
 import SupLayout from '../layout/SupLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 import { useResolvedAddress } from '../lib/reverseGeocode.js'
+import { formatManilaTimestamp, formatManilaDateTime, MANILA_TIMEZONE } from '../lib/manilaTime.js'
 import { customer_deliveries, delivery_drivers, delivery_helpers, delivery_trucks, delivery_quotations, delivery_cancellations, delivery_monitoring, delivery_alert_monitoring, delivery_supervisor_data, completed_delivery_reports } from '../lib/mockDeliveriesData.js'
 
 delete L.Icon.Default.prototype._getIconUrl
@@ -138,28 +139,17 @@ function formatDateTime(dateStr, timeStr) {
 }
 
 // Formats a full ISO timestamp (delivery_requests.created_at) into the same
-// "Aug 3, 2026, 11:02 PM" style used for pickup/drop-off dates.
+// "Aug 3, 2026, 11:02 PM" style used for pickup/drop-off dates. Pinned to
+// Asia/Manila (see lib/manilaTime.js) -- previously used the browser's own
+// local timezone via Date's local getters, correct only by coincidence on
+// dev machines already set to Manila time.
 function formatIsoDateTime(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  const h = d.getHours()
-  const suffix = h >= 12 ? 'PM' : 'AM'
-  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
-  return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}, ${hour12}:${String(d.getMinutes()).padStart(2, '0')} ${suffix}`
+  return formatManilaDateTime(iso, { includeYear: true })
 }
 
-// Short timestamp for chat bubbles: "Aug 3, 11:02 PM".
+// Short timestamp for chat bubbles: "Aug 3, 11:02 PM". Same Manila-pinned fix.
 function formatMessageTimestamp(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  const h = d.getHours()
-  const suffix = h >= 12 ? 'PM' : 'AM'
-  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
-  return `${months[d.getMonth()]} ${d.getDate()}, ${hour12}:${String(d.getMinutes()).padStart(2, '0')} ${suffix}`
+  return formatManilaDateTime(iso, { includeYear: false })
 }
 
 function getTruckType(r) {
@@ -585,7 +575,7 @@ const stageStatus = {
 function buildProgressData(request) {
   const idx = stageStatus[request.status] ?? 0
   const registeredAt = formatIsoDateTime(request.createdAt)
-  const now = new Date().toLocaleString('en-PH', { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  const now = new Date().toLocaleString('en-PH', { timeZone: MANILA_TIMEZONE, year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 
   const isCancelled = request.status === 'CANCELLED'
   const isApprovedOrLater = idx >= 2
@@ -964,7 +954,7 @@ function buildRealAlertSummary(deliveryId, rows, sessionStartTime) {
   let closureDurationTotal = 0
   let closureDurationCount = 0
   let worst = 'LOW'
-  const formatTime = (iso) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const formatTime = (iso) => new Date(iso).toLocaleString('en-US', { timeZone: MANILA_TIMEZONE, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   const alertHistory = rows.map((row) => {
     const severity = DB_ALERT_TYPE_SEVERITY[row.event_type] || 'INFO'
     if (row.event_type === 'prolonged_eye_closure' || row.event_type === 'pattern_repeated_eye_closure') {
@@ -997,6 +987,184 @@ function buildRealAlertSummary(deliveryId, rows, sessionStartTime) {
     lastAlert: DB_ALERT_TYPE_LABELS[latest.event_type] || latest.event_type,
     lastAlertAt: formatTime(latest.created_at),
     alertHistory,
+  }
+}
+
+// Plain-JS haversine, no google.maps dependency -- mirrors DriverDeliveries.jsx's
+// own distanceMeters helper exactly, used below to sum a delivery's real
+// driven distance from its gps_logs (the same per-session mileage calc
+// driver-trip's pause-trip/end-trip Edge Function already does server-side,
+// just recomputed here for display since that result only ever gets added
+// to trucks.current_mileage, never stored per-delivery).
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLon = ((lon2 - lon1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+// Real Trip Details / DriveWise Report data for CompletedDeliveryReport
+// (Supervisor's Completed-delivery view), 2026-08-14. Replaces the old
+// completed_delivery_reports mock lookup, which only ever had entries for a
+// handful of fake delivery ids -- every real DB-backed completed delivery
+// got no report at all, since those two tabs simply didn't render without a
+// matching mock entry. Built entirely from sessions/alerts/gps_logs, the
+// same tables DriverPerformance.jsx/SupCrewProfile.jsx already use for the
+// equivalent per-driver views.
+//
+// Fields with no real backing anywhere in the schema (rest stops actually
+// taken, waiting/idle time per leg, camera/vibration/audio device state
+// history, an AI-narrative paragraph, exact on-time/late-by-N-minutes) are
+// deliberately left out rather than fabricated -- see the two Tab
+// components below for exactly which UI blocks that gates. `analysis` is
+// still a real paragraph, just computed/templated from the actual numbers
+// here rather than an invented narrative.
+function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
+  if (!sessions.length) return null
+
+  const sorted = [...sessions].sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
+  const firstSession = sorted[0]
+  const lastSession = sorted[sorted.length - 1]
+  const totalDurationSec = sorted.reduce((sum, s) => sum + (s.session_duration || 0), 0)
+
+  // Plain object, not `new Map()` -- `Map` is shadowed in this file's module
+  // scope by the lucide-react icon import used for REPORT_TABS' route tab
+  // (`icon: Map`), so `new Map()` here actually invokes that React
+  // component as a constructor and throws "Map is not a constructor".
+  const bySessionId = {}
+  for (const row of gpsLogs) {
+    if (!bySessionId[row.session_id]) bySessionId[row.session_id] = []
+    bySessionId[row.session_id].push(row)
+  }
+  let totalMeters = 0
+  for (const points of Object.values(bySessionId)) {
+    for (let i = 1; i < points.length; i += 1) {
+      totalMeters += distanceMeters(points[i - 1].latitude, points[i - 1].longitude, points[i].latitude, points[i].longitude)
+    }
+  }
+
+  // Real per-item completion order -- dropoff_location is no longer always
+  // last in the chain (02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-
+  // Dropoff Ordering"), so this sorts by each item's actual completedAt
+  // rather than assuming dropoff always precedes the stops.
+  const dropoffEvents = []
+  if (delivery.dropoffCompletedAt) {
+    dropoffEvents.push({ label: 'Dropoff Completed', location: delivery.deliveryAddress, at: delivery.dropoffCompletedAt })
+  }
+  ;(delivery.stops || []).forEach((s, i) => {
+    if (s.completed && s.completedAt) {
+      dropoffEvents.push({ label: `Dropoff ${i + 2} Completed`, location: s.location, at: s.completedAt })
+    }
+  })
+  dropoffEvents.sort((a, b) => new Date(a.at) - new Date(b.at))
+
+  // Pickup's own confirmation has no stored timestamp anywhere (only
+  // pickup_photo_url, essentially a boolean flag) -- shown as done without
+  // a time rather than an invented one.
+  const timeline = [
+    delivery.assignedAt && { label: 'Assigned to Crew', time: formatAlertTimestamp(delivery.assignedAt), completed: true },
+    { label: 'Pickup Trip Started', time: formatAlertTimestamp(firstSession.start_time), completed: true },
+    delivery.pickupPhotoUrl && { label: 'Pickup Confirmed', time: '—', completed: true },
+    ...dropoffEvents.map((e) => ({ label: e.label, time: formatAlertTimestamp(e.at), completed: true })),
+    { label: 'Delivery Completed', time: formatAlertTimestamp(delivery.completedAt || lastSession.end_time), completed: true },
+  ].filter(Boolean)
+
+  const stops = [
+    { location: delivery.pickupAddress, time: formatAlertTimestamp(firstSession.start_time), action: 'Pickup / Departure' },
+    ...dropoffEvents.map((e) => ({ location: e.location, time: formatAlertTimestamp(e.at), action: e.label })),
+  ]
+
+  const closureAlerts = alerts.filter(
+    (a) => a.event_type === 'prolonged_eye_closure' || a.event_type === 'pattern_repeated_eye_closure',
+  )
+  const avgClosureSec = closureAlerts.length
+    ? closureAlerts.reduce((sum, a) => sum + (a.duration || 0), 0) / closureAlerts.length
+    : null
+
+  const typeCounts = {}
+  alerts.forEach((a) => {
+    typeCounts[a.event_type] = (typeCounts[a.event_type] || 0) + 1
+  })
+  const alertsByType = Object.keys(DB_ALERT_TYPE_LABELS)
+    .map((type) => ({ type, count: typeCounts[type] || 0, label: DB_ALERT_TYPE_LABELS[type] }))
+    .filter((row) => row.count > 0)
+
+  let worst = 'LOW'
+  alerts.forEach((a) => {
+    const sev = DB_ALERT_TYPE_SEVERITY[a.event_type] || 'INFO'
+    if (sev === 'CRITICAL') worst = 'HIGH'
+    else if (sev === 'WARNING' && worst !== 'HIGH') worst = 'MODERATE'
+  })
+
+  const alertHistory = alerts.map((a) => ({
+    type: DB_ALERT_TYPE_LABELS[a.event_type] || a.event_type,
+    time: formatAlertTimestamp(a.created_at),
+    severity: DB_ALERT_TYPE_SEVERITY[a.event_type] || 'INFO',
+  }))
+
+  const totalAlerts = alerts.length
+  // face_not_detected deliberately excluded from the risk tier -- it's not
+  // a drowsiness signal itself (fires easily on ordinary driving behavior
+  // like checking mirrors, see 06_DROWSINESS_ALERT_PIPELINE.md's reasoning
+  // for why it doesn't even get the driver-facing audio alert the other
+  // three types do) and shouldn't be able to push a trip into "High Risk"
+  // on its own. `totalAlerts` above still counts it for the raw Total
+  // Alerts metric -- only the risk classification excludes it.
+  const drowsinessAlerts = alerts.filter((a) => a.event_type !== 'face_not_detected')
+  const drowsinessAlertCount = drowsinessAlerts.length
+  // Same count-based tiers DriverPerformance.jsx's own getRiskLevel uses,
+  // for consistency across the app.
+  const riskLevel =
+    drowsinessAlertCount >= 4
+      ? { tone: 'red', label: 'High Risk' }
+      : drowsinessAlertCount >= 2
+        ? { tone: 'amber', label: 'Moderate' }
+        : { tone: 'emerald', label: 'Safe' }
+
+  const sessionWord = sorted.length === 1 ? 'session' : 'sessions'
+  const topDrowsinessType = [...alertsByType]
+    .filter((row) => row.type !== 'face_not_detected')
+    .sort((a, b) => b.count - a.count)[0]
+  const analysis =
+    drowsinessAlertCount === 0
+      ? `The DriveWise system monitored this trip across ${sorted.length} ${sessionWord} totaling ${formatAlertDuration(totalDurationSec)} with no drowsiness alerts recorded${totalAlerts > drowsinessAlertCount ? ` (${totalAlerts - drowsinessAlertCount} eyes-not-detected event${totalAlerts - drowsinessAlertCount === 1 ? '' : 's'} logged separately, not counted toward risk)` : ''}. Overall risk for this trip was Safe.`
+      : `The DriveWise system monitored this trip across ${sorted.length} ${sessionWord} totaling ${formatAlertDuration(totalDurationSec)}. ${drowsinessAlertCount} drowsiness alert${drowsinessAlertCount === 1 ? ' was' : 's were'} recorded, most frequently ${topDrowsinessType?.label || 'an unspecified type'}${topDrowsinessType ? ` (${topDrowsinessType.count} occurrence${topDrowsinessType.count === 1 ? '' : 's'})` : ''}. Overall risk for this trip was ${riskLevel.label}.`
+
+  return {
+    trip: {
+      pickupLocation: delivery.pickupAddress,
+      dropoffLocation: delivery.deliveryAddress,
+      distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : '—',
+      duration: formatAlertDuration(totalDurationSec),
+      startTime: firstSession.start_time,
+      endTime: delivery.completedAt || lastSession.end_time,
+      scheduledStart: delivery.pickupDate && delivery.pickupTime ? `${delivery.pickupDate} ${delivery.pickupTime}` : null,
+      scheduledEnd: delivery.dropoffDate && delivery.dropoffTime ? `${delivery.dropoffDate} ${delivery.dropoffTime}` : null,
+      stops,
+      timeline,
+    },
+    behavior: {
+      totalAlerts,
+      drowsinessAlertCount,
+      riskLevel,
+      drowsinessLevel: worst,
+      avgClosureDuration: avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : '—',
+      yawnCount: typeCounts.pattern_eye_closure_yawn || 0,
+      eyeDetectionFailures: typeCounts.face_not_detected || 0,
+      alertsByType,
+      alertHistory,
+      sessions: sorted.map((s) => ({
+        start: s.start_time,
+        end: s.end_time,
+        alerts: s.total_alerts ?? alerts.filter((a) => a.session_id === s.session_id).length,
+        duration: s.session_duration,
+      })),
+      analysis,
+    },
+    delivery: { totalAlerts },
   }
 }
 
@@ -1061,25 +1229,12 @@ function formatAlertDuration(seconds) {
   return `${hours}h ${minutes}m`
 }
 
+// Pinned to Asia/Manila (see lib/manilaTime.js) -- previously regex-
+// extracted the raw digit characters straight out of the UTC-stored ISO
+// string with no timezone conversion at all, displaying the UTC clock
+// reading mislabeled as local time (8 hours behind real Manila time).
 function formatAlertTimestamp(value) {
-  if (!value) return '--'
-  const raw = String(value)
-  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
-  if (!isoMatch) return raw
-  const year = Number(isoMatch[1])
-  const monthIndex = Number(isoMatch[2]) - 1
-  const day = Number(isoMatch[3])
-  const hour24 = Number(isoMatch[4])
-  const minute = isoMatch[5]
-  const hour12 = ((hour24 + 11) % 12) + 1
-  const suffix = hour24 >= 12 ? 'pm' : 'am'
-  const monthLabels = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
-  ]
-  const monthLabel = monthLabels[monthIndex] || ''
-  if (!monthLabel || !year) return `${hour12}:${minute} ${suffix}`
-  return `${monthLabel} ${day}, ${hour12}:${minute} ${suffix}`
+  return formatManilaTimestamp(value)
 }
 
 function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoords }) {
@@ -1122,6 +1277,15 @@ function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoo
       </MapContainer>
     </div>
   )
+}
+
+// Resolves a single "lat, lng"-shaped value (e.g. DR-0020-style fixture
+// data) into a real address inline, same useResolvedAddress hook
+// LocationSwitcher already uses -- as its own component so it can be used
+// once per list row (Trip Stops, etc.) without violating the rules of hooks
+// by calling useResolvedAddress inside a .map() directly.
+function ResolvedText({ value }) {
+  return useResolvedAddress(value || '')
 }
 
 // One switchable map for the full Pickup -> Dropoff -> Stops chain, instead
@@ -1169,6 +1333,16 @@ function LocationSwitcher({ request }) {
 
   return (
     <div className="space-y-2">
+      {points.length > 2 && (
+        // Clarifies that badge order here isn't the driver's actual visiting
+        // order (see 02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff
+        // Ordering", 2026-08-14) -- the driver is routed to whichever
+        // remaining dropoff is nearest at each point, not this list's order.
+        <p className="text-[11px] text-slate-500">
+          Additional dropoffs, not necessarily visited in this order — the driver is routed to whichever is nearest
+          at each point.
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-1.5">
         {points.map((p, i) => (
           <button
@@ -1278,7 +1452,7 @@ function ProofOfDeliverySection({ request }) {
   )
 }
 
-function DeliveryRequestDetails({ request }) {
+function DeliveryRequestDetails({ request, timeline }) {
   return (
     <div>
       <div className="grid grid-cols-2 gap-3">
@@ -1364,6 +1538,12 @@ function DeliveryRequestDetails({ request }) {
         </div>
         <LocationSwitcher request={request} />
       </div>
+
+      {timeline?.length > 0 && (
+        <div className="mt-3">
+          <TripTimelineList timeline={timeline} />
+        </div>
+      )}
 
       <ProofOfDeliverySection request={request} />
     </div>
@@ -1570,21 +1750,31 @@ function TripDetailsTab({ delivery, report }) {
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
         <div className="mb-1 flex items-center justify-between gap-2">
           <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Route</p>
-          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold ${
-            t.arrivedOnTime ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
-          }`}>
-            {t.arrivedOnTime ? <Check className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
-            {t.arrivedOnTime ? 'On time' : `Late by ${t.lateMinutes} min`}
-          </span>
+          {/* No real "scheduled vs actual, late by N minutes" comparison is
+              computed (see buildRealTripAndBehaviorReport's comment) --
+              t.arrivedOnTime is left undefined for real reports, so this
+              badge only ever shows for the legacy mock ones that set it. */}
+          {t.arrivedOnTime !== undefined && (
+            <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold ${
+              t.arrivedOnTime ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+            }`}>
+              {t.arrivedOnTime ? <Check className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
+              {t.arrivedOnTime ? 'On time' : `Late by ${t.lateMinutes} min`}
+            </span>
+          )}
         </div>
-        <p className="text-sm font-semibold text-slate-900">{t.route}</p>
+        <p className="text-sm font-semibold text-slate-900">
+          {t.route ? t.route : <><ResolvedText value={t.pickupLocation} /> → <ResolvedText value={t.dropoffLocation} /></>}
+        </p>
         <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
           <Row label="Scheduled Pickup" value={formatAlertTimestamp(t.scheduledStart)} />
           <Row label="Actual Departure" value={formatAlertTimestamp(t.startTime)} />
           <Row label="Scheduled Drop-off" value={formatAlertTimestamp(t.scheduledEnd)} />
           <Row label="Actual Arrival" value={formatAlertTimestamp(t.endTime)} />
-          <Row label="Waiting at Pickup" value={t.waitingTime} />
-          <Row label="Idle at Drop-off" value={t.idleTime} />
+          {/* No real per-leg waiting/idle tracking exists -- omitted for
+              real reports rather than shown as an unavailable placeholder. */}
+          {t.waitingTime && <Row label="Waiting at Pickup" value={t.waitingTime} />}
+          {t.idleTime && <Row label="Idle at Drop-off" value={t.idleTime} />}
         </div>
       </div>
 
@@ -1659,7 +1849,7 @@ function TripDetailsTab({ delivery, report }) {
                 {i < t.stops.length - 1 && <div className="mt-0.5 h-3 w-px bg-slate-200" />}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="font-medium text-slate-700">{stop.location}</p>
+                <p className="font-medium text-slate-700"><ResolvedText value={stop.location} /></p>
                 <p className="text-xs text-slate-400">{stop.time} — {stop.action}</p>
               </div>
             </div>
@@ -1667,19 +1857,33 @@ function TripDetailsTab({ delivery, report }) {
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Trip Progress Timeline</p>
-        <div className="space-y-2">
-          {t.timeline.map((step, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm">
-              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${step.completed ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
-                <Check className="h-3 w-3" />
-              </span>
-              <span className="font-medium text-slate-700">{step.label}</span>
-              <span className="ml-auto text-slate-400">{step.time}</span>
-            </div>
-          ))}
-        </div>
+      <TripTimelineList timeline={t.timeline} />
+    </div>
+  )
+}
+
+// Shared by TripDetailsTab and DeliveryRequestDetails (2026-08-14) -- a
+// Supervisor asked for the same real completion timestamps (driver's Start
+// Pickup click, each Helper dropoff/stop completion) to show directly on
+// the Delivery Request Details tab, not just buried in the separate Trip
+// Details tab. Same real, per-event-sorted data either way (see
+// buildRealTripAndBehaviorReport's timeline construction) -- just rendered
+// in two places now instead of one.
+function TripTimelineList({ timeline }) {
+  if (!timeline?.length) return null
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Trip Timeline</p>
+      <div className="space-y-2">
+        {timeline.map((step, i) => (
+          <div key={i} className="flex items-center gap-2 text-sm">
+            <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${step.completed ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
+              <Check className="h-3 w-3" />
+            </span>
+            <span className="font-medium text-slate-700">{step.label}</span>
+            <span className="ml-auto text-slate-400">{step.time}</span>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -1697,7 +1901,9 @@ function DriveWiseAnalysisTab({ report }) {
         <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-3">
           <div>
             <p className="text-xs text-slate-500">Driver Risk Level</p>
-            <p className="text-sm font-semibold text-slate-900">{b.totalAlerts} alerts this trip</p>
+            <p className="text-sm font-semibold text-slate-900">
+              {b.drowsinessAlertCount ?? b.totalAlerts} drowsiness alert{(b.drowsinessAlertCount ?? b.totalAlerts) === 1 ? '' : 's'} this trip
+            </p>
           </div>
           <RiskBadge tone={b.riskLevel.tone} label={b.riskLevel.label} />
         </div>
@@ -1710,12 +1916,17 @@ function DriveWiseAnalysisTab({ report }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatusChip icon={Camera} label="Camera Feed" ok={b.cameraStatus === 'ACTIVE'} value={b.cameraStatus} />
-        <StatusChip icon={EyeOff} label="Eye Detection" ok={b.eyeDetection === 'DETECTED'} value={b.eyeDetection} />
-        <StatusChip icon={Vibrate} label="Seat Vibration" ok={b.alertMechanism?.seatVibration === 'ACTIVE'} value={b.alertMechanism?.seatVibration} />
-        <StatusChip icon={Volume2} label="Audio Alert" ok={b.alertMechanism?.audioAlert === 'ACTIVE'} value={b.alertMechanism?.audioAlert} />
-      </div>
+      {/* No per-trip device-state history exists (camera/vibration/audio
+          status is only ever observed live, never persisted) -- this row
+          only renders for the legacy mock reports that set cameraStatus. */}
+      {b.cameraStatus && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatusChip icon={Camera} label="Camera Feed" ok={b.cameraStatus === 'ACTIVE'} value={b.cameraStatus} />
+          <StatusChip icon={EyeOff} label="Eye Detection" ok={b.eyeDetection === 'DETECTED'} value={b.eyeDetection} />
+          <StatusChip icon={Vibrate} label="Seat Vibration" ok={b.alertMechanism?.seatVibration === 'ACTIVE'} value={b.alertMechanism?.seatVibration} />
+          <StatusChip icon={Volume2} label="Audio Alert" ok={b.alertMechanism?.audioAlert === 'ACTIVE'} value={b.alertMechanism?.audioAlert} />
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="Total Alerts" value={report.delivery.totalAlerts} />
@@ -1919,12 +2130,67 @@ function RouteDeviationTab({ report }) {
 }
 
 function CompletedDeliveryReport({ delivery }) {
-  const report = completed_delivery_reports[delivery.id]
   const [reportTab, setReportTab] = useState('details')
-  // Telemetry tabs (trip/behavior/route) only apply when a DriveWise report
-  // exists. Real DB deliveries have no telemetry, so fall back to the tabs
-  // that only need the delivery row (Details + Quotation).
-  const tabs = report ? REPORT_TABS : REPORT_TABS.filter((t) => t.id === 'details' || t.id === 'quotation')
+  // Real Trip Details / DriveWise Report data (2026-08-14), fetched per
+  // delivery from sessions/alerts/gps_logs -- see buildRealTripAndBehaviorReport.
+  // Falls back to the legacy completed_delivery_reports mock only for the
+  // handful of fake ids that still use it (kept for the old demo fixtures);
+  // a real delivery with genuinely no sessions (e.g. completed with no Trip
+  // ever started) gets neither, same "Details + Quotation only" fallback as
+  // before.
+  const [realReport, setRealReport] = useState(null)
+  useEffect(() => {
+    let isMounted = true
+    async function load() {
+      const { data: sessionRows } = await supabase
+        .from('sessions')
+        .select('session_id, start_time, end_time, total_alerts, session_duration')
+        .eq('delivery_request_id', delivery.id)
+        .order('start_time', { ascending: true })
+      if (!isMounted) return
+      const sessions = sessionRows || []
+      if (sessions.length === 0) {
+        setRealReport(null)
+        return
+      }
+      const sessionIds = sessions.map((s) => s.session_id)
+      const [{ data: alertRows }, { data: gpsRows }] = await Promise.all([
+        supabase
+          .from('alerts')
+          .select('id, created_at, event_type, duration, session_id')
+          .in('session_id', sessionIds)
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('gps_logs')
+          .select('session_id, latitude, longitude, timestamp')
+          .in('session_id', sessionIds)
+          .order('timestamp', { ascending: true }),
+      ])
+      if (!isMounted) return
+      setRealReport(buildRealTripAndBehaviorReport(delivery, sessions, alertRows || [], gpsRows || []))
+    }
+    load()
+    return () => {
+      isMounted = false
+    }
+    // Keyed on delivery.id specifically, not the whole delivery object --
+    // same "reacting to an external system's id, not a derived-state anti-
+    // pattern" reasoning already established throughout this codebase (e.g.
+    // DriverDeliveries.jsx's active?.sessionId-keyed effects) -- refetching
+    // on every parent re-render (a new delivery object reference, same id)
+    // would be wasteful.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [delivery.id])
+  const mockReport = completed_delivery_reports[delivery.id]
+  const report = realReport || mockReport
+  // Telemetry tabs (trip/behavior) apply whenever a report (real or mock)
+  // exists. Route Deviation Report still needs a persisted planned route
+  // (Phase 11, not built yet -- see 11_ROUTE_COMPARISON.md), so it only
+  // shows for the legacy mock reports that already carry a routeDeviation
+  // field, not for real ones.
+  const tabs = report
+    ? REPORT_TABS.filter((t) => t.id !== 'route' || Boolean(report.routeDeviation))
+    : REPORT_TABS.filter((t) => t.id === 'details' || t.id === 'quotation')
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -1963,11 +2229,11 @@ function CompletedDeliveryReport({ delivery }) {
       </div>
 
       <div className="p-4 md:p-5">
-        {reportTab === 'details' && <DeliveryRequestDetails request={delivery} />}
+        {reportTab === 'details' && <DeliveryRequestDetails request={delivery} timeline={report?.trip?.timeline} />}
         {reportTab === 'quotation' && <QuotationTab delivery={delivery} />}
         {report && reportTab === 'trip' && <TripDetailsTab delivery={delivery} report={report} />}
         {report && reportTab === 'behavior' && <DriveWiseAnalysisTab report={report} />}
-        {report && reportTab === 'route' && <RouteDeviationTab report={report} />}
+        {report?.routeDeviation && reportTab === 'route' && <RouteDeviationTab report={report} />}
       </div>
     </div>
   )
@@ -2242,7 +2508,10 @@ function autoCompleteDelivered(list) {
       return {
         ...r,
         status: 'COMPLETED',
-        completedAt: new Date().toLocaleString('en-PH', { year: 'numeric', month: 'short', day: '2-digit' }),
+        // Real ISO, not a pre-formatted locale string -- this field gets
+        // read back through formatAlertTimestamp/formatIsoDateTime
+        // elsewhere, which expect a parseable timestamp, not display text.
+        completedAt: new Date().toISOString(),
       }
     }
     return r
@@ -2890,6 +3159,7 @@ function SupDeliveries() {
 
   const resolveIssue = (id) => {
     const resolvedAt = new Date().toLocaleString('en-PH', {
+      timeZone: MANILA_TIMEZONE,
       year: 'numeric',
       month: 'short',
       day: '2-digit',
@@ -3183,6 +3453,7 @@ function SupDeliveries() {
 
     const assignedAtIso = new Date().toISOString()
     const assignedAt = new Date().toLocaleString('en-PH', {
+      timeZone: MANILA_TIMEZONE,
       year: 'numeric',
       month: 'short',
       day: '2-digit',

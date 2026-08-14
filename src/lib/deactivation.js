@@ -1,3 +1,5 @@
+import { MANILA_TIMEZONE } from './manilaTime.js'
+
 export const DEACTIVATION_GRACE_HOURS = 24
 
 // Deactivating an account doesn't ban it in Supabase Auth immediately —
@@ -27,6 +29,7 @@ export function formatCutoff(cutoffAt) {
   }
 
   return cutoffAt.toLocaleString('en-US', {
+    timeZone: MANILA_TIMEZONE,
     dateStyle: 'medium',
     timeStyle: 'short'
   })

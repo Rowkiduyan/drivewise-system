@@ -20,15 +20,19 @@ import {
   Cog,
   Wind,
 } from "lucide-react";
+import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 // import { supabase } from "../lib/supabaseClient.js"; // Disabled for supervisor view (no data fetch)
 
-// Utility to format a stored date string (yyyy-MM or yyyy-MM-dd) as "MM/YYYY"
+// Utility to format a stored date string (yyyy-MM or yyyy-MM-dd) as "MM/YYYY".
+// UTC-anchored -- this is a date-only value with no real time component, so
+// reading it back via UTC getters (rather than the browser's own local
+// timezone) is the correct, timezone-independent approach.
 const formatMonthYear = (dateStr) => {
   if (!dateStr) return "N/A";
   const d = new Date(dateStr);
   if (isNaN(d)) return dateStr;
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const year = d.getFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const year = d.getUTCFullYear();
   return `${month}/${year}`;
 };
 
@@ -129,7 +133,7 @@ function buildMockTrips(truck) {
 
     return {
       id: `TRIP-${2100 - i}`,
-      dateLabel: date.toLocaleDateString(undefined, {
+      dateLabel: date.toLocaleDateString("en-US", { timeZone: MANILA_TIMEZONE,
         month: "short",
         day: "numeric",
         year: "numeric",
@@ -173,7 +177,7 @@ function buildMockMaintenance(truck) {
     return {
       id: `MTN-${3100 - i}`,
       date: actualDate,
-      dateLabel: actualDate.toLocaleDateString(undefined, {
+      dateLabel: actualDate.toLocaleDateString("en-US", { timeZone: MANILA_TIMEZONE,
         month: "short",
         day: "numeric",
         year: "numeric",

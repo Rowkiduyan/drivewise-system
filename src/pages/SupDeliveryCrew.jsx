@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Search, Truck, Users, CircleCheck, ChevronRight } from "lucide-react";
+import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 
 // ---------------------------------------------------------------------------
 // Crew roster — loaded from the admin-users Edge Function's `list-crew`
@@ -17,10 +18,14 @@ import { Search, Truck, Users, CircleCheck, ChevronRight } from "lucide-react";
 // Function's list-crew (per-crew assignments) and list-clients (the full
 // client roster, for the filter dropdown).
 
+// UTC-anchored, matching DriverProfile.jsx's calculateAge -- birthdate is a
+// date-only value with no real time component, so reading it back via UTC
+// getters (rather than the browser's own local timezone) is the correct,
+// timezone-independent approach.
 function getAgeFromBirthday(birthday, referenceDate = new Date()) {
-  const age = referenceDate.getFullYear() - birthday.getFullYear();
-  const monthDifference = referenceDate.getMonth() - birthday.getMonth();
-  const dayDifference = referenceDate.getDate() - birthday.getDate();
+  const age = referenceDate.getUTCFullYear() - birthday.getUTCFullYear();
+  const monthDifference = referenceDate.getUTCMonth() - birthday.getUTCMonth();
+  const dayDifference = referenceDate.getUTCDate() - birthday.getUTCDate();
 
   return monthDifference > 0 || (monthDifference === 0 && dayDifference >= 0)
     ? age
@@ -53,11 +58,11 @@ function mapCrewRow(row) {
     contactNumber: row.contact_number || "—",
     employeeId: row.record_id || "—",
     birthday: birthDate
-      ? birthDate.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })
+      ? birthDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" })
       : null,
     age: birthDate ? getAgeFromBirthday(birthDate) : null,
     dateJoined: row.created_at
-      ? new Date(row.created_at).toLocaleDateString(undefined, { month: "long", year: "numeric" })
+      ? new Date(row.created_at).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: MANILA_TIMEZONE })
       : "—",
     personalEmail: row.email || "",
     workEmail: row.login_email || "",

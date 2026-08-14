@@ -6,6 +6,7 @@ import {
 import CustomerLayout from '../layout/CustomerLayout.jsx'
 import { truckTypes, itemTypes } from '../lib/deliveryOptions.js'
 import { supabase } from '../lib/supabaseClient.js'
+import { manilaTodayISO, MANILA_TIMEZONE } from '../lib/manilaTime.js'
 
 const background = null
 
@@ -29,15 +30,14 @@ function formatDisplayDateTime(dateStr, timeStr) {
   return `${monthLabel} ${day}, ${year}, ${hour12}:${String(minute).padStart(2, '0')} ${period}`
 }
 
-// Today's date as "YYYY-MM-DD" in the user's local timezone. Pickup dates are
-// calendar dates (e.g. "2026-08-07"), so comparisons like "is the pickup still
-// in the future?" must use the local date — Date.toISOString() (UTC) would
-// shift the comparison a day ahead in timezones east of UTC (e.g. PH, UTC+8).
+// Today's date as "YYYY-MM-DD" in Asia/Manila (see lib/manilaTime.js).
+// Pickup dates are calendar dates (e.g. "2026-08-07"), so comparisons like
+// "is the pickup still in the future?" must use the Manila-local date --
+// Date.toISOString() (UTC) would shift the comparison a day ahead during
+// the Manila morning. Previously used the *browser's* local date instead
+// of Manila's explicitly.
 function localTodayISO() {
-  const now = new Date()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  return `${now.getFullYear()}-${month}-${day}`
+  return manilaTodayISO()
 }
 
 // Status configuration
@@ -162,7 +162,7 @@ const CUSTOMER_TIMELINE_STAGE_INDEX = {
 function formatTimestamp(iso) {
   if (!iso) return null
   return new Date(iso).toLocaleString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+    timeZone: MANILA_TIMEZONE, month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
   })
 }
 
@@ -604,7 +604,7 @@ function DeliveryTimeline({ request }) {
 // record gets a one-line confirmation instead.
 function CompletedSummary({ request }) {
   const completedDate = request.receivedConfirmedAt
-    ? new Date(request.receivedConfirmedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    ? new Date(request.receivedConfirmedAt).toLocaleDateString('en-US', { timeZone: MANILA_TIMEZONE, month: 'long', day: 'numeric', year: 'numeric' })
     : request.trip?.actualDropoff || null
   return (
     <div className="flex items-center gap-2.5 rounded-2xl border border-slate-200 bg-white p-2.5 md:p-4 md:shadow-sm">
@@ -760,7 +760,7 @@ function ProofOfDeliverySection({ request }) {
             <div className="px-1.5 py-1">
               <p className="truncate text-[10px] font-semibold text-slate-900">{item.label}</p>
               {item.completedAt && (
-                <p className="truncate text-[9px] text-slate-500">{new Date(item.completedAt).toLocaleString()}</p>
+                <p className="truncate text-[9px] text-slate-500">{new Date(item.completedAt).toLocaleString('en-US', { timeZone: MANILA_TIMEZONE })}</p>
               )}
             </div>
           </a>
@@ -1084,7 +1084,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
             {request.cancelledBy && (
               <p className="mt-1 text-[10px] text-red-600 md:text-xs">
                 Cancelled by {request.cancelledBy === 'customer' ? 'you' : 'the supervisor'}
-                {request.cancelledAt ? ` on ${new Date(request.cancelledAt).toLocaleDateString()}` : ''}
+                {request.cancelledAt ? ` on ${new Date(request.cancelledAt).toLocaleDateString('en-US', { timeZone: MANILA_TIMEZONE })}` : ''}
               </p>
             )}
           </div>
@@ -1918,7 +1918,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                     </h3>
                     <p className="mt-1.5 text-xs text-emerald-700 md:mt-2 md:text-sm">
                       You confirmed receipt of this delivery
-                      {request.receivedConfirmedAt ? ` on ${new Date(request.receivedConfirmedAt).toLocaleDateString()}` : ''}. Thank you!
+                      {request.receivedConfirmedAt ? ` on ${new Date(request.receivedConfirmedAt).toLocaleDateString('en-US', { timeZone: MANILA_TIMEZONE })}` : ''}. Thank you!
                     </p>
                   </>
                 ) : request.issueReported ? (
@@ -1993,7 +1993,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
               </h3>
               <p className="mt-1.5 text-sm text-emerald-700">
                 You confirmed receipt of this delivery
-                {request.receivedConfirmedAt ? ` on ${new Date(request.receivedConfirmedAt).toLocaleDateString()}` : ''}. Thank you!
+                {request.receivedConfirmedAt ? ` on ${new Date(request.receivedConfirmedAt).toLocaleDateString('en-US', { timeZone: MANILA_TIMEZONE })}` : ''}. Thank you!
               </p>
             </>
           ) : request.issueReported ? (

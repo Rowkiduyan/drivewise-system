@@ -1,5 +1,6 @@
 import { useState } from "react";
 import SupLayout from "../layout/SupLayout.jsx";
+import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 
 const ALERT_TYPE_LABELS = {
   prolonged_eye_closure: "Prolonged Eye Closure",
@@ -26,7 +27,8 @@ function formatTimestamp(value) {
     return "--";
   }
   const date = new Date(value);
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString("en-US", {
+    timeZone: MANILA_TIMEZONE,
     month: "short",
     day: "numeric",
     hour: "2-digit",

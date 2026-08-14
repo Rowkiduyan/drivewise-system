@@ -25,6 +25,10 @@ const EMPTY_NEW_USER_FORM = {
   province: ''
 }
 
+// UTC-anchored, matching DriverProfile.jsx's calculateAge -- birthdate is a
+// date-only value with no real time component, so reading it back via UTC
+// getters (rather than the browser's own local timezone) is the correct,
+// timezone-independent approach.
 function calculateAge(birthdate) {
   if (!birthdate) {
     return null
@@ -36,10 +40,10 @@ function calculateAge(birthdate) {
   }
 
   const today = new Date()
-  let age = today.getFullYear() - dob.getFullYear()
+  let age = today.getUTCFullYear() - dob.getUTCFullYear()
   const hasHadBirthdayThisYear =
-    today.getMonth() > dob.getMonth() ||
-    (today.getMonth() === dob.getMonth() && today.getDate() >= dob.getDate())
+    today.getUTCMonth() > dob.getUTCMonth() ||
+    (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() >= dob.getUTCDate())
 
   if (!hasHadBirthdayThisYear) {
     age -= 1

@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import DriverLayout from '../layout/DriverLayout.jsx'
+import { supabase } from '../lib/supabaseClient.js'
+import { formatManilaTimestamp, formatManilaShortDate, formatManilaShortTime, getManilaHour, getManilaWeekday } from '../lib/manilaTime.js'
 import {
   ShieldCheck,
   ShieldAlert,
@@ -13,6 +15,7 @@ import {
   Route,
   Lightbulb,
   CameraOff,
+  Info,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -91,65 +94,22 @@ function formatAlertDuration(seconds) {
   return `${hours}h ${minutes}m`
 }
 
+// All three pinned to Asia/Manila (see lib/manilaTime.js) -- previously
+// regex-extracted the raw digit characters straight out of the UTC-stored
+// ISO string with no timezone conversion at all, displaying the UTC clock
+// reading mislabeled as local time (8 hours behind real Manila time).
 function formatAlertTimestamp(value) {
-  if (!value) {
-    return '--'
-  }
-  const raw = String(value)
-  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
-  if (!isoMatch) {
-    return raw
-  }
-  const year = Number(isoMatch[1])
-  const monthIndex = Number(isoMatch[2]) - 1
-  const day = Number(isoMatch[3])
-  const hour24 = Number(isoMatch[4])
-  const minute = isoMatch[5]
-  const hour12 = ((hour24 + 11) % 12) + 1
-  const suffix = hour24 >= 12 ? 'pm' : 'am'
-  const monthLabels = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
-  ]
-  const monthLabel = monthLabels[monthIndex] || ''
-  if (!monthLabel || !year) {
-    return `${hour12}:${minute} ${suffix}`
-  }
-  return `${monthLabel} ${day}, ${hour12}:${minute} ${suffix}`
+  return formatManilaTimestamp(value)
 }
 
-// Compact "Jul 22" / "7:10am" variants of the same parsing used by
-// formatAlertTimestamp, for the mobile Trip Log card list where a full
-// "July 22, 7:10 am" per timestamp (x2 per row) doesn't fit.
+// Compact "Jul 22" / "7:10am" variants, for the mobile Trip Log card list
+// where a full "July 22, 7:10 am" per timestamp (x2 per row) doesn't fit.
 function formatShortDate(value) {
-  if (!value) {
-    return '--'
-  }
-  const raw = String(value)
-  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (!isoMatch) {
-    return raw
-  }
-  const monthIndex = Number(isoMatch[2]) - 1
-  const day = Number(isoMatch[3])
-  const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  return `${monthLabels[monthIndex] || ''} ${day}`
+  return formatManilaShortDate(value)
 }
 
 function formatShortTime(value) {
-  if (!value) {
-    return '--'
-  }
-  const raw = String(value)
-  const match = raw.match(/[T ](\d{2}):(\d{2})/)
-  if (!match) {
-    return raw
-  }
-  const hour24 = Number(match[1])
-  const minute = match[2]
-  const hour12 = ((hour24 + 11) % 12) + 1
-  const suffix = hour24 >= 12 ? 'pm' : 'am'
-  return `${hour12}:${minute}${suffix}`
+  return formatManilaShortTime(value)
 }
 
 function PerformancePanel({ title, icon: Icon, children, right }) {
@@ -190,100 +150,134 @@ function MetricTile({ label, value, hint, icon: Icon, tone = 'slate' }) {
 }
 
 // ---------------------------------------------------------------------------
-// Mock data (frontend-only placeholder, no backend/API call) — the last
-// completed trip has just 1 alert (Safe/green), while the week as a whole
-// includes a high-alert trip that pushes the weekly total to 15 and the
-// weekly risk mix into High Risk/red.
+// Small sample fallback (frontend-only, no backend/API call) — shown only
+// when the real query below comes back with zero sessions in the last 7
+// days (a driver who hasn't completed any trips yet), so the page
+// demonstrates its layout instead of just reading "no trip data" on a fresh
+// account. Deliberately a handful of rows, not a full fabricated week, and
+// clearly labeled as sample data (see the banner below) rather than passed
+// off as real history -- misrepresenting a driver's own safety record isn't
+// the kind of thing this app should ever do, even as a placeholder.
+// Timestamps are generated relative to "now" at module load rather than
+// hardcoded dates, so they always fall inside whatever "last 7 days" window
+// is actually being queried, no matter when this is viewed.
 // ---------------------------------------------------------------------------
 
-const MOCK_SESSIONS = [
+function hoursAgoIso(hours) {
+  return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()
+}
+
+const SAMPLE_SESSIONS = [
   {
-    session_id: 'SESSION-7',
-    created_at: '2026-07-22T07:10:00',
-    start_time: '2026-07-22T07:10:00',
-    end_time: '2026-07-22T07:52:00',
+    session_id: 'SAMPLE-2',
+    created_at: hoursAgoIso(20),
+    start_time: hoursAgoIso(20),
+    end_time: hoursAgoIso(19.3),
     total_alerts: 1,
     session_duration: 2520,
   },
   {
-    session_id: 'SESSION-6',
-    created_at: '2026-07-21T18:30:00',
-    start_time: '2026-07-21T18:30:00',
-    end_time: '2026-07-21T19:20:00',
-    total_alerts: 5,
-    session_duration: 3000,
-  },
-  {
-    session_id: 'SESSION-5',
-    created_at: '2026-07-20T09:15:00',
-    start_time: '2026-07-20T09:15:00',
-    end_time: '2026-07-20T10:05:00',
-    total_alerts: 3,
-    session_duration: 3000,
-  },
-  {
-    session_id: 'SESSION-4',
-    created_at: '2026-07-19T14:00:00',
-    start_time: '2026-07-19T14:00:00',
-    end_time: '2026-07-19T14:45:00',
+    session_id: 'SAMPLE-1',
+    created_at: hoursAgoIso(68),
+    start_time: hoursAgoIso(68),
+    end_time: hoursAgoIso(67.2),
     total_alerts: 2,
-    session_duration: 2700,
-  },
-  {
-    session_id: 'SESSION-3',
-    created_at: '2026-07-18T06:45:00',
-    start_time: '2026-07-18T06:45:00',
-    end_time: '2026-07-18T07:30:00',
-    total_alerts: 1,
-    session_duration: 2700,
-  },
-  {
-    session_id: 'SESSION-2',
-    created_at: '2026-07-17T16:00:00',
-    start_time: '2026-07-17T16:00:00',
-    end_time: '2026-07-17T16:50:00',
-    total_alerts: 2,
-    session_duration: 3000,
-  },
-  {
-    session_id: 'SESSION-1',
-    created_at: '2026-07-16T08:00:00',
-    start_time: '2026-07-16T08:00:00',
-    end_time: '2026-07-16T08:40:00',
-    total_alerts: 1,
-    session_duration: 2400,
+    session_duration: 2880,
   },
 ]
 
-const MOCK_ALERTS = [
-  { id: 'A-15', created_at: '2026-07-22T07:30:00', event_type: 'prolonged_eye_closure', duration: 40, session_id: 'SESSION-7' },
-
-  { id: 'A-14', created_at: '2026-07-21T19:15:00', event_type: 'pattern_repeated_eye_closure', duration: 55, session_id: 'SESSION-6' },
-  { id: 'A-13', created_at: '2026-07-21T19:05:00', event_type: 'pattern_eye_closure_yawn', duration: 65, session_id: 'SESSION-6' },
-  { id: 'A-12', created_at: '2026-07-21T18:55:00', event_type: 'pattern_eye_closure_yawn', duration: 50, session_id: 'SESSION-6' },
-  { id: 'A-11', created_at: '2026-07-21T18:45:00', event_type: 'prolonged_eye_closure', duration: 45, session_id: 'SESSION-6' },
-  { id: 'A-10', created_at: '2026-07-21T18:35:00', event_type: 'prolonged_eye_closure', duration: 60, session_id: 'SESSION-6' },
-
-  { id: 'A-9', created_at: '2026-07-20T09:55:00', event_type: 'pattern_eye_closure_yawn', duration: 35, session_id: 'SESSION-5' },
-  { id: 'A-8', created_at: '2026-07-20T09:40:00', event_type: 'prolonged_eye_closure', duration: 50, session_id: 'SESSION-5' },
-  { id: 'A-7', created_at: '2026-07-20T09:20:00', event_type: 'pattern_repeated_eye_closure', duration: 30, session_id: 'SESSION-5' },
-
-  { id: 'A-6', created_at: '2026-07-19T14:30:00', event_type: 'pattern_repeated_eye_closure', duration: 45, session_id: 'SESSION-4' },
-  { id: 'A-5', created_at: '2026-07-19T14:10:00', event_type: 'prolonged_eye_closure', duration: 40, session_id: 'SESSION-4' },
-
-  { id: 'A-4', created_at: '2026-07-18T06:55:00', event_type: 'pattern_eye_closure_yawn', duration: 30, session_id: 'SESSION-3' },
-
-  { id: 'A-3', created_at: '2026-07-17T16:35:00', event_type: 'prolonged_eye_closure', duration: 55, session_id: 'SESSION-2' },
-  { id: 'A-2', created_at: '2026-07-17T16:10:00', event_type: 'prolonged_eye_closure', duration: 45, session_id: 'SESSION-2' },
-
-  { id: 'A-1', created_at: '2026-07-16T08:10:00', event_type: 'pattern_repeated_eye_closure', duration: 35, session_id: 'SESSION-1' },
+const SAMPLE_ALERTS = [
+  { id: 'SAMPLE-A3', created_at: hoursAgoIso(19.6), event_type: 'prolonged_eye_closure', duration: 40, session_id: 'SAMPLE-2' },
+  { id: 'SAMPLE-A2', created_at: hoursAgoIso(67.6), event_type: 'pattern_eye_closure_yawn', duration: 35, session_id: 'SAMPLE-1' },
+  { id: 'SAMPLE-A1', created_at: hoursAgoIso(67.9), event_type: 'prolonged_eye_closure', duration: 50, session_id: 'SAMPLE-1' },
 ]
+
+// Same performance data source as SupCrewProfile.jsx's Performance tab
+// (alerts + sessions from the last 7 days), but properly scoped to the
+// calling driver's own rows rather than that page's unscoped query --
+// `sessions` has RLS ("assigned crew can read own sessions", see RLS.md)
+// keying off the caller's own driver_records.id, so a plain query already
+// returns only this driver's sessions. `alerts` has no such per-driver RLS
+// (see DATABASE.md's alerts Grants note -- `authenticated` gets a blanket
+// `select`), so it's explicitly filtered to this driver's own session_ids
+// afterward rather than trusted to scope itself.
+function useDriverPerformanceData() {
+  const [alerts, setAlerts] = useState([])
+  const [sessions, setSessions] = useState([])
+  const [isPerformanceLoading, setIsPerformanceLoading] = useState(true)
+  const [performanceError, setPerformanceError] = useState('')
+  const [isSampleData, setIsSampleData] = useState(false)
+
+  useEffect(() => {
+    let isMounted = true
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+
+    async function loadPerformance() {
+      setIsPerformanceLoading(true)
+      setPerformanceError('')
+
+      const sessionsRes = await supabase
+        .from('sessions')
+        .select('session_id, created_at, start_time, end_time, total_alerts, session_duration')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+
+      if (!isMounted) return
+
+      if (sessionsRes.error) {
+        setPerformanceError(sessionsRes.error.message)
+        setSessions(SAMPLE_SESSIONS)
+        setAlerts(SAMPLE_ALERTS)
+        setIsSampleData(true)
+        setIsPerformanceLoading(false)
+        return
+      }
+
+      const realSessions = sessionsRes.data || []
+      if (realSessions.length === 0) {
+        // No real trips in the window at all -- show the small sample set
+        // instead of an empty page. Deliberately not done when sessions
+        // exist but have zero alerts (a genuinely clean week) -- that's
+        // real data, not something to paper over with fake alerts.
+        setSessions(SAMPLE_SESSIONS)
+        setAlerts(SAMPLE_ALERTS)
+        setIsSampleData(true)
+        setIsPerformanceLoading(false)
+        return
+      }
+
+      const sessionIds = realSessions.map((s) => s.session_id)
+      const alertsRes = await supabase
+        .from('alerts')
+        .select('id, created_at, event_type, duration, session_id')
+        .in('session_id', sessionIds)
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+
+      if (!isMounted) return
+
+      if (alertsRes.error) {
+        setPerformanceError(alertsRes.error.message)
+        setAlerts([])
+      } else {
+        setAlerts(alertsRes.data || [])
+      }
+      setSessions(realSessions)
+      setIsSampleData(false)
+      setIsPerformanceLoading(false)
+    }
+
+    loadPerformance()
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  return { alerts, sessions, isPerformanceLoading, performanceError, isSampleData }
+}
 
 function DriverPerformance() {
-  const [alerts] = useState(MOCK_ALERTS)
-  const [sessions] = useState(MOCK_SESSIONS)
-  const [isPerformanceLoading] = useState(false)
-  const [performanceError] = useState('')
+  const { alerts, sessions, isPerformanceLoading, performanceError, isSampleData } = useDriverPerformanceData()
 
   const {
     performanceKpis,
@@ -393,7 +387,9 @@ function DriverPerformance() {
     const alertsByType = {}
     const hourlyCounts = Array.from({ length: 24 }, (_, hour) => ({ hour, alerts: 0 }))
     alerts.forEach((item) => {
-      const hour = new Date(item.created_at).getHours()
+      // Manila-pinned (see lib/manilaTime.js) -- .getHours() reads the
+      // browser's own local timezone, not necessarily Manila's.
+      const hour = getManilaHour(item.created_at)
       hourlyCounts[hour].alerts += 1
       if (item.event_type) {
         alertsByType[item.event_type] = (alertsByType[item.event_type] || 0) + 1
@@ -482,9 +478,7 @@ function DriverPerformance() {
   // can see *when* alerts spiked instead of just an abstract tier count.
   const weekTrend = [...sessions].reverse().map((session) => {
     const tone = getRiskLevel(session.total_alerts || 0).tone
-    const dayLabel = session.start_time
-      ? new Date(session.start_time).toLocaleDateString(undefined, { weekday: 'short' })
-      : '--'
+    const dayLabel = session.start_time ? getManilaWeekday(session.start_time) : '--'
     return { sessionId: session.session_id, alerts: session.total_alerts || 0, tone, dayLabel }
   })
   const maxWeekAlerts = Math.max(...weekTrend.map((day) => day.alerts), 0)
@@ -504,6 +498,16 @@ function DriverPerformance() {
         {performanceError ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-2.5 text-xs text-red-700 sm:p-4 sm:text-sm">
             {performanceError}
+          </div>
+        ) : null}
+
+        {!isPerformanceLoading && isSampleData ? (
+          <div className="flex items-start gap-2.5 rounded-2xl border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600 sm:gap-3 sm:p-4 sm:text-sm">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+            <p>
+              Showing sample data — you haven't completed any trips in the last 7 days yet. Your real performance
+              stats will appear here once you have.
+            </p>
           </div>
         ) : null}
 

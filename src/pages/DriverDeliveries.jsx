@@ -32,6 +32,7 @@ import {
   Maximize2,
   Minimize2,
   LocateFixed,
+  Coffee,
 } from 'lucide-react'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
@@ -46,6 +47,7 @@ import DriverLayout from '../layout/DriverLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 import { GOOGLE_MAPS_LOADER_OPTIONS } from '../lib/googleMapsLoaderOptions.js'
 import { useResolvedAddress } from '../lib/reverseGeocode.js'
+import { formatManilaTimestamp, formatManilaShortTime, manilaTodayISO, MANILA_TIMEZONE } from '../lib/manilaTime.js'
 
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -235,52 +237,30 @@ function formatAlertDuration(seconds) {
   return `${hours}h ${minutes}m`
 }
 
+// Pinned to Asia/Manila (see lib/manilaTime.js) -- previously regex-
+// extracted the raw digit characters straight out of the UTC-stored ISO
+// string with no timezone conversion at all, displaying the UTC clock
+// reading mislabeled as local time (8 hours behind real Manila time).
 function formatAlertTimestamp(value) {
-  if (!value) return '--'
-  const raw = String(value)
-  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
-  if (!isoMatch) return raw
-  const year = Number(isoMatch[1])
-  const monthIndex = Number(isoMatch[2]) - 1
-  const day = Number(isoMatch[3])
-  const hour24 = Number(isoMatch[4])
-  const minute = isoMatch[5]
-  const hour12 = ((hour24 + 11) % 12) + 1
-  const suffix = hour24 >= 12 ? 'pm' : 'am'
-  const monthLabels = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
-  ]
-  const monthLabel = monthLabels[monthIndex] || ''
-  if (!monthLabel || !year) return `${hour12}:${minute} ${suffix}`
-  return `${monthLabel} ${day}, ${hour12}:${minute} ${suffix}`
+  return formatManilaTimestamp(value)
 }
 
-// Today's date as "YYYY-MM-DD" in the user's local timezone. Delivery
-// pickup/dropoff dates are calendar dates entered by the customer (e.g.
-// "2026-08-07"), so grouping must compare against the *local* date — using
-// Date.toISOString() (UTC) shifts the comparison a day ahead in timezones
-// east of UTC (e.g. PH, UTC+8) during the morning.
+// Today's date as "YYYY-MM-DD" in Asia/Manila (see lib/manilaTime.js).
+// Delivery pickup/dropoff dates are calendar dates entered by the customer
+// (e.g. "2026-08-07"), so grouping must compare against the Manila-local
+// date -- using Date.toISOString() (UTC) shifts the comparison a day ahead
+// during the Manila morning. Previously used the *browser's* local date
+// instead of Manila's explicitly, correct only by coincidence when the
+// browser happens to already be set to Manila time.
 function localTodayISO() {
-  const now = new Date()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  return `${now.getFullYear()}-${month}-${day}`
+  return manilaTodayISO()
 }
 
 // Time-only ("2:45pm") variant of formatAlertTimestamp, for the live
 // monitoring feed where a full date would be redundant — every alert shown
 // there happened moments ago, today.
 function formatTimeOnly(value) {
-  if (!value) return '--'
-  const raw = String(value)
-  const match = raw.match(/[T ](\d{2}):(\d{2})/)
-  if (!match) return raw
-  const hour24 = Number(match[1])
-  const minute = match[2]
-  const hour12 = ((hour24 + 11) % 12) + 1
-  const suffix = hour24 >= 12 ? 'pm' : 'am'
-  return `${hour12}:${minute}${suffix}`
+  return formatManilaShortTime(value)
 }
 
 function RouteDeviationMap({ plannedRoute, actualRoute, pickupCoords, dropoffCoords }) {
@@ -479,6 +459,15 @@ function LiveNavigationMap({
         destination: routeDestination,
         waypoints: routeWaypoints && routeWaypoints.length > 0 ? routeWaypoints : undefined,
         travelMode: window.google.maps.TravelMode.DRIVING,
+        // Traffic-aware routing (11_ROUTE_COMPARISON.md's "Traffic-Aware
+        // Suggested Routes", decided 2026-08-13) -- departureTime: now makes
+        // DirectionsService route around currently-predicted congestion,
+        // not just shortest distance/time. Reused for every computeRoute()
+        // call, including reroute-on-deviation, so a fresh traffic read
+        // happens each time a new route is actually computed, not just once
+        // at mount. 'bestguess' is Google's default/recommended model absent
+        // a specific reason to prefer 'optimistic'/'pessimistic'.
+        drivingOptions: { departureTime: new Date(), trafficModel: 'bestguess' },
       },
       (result, status) => {
         if (status === 'OK' && result) {
@@ -1399,11 +1388,67 @@ function parseCoords(value) {
   return { lat, lng }
 }
 
+// Plain-JS haversine, no google.maps dependency -- mirrors SupDashboard.jsx's
+// own distanceMeters helper exactly, reused here for the rest-stop
+// recommendation's distance accumulation (12_REST_STOP_RECOMMENDATIONS.md)
+// so it works regardless of whether the Maps JS API has finished loading
+// yet at the point this runs (unlike google.maps.geometry.spherical, which
+// LiveNavigationMap can rely on since it gates on its own isLoaded).
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLon = ((lon2 - lon1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+// Greedy nearest-neighbor ordering for dropoff-type candidates (02B_MULTI_
+// STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering", decided
+// 2026-08-14). Each candidate is `{ location, coords }`; `coords` may be
+// null for a candidate whose address doesn't parse to "lat, lng" (a real
+// street address, same limitation parseCoords already has elsewhere) -- such
+// a candidate can't be ranked by distance, so it's kept in its original
+// relative position among the other un-rankable candidates and only ever
+// picked once no coordinate-bearing candidate remains closer. Chains from
+// each picked candidate's own coords for the next pick (simulating "having
+// arrived there"), since only the very first pick is ever actually driven to
+// before the caller re-derives this list from a real position again.
+function nearestDropoffOrder(referencePos, candidates) {
+  const remaining = [...candidates]
+  const ordered = []
+  let fromPos = referencePos
+  while (remaining.length > 0) {
+    let pickIndex = 0
+    let pickDistance = Infinity
+    remaining.forEach((candidate, i) => {
+      if (!candidate.coords || !fromPos) return
+      const d = distanceMeters(fromPos.lat, fromPos.lng, candidate.coords.lat, candidate.coords.lng)
+      if (d < pickDistance) {
+        pickDistance = d
+        pickIndex = i
+      }
+    })
+    const [next] = remaining.splice(pickIndex, 1)
+    ordered.push(next)
+    if (next.coords) fromPos = next.coords
+  }
+  return ordered
+}
+
+// Rest-stop recommendation thresholds (12_REST_STOP_RECOMMENDATIONS.md,
+// decided 2026-08-13): either crossing recommends a rest stop, whichever
+// comes first, since Trip start -- Trip-start-only, one-shot, no reset.
+const REST_STOP_DISTANCE_KM = 321.9 // 200 miles
+const REST_STOP_HOURS = 2
+
 function formatAssignedAt(iso) {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleString('en-PH', {
+    timeZone: MANILA_TIMEZONE,
     year: 'numeric',
     month: 'short',
     day: '2-digit',
@@ -1962,6 +2007,19 @@ function DriverDeliveries() {
   // Live nav position, sourced from the Pi's gps_logs uploads -- see the
   // Realtime subscription below. null until the first reading arrives.
   const [livePosition, setLivePosition] = useState(null)
+  // Rest-stop recommendation (12_REST_STOP_RECOMMENDATIONS.md): ephemeral,
+  // client-side only, Trip-start-only, one-shot -- never persisted, never
+  // resets once shown, ordinary dismiss just clears the banner. Refs (not
+  // state) hold the running totals since they don't need to re-render on
+  // every GPS tick, only when the threshold is actually crossed.
+  const [restStopRecommended, setRestStopRecommended] = useState(false)
+  const [restStopDismissed, setRestStopDismissed] = useState(false)
+  const priorSessionsHoursRef = useRef(0)
+  const priorSessionsKmRef = useRef(0)
+  const currentSessionStartRef = useRef(null)
+  const currentSessionKmRef = useRef(0)
+  const lastDistanceCheckPositionRef = useRef(null)
+  const restStopTripIdRef = useRef(null)
   // Phone-only page-scroll slider (a real scrollbar-style thumb, not just an
   // invisible swipe pad -- see the effect and handlers further down, near
   // isDrivingStage, for how its position is tracked/dragged): thumb size and
@@ -1986,16 +2044,39 @@ function DriverDeliveries() {
   // deliveries that already store a real street address.
   const resolvedPickupAddress = useResolvedAddress(active?.pickupAddress || '')
   const resolvedDeliveryAddress = useResolvedAddress(active?.deliveryAddress || '')
-  // Current dropoff target in the chain (Pickup -> Dropoff -> Stops) -- the
-  // main dropoff until it's completed, then whichever stop is next
-  // incomplete, matching HelperDeliveries.jsx's chain-item ordering. Falls
-  // back to the main dropoff once every stop is done too (nothing left to
-  // point "To").
-  const currentDropoffRaw = active
-    ? active.dropoffCompletedAt
-      ? (active.stops || []).find((s) => !s.completed)?.location || active.deliveryAddress
-      : active.deliveryAddress
-    : ''
+
+  // Before pickup, the relevant leg is "get to the pickup point"; after pickup, it's "get to drop-off."
+  const activeNeedsPickup = active ? (active.status === 'ASSIGNED' || active.status === 'FOR_PICKUP') : true
+  const activeNavOrigin = active ? (activeNeedsPickup ? { lat: 14.5506, lng: 121.0471 } : active.pickupCoords) : null
+
+  // Greedy nearest-neighbor dropoff ordering (decided 2026-08-14, see
+  // 02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering") --
+  // completion order/permission is unchanged (the Helper can still complete
+  // Dropoff or any Stop in any order, enforced nowhere client-side, see
+  // admin-users/index.ts), but the DRIVER is now routed to whichever
+  // still-incomplete dropoff (dropoff_location or a stop) is nearest to the
+  // current position, not whichever is next in the customer-entered list.
+  // Recomputed on every render off livePosition/activeNavOrigin -- since the
+  // candidate list only changes when a completion actually lands (via the
+  // Realtime subscription updating active.stops/active.dropoffCompletedAt),
+  // this naturally re-evaluates once per completion rather than continuously
+  // reordering mid-drive.
+  const remainingDropoffCandidates = active && !activeNeedsPickup
+    ? [
+        ...(active.dropoffCompletedAt ? [] : [{ location: active.deliveryAddress, coords: active.destinationCoords }]),
+        ...(active.stops || [])
+          .filter((s) => !s.completed)
+          .map((s) => ({ location: s.location, coords: parseCoords(s.location) })),
+      ]
+    : []
+  const orderedRemainingDropoffs = remainingDropoffCandidates.length > 0
+    ? nearestDropoffOrder(livePosition || activeNavOrigin, remainingDropoffCandidates)
+    : []
+
+  // Current dropoff target in the chain -- the nearest remaining dropoff per
+  // the greedy ordering above, falling back to the main dropoff once every
+  // dropoff is done (nothing left to point "To").
+  const currentDropoffRaw = active ? (orderedRemainingDropoffs[0]?.location || active.deliveryAddress) : ''
   const resolvedCurrentDropoffAddress = useResolvedAddress(currentDropoffRaw || '')
   const statusCfg = active ? statusConfig[active.status] : null
   const todayISO = localTodayISO()
@@ -2008,34 +2089,17 @@ function DriverDeliveries() {
   const upcomingCount = data.upcoming.length
   const pastCount = data.completed.length
 
-  // Before pickup, the relevant leg is "get to the pickup point"; after pickup, it's "get to drop-off."
-  const activeNeedsPickup = active ? (active.status === 'ASSIGNED' || active.status === 'FOR_PICKUP') : true
-  const activeNavOrigin = active ? (activeNeedsPickup ? { lat: 14.5506, lng: 121.0471 } : active.pickupCoords) : null
-
-  // The real chain order is Pickup -> Dropoff -> Stop 1 -> ... -> Stop N, not
-  // "stops sandwiched between pickup and a fixed final dropoff" (see
-  // 02B_MULTI_STOP_DELIVERIES.md). On the dropoff leg, when stops exist,
-  // dropoff_location becomes a waypoint and the LAST stop becomes the real
-  // navigation target instead.
+  // The nav map's target/waypoints follow the same nearest-first order --
+  // route to the nearest remaining dropoff, with the rest (also nearest-
+  // first from that point) threaded in as waypoints after it.
   let activeNavTarget = null
   let activeNavStops = []
   if (active) {
     if (activeNeedsPickup) {
       activeNavTarget = active.pickupCoords
-    } else if (active.stops.length > 0) {
-      const lastStopCoords = parseCoords(active.stops[active.stops.length - 1].location)
-      if (lastStopCoords) {
-        activeNavTarget = lastStopCoords
-        activeNavStops = [{ location: active.deliveryAddress }, ...active.stops.slice(0, -1)]
-      } else {
-        // Last stop's address doesn't parse to coordinates (parseCoords only
-        // understands "lat, lng" text, same limitation pickup/dropoff already
-        // have) -- fall back to dropoff as the destination and every stop as
-        // a waypoint before it, rather than breaking the map on an
-        // unparseable final target.
-        activeNavTarget = active.destinationCoords
-        activeNavStops = active.stops
-      }
+    } else if (orderedRemainingDropoffs.length > 0) {
+      activeNavTarget = orderedRemainingDropoffs[0].coords || active.destinationCoords
+      activeNavStops = orderedRemainingDropoffs.slice(1)
     } else {
       activeNavTarget = active.destinationCoords
     }
@@ -2158,7 +2222,12 @@ function DriverDeliveries() {
     const mapped = (result?.deliveries || []).map(mapDelivery)
     const today = localTodayISO()
     const nonArchived = mapped
-      .filter((d) => d.status !== 'DELIVERED' && d.status !== 'COMPLETED')
+      // CANCELLED excluded alongside DELIVERED/COMPLETED -- without this, a
+      // same-day cancelled delivery can still be picked as "today's active
+      // delivery" below (hasOpenSession or pickupDate === today), and
+      // DB_TO_DRIVER_STATUS has no CANCELLED entry, so statusConfig[status]
+      // resolves to undefined and statusCfg.banner crashes the whole page.
+      .filter((d) => d.status !== 'DELIVERED' && d.status !== 'COMPLETED' && d.status !== 'CANCELLED')
       .sort((a, b) => String(a.pickupDate || '').localeCompare(String(b.pickupDate || '')))
     // A delivery with a genuinely open Session takes priority over "today's"
     // delivery — a stale open Session on a different pickup_date must still
@@ -2273,6 +2342,120 @@ function DriverDeliveries() {
     }
   }, [isMonitoring, active?.sessionId])
 
+  // Rest-stop recommendation setup (12_REST_STOP_RECOMMENDATIONS.md): once
+  // per Trip (active.id), not per Session -- resets the one-shot banner and
+  // the running totals only when the driver actually switches to a
+  // different delivery, never on Pause/Resume within the same one. Sums
+  // each already-closed Session's own session_duration (hours) and its own
+  // gps_logs' point-to-point distance (km) -- deliberately per-session, not
+  // one continuous sum across session boundaries, matching the existing
+  // per-Session mileage precedent (03B_PAUSE_AND_RESUME_TRIP.md/
+  // 07_END_TRIP.md) rather than treating a Pause gap as driven distance.
+  // Defined ahead of the GPS position effect below, which calls
+  // checkRestStopThreshold() on every tick -- react-hooks/immutability
+  // (correctly) flags referencing a later-declared const from an earlier
+  // effect, since that effect's closure would otherwise never see updates.
+  useEffect(() => {
+    if (!active?.id) return undefined
+    if (restStopTripIdRef.current !== active.id) {
+      restStopTripIdRef.current = active.id
+      setRestStopRecommended(false)
+      setRestStopDismissed(false)
+      priorSessionsHoursRef.current = 0
+      priorSessionsKmRef.current = 0
+    }
+    let cancelled = false
+    async function loadPriorSessionTotals() {
+      const { data: sessions, error: sessionsError } = await supabase
+        .from('sessions')
+        .select('session_id, session_duration')
+        .eq('delivery_request_id', active.id)
+        .eq('status', 'Completed')
+      if (cancelled || sessionsError || !sessions?.length) return
+      const hours = sessions.reduce((sum, s) => sum + (s.session_duration || 0) / 3600, 0)
+      const sessionIds = sessions.map((s) => s.session_id)
+      const { data: rows, error: rowsError } = await supabase
+        .from('gps_logs')
+        .select('session_id, latitude, longitude, timestamp')
+        .in('session_id', sessionIds)
+        .order('session_id', { ascending: true })
+        .order('timestamp', { ascending: true })
+      if (cancelled) return
+      let km = 0
+      if (!rowsError && rows?.length) {
+        let prevSessionId = null
+        let prev = null
+        for (const row of rows) {
+          if (row.session_id !== prevSessionId) {
+            prevSessionId = row.session_id
+            prev = row
+            continue
+          }
+          km += distanceMeters(prev.latitude, prev.longitude, row.latitude, row.longitude) / 1000
+          prev = row
+        }
+      }
+      priorSessionsHoursRef.current = hours
+      priorSessionsKmRef.current = km
+    }
+    loadPriorSessionTotals()
+    return () => {
+      cancelled = true
+    }
+  }, [active?.id])
+
+  // Current Session's own start time (for the elapsed-hours half of the
+  // threshold) -- fetched fresh per Session rather than trusting a value
+  // passed down from get-driver-deliveries, since that action's shape isn't
+  // guaranteed to carry it. Resets the current-session distance accumulator
+  // for the new Session too.
+  useEffect(() => {
+    if (!isMonitoring || !active?.sessionId) return undefined
+    currentSessionStartRef.current = null
+    currentSessionKmRef.current = 0
+    lastDistanceCheckPositionRef.current = null
+    let cancelled = false
+    supabase
+      .from('sessions')
+      .select('start_time')
+      .eq('session_id', active.sessionId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled || error || !data?.start_time) return
+        currentSessionStartRef.current = new Date(data.start_time).getTime()
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isMonitoring, active?.sessionId])
+
+  // One-shot threshold check (12_REST_STOP_RECOMMENDATIONS.md): either 200
+  // miles or 2 continuous driving hours since Trip start, whichever first,
+  // summed across all of this Trip's Sessions. Never re-fires once shown,
+  // never resets on its own -- only a new Trip (the effect above) clears it.
+  const checkRestStopThreshold = () => {
+    if (restStopRecommended || !currentSessionStartRef.current) return
+    const currentHours = (Date.now() - currentSessionStartRef.current) / 3_600_000
+    const totalHours = priorSessionsHoursRef.current + currentHours
+    const totalKm = priorSessionsKmRef.current + currentSessionKmRef.current
+    if (totalHours >= REST_STOP_HOURS || totalKm >= REST_STOP_DISTANCE_KM) {
+      setRestStopRecommended(true)
+    }
+  }
+
+  // Backup timer purely for the time threshold -- the GPS-tick-driven check
+  // below only fires when a new position actually lands, so a driver with a
+  // GPS dropout (09_EDGE_CASES.md's "GPS unavailable" -- heartbeat/Trip keep
+  // going regardless) could otherwise sit past 2 hours with no new tick to
+  // trigger the check. 60s is frequent enough for a 2-hour threshold without
+  // being wasteful.
+  useEffect(() => {
+    if (!isMonitoring) return undefined
+    const interval = setInterval(checkRestStopThreshold, 60000)
+    return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMonitoring])
+
   // Live nav position (05_GPS_PIPELINE.md): the Pi uploads to gps_logs via
   // the gps-upload Edge Function roughly once per second while its Session
   // is Active. Same shape as the alerts subscription above -- seed-fetch the
@@ -2295,6 +2478,11 @@ function DriverDeliveries() {
         .limit(1)
       if (cancelled || error || !data?.length) return
       setLivePosition({ lat: data[0].latitude, lng: data[0].longitude })
+      // Seeds the distance accumulator's reference point on mount/reload,
+      // without counting a "distance" against a point that arrived before
+      // this mount -- only a genuinely new tick (below) adds distance.
+      lastDistanceCheckPositionRef.current = { lat: data[0].latitude, lng: data[0].longitude }
+      checkRestStopThreshold()
     }
     loadLatestPosition()
 
@@ -2304,7 +2492,21 @@ function DriverDeliveries() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'gps_logs', filter: `session_id=eq.${active.sessionId}` },
         (payload) => {
-          setLivePosition({ lat: payload.new.latitude, lng: payload.new.longitude })
+          const next = { lat: payload.new.latitude, lng: payload.new.longitude }
+          setLivePosition(next)
+          // Rest-stop distance accumulation (12_REST_STOP_RECOMMENDATIONS.md):
+          // running total for the CURRENT session only -- prior Sessions'
+          // totals are summed once, separately, above.
+          if (lastDistanceCheckPositionRef.current) {
+            currentSessionKmRef.current += distanceMeters(
+              lastDistanceCheckPositionRef.current.lat,
+              lastDistanceCheckPositionRef.current.lng,
+              next.lat,
+              next.lng,
+            ) / 1000
+          }
+          lastDistanceCheckPositionRef.current = next
+          checkRestStopThreshold()
         },
       )
       .subscribe()
@@ -2312,6 +2514,11 @@ function DriverDeliveries() {
       cancelled = true
       supabase.removeChannel(channel)
     }
+    // checkRestStopThreshold deliberately omitted -- a plain function
+    // redefined every render, not memoized; including it would force this
+    // effect to tear down/resubscribe the Realtime channel every render
+    // instead of only when the Session actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMonitoring, active?.sessionId])
 
   // Runs a confirm-modal action while it's in flight: blocks re-entry (a second
@@ -2491,6 +2698,24 @@ function DriverDeliveries() {
                 <div className="flex items-center gap-1.5 rounded-xl bg-amber-900 px-3.5 py-2.5 text-[11px] font-medium text-white sm:text-xs">
                   {statusCfg.bannerIcon && <statusCfg.bannerIcon className="h-3.5 w-3.5 shrink-0" />}
                   {statusCfg.banner}
+                </div>
+              )}
+
+              {/* Rest-stop recommendation (12_REST_STOP_RECOMMENDATIONS.md):
+                  ephemeral, dismissible, never re-shows itself once dismissed
+                  or the Trip ends -- purely advisory, dismissing it never
+                  touches Trip/Session state. */}
+              {isMonitoring && restStopRecommended && !restStopDismissed && (
+                <div className="flex items-center gap-1.5 rounded-xl bg-sky-800 px-3.5 py-2.5 text-[11px] font-medium text-white sm:text-xs">
+                  <Coffee className="h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1">You've been driving a while — consider taking a rest stop when it's safe to.</span>
+                  <button
+                    onClick={() => setRestStopDismissed(true)}
+                    aria-label="Dismiss rest stop recommendation"
+                    className="shrink-0 rounded-md p-1 hover:bg-sky-700"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               )}
 

@@ -2,13 +2,17 @@ import { useState, useMemo } from "react";
 import AdminLayout from "../layout/AdminLayout.jsx";
 import mockLogs from "../lib/mockSystemLogs.js";
 import { ShieldCheck, ArrowUp, ArrowDown } from "lucide-react";
+import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 
-// Helper to format timestamps to "MMM dd, yyyy • HH:mm"
+// Helper to format timestamps to "MMM dd, yyyy • HH:mm", pinned to
+// Asia/Manila (see lib/manilaTime.js) rather than the browser's own
+// timezone.
 const formatTimestamp = (iso) => {
   const date = new Date(iso);
-  const options = { month: "short", day: "2-digit", year: "numeric" };
+  const options = { timeZone: MANILA_TIMEZONE, month: "short", day: "2-digit", year: "numeric" };
   const datePart = new Intl.DateTimeFormat("en-US", options).format(date);
   const timePart = date.toLocaleTimeString("en-US", {
+    timeZone: MANILA_TIMEZONE,
     hour: "2-digit",
     minute: "2-digit",
     hour12: true,

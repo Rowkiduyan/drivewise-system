@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
+import { formatManilaTimestamp, getManilaHour, MANILA_TIMEZONE } from "../lib/manilaTime.js";
 import {
   ArrowLeft,
   Route,
@@ -72,7 +73,7 @@ function buildMockTrips(crew) {
 
     return {
       id: `TRIP-${2100 - i}`,
-      dateLabel: date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }),
+      dateLabel: date.toLocaleDateString("en-US", { timeZone: MANILA_TIMEZONE, month: "short", day: "numeric", year: "numeric" }),
       client,
       route: pick(TRIP_ROUTES),
       status,
@@ -244,31 +245,12 @@ function formatAlertDuration(seconds) {
   return `${hours}h ${minutes}m`;
 }
 
+// Pinned to Asia/Manila (see lib/manilaTime.js) -- previously regex-
+// extracted the raw digit characters straight out of the UTC-stored ISO
+// string with no timezone conversion at all, displaying the UTC clock
+// reading mislabeled as local time (8 hours behind real Manila time).
 function formatAlertTimestamp(value) {
-  if (!value) {
-    return "--";
-  }
-  const raw = String(value);
-  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
-  if (!isoMatch) {
-    return raw;
-  }
-  const year = Number(isoMatch[1]);
-  const monthIndex = Number(isoMatch[2]) - 1;
-  const day = Number(isoMatch[3]);
-  const hour24 = Number(isoMatch[4]);
-  const minute = isoMatch[5];
-  const hour12 = ((hour24 + 11) % 12) + 1;
-  const suffix = hour24 >= 12 ? "pm" : "am";
-  const monthLabels = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-  ];
-  const monthLabel = monthLabels[monthIndex] || "";
-  if (!monthLabel || !year) {
-    return `${hour12}:${minute} ${suffix}`;
-  }
-  return `${monthLabel} ${day}, ${hour12}:${minute} ${suffix}`;
+  return formatManilaTimestamp(value);
 }
 
 function PerformancePanel({ title, icon: Icon, children, right }) {
@@ -563,42 +545,77 @@ function SupCrewProfile() {
     [crew, clientFallbackNames],
   );
 
+  // Scoped to this specific crew member's own driver_records.id
+  // (crew.employeeId, see SupDeliveryCrew.jsx's mapCrewRow), not the
+  // previously-unscoped query this effect used to run. Found 2026-08-14
+  // while wiring DriverPerformance.jsx to real data: `sessions`/`alerts`
+  // have no per-crew-member RLS restricting a Supervisor's own reads (a
+  // Supervisor can read every session/alert, see RLS.md), so the old
+  // date-only filter here silently mixed every driver's alerts/sessions
+  // together on whichever crew member's profile happened to be open. This
+  // tab only ever renders for a Driver (`driversOnly: true` in TABS_BASE),
+  // so `sessions.driver_id` is the right column to scope on -- mirrors
+  // DriverDeliveries.jsx-adjacent DriverPerformance.jsx's own
+  // useDriverPerformanceData(), which scopes the same two tables the same
+  // two-step way (sessions first, then alerts filtered to those session
+  // ids) since `alerts` itself has no driver-level RLS to lean on either.
   useEffect(() => {
     let isMounted = true;
     const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const driverId = crew?.employeeId;
 
     async function loadPerformance() {
+      if (!driverId) {
+        setAlerts([]);
+        setSessions([]);
+        setIsPerformanceLoading(false);
+        return;
+      }
+
       setIsPerformanceLoading(true);
       setPerformanceError("");
 
-      const [alertsRes, sessionsRes] = await Promise.all([
-        supabase
-          .from("alerts")
-          .select("id, created_at, event_type, duration, session_id")
-          .gte("created_at", since)
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("sessions")
-          .select("session_id, created_at, start_time, end_time, total_alerts, session_duration")
-          .gte("created_at", since)
-          .order("created_at", { ascending: false }),
-      ]);
+      const sessionsRes = await supabase
+        .from("sessions")
+        .select("session_id, created_at, start_time, end_time, total_alerts, session_duration")
+        .eq("driver_id", driverId)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false });
 
       if (!isMounted) {
         return;
       }
 
-      if (alertsRes.error || sessionsRes.error) {
-        setPerformanceError(
-          alertsRes.error?.message || sessionsRes.error?.message || "Unable to load data.",
-        );
+      if (sessionsRes.error) {
+        setPerformanceError(sessionsRes.error.message || "Unable to load data.");
         setAlerts([]);
         setSessions([]);
-      } else {
-        setAlerts(alertsRes.data || []);
-        setSessions(sessionsRes.data || []);
+        setIsPerformanceLoading(false);
+        return;
       }
 
+      const realSessions = sessionsRes.data || [];
+      const sessionIds = realSessions.map((s) => s.session_id);
+      const alertsRes = sessionIds.length
+        ? await supabase
+            .from("alerts")
+            .select("id, created_at, event_type, duration, session_id")
+            .in("session_id", sessionIds)
+            .gte("created_at", since)
+            .order("created_at", { ascending: false })
+        : { data: [], error: null };
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (alertsRes.error) {
+        setPerformanceError(alertsRes.error.message || "Unable to load data.");
+        setAlerts([]);
+      } else {
+        setAlerts(alertsRes.data || []);
+      }
+      setSessions(realSessions);
       setIsPerformanceLoading(false);
     }
 
@@ -606,7 +623,7 @@ function SupCrewProfile() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [crew?.employeeId]);
 
   const {
     performanceKpis,
@@ -696,7 +713,9 @@ function SupCrewProfile() {
     const alertsByType = {};
     const hourlyCounts = Array.from({ length: 24 }, (_, hour) => ({ hour, alerts: 0 }));
     alerts.forEach((item) => {
-      const hour = new Date(item.created_at).getHours();
+      // Manila-pinned (see lib/manilaTime.js) -- .getHours() reads the
+      // browser's own local timezone, not necessarily Manila's.
+      const hour = getManilaHour(item.created_at);
       hourlyCounts[hour].alerts += 1;
       if (item.event_type) {
         alertsByType[item.event_type] = (alertsByType[item.event_type] || 0) + 1;

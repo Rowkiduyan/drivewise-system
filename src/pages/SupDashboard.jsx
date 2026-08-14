@@ -6,6 +6,7 @@ import { GoogleMap, Marker as GoogleMapMarker, useJsApiLoader } from "@react-goo
 import DateRangeFilter from "../components/DateRangeFilter.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
+import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 
 const background = null;
 
@@ -498,7 +499,7 @@ function useFleetOps() {
         name: driverNameById[session?.driver_id] || session?.driver_id || "Unknown driver",
         truck: truck?.plate_number || session?.truck_plate || "—",
         alertType: ALERT_TYPE_LABELS[a.event_type] || a.event_type,
-        time: new Date(a.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        time: new Date(a.created_at).toLocaleTimeString("en-US", { timeZone: MANILA_TIMEZONE, hour: "2-digit", minute: "2-digit" }),
         severity: ALERT_SEVERITY[a.event_type] || "Medium",
         tripAlerts: countBySession[a.session_id] || 1,
         deliveryId: session?.delivery_request_id || null,

@@ -373,13 +373,21 @@ repeat_lock_enforced = False
 ALARM_ON = False
 
 print("[INFO] Starting camera...")
-picam2 = Picamera2()
-picam2.preview_configuration.main.size = (640, 480)
-picam2.preview_configuration.main.format = "RGB888"
-picam2.preview_configuration.align()
-picam2.configure("preview")
-picam2.start()
-time.sleep(2.0)
+picam2 = None
+camera_available = False
+try:
+    picam2 = Picamera2()
+    picam2.preview_configuration.main.size = (640, 480)
+    picam2.preview_configuration.main.format = "RGB888"
+    picam2.preview_configuration.align()
+    picam2.configure("preview")
+    picam2.start()
+    time.sleep(2.0)
+    camera_available = True
+except Exception as e:
+    # 09_EDGE_CASES.md gap #3: a camera fault must not take down heartbeat/
+    # GPS too -- degrade detection in isolation and keep the rest running.
+    print(f"[ERROR] Camera unavailable, detection disabled: {e}")
 
 print("[INFO] Starting background threads (heartbeat, GPS)...")
 threading.Thread(target=heartbeat_thread, daemon=True).start()
@@ -415,6 +423,12 @@ try:
             closure_2s_events.clear()
             closure_1_5s_events.clear()
             time.sleep(0.2)
+            continue
+
+        if not camera_available:
+            # Detection stays down for the rest of this run, but heartbeat/
+            # GPS threads above are already running independently.
+            time.sleep(1.0)
             continue
 
         frame = picam2.capture_array()

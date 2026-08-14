@@ -686,6 +686,10 @@ function CustomerRequestDelivery() {
 
               {formData.stops.length > 0 && (
                 <div className="space-y-4">
+                  <p className="text-xs text-slate-500">
+                    These are additional drop-off destinations, not necessarily visited in this order — the driver is
+                    routed to whichever is nearest at each point along the trip.
+                  </p>
                   {formData.stops.map((stop, index) => (
                     <div key={index} className="flex items-end gap-2">
                       <div className="flex-1">
@@ -715,7 +719,7 @@ function CustomerRequestDelivery() {
                   onClick={addStop}
                   className="text-sm font-medium text-emerald-700 hover:text-emerald-800"
                 >
-                  + Add another dropoff after Drop Off
+                  + Add another dropoff destination
                 </button>
               )}
             </div>

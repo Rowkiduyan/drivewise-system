@@ -6,6 +6,7 @@ import RegisterDeviceModal from "../components/RegisterDeviceModal.jsx";
 import { Search, Edit, XCircle, Trash2 } from "lucide-react";
 import EditDeviceModal from "../components/EditDeviceModal.jsx";
 import { supabase } from "../lib/supabaseClient.js";
+import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 
 // Helper to fetch devices from Supabase
 async function fetchDevices() {
@@ -226,7 +227,7 @@ export default function AdminDevices() {
                         </td>
                         <td className="px-5 py-2.5">
                           {d.last_ping
-                            ? new Date(d.last_ping).toLocaleString()
+                            ? new Date(d.last_ping).toLocaleString("en-US", { timeZone: MANILA_TIMEZONE })
                             : "Never"}
                         </td>
                         <td className="px-5 py-2.5 text-right flex items-center justify-end space-x-2">

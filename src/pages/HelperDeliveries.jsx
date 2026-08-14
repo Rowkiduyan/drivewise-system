@@ -26,6 +26,7 @@ import HelperLayout from '../layout/HelperLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 import { resizeProofPhotoToBase64 } from '../lib/proofPhoto.js'
 import { useResolvedAddress } from '../lib/reverseGeocode.js'
+import { formatManilaShortTime, manilaTodayISO, MANILA_TIMEZONE } from '../lib/manilaTime.js'
 
 // Same alert taxonomy DriverDeliveries.jsx uses (06_DROWSINESS_ALERT_PIPELINE.md)
 // — kept in sync manually since the two pages don't share a module today.
@@ -52,16 +53,12 @@ function formatAlertDuration(seconds) {
   return `${hours}h ${minutes}m`
 }
 
+// Pinned to Asia/Manila (see lib/manilaTime.js) -- previously regex-
+// extracted the raw digit characters straight out of the UTC-stored ISO
+// string with no timezone conversion at all, displaying the UTC clock
+// reading mislabeled as local time (8 hours behind real Manila time).
 function formatTimeOnly(value) {
-  if (!value) return '--'
-  const raw = String(value)
-  const match = raw.match(/[T ](\d{2}):(\d{2})/)
-  if (!match) return raw
-  const hour24 = Number(match[1])
-  const minute = match[2]
-  const hour12 = ((hour24 + 11) % 12) + 1
-  const suffix = hour24 >= 12 ? 'pm' : 'am'
-  return `${hour12}:${minute}${suffix}`
+  return formatManilaShortTime(value)
 }
 
 // Read-only mirror of DriverDeliveries.jsx's LiveMonitoringCard — same alert
@@ -191,14 +188,11 @@ const DB_TO_HELPER_STATUS = {
   COMPLETED: 'COMPLETED',
 }
 
-// Today's date as "YYYY-MM-DD" in the user's local timezone — matches
-// DriverDeliveries.jsx's localTodayISO, avoiding the UTC-vs-local mismatch
-// toISOString() has for timezones east of UTC (e.g. PH, UTC+8).
+// Today's date as "YYYY-MM-DD" in Asia/Manila (see lib/manilaTime.js) --
+// previously used the *browser's* local date, correct only by coincidence
+// when the browser happens to already be set to Manila time.
 function localTodayISO() {
-  const now = new Date()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  return `${now.getFullYear()}-${month}-${day}`
+  return manilaTodayISO()
 }
 
 // Some pickup/dropoff locations are stored as a "lat, lng" coordinate pair
@@ -214,11 +208,26 @@ function parseCoords(value) {
   return { lat, lng }
 }
 
+// Plain-JS haversine, no google.maps dependency -- mirrors DriverDeliveries.jsx's
+// own distanceMeters helper exactly, used to pick which Delivery Chain item
+// is nearest the truck's live position (see the "Next" flag in chainItems
+// below, 02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering").
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLon = ((lon2 - lon1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
 function formatAssignedAt(iso) {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleString('en-PH', {
+    timeZone: MANILA_TIMEZONE,
     year: 'numeric',
     month: 'short',
     day: '2-digit',
@@ -662,6 +671,17 @@ function HelperDeliveries() {
   const [currentHelperName, setCurrentHelperName] = useState('')
   const [liveAlerts, setLiveAlerts] = useState([])
   const [isAlertHistoryExpanded, setIsAlertHistoryExpanded] = useState(false)
+  // Truck's live GPS position, used only to flag which Delivery Chain item
+  // is "Next" per the nearest-dropoff logic below -- see the gps_logs
+  // subscription further down.
+  const [livePosition, setLivePosition] = useState(null)
+  // Success confirmation shown after a chain-item photo upload completes
+  // (submitChainAction below) -- { label, isFinal }. Mirrors
+  // DriverDeliveries.jsx's completionNotice toast (same auto-dismiss
+  // pattern), added 2026-08-14 since submitChainAction previously just
+  // closed the modal silently on success with no confirmation the upload
+  // actually went through.
+  const [chainSuccessNotice, setChainSuccessNotice] = useState(null)
 
   // Photo-required chain completion (Pickup -> Dropoff -> Stops), see
   // 02B_MULTI_STOP_DELIVERIES.md. confirmingChainItem identifies which row's
@@ -699,6 +719,8 @@ function HelperDeliveries() {
   const isCurrentHelper = (member) =>
     Boolean(currentHelperName) && member.name.trim().toLowerCase() === currentHelperName.trim().toLowerCase()
 
+  const chainItemKey = (item) => (item.type === 'stop' ? `stop-${item.index}` : item.type)
+
   // The full completion chain for the active delivery, in the real order
   // (Pickup -> Dropoff -> Stops, not "stops between a fixed pickup/dropoff")
   // — see 02B_MULTI_STOP_DELIVERIES.md. Each item's Complete button is only
@@ -708,40 +730,70 @@ function HelperDeliveries() {
   // server-side, so dropoff can end up never completed if the last stop
   // was completed directly — that's accepted, not a bug).
   const chainItems = active
-    ? [
-        {
-          type: 'pickup',
-          label: 'Pickup',
-          location: active.pickupAddress,
-          done: active.status !== 'FOR_PICKUP',
-          photoUrl: active.pickupPhotoUrl,
-          actionable: active.status === 'FOR_PICKUP',
-        },
-        {
-          type: 'dropoff',
-          label: 'Dropoff',
-          location: active.deliveryAddress,
-          done: Boolean(active.dropoffCompletedAt),
-          photoUrl: active.dropoffPhotoUrl,
-          actionable: active.status === 'OUT_FOR_DELIVERY' && !active.dropoffCompletedAt,
-        },
-        ...active.stops.map((stop, index) => ({
-          type: 'stop',
-          index,
-          // "Dropoff N" naming, not "Stop N" -- every point after Pickup is
-          // conceptually another dropoff (Dropoff itself is implicitly
-          // "Dropoff 1"), keeps the chain's vocabulary consistent end to end
-          // (Delivery Chain list, confirm modal, Proof of Delivery labels).
-          label: `Dropoff ${index + 2}`,
-          location: stop.location,
-          done: Boolean(stop.completed),
-          photoUrl: stop.photoUrl,
-          actionable: active.status === 'OUT_FOR_DELIVERY' && !stop.completed,
-        })),
-      ]
-    : []
+    ? (() => {
+        const items = [
+          {
+            type: 'pickup',
+            label: 'Pickup',
+            location: active.pickupAddress,
+            done: active.status !== 'FOR_PICKUP',
+            photoUrl: active.pickupPhotoUrl,
+            actionable: active.status === 'FOR_PICKUP',
+          },
+          {
+            type: 'dropoff',
+            label: 'Dropoff',
+            location: active.deliveryAddress,
+            done: Boolean(active.dropoffCompletedAt),
+            photoUrl: active.dropoffPhotoUrl,
+            actionable: active.status === 'OUT_FOR_DELIVERY' && !active.dropoffCompletedAt,
+          },
+          ...active.stops.map((stop, index) => ({
+            type: 'stop',
+            index,
+            // "Dropoff N" naming, not "Stop N" -- every point after Pickup is
+            // conceptually another dropoff (Dropoff itself is implicitly
+            // "Dropoff 1"), keeps the chain's vocabulary consistent end to end
+            // (Delivery Chain list, confirm modal, Proof of Delivery labels).
+            label: `Dropoff ${index + 2}`,
+            location: stop.location,
+            done: Boolean(stop.completed),
+            photoUrl: stop.photoUrl,
+            actionable: active.status === 'OUT_FOR_DELIVERY' && !stop.completed,
+          })),
+        ]
 
-  const chainItemKey = (item) => (item.type === 'stop' ? `stop-${item.index}` : item.type)
+        // "Next" highlight (02B_MULTI_STOP_DELIVERIES.md's "Dynamic
+        // Nearest-Dropoff Ordering", 2026-08-14) -- purely informational,
+        // doesn't change which buttons are actionable above (completion
+        // order is still unenforced server-side). Pickup is always first
+        // when undone. After that, whichever remaining dropoff/stop is
+        // nearest the truck's live position gets the flag, matching what
+        // the driver's own nav is routing to; falls back to the first
+        // remaining item in chain order if no live position has arrived yet
+        // or none of the remaining items have parseable coordinates.
+        let nextKey = null
+        if (!items[0].done) {
+          nextKey = 'pickup'
+        } else {
+          const undone = items.slice(1).filter((it) => !it.done)
+          if (undone.length > 0) {
+            const rankable = undone
+              .map((it) => ({ item: it, coords: parseCoords(it.location) }))
+              .filter((c) => c.coords)
+            const nearest = livePosition && rankable.length > 0
+              ? rankable.reduce((best, c) => {
+                  const d = distanceMeters(livePosition.lat, livePosition.lng, c.coords.lat, c.coords.lng)
+                  return !best || d < best.distance ? { ...c, distance: d } : best
+                }, null)
+              : null
+            nextKey = chainItemKey(nearest ? nearest.item : undone[0])
+          }
+        }
+
+        return items.map((it) => ({ ...it, isNext: nextKey !== null && chainItemKey(it) === nextKey }))
+      })()
+    : []
 
   const openChainModal = (item) => {
     setConfirmingChainItem(item)
@@ -838,6 +890,15 @@ function HelperDeliveries() {
       }
 
       await loadDeliveries()
+      setChainSuccessNotice({
+        label:
+          confirmingChainItem.type === 'pickup'
+            ? 'Pickup'
+            : confirmingChainItem.type === 'dropoff'
+              ? 'Dropoff'
+              : `Dropoff ${confirmingChainItem.index + 2}`,
+        isFinal: Boolean(result.data?.isFinal),
+      })
       closeChainModal()
     } finally {
       setIsSubmittingChainAction(false)
@@ -979,6 +1040,51 @@ function HelperDeliveries() {
           const row = payload.new
           const newAlert = { id: String(row.id), type: row.event_type, duration: row.duration, time: row.created_at }
           setLiveAlerts((prev) => [newAlert, ...prev])
+        },
+      )
+      .subscribe()
+    return () => {
+      cancelled = true
+      supabase.removeChannel(channel)
+    }
+  }, [isMonitoring, active?.sessionId])
+
+  // Live truck position (05_GPS_PIPELINE.md), added 2026-08-14 to support the
+  // Delivery Chain list's "Next" highlight (02B_MULTI_STOP_DELIVERIES.md's
+  // "Dynamic Nearest-Dropoff Ordering") -- the Helper has no GPS device of
+  // their own, only the truck's Pi does, so this reads the same gps_logs
+  // stream the Driver's own live nav and the backend's proof-location check
+  // already use. Same seed-fetch + postgres_changes INSERT pattern as the
+  // alerts subscription above.
+  useEffect(() => {
+    if (!chainSuccessNotice) return undefined
+    const timer = setTimeout(() => setChainSuccessNotice(null), 5000)
+    return () => clearTimeout(timer)
+  }, [chainSuccessNotice])
+
+  useEffect(() => {
+    if (!isMonitoring || !active?.sessionId) return undefined
+    let cancelled = false
+
+    async function loadLatestPosition() {
+      const { data, error } = await supabase
+        .from('gps_logs')
+        .select('latitude, longitude')
+        .eq('session_id', active.sessionId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      if (cancelled || error || !data?.length) return
+      setLivePosition({ lat: data[0].latitude, lng: data[0].longitude })
+    }
+    loadLatestPosition()
+
+    const channel = supabase
+      .channel(`helper-gps-session-${active.sessionId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'gps_logs', filter: `session_id=eq.${active.sessionId}` },
+        (payload) => {
+          setLivePosition({ lat: payload.new.latitude, lng: payload.new.longitude })
         },
       )
       .subscribe()
@@ -1133,7 +1239,11 @@ function HelperDeliveries() {
                       <div
                         key={chainItemKey(item)}
                         className={`flex items-center gap-2.5 rounded-lg border p-2.5 ${
-                          item.done ? 'border-emerald-200 bg-emerald-50' : 'border-teal-200/70 bg-white'
+                          item.done
+                            ? 'border-emerald-200 bg-emerald-50'
+                            : item.isNext
+                              ? 'border-teal-400 bg-teal-50/70'
+                              : 'border-teal-200/70 bg-white'
                         }`}
                       >
                         <span
@@ -1144,7 +1254,14 @@ function HelperDeliveries() {
                           {item.done ? <Check className="h-3 w-3" strokeWidth={3} /> : idx + 1}
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+                          <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                            {item.label}
+                            {!item.done && item.isNext && (
+                              <span className="rounded-full bg-teal-900 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+                                Next
+                              </span>
+                            )}
+                          </p>
                           <p className="truncate text-xs font-medium text-slate-800">{item.location}</p>
                         </div>
                         {item.photoUrl && (
@@ -1415,6 +1532,41 @@ function HelperDeliveries() {
               >
                 {isSubmittingChainAction && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}
                 {isSubmittingChainAction ? 'Please wait…' : 'Complete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload confirmation -- floats above the page after a chain-item
+          photo submits successfully, and auto-dismisses after a few seconds.
+          Mirrors DriverDeliveries.jsx's completionNotice toast (same
+          pattern/z-index-above-the-confirm-modal reasoning). Added
+          2026-08-14 -- submitChainAction previously closed the modal
+          silently on success with no confirmation the upload went through. */}
+      {chainSuccessNotice && (
+        <div className="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center px-4">
+          <div className="pointer-events-auto w-full max-w-sm overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-2xl shadow-emerald-900/15">
+            <div className="flex items-center gap-3 bg-emerald-600 px-4 py-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20">
+                <CheckCircle2 className="h-5 w-5 text-white" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-white">
+                  {chainSuccessNotice.isFinal ? 'Delivery Completed' : `${chainSuccessNotice.label} Confirmed`}
+                </p>
+                <p className="truncate text-[11px] text-emerald-100">
+                  {chainSuccessNotice.isFinal
+                    ? 'Every item in the chain is done — the trip has been closed out.'
+                    : 'Photo uploaded successfully.'}
+                </p>
+              </div>
+              <button
+                onClick={() => setChainSuccessNotice(null)}
+                aria-label="Dismiss"
+                className="shrink-0 rounded-full p-1 text-emerald-100 transition hover:bg-white/20 hover:text-white"
+              >
+                <X className="h-4 w-4" />
               </button>
             </div>
           </div>

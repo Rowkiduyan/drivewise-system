@@ -1222,9 +1222,13 @@ Deno.serve(async (req) => {
       }
 
       const stops = Array.isArray(row.stops) ? row.stops : [];
-      // Dropoff is the final item in the chain only when nothing follows it
-      // — see 02B_MULTI_STOP_DELIVERIES.md's Pickup -> Dropoff -> Stops order.
-      const isFinal = stops.length === 0;
+      // Finality is "are all OTHER items in the chain already completed",
+      // not a fixed list position — the driver's nav now routes to whichever
+      // remaining dropoff is nearest (02B_MULTI_STOP_DELIVERIES.md's
+      // "Dynamic Nearest-Dropoff Ordering", 2026-08-14), so the Helper can
+      // genuinely complete Dropoff after some/all stops are already done.
+      // Vacuously true when stops is empty, same as before.
+      const isFinal = stops.every((s: { completed?: boolean }) => s?.completed);
 
       const updates: Record<string, unknown> = {
         dropoff_photo_url: upload.url,
@@ -1247,8 +1251,12 @@ Deno.serve(async (req) => {
       return json({ ok: true, isFinal, dropoffPhotoUrl: upload.url });
     }
 
-    // A customer-added stop (item 3+ of the chain) — final only when it's
-    // the last entry in the stops array.
+    // A customer-added stop (item 3+ of the chain) — final only when every
+    // OTHER item in the chain (dropoff + every other stop) is already
+    // completed, not when it's positionally last in the stops array (see
+    // 02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering",
+    // 2026-08-14 — the driver's nav no longer visits stops in array order,
+    // so array position no longer implies completion order either).
     if (action === "complete-stop") {
       const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
       const stopIndex = typeof body.stopIndex === "number" ? body.stopIndex : -1;
@@ -1265,7 +1273,7 @@ Deno.serve(async (req) => {
 
       const { data: row, error: rowError } = await adminClient
         .from("delivery_requests")
-        .select("id, status, assigned_helper_ids, stops")
+        .select("id, status, assigned_helper_ids, stops, dropoff_completed_at")
         .eq("id", deliveryId)
         .maybeSingle();
 
@@ -1303,9 +1311,11 @@ Deno.serve(async (req) => {
         photoUrl: upload.url,
       };
 
-      // The last entry in stops is the final item in the whole chain — see
-      // 02B_MULTI_STOP_DELIVERIES.md.
-      const isFinal = stopIndex === stops.length - 1;
+      // Final only when dropoff and every OTHER stop are already completed —
+      // see the note above `complete-stop` for why this is no longer a
+      // fixed list-position check.
+      const isFinal = Boolean(row.dropoff_completed_at) &&
+        stops.every((s: { completed?: boolean }, i: number) => i === stopIndex || s?.completed);
 
       const updates: Record<string, unknown> = { stops };
       if (isFinal) {
