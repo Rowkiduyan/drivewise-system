@@ -1,96 +1,23 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import SupLayout from "../layout/SupLayout.jsx";
-import { Search, ChevronRight } from "lucide-react";
-
-// ---------------------------------------------------------------------------
-// Dummy fleet roster — frontend only, no backend/API/database.
-// ---------------------------------------------------------------------------
-
-const DRIVER_FIRST_NAMES = [
-  "Juan", "Maria", "Jose", "Ana", "Pedro", "Rosa", "Carlos", "Elena",
-  "Miguel", "Carmen", "Antonio", "Teresa", "Francisco", "Luz", "Manuel",
-  "Corazon", "Ricardo", "Josefina", "Eduardo", "Remedios", "Fernando",
+import AdminLayout from "../layout/AdminLayout.jsx";
+// import AddTruckModal from "../components/AddTruckModal.jsx"; // Not used in read‑only view
+// Import only the icons that are still needed (Search, ChevronRight, RefreshCw)
+import { Search, ChevronRight, RefreshCw } from "lucide-react";
+// Truck type options are defined directly here as mockTrucks.js has been removed.
+const TRUCK_TYPES = [
+  "L300",
+  "AUV",
+  "1T DRY",
+  "2T DRY",
+  "1T REF",
+  "2T REF",
+  "4T DRY",
+  "4T REF",
 ];
+import { supabase } from "../lib/supabaseClient.js";
 
-const DRIVER_LAST_NAMES = [
-  "Santos", "Reyes", "Cruz", "Bautista", "Ocampo", "Garcia", "Torres",
-  "Flores", "Ramos", "Mendoza", "Castillo", "Villanueva", "Aquino",
-  "Del Rosario", "Gonzales", "Fernandez", "Domingo", "Pascual", "Salazar",
-];
-
-const DRIVER_MIDDLE_INITIALS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-
-const TRUCK_TYPES = ["L300", "AUV", "1T DRY", "2T DRY", "1T REF", "2T REF", "4T DRY", "4T REF"];
-
-const TRUCK_SPECS = [
-  { brand: "Mitsubishi", model: "L300 FB", truckType: "L300" },
-  { brand: "Toyota", model: "Innova", truckType: "AUV" },
-  { brand: "Isuzu", model: "NHR 55", truckType: "1T DRY" },
-  { brand: "Isuzu", model: "NKR 71", truckType: "2T DRY" },
-  { brand: "Fuso", model: "Canter FE71", truckType: "1T REF" },
-  { brand: "Hino", model: "300 Series 714", truckType: "2T REF" },
-  { brand: "Isuzu", model: "Forward FRR90", truckType: "4T DRY" },
-  { brand: "Hino", model: "500 Series FG8J", truckType: "4T REF" },
-];
-
-const PLATE_PREFIXES = ["NGP", "NDW", "NBW", "NGK", "NAP", "NDT", "NEQ", "NFY", "NHC", "NJB"];
-const STATUS_SEQUENCE = ["Available", "Available", "On Delivery", "On Delivery", "Maintenance", "Offline"];
-const ACQUIRE_MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
-function buildPlateNumber(i) {
-  const prefix = PLATE_PREFIXES[i % PLATE_PREFIXES.length];
-  const number = String(1000 + ((i * 137) % 9000));
-  return `${prefix} ${number}`;
-}
-
-function buildMockTrucks(count) {
-  return Array.from({ length: count }, (_, i) => {
-    const { brand, model, truckType } = TRUCK_SPECS[i % TRUCK_SPECS.length];
-    const status = STATUS_SEQUENCE[(i * 11) % STATUS_SEQUENCE.length];
-    const deviceStatus = i % 7 === 0 ? "Offline" : "Online";
-    const hasDriver = status === "Available" || status === "On Delivery";
-    const driverFirst = DRIVER_FIRST_NAMES[i % DRIVER_FIRST_NAMES.length];
-    const driverLast = DRIVER_LAST_NAMES[(i * 7 + 3) % DRIVER_LAST_NAMES.length];
-    const driverMiddle = DRIVER_MIDDLE_INITIALS[(i * 3) % DRIVER_MIDDLE_INITIALS.length];
-    const assignedDriver = hasDriver ? `${driverLast}, ${driverFirst} ${driverMiddle}.` : null;
-
-    const plateNumber = buildPlateNumber(i);
-    const assignedDeviceNo = `DWD-${String(1001 + i).padStart(4, "0")}`;
-    const yearModel = 2016 + (i % 9);
-    const odometer = 12000 + ((i * 3187) % 148000);
-    const fuelLevel = 20 + ((i * 13) % 80);
-    const dateAcquired = `${ACQUIRE_MONTHS[(i * 5) % ACQUIRE_MONTHS.length]} ${2026 - (i % 6)}`;
-
-    return {
-      id: `truck-${i + 1}`,
-      plateNumber,
-      brand,
-      model,
-      truckType,
-      status,
-      deviceStatus,
-      assignedDriver,
-      assignedDeviceNo,
-      yearModel,
-      odometer,
-      fuelLevel,
-      dateAcquired,
-    };
-  });
-}
-
-const MOCK_TRUCKS = buildMockTrucks(48);
-
-const STATUS_BADGE_CLASSES = {
-  Available: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  "On Delivery": "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
-  Maintenance: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
-  Offline: "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
-};
+// STATUS_BADGE_CLASSES removed as status field is no longer used.
 
 const TRUCK_TYPE_TAG_CLASSES = {
   L300: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
@@ -103,23 +30,14 @@ const TRUCK_TYPE_TAG_CLASSES = {
   "4T REF": "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200",
 };
 
-function StatusBadge({ status }) {
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${
-        STATUS_BADGE_CLASSES[status] || STATUS_BADGE_CLASSES.Offline
-      }`}
-    >
-      {status}
-    </span>
-  );
-}
+// StatusBadge component removed as status field is no longer used.
 
 function TypeTag({ type }) {
   return (
     <span
       className={`inline-flex min-w-[78px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.01em] ${
-        TRUCK_TYPE_TAG_CLASSES[type] || "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200"
+        TRUCK_TYPE_TAG_CLASSES[type] ||
+        "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200"
       }`}
     >
       {type}
@@ -127,29 +45,15 @@ function TypeTag({ type }) {
   );
 }
 
-// Device Status — GPS/dashcam connectivity for the truck's onboard unit.
-// Color-coded the same way the crew list flags at-risk drivers, so
-// supervisors can spot disconnected hardware at a glance.
-function DeviceStatusBadge({ status }) {
-  const isOnline = status === "Online";
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${
-        isOnline
-          ? "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200"
-          : "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200"
-      }`}
-    >
-      {status}
-    </span>
-  );
-}
-
-// Filter dropdown — used for Status, Type, and Client. A native <select>
-// scales to any number of options without wrapping or crowding the toolbar
-// (unlike the pill/tab groups it replaces), and gets keyboard navigation and
-// a native mobile picker for free, so no custom popover/menu is needed.
-function FilterSelect({ id, label, value, onChange, options, counts, allLabel }) {
+function FilterSelect({
+  id,
+  label,
+  value,
+  onChange,
+  options,
+  counts,
+  allLabel,
+}) {
   return (
     <>
       <label className="sr-only" htmlFor={id}>
@@ -161,9 +65,7 @@ function FilterSelect({ id, label, value, onChange, options, counts, allLabel })
         onChange={(event) => onChange(event.target.value)}
         className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
       >
-        <option value="All">
-          {allLabel}
-        </option>
+        <option value="All">{allLabel}</option>
         {options.map((option) => (
           <option key={option} value={option}>
             {option} ({counts[option] ?? 0})
@@ -175,7 +77,7 @@ function FilterSelect({ id, label, value, onChange, options, counts, allLabel })
 }
 
 function PaginationBar({ page, setPage, totalPages }) {
-  if (totalPages <= 1) return null;
+  // Always render the pagination bar to provide a consistent UI, even when there is only a single page.
   return (
     <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
       <p className="text-sm text-slate-500">
@@ -188,14 +90,38 @@ function PaginationBar({ page, setPage, totalPages }) {
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
           title="First page"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
+            />
+          </svg>
         </button>
         <button
           onClick={() => setPage((p) => Math.max(1, p - 1))}
           disabled={page === 1}
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M15 19l-7-7 7-7"
+            />
+          </svg>
         </button>
         <div className="flex items-center gap-1 px-1">
           {(() => {
@@ -204,27 +130,37 @@ function PaginationBar({ page, setPage, totalPages }) {
               for (let i = 1; i <= totalPages; i++) pages.push(i);
             } else {
               pages.push(1);
-              if (page > 3) pages.push('...');
-              for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i);
-              if (page < totalPages - 2) pages.push('...');
+              if (page > 3) pages.push("...");
+              for (
+                let i = Math.max(2, page - 1);
+                i <= Math.min(totalPages - 1, page + 1);
+                i++
+              )
+                pages.push(i);
+              if (page < totalPages - 2) pages.push("...");
               pages.push(totalPages);
             }
             return pages.map((num, idx) =>
-              num === '...' ? (
-                <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
+              num === "..." ? (
+                <span
+                  key={`ellipsis-${idx}`}
+                  className="flex h-8 w-8 items-center justify-center text-sm text-slate-400"
+                >
+                  ...
+                </span>
               ) : (
                 <button
                   key={num}
                   onClick={() => setPage(num)}
                   className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
                     num === page
-                      ? 'bg-slate-900 text-white shadow-sm'
-                      : 'text-slate-600 hover:bg-slate-100'
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-600 hover:bg-slate-100"
                   }`}
                 >
                   {num}
                 </button>
-              )
+              ),
             );
           })()}
         </div>
@@ -233,7 +169,19 @@ function PaginationBar({ page, setPage, totalPages }) {
           disabled={page === totalPages}
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 5l7 7-7 7"
+            />
+          </svg>
         </button>
         <button
           onClick={() => setPage(totalPages)}
@@ -241,93 +189,189 @@ function PaginationBar({ page, setPage, totalPages }) {
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
           title="Last page"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M13 5l7 7-7 7M5 5l7 7-7 7"
+            />
+          </svg>
         </button>
       </div>
     </div>
   );
 }
 
-const STATUS_OPTIONS = ["Available", "On Delivery", "Maintenance", "Offline"];
 const TYPE_OPTIONS = TRUCK_TYPES;
-const STATUS_SORT_SEQUENCE = ["On Delivery", "Available", "Maintenance", "Offline"];
-const STATUS_SORT_ORDER = STATUS_SORT_SEQUENCE.reduce((order, status, index) => {
-  order[status] = index;
-  return order;
-}, {});
 const TRUCK_TYPE_ORDER = TRUCK_TYPES.reduce((order, type, index) => {
   order[type] = index;
   return order;
 }, {});
 const PAGE_SIZE = 10;
 
-function SupTrucks() {
+function AdminTrucks() {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedStatus, setSelectedStatus] = useState("All");
   const [selectedType, setSelectedType] = useState("All");
+  const [selectedStatus, setSelectedStatus] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
+  // const [isAddModalOpen, setIsAddModalOpen] = useState(false); // Add modal disabled for supervisor view
+  // const [isEditModalOpen, setIsEditModalOpen] = useState(false); // Edit modal disabled
+  // const [truckToEdit, setTruckToEdit] = useState(null); // Edit modal data placeholder
+  // Load trucks from Supabase on component mount. Fallback to empty array if fetch fails.
+  const [trucks, setTrucks] = useState([]);
+  // Toast state: message and type ('success' | 'error')
+  const [toast, setToast] = useState(null);
 
-  const statusCounts = useMemo(
-    () => ({
-      All: MOCK_TRUCKS.length,
-      Available: MOCK_TRUCKS.filter((truck) => truck.status === "Available").length,
-      "On Delivery": MOCK_TRUCKS.filter((truck) => truck.status === "On Delivery").length,
-      Maintenance: MOCK_TRUCKS.filter((truck) => truck.status === "Maintenance").length,
-      Offline: MOCK_TRUCKS.filter((truck) => truck.status === "Offline").length,
-    }),
-    [],
-  );
+  // Delete modal state
+  // const [truckToDelete, setTruckToDelete] = useState(null); // Delete confirmation disabled
+  // const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
-  const typeCounts = useMemo(() => {
-    const counts = { All: MOCK_TRUCKS.length };
-    TYPE_OPTIONS.forEach((type) => {
-      counts[type] = MOCK_TRUCKS.filter((truck) => truck.truckType === type).length;
-    });
-    return counts;
+  // Loading state for initial data fetch
+  const [loading, setLoading] = useState(true);
+
+  // Devices list for mapping assigned device IDs to trucks
+  const [devices, setDevices] = useState([]);
+
+  // Persist trucks to localStorage for offline fallback (optional)
+  useEffect(() => {
+    localStorage.setItem("adminTrucks", JSON.stringify(trucks));
+  }, [trucks]);
+
+  // Load trucks from localStorage on mount as an immediate fallback before the async fetch.
+  useEffect(() => {
+    const stored = localStorage.getItem("adminTrucks");
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setTrucks(parsed);
+          setLoading(false);
+        }
+      } catch (e) {
+        console.error("Failed to parse stored trucks", e);
+      }
+    }
   }, []);
 
+  // Fetch initial truck data from Supabase
+  useEffect(() => {
+    async function loadTrucks() {
+      const { data, error } = await supabase.from("trucks").select("*");
+      if (error) {
+        console.error("Failed to fetch trucks from Supabase:", error);
+        // No fallback – keep current state (empty) if fetch fails.
+        setLoading(false);
+        return;
+      }
+      setTrucks(data);
+      setLoading(false);
+    }
+    loadTrucks();
+  }, []);
+
+  // Fetch devices for assignment lookup
+  useEffect(() => {
+    async function loadDevices() {
+      const { data, error } = await supabase
+        .from("devices")
+        .select("device_id, plate_number")
+        .order("device_id", { ascending: true });
+      if (error) {
+        console.error("Failed to fetch devices", error);
+        return;
+      }
+      setDevices(data || []);
+    }
+    loadDevices();
+  }, []);
+
+  const typeCounts = useMemo(() => {
+    const counts = { All: trucks.length };
+    TYPE_OPTIONS.forEach((type) => {
+      counts[type] = trucks.filter((t) => t.truck_type === type).length;
+    });
+    return counts;
+  }, [trucks]);
+
+  // Compute status counts for the status filter dropdown.
+  const statusCounts = useMemo(() => {
+    const counts = { All: trucks.length };
+    trucks.forEach((t) => {
+      const status = t.status ?? "-";
+      counts[status] = (counts[status] || 0) + 1;
+    });
+    return counts;
+  }, [trucks]);
+
+  // Filter trucks based on search term and selected type, then sort by type order and plate number.
   const filteredTrucks = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
+    return trucks
+      .filter((truck) => {
+        const matchesSearch = !query
+          ? true
+          : [
+              truck.plate_number,
+              truck.brand,
+              truck.model,
+              truck.truck_type,
+              truck.device_id,
+              truck.assignedDriver || "",
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(query);
 
-    return MOCK_TRUCKS.filter((truck) => {
-      const matchesSearch = !query
-        ? true
-        : [
-            truck.plateNumber,
-            truck.brand,
-            truck.model,
-            truck.truckType,
-            truck.status,
-            truck.assignedDeviceNo,
-            truck.assignedDriver || "",
-          ]
-            .join(" ")
-            .toLowerCase()
-            .includes(query);
+        const matchesType =
+          selectedType === "All" || truck.truck_type === selectedType;
+        const matchesStatus =
+          selectedStatus === "All" || (truck.status ?? "-") === selectedStatus;
 
-      const matchesStatus = selectedStatus === "All" || truck.status === selectedStatus;
-      const matchesType = selectedType === "All" || truck.truckType === selectedType;
+        return matchesSearch && matchesType && matchesStatus;
+      })
+      .sort((leftTruck, rightTruck) => {
+        // First, sort by creation date (most recent first).
+        const leftCreated = new Date(leftTruck.created_at).getTime();
+        const rightCreated = new Date(rightTruck.created_at).getTime();
+        if (leftCreated !== rightCreated) return rightCreated - leftCreated;
 
-      return matchesSearch && matchesStatus && matchesType;
-    }).sort((leftTruck, rightTruck) => {
-      const leftStatusOrder = STATUS_SORT_ORDER[leftTruck.status] ?? Number.MAX_SAFE_INTEGER;
-      const rightStatusOrder = STATUS_SORT_ORDER[rightTruck.status] ?? Number.MAX_SAFE_INTEGER;
+        // If creation dates are equal, fall back to type order.
+        const leftOrder =
+          TRUCK_TYPE_ORDER[leftTruck.truck_type] ?? Number.MAX_SAFE_INTEGER;
+        const rightOrder =
+          TRUCK_TYPE_ORDER[rightTruck.truck_type] ?? Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
 
-      if (leftStatusOrder !== rightStatusOrder) {
-        return leftStatusOrder - rightStatusOrder;
-      }
+        // Finally, sort by plate number for deterministic ordering.
+        return leftTruck.plate_number.localeCompare(rightTruck.plate_number);
+      });
+  }, [searchTerm, selectedType, selectedStatus, trucks]);
+  // Handler for adding a new truck from the modal
+  // Add a new truck entry – now persists to Supabase and updates local state.
+  // Insert a new truck via Supabase and update UI state.
+  // const handleAddTruck = async (formData) => {
+  //   // Add‑truck functionality disabled for supervisor view
+  // };
 
-      const leftTypeOrder = TRUCK_TYPE_ORDER[leftTruck.truckType] ?? Number.MAX_SAFE_INTEGER;
-      const rightTypeOrder = TRUCK_TYPE_ORDER[rightTruck.truckType] ?? Number.MAX_SAFE_INTEGER;
+  // Refresh trucks list from Supabase – used after edit to reflect changes.
+  const refreshTrucks = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from("trucks").select("*");
+    if (!error && data) setTrucks(data);
+    setLoading(false);
+  };
 
-      if (leftTypeOrder !== rightTypeOrder) {
-        return leftTypeOrder - rightTypeOrder;
-      }
-
-      return leftTruck.plateNumber.localeCompare(rightTruck.plateNumber);
-    });
-  }, [searchTerm, selectedStatus, selectedType]);
+  // Edit truck handler – opens edit modal with selected truck data
+  // const handleEditTruck = (truck) => {
+  //   // Edit functionality disabled for supervisor view
+  // };
 
   const totalPages = Math.max(1, Math.ceil(filteredTrucks.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
@@ -339,28 +383,41 @@ function SupTrucks() {
     setCurrentPage(1);
   };
 
-  const updateStatus = (value) => {
-    setSelectedStatus(value);
-    setCurrentPage(1);
-  };
+  // Status update removed as status field is no longer used.
 
   const updateType = (value) => {
     setSelectedType(value);
     setCurrentPage(1);
   };
 
+  // Update selected status for the status filter
+  const updateStatus = (value) => {
+    setSelectedStatus(value);
+    setCurrentPage(1);
+  };
+
+  // Navigate to the supervisor‑specific truck profile page
   const openProfile = (truck) => {
     navigate("/supervisor/trucks/profile", { state: { truck } });
   };
 
+  // Delete handler
+  // const handleDeleteTruck = async (truck) => {
+  //   // Delete functionality disabled for supervisor view
+  // };
+
+  // Auto‑clear toast after 3 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
   return (
-    <SupLayout title="Trucks" background={null} bg="bg-[#F6F7FB]">
+    <AdminLayout title="Truck Management" background={null} bg="bg-[#F6F7FB]">
       <div className="flex h-full min-h-0 flex-col gap-3">
-        {/* Search and Filter Toolbar — search and filters share one row, with
-            filters right-aligned. This is the common modern dashboard layout
-            (e.g. Linear, Notion tables): the search stays the primary, most
-            prominent control while filters sit as a secondary cluster the
-            eye reaches after. Wraps to a stacked layout on small screens. */}
+        {/* Toolbar */}
         <section className="shrink-0 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             {/* Search */}
@@ -373,48 +430,86 @@ function SupTrucks() {
                 id="truck-search"
                 type="text"
                 value={searchTerm}
-                onChange={(event) => updateSearch(event.target.value)}
+                onChange={(e) => updateSearch(e.target.value)}
                 placeholder="Search by plate, brand, model, type, or device no..."
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
               />
             </div>
-
-            {/* Filters — one dropdown per dimension, all styled identically so
-                the set reads as one system and scales cleanly if more filters
-                are added later. */}
+            {/* Filters */}
             <div className="flex flex-wrap items-center gap-2 sm:flex-none sm:justify-end">
+              {/* Status filter */}
               <FilterSelect
                 id="status-filter"
                 label="Status"
                 value={selectedStatus}
                 onChange={updateStatus}
-                options={STATUS_OPTIONS}
+                // Display "On Delivery" for the "Active" status while keeping the underlying value unchanged.
+                options={[
+                  "Available",
+                  "On Delivery",
+                  "Inactive",
+                  "Maintenance",
+                ]}
                 counts={statusCounts}
                 allLabel="Status"
               />
+              {/* Truck Type filter */}
               <FilterSelect
                 id="type-filter"
-                label="Type"
+                label="Truck Type"
                 value={selectedType}
                 onChange={updateType}
                 options={TYPE_OPTIONS}
                 counts={typeCounts}
-                allLabel="Type"
+                allLabel="Truck Type"
               />
+              {/* Manual refresh button (icon) */}
+              <button
+                onClick={refreshTrucks}
+                className="rounded-full bg-gray-200 p-2 hover:bg-gray-300"
+                title="Refresh data"
+              >
+                <RefreshCw className="h-4 w-4 text-slate-800" />
+              </button>
             </div>
+            {/* Add Truck button removed for supervisor view */}
           </div>
         </section>
+        {/* Toast message with slide‑down animation */}
+        {toast && (
+          <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+            <p
+              className={`
+                  px-4 py-2 rounded-md shadow-md text-sm font-medium
+                  transition-transform duration-300 ease-out
+                  ${
+                    toast.type === "success"
+                      ? "bg-green-100 text-green-800 border border-green-300"
+                      : "bg-red-100 text-red-800 border border-red-300"
+                  }
+                  transform translate-y-0 opacity-100
+                `}
+            >
+              {toast.message}
+            </p>
+          </div>
+        )}
 
         {/* Truck List */}
         <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex h-full min-h-0 flex-col">
-            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto">
-              {filteredTrucks.length === 0 ? (
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+              {loading ? (
                 <div className="flex h-full items-center justify-center px-4 py-6 text-center text-sm text-slate-500">
-                  No truck records match your search. Try adjusting your filters.
+                  Loading trucks…
+                </div>
+              ) : filteredTrucks.length === 0 ? (
+                <div className="flex h-full items-center justify-center px-4 py-6 text-center text-sm text-slate-500">
+                  No truck records match your search. Try adjusting your
+                  filters.
                 </div>
               ) : (
-                <table className="w-full min-w-[1080px] text-left text-sm">
+                <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
@@ -430,17 +525,12 @@ function SupTrucks() {
                         Truck Type
                       </th>
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-                        Device No.
-                      </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-                        Device Status
-                      </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Status
                       </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 py-3 pl-2 pr-5 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-                        &nbsp;
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Assigned Device
                       </th>
+                      {/* Actions column header removed for supervisor view */}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -453,9 +543,11 @@ function SupTrucks() {
                         <td className="px-5 py-2.5">
                           <div className="min-w-0">
                             <p className="truncate text-sm font-semibold text-slate-900">
-                              {truck.plateNumber}
+                              {truck.plate_number}
                             </p>
-                            <p className="truncate text-xs text-slate-500">{truck.yearModel}</p>
+                            <p className="truncate text-xs text-slate-500">
+                              {truck.year_model}
+                            </p>
                           </div>
                         </td>
                         <td className="px-5 py-2.5">
@@ -465,19 +557,25 @@ function SupTrucks() {
                           {truck.model}
                         </td>
                         <td className="px-5 py-2.5">
-                          <TypeTag type={truck.truckType} />
+                          <TypeTag type={truck.truck_type} />
+                        </td>
+                        {/* Device Status column removed */}
+                        {/* Status column */}
+                        <td className="px-5 py-2.5 text-slate-700">
+                          {truck.status ?? "-"}
                         </td>
                         <td className="px-5 py-2.5 text-slate-700">
-                          {truck.assignedDeviceNo}
+                          {(() => {
+                            const dev = devices.find(
+                              (d) => d.plate_number === truck.plate_number,
+                            );
+                            return dev?.device_id ?? "NONE";
+                          })()}
                         </td>
-                        <td className="px-5 py-2.5">
-                          <DeviceStatusBadge status={truck.deviceStatus} />
-                        </td>
-                        <td className="px-5 py-2.5">
-                          <StatusBadge status={truck.status} />
-                        </td>
-                        <td className="py-2.5 pl-2 pr-5 text-right">
-                          <ChevronRight className="ml-auto h-4 w-4 text-slate-400" />
+                        {/* Action buttons (Edit/Delete) removed for supervisor view */}
+                        <td className="py-2.5 pl-2 pr-5 flex items-center justify-center space-x-2">
+                          {/* Navigation chevron remains */}
+                          <ChevronRight className="ml-1 h-4 w-4 text-slate-400" />
                         </td>
                       </tr>
                     ))}
@@ -485,14 +583,19 @@ function SupTrucks() {
                 </table>
               )}
             </div>
-
             {/* Pagination */}
-            <PaginationBar page={safePage} setPage={setCurrentPage} totalPages={totalPages} />
+            <PaginationBar
+              page={safePage}
+              setPage={setCurrentPage}
+              totalPages={totalPages}
+            />
           </div>
         </div>
       </div>
-    </SupLayout>
+      {/* Add Truck Modal */}
+      {/* Modals disabled for supervisor view */}
+    </AdminLayout>
   );
 }
 
-export default SupTrucks;
+export default AdminTrucks;
