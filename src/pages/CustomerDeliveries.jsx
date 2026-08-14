@@ -30,14 +30,15 @@ function formatDisplayDateTime(dateStr, timeStr) {
   return `${monthLabel} ${day}, ${year}, ${hour12}:${String(minute).padStart(2, '0')} ${period}`
 }
 
-// Today's date as "YYYY-MM-DD" in Asia/Manila (see lib/manilaTime.js).
-// Pickup dates are calendar dates (e.g. "2026-08-07"), so comparisons like
-// "is the pickup still in the future?" must use the Manila-local date --
-// Date.toISOString() (UTC) would shift the comparison a day ahead during
-// the Manila morning. Previously used the *browser's* local date instead
-// of Manila's explicitly.
-function localTodayISO() {
-  return manilaTodayISO()
+// Whole calendar days between Manila-local "today" and a delivery's
+// pickup_date (both "YYYY-MM-DD"), independent of time-of-day -- pickup
+// dates are calendar dates, not timestamps, and Date.toISOString() (UTC)
+// would shift "today" a day early/late during the Manila morning if used
+// directly instead of manilaTodayISO().
+function daysUntilPickup(pickupDate) {
+  if (!pickupDate) return null
+  const msPerDay = 24 * 60 * 60 * 1000
+  return Math.round((new Date(`${pickupDate}T00:00:00`) - new Date(`${manilaTodayISO()}T00:00:00`)) / msPerDay)
 }
 
 // Status configuration
@@ -52,8 +53,16 @@ const statusConfig = {
 }
 
 // Statuses where cancellation is still possible — once a delivery is out for
-// delivery, delivered, completed, or already cancelled, there's nothing left to cancel.
+// delivery, delivered, completed, or already cancelled, there's nothing left
+// to cancel. Combined with CANCEL_MIN_DAYS_BEFORE_PICKUP below (the actual
+// cutoff): a delivery must be at least that many days out from its scheduled
+// pickup date, regardless of whether a crew has already been assigned.
+// Instant, no supervisor approval step -- an earlier "requires approval once
+// a crew is assigned" path existed but only updated local state, never
+// persisted anywhere and had no Supervisor UI to act on it, so it never
+// actually worked; this replaces it with a single date-based rule.
 const CANCELLABLE_STATUSES = ['PENDING_REQUEST', 'PROCESSING', 'FOR_PICKUP']
+const CANCEL_MIN_DAYS_BEFORE_PICKUP = 2
 
 // Map the database's status vocabulary to the customer page's labels. The
 // customer page has its own set (PROCESSING, FOR_PICKUP, OUT_FOR_DELIVERY,
@@ -631,7 +640,7 @@ function CompletedSummary({ request }) {
 // "Confirmed Pickup Schedule" / "Live Tracking" cards on the detail page.
 function RealTimeMonitoringCard({ request, status }) {
   const isOutForDelivery = request.status === 'OUT_FOR_DELIVERY' && request.liveTracking
-  const mapSrc = isOutForDelivery ? toGoogleMapEmbed(request.liveTracking) : toGoogleMapEmbed(request.pickupLocation)
+  const mapSrc = isOutForDelivery ? toGoogleMapEmbed(request.liveTracking) : toGoogleMapEmbed(request.pickupCoords || request.pickupLocation)
   const driverName = request.crew?.driver?.name
   const truck = request.crew?.truck
 
@@ -916,13 +925,12 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
   // it once that interactive state has resolved (approved, rejected, or a later stage).
   const showQuotationSummary = quotationAmount && request.status !== 'PROCESSING'
 
-  // A crew/truck is already assigned once the request reaches FOR_PICKUP — from that
-  // point on, cancelling needs the supervisor to sign off rather than taking effect right away.
+  // A crew/truck is already assigned once the request reaches FOR_PICKUP --
+  // still shown its own "Delivery Team" card below, unrelated to cancellation.
   const hasAssignedCrew = Boolean(request.crew)
-  const today = localTodayISO()
-  const isBeforePickup = !request.pickupDate || request.pickupDate > today
-  const cancellationPending = request.cancellationRequested && request.status !== 'CANCELLED'
-  const isCancellable = CANCELLABLE_STATUSES.includes(request.status) && isBeforePickup && !cancellationPending
+  const pickupDaysAway = daysUntilPickup(request.pickupDate)
+  const isCancellable = CANCELLABLE_STATUSES.includes(request.status)
+    && pickupDaysAway != null && pickupDaysAway >= CANCEL_MIN_DAYS_BEFORE_PICKUP
   const isCancelReasonValid = cancelReason && (cancelReason !== 'Other' || cancelReasonOther.trim())
   const isIssueReasonValid = issueReason && (issueReason !== 'Other' || issueDescription.trim())
 
@@ -982,24 +990,18 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
     if (!isCancelReasonValid) return
     const reason = cancelReason === 'Other' ? cancelReasonOther.trim() : cancelReason
 
-    if (hasAssignedCrew) {
-      onUpdate(request.id, {
-        cancellationRequested: true,
-        cancellationReason: reason,
-        cancellationRequestedAt: new Date().toISOString()
-      })
-    } else {
-      const cancelledAt = new Date().toISOString()
-      const cancelledFromStatus = request.dbStatus || request.status
-      onUpdate(request.id, {
-        status: 'CANCELLED',
-        cancelReason: reason,
-        cancelledBy: 'customer',
-        cancelledAt,
-        cancelledFromStatus
-      })
-      onCancellation?.(request.id, { cancelledBy: 'customer', cancelReason: reason, cancelledAt, cancelledFromStatus })
-    }
+    // Instant, no supervisor approval step -- isCancellable already confirms
+    // pickup is still at least CANCEL_MIN_DAYS_BEFORE_PICKUP days out.
+    const cancelledAt = new Date().toISOString()
+    const cancelledFromStatus = request.dbStatus || request.status
+    onUpdate(request.id, {
+      status: 'CANCELLED',
+      cancelReason: reason,
+      cancelledBy: 'customer',
+      cancelledAt,
+      cancelledFromStatus
+    })
+    onCancellation?.(request.id, { cancelledBy: 'customer', cancelReason: reason, cancelledAt, cancelledFromStatus })
 
     setShowCancelForm(false)
     setCancelReason('')
@@ -1064,16 +1066,6 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
         </div>
       </div>
 
-      {cancellationPending && (
-        <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-2.5 md:gap-3 md:p-4 md:shadow-sm">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 md:h-5 md:w-5" />
-          <div>
-            <h3 className="text-xs font-semibold text-amber-800 md:text-sm">Cancellation Request Pending</h3>
-            <p className="mt-1 text-xs text-amber-800 md:text-sm">Reason: {request.cancellationReason}</p>
-            <p className="mt-1 text-[10px] text-amber-600 md:text-xs">A crew is already assigned to this delivery, so a supervisor needs to approve the cancellation. The delivery will continue as scheduled until then.</p>
-          </div>
-        </div>
-      )}
 
       {request.status === 'CANCELLED' && request.cancelReason && (
         <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 p-2.5 md:gap-3 md:p-4 md:shadow-sm">
@@ -1452,7 +1444,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                       </div>
                       <iframe
                         title="Pickup - Google Map"
-                        src={toGoogleMapEmbed(request.pickupLocation)}
+                        src={toGoogleMapEmbed(request.pickupCoords || request.pickupLocation)}
                         className="h-36 w-full rounded-lg border border-slate-200"
                         loading="lazy"
                         referrerPolicy="no-referrer-when-downgrade"
@@ -1470,7 +1462,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                       </div>
                       <iframe
                         title="Drop-off - Google Map"
-                        src={toGoogleMapEmbed(request.dropoffLocation)}
+                        src={toGoogleMapEmbed(request.dropoffCoords || request.dropoffLocation)}
                         className="h-36 w-full rounded-lg border border-slate-200"
                         loading="lazy"
                         referrerPolicy="no-referrer-when-downgrade"
@@ -2100,9 +2092,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
         <div className="rounded-2xl border border-red-200 bg-red-50 p-2.5 md:p-4 md:shadow-sm">
           <h3 className="text-xs font-semibold text-red-800 md:text-sm">Cancel This Delivery</h3>
           <p className="mt-1 text-[11px] text-red-700 leading-relaxed md:text-xs">
-            {hasAssignedCrew
-              ? 'A crew has already been assigned to this delivery. Submitting this will send a cancellation request to the supervisor for approval — it will not cancel immediately.'
-              : 'This request has not yet been assigned a crew, so it will be cancelled right away.'}
+            This will cancel the delivery request right away — no need to wait for approval.
           </p>
           <div className="mt-2 space-y-2 md:mt-3 md:space-y-3">
             <div>
@@ -2138,7 +2128,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                 disabled={!isCancelReasonValid}
                 className="flex-1 rounded-xl bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700 active:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50 md:px-4 md:py-2.5 md:text-sm"
               >
-                {hasAssignedCrew ? 'Submit Cancellation Request' : 'Confirm Cancellation'}
+                Confirm Cancellation
               </button>
               <button
                 onClick={() => { setShowCancelForm(false); setCancelReason(''); setCancelReasonOther('') }}
@@ -2157,11 +2147,8 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
             onClick={() => setShowCancelForm(true)}
             className="w-full rounded-xl border border-red-300 px-3 py-2 text-xs font-medium text-red-600 transition hover:bg-red-50 active:bg-red-100 md:w-fit md:px-4 md:py-2.5 md:text-sm"
           >
-            {hasAssignedCrew ? 'Request Cancellation' : 'Cancel Delivery'}
+            Cancel Delivery
           </button>
-          {hasAssignedCrew && (
-            <p className="text-[10px] text-slate-500 md:text-[11px]">A crew is already assigned — this needs supervisor approval before it takes effect.</p>
-          )}
         </div>
       )}
 
@@ -2282,8 +2269,6 @@ function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue,
     ? (typeof request.quotation === 'object' ? request.quotation.amount : request.quotation)
     : null
 
-  const cancellationPending = request.cancellationRequested && request.status !== 'CANCELLED'
-
   // One line that tracks wherever the price currently stands in the
   // negotiation: the customer's original budget range until a supervisor
   // quotes it, the quote itself while it's pending the customer's response
@@ -2342,22 +2327,17 @@ function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue,
               Drop-off &middot; {formatDisplayDateTime(request.dropoffDate, request.dropoffTime)}
             </p>
 
-            {(quotationInfo || cancellationPending) && (
+            {quotationInfo && (
               <div className="mt-2 space-y-1 text-xs">
-                {quotationInfo && (
-                  <div className="flex items-center gap-1.5">
-                    {needsAction && (
-                      <span className="relative flex h-1.5 w-1.5 shrink-0">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-red-500" />
-                      </span>
-                    )}
-                    <span className={`whitespace-nowrap text-[10px] font-medium ${quotationInfo.tone}`}>{quotationInfo.text}</span>
-                  </div>
-                )}
-                {cancellationPending && (
-                  <p className="font-medium text-amber-600">Cancellation pending supervisor approval</p>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {needsAction && (
+                    <span className="relative flex h-1.5 w-1.5 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-red-500" />
+                    </span>
+                  )}
+                  <span className={`whitespace-nowrap text-[10px] font-medium ${quotationInfo.tone}`}>{quotationInfo.text}</span>
+                </div>
               </div>
             )}
           </div>
@@ -2448,14 +2428,6 @@ function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue,
         <div className="flex justify-end">
           <ChevronRight className="h-4 w-4 text-slate-400" />
         </div>
-
-        {cancellationPending && (
-          <div className="md:col-span-full" onClick={(e) => e.stopPropagation()}>
-            <div className="mt-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs">
-              <span className="font-medium text-amber-700">Cancellation request pending supervisor approval</span>
-            </div>
-          </div>
-        )}
       </article>
     </>
   )
@@ -2516,7 +2488,9 @@ function mapDeliveryRow(row) {
     dropoffDate: row.dropoff_date,
     dropoffTime: row.dropoff_time,
     pickupLocation: row.pickup_location,
+    pickupCoords: (row.pickup_lat != null && row.pickup_lng != null) ? { lat: row.pickup_lat, lng: row.pickup_lng } : null,
     dropoffLocation: row.dropoff_location,
+    dropoffCoords: (row.dropoff_lat != null && row.dropoff_lng != null) ? { lat: row.dropoff_lat, lng: row.dropoff_lng } : null,
     truckType: row.truck_type,
     itemType: row.item_type,
     otherItemType: row.other_item_type || '',

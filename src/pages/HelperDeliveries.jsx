@@ -199,7 +199,7 @@ function localTodayISO() {
 // rather than a street address — parse those back into coords for the maps.
 function parseCoords(value) {
   if (!value) return null
-  const m = String(value).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/)
+  const m = String(value).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/)
   if (!m) return null
   const lat = parseFloat(m[1])
   const lng = parseFloat(m[2])
@@ -269,8 +269,8 @@ function mapDelivery(d) {
         ? { plateNumber: str(d.truck.plateNumber), truckType: str(d.truck.truckType), capacity: str(d.truck.capacity || '') }
         : { plateNumber: '—', truckType: '', capacity: '' },
     },
-    pickupCoords: parseCoords(d.pickupAddress),
-    destinationCoords: parseCoords(d.deliveryAddress),
+    pickupCoords: (d.pickupLat != null && d.pickupLng != null) ? { lat: d.pickupLat, lng: d.pickupLng } : parseCoords(d.pickupAddress),
+    destinationCoords: (d.dropoffLat != null && d.dropoffLng != null) ? { lat: d.dropoffLat, lng: d.dropoffLng } : parseCoords(d.deliveryAddress),
   }
 }
 

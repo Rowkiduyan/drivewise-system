@@ -199,6 +199,7 @@ function getTotalDays(r) {
 }
 function getPickupCoords(r) {
   if (r.currentLocation) return r.currentLocation
+  if (r.pickupLat != null && r.pickupLng != null) return { lat: r.pickupLat, lng: r.pickupLng }
   if (r.pickupAddress) {
     const parsed = parseCoords(r.pickupAddress)
     if (parsed) return parsed
@@ -207,6 +208,7 @@ function getPickupCoords(r) {
   return null
 }
 function getDropoffCoords(r) {
+  if (r.dropoffLat != null && r.dropoffLng != null) return { lat: r.dropoffLat, lng: r.dropoffLng }
   if (r.destinationCoords) return r.destinationCoords
   if (r.deliveryAddress) return parseCoords(r.deliveryAddress)
   return null
@@ -218,7 +220,7 @@ function getDropoffCoords(r) {
 // existing per-portal convention).
 function parseCoords(value) {
   if (!value) return null
-  const m = String(value).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/)
+  const m = String(value).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/)
   if (!m) return null
   const lat = parseFloat(m[1])
   const lng = parseFloat(m[2])
@@ -2773,7 +2775,11 @@ function mapDbRequest(row, clientName, fleet) {
     dropoffDate: row.dropoff_date,
     dropoffTime: row.dropoff_time,
     pickupAddress: row.pickup_location,
+    pickupLat: row.pickup_lat,
+    pickupLng: row.pickup_lng,
     deliveryAddress: row.dropoff_location,
+    dropoffLat: row.dropoff_lat,
+    dropoffLng: row.dropoff_lng,
     // Reference-only intermediate stops between pickup/dropoff, customer-entered
     // at booking time — read-only here (02B_MULTI_STOP_DELIVERIES.md).
     stops: Array.isArray(row.stops) ? row.stops : [],

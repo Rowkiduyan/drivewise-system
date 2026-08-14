@@ -70,7 +70,7 @@ const PROOF_LOCATION_RADIUS_METERS = 200;
 // street address; only those can be geofence-checked.
 function parseCoords(value: string | null | undefined): { lat: number; lng: number } | null {
   if (!value) return null;
-  const m = String(value).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+  const m = String(value).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
   if (!m) return null;
   const lat = parseFloat(m[1]);
   const lng = parseFloat(m[2]);
@@ -90,22 +90,26 @@ function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng:
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-// Checks the Helper is within PROOF_LOCATION_RADIUS_METERS of `targetLocation`
-// before letting a proof-photo action through. Fails OPEN (returns null =
-// "no objection") in two cases, both deliberate: the target address isn't in
-// parseable "lat, lng" form (most booked addresses are plain street text --
-// same limitation the route/marker rendering already has, see
-// 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md), or the delivery has no GPS
-// reading yet (e.g. the Raspberry Pi was never powered on -- 09_EDGE_CASES.md
-// already establishes that Trip functionality must not block on Pi absence).
-// Returns an error string when it fails CLOSED (target parses, GPS exists,
-// but they're too far apart).
+// Checks the Helper is within PROOF_LOCATION_RADIUS_METERS of the pickup/
+// dropoff location before letting a proof-photo action through. `targetCoords`
+// (the booking's real pickup_lat/lng or dropoff_lat/lng, captured at booking
+// time from the Customer app's location picker) is preferred when present;
+// `targetLocation` (the address text) is only a fallback via parseCoords, for
+// older rows booked before those columns existed or a manually-typed address
+// with no picked coordinate. Fails OPEN (returns null = "no objection") in
+// two cases, both deliberate: neither target resolves to coordinates, or the
+// delivery has no GPS reading yet (e.g. the Raspberry Pi was never powered on
+// -- 09_EDGE_CASES.md already establishes that Trip functionality must not
+// block on Pi absence). Returns an error string when it fails CLOSED (target
+// resolves, GPS exists, but they're too far apart).
 async function checkProofLocation(
   adminClient: ReturnType<typeof createClient>,
   deliveryId: string,
   targetLocation: string | null | undefined,
+  targetCoords?: { lat: number | null; lng: number | null } | null,
 ): Promise<string | null> {
-  const target = parseCoords(targetLocation);
+  const hasRealCoords = targetCoords != null && Number.isFinite(targetCoords.lat) && Number.isFinite(targetCoords.lng);
+  const target = hasRealCoords ? (targetCoords as { lat: number; lng: number }) : parseCoords(targetLocation);
   if (!target) return null;
 
   const { data: lastFix } = await adminClient
@@ -876,7 +880,11 @@ Deno.serve(async (req) => {
           dropoffDate: r.dropoff_date,
           dropoffTime: r.dropoff_time ? String(r.dropoff_time).slice(0, 5) : null,
           pickupAddress: r.pickup_location,
+          pickupLat: r.pickup_lat,
+          pickupLng: r.pickup_lng,
           deliveryAddress: r.dropoff_location,
+          dropoffLat: r.dropoff_lat,
+          dropoffLng: r.dropoff_lng,
           // Reference-only intermediate stops between pickup/dropoff,
           // customer-entered at booking time — read-only for the driver, used
           // to build the dropoff leg's route waypoints (02B_MULTI_STOP_DELIVERIES.md).
@@ -1083,7 +1091,11 @@ Deno.serve(async (req) => {
           pickupDate: r.pickup_date,
           pickupTime: r.pickup_time ? String(r.pickup_time).slice(0, 5) : null,
           pickupAddress: r.pickup_location,
+          pickupLat: r.pickup_lat,
+          pickupLng: r.pickup_lng,
           deliveryAddress: r.dropoff_location,
+          dropoffLat: r.dropoff_lat,
+          dropoffLng: r.dropoff_lng,
           // Reference-only intermediate stops between dropoff and the end of
           // the chain, plus proof-photo state for each item in the Pickup ->
           // Dropoff -> Stops sequence the Helper completes (02B_MULTI_STOP_DELIVERIES.md).
@@ -1144,7 +1156,7 @@ Deno.serve(async (req) => {
 
       const { data: row, error: rowError } = await adminClient
         .from("delivery_requests")
-        .select("id, status, assigned_helper_ids, pickup_location")
+        .select("id, status, assigned_helper_ids, pickup_location, pickup_lat, pickup_lng")
         .eq("id", deliveryId)
         .maybeSingle();
 
@@ -1161,7 +1173,10 @@ Deno.serve(async (req) => {
         return json({ error: `Cannot move a delivery from ${row.status} to ${nextStatus}` }, 400);
       }
 
-      const locationError = await checkProofLocation(adminClient, deliveryId, row.pickup_location as string);
+      const locationError = await checkProofLocation(adminClient, deliveryId, row.pickup_location as string, {
+        lat: row.pickup_lat as number | null,
+        lng: row.pickup_lng as number | null,
+      });
       if (locationError) {
         return json({ error: locationError }, 400);
       }
@@ -1200,7 +1215,7 @@ Deno.serve(async (req) => {
 
       const { data: row, error: rowError } = await adminClient
         .from("delivery_requests")
-        .select("id, status, assigned_helper_ids, stops, dropoff_location")
+        .select("id, status, assigned_helper_ids, stops, dropoff_location, dropoff_lat, dropoff_lng")
         .eq("id", deliveryId)
         .maybeSingle();
 
@@ -1216,7 +1231,10 @@ Deno.serve(async (req) => {
         return json({ error: `Cannot complete the dropoff from status ${row.status}` }, 400);
       }
 
-      const locationError = await checkProofLocation(adminClient, deliveryId, row.dropoff_location as string);
+      const locationError = await checkProofLocation(adminClient, deliveryId, row.dropoff_location as string, {
+        lat: row.dropoff_lat as number | null,
+        lng: row.dropoff_lng as number | null,
+      });
       if (locationError) {
         return json({ error: locationError }, 400);
       }

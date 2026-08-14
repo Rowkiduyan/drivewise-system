@@ -47,6 +47,7 @@ import DriverLayout from '../layout/DriverLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 import { GOOGLE_MAPS_LOADER_OPTIONS } from '../lib/googleMapsLoaderOptions.js'
 import { useResolvedAddress } from '../lib/reverseGeocode.js'
+import { useResolvedStopCoords } from '../lib/forwardGeocode.js'
 import { formatManilaTimestamp, formatManilaShortTime, manilaTodayISO, MANILA_TIMEZONE, getManilaHour } from '../lib/manilaTime.js'
 
 delete L.Icon.Default.prototype._getIconUrl
@@ -476,7 +477,7 @@ function warehouseMarkerIcon() {
 // Supervisor's planned-vs-actual Route Deviation Report
 // (11_ROUTE_COMPARISON.md). Google Maps, not Leaflet, to match the app's
 // live-nav map and reuse its pickup/dropoff/stop marker icons.
-function PlannedRouteMap({ pickupAddress, dropoffAddress, stops, suggestedRoute, deliveryRequestId, onSaved }) {
+function PlannedRouteMap({ pickupAddress, dropoffAddress, pickupCoordsProp, dropoffCoordsProp, stops, suggestedRoute, deliveryRequestId, onSaved }) {
   const { isLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS)
   const [computedLegs, setComputedLegs] = useState(null)
   const [routeError, setRouteError] = useState(false)
@@ -484,22 +485,33 @@ function PlannedRouteMap({ pickupAddress, dropoffAddress, stops, suggestedRoute,
   const mapRef = useRef(null)
 
   const stopsKey = (stops || []).map((s) => s.location).join('|')
+  const stopLocations = (stops || []).map((s) => s.location)
+  const { coordsByLocation: stopCoords, isReady: stopCoordsReady } = useResolvedStopCoords(stopLocations)
 
   useEffect(() => {
     if (suggestedRoute) return
-    if (!isLoaded || !pickupAddress || !dropoffAddress || !window.google || savingRef.current) return
+    if (!isLoaded || !pickupAddress || !dropoffAddress || !window.google || savingRef.current || !stopCoordsReady) return
 
-    // parseCoords only matches a "lat, lng"-shaped fixture value -- a real,
-    // human-entered address (the normal case) won't parse, and that's fine:
-    // DirectionsService geocodes a plain address string directly, same as
-    // LiveNavigationMap's own waypoints already do (`parseCoords(x) || x`).
-    // Only nearestDropoffOrder needs actual coordinates to rank by distance;
-    // an un-parseable candidate just falls back to its original relative
-    // order (see that function's own handling of a null `coords`).
-    const pickupCoords = parseCoords(pickupAddress)
+    // pickupCoordsProp/dropoffCoordsProp are the real coordinates captured
+    // at booking time (CustomerRequestDelivery.jsx's location picker,
+    // persisted as pickup_lat/lng, dropoff_lat/lng) -- these are trusted,
+    // Photon-resolved points, not a re-geocode. Falling back to
+    // parseCoords(address) covers only the older "lat, lng"-text fixture
+    // convention (DR-0020-style). Neither should fall back to letting
+    // DirectionsService blind-geocode the raw address text for pickup/
+    // dropoff specifically -- confirmed live that Google's own geocoder can
+    // confidently mis-resolve an ambiguous local address (e.g. a subdivision
+    // name plus a council-district label it doesn't recognize) to a
+    // completely unrelated place, flagged only by an easy-to-miss
+    // `partial_match: true` in the response. Stops have no captured
+    // coordinate of their own (no autocomplete/map picker on the booking
+    // form for them) -- stopCoords (useResolvedStopCoords, resolved via
+    // Photon before this effect is allowed to run, see stopCoordsReady
+    // above) covers those instead, same reasoning as pickup/dropoff.
+    const pickupCoords = pickupCoordsProp || parseCoords(pickupAddress)
     const orderedStops = nearestDropoffOrder(pickupCoords, [
-      { location: dropoffAddress, coords: parseCoords(dropoffAddress), key: 'dropoff' },
-      ...(stops || []).map((s) => ({ location: s.location, coords: parseCoords(s.location), key: 'stop' })),
+      { location: dropoffAddress, coords: dropoffCoordsProp || parseCoords(dropoffAddress), key: 'dropoff' },
+      ...(stops || []).map((s) => ({ location: s.location, coords: parseCoords(s.location) || stopCoords[s.location] || null, key: 'stop' })),
     ])
     if (orderedStops.length === 0) return
 
@@ -548,7 +560,7 @@ function PlannedRouteMap({ pickupAddress, dropoffAddress, stops, suggestedRoute,
       },
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, suggestedRoute, pickupAddress, dropoffAddress, stopsKey])
+  }, [isLoaded, suggestedRoute, pickupAddress, dropoffAddress, stopsKey, stopCoordsReady])
 
   const legs = suggestedRoute || computedLegs
 
@@ -562,6 +574,11 @@ function PlannedRouteMap({ pickupAddress, dropoffAddress, stops, suggestedRoute,
   const pickupPos = pickupLeg ? pickupLeg.path[pickupLeg.path.length - 1] : null
   const dropoffLeg = legs?.find((leg) => leg.to === 'dropoff')
   const dropoffPos = dropoffLeg ? dropoffLeg.path[dropoffLeg.path.length - 1] : null
+  // Whether the real dropoff is genuinely the LAST leg of the whole route --
+  // Dynamic Nearest-Dropoff Ordering (02B_MULTI_STOP_DELIVERIES.md) can
+  // legitimately place it before a stop instead, and the flag icon means
+  // "this is the actual end of the trip," which would be misleading then.
+  const isDropoffFinal = legs?.[legs.length - 1]?.to === 'dropoff'
   const stopPositions = (legs || []).filter((leg) => leg.to === 'stop').map((leg) => leg.path[leg.path.length - 1])
 
   // Re-fits whenever `legs` becomes available from a route already saved as
@@ -612,13 +629,29 @@ function PlannedRouteMap({ pickupAddress, dropoffAddress, stops, suggestedRoute,
             ))}
             {warehousePos && <GoogleMapMarker position={{ lat: warehousePos[0], lng: warehousePos[1] }} icon={warehouseMarkerIcon()} />}
             {pickupPos && <GoogleMapMarker position={{ lat: pickupPos[0], lng: pickupPos[1] }} icon={pickupMarkerIcon()} />}
-            {dropoffPos && <GoogleMapMarker position={{ lat: dropoffPos[0], lng: dropoffPos[1] }} icon={dropoffMarkerIcon()} />}
+            {dropoffPos && (
+              <GoogleMapMarker
+                position={{ lat: dropoffPos[0], lng: dropoffPos[1] }}
+                icon={isDropoffFinal ? dropoffMarkerIcon() : dropoffPinIcon('#059669', false)}
+              />
+            )}
             {stopPositions.map((pos, i) => (
               <GoogleMapMarker
                 key={i}
                 position={{ lat: pos[0], lng: pos[1] }}
                 label={{ text: String(i + 2), color: '#fff', fontSize: '11px', fontWeight: '700' }}
-                icon={dropoffPinIcon('#d97706', true)}
+                // isCurrent: false -- this whole-trip overview shows every
+                // stop at once (unlike LiveNavigationMap's single-current-
+                // target view below, where isCurrent: true is correct since
+                // that pin IS the immediate target). Dynamic Nearest-Dropoff
+                // Ordering (02B_MULTI_STOP_DELIVERIES.md) can legitimately
+                // place a reference-only stop last/farthest in the chain --
+                // that's correct routing, but it must never render with the
+                // same full-prominence styling as "the current/final target,"
+                // which read as if a mere stop were the real delivery
+                // destination. dropoffMarkerIcon() (the green flag, above)
+                // is the only marker that represents the actual dropoff.
+                icon={dropoffPinIcon('#d97706', false)}
               />
             ))}
           </GoogleMap>
@@ -648,6 +681,7 @@ function LiveNavigationMap({
   needsPickup,
   pickupCoords,
   dropoffCoords,
+  isDropoffFinal,
   allStops,
   livePosition,
   isPaused,
@@ -750,13 +784,22 @@ function LiveNavigationMap({
   }
 
   // Stops (reference-only locations between pickup and dropoff) become
-  // DirectionsService waypoints -- one extra `legs[]` entry per stop. Text
-  // addresses are parsed to coords via parseCoords the same way pickup/
-  // dropoff already are; DirectionsService also accepts a raw address string
-  // directly, so an unparseable value (a real street address, not "lat,lng")
-  // is passed through as-is rather than dropped.
+  // DirectionsService waypoints -- one extra `legs[]` entry per stop.
+  // `stop.coords` is already set upstream (the parent's
+  // remainingDropoffCandidates/orderedRemainingDropoffs) for whichever entry
+  // is the real dropoff sitting in a waypoint slot, via `active.
+  // destinationCoords` -- using it here (rather than re-deriving from
+  // `stop.location` text, which discarded it) keeps that already-correct
+  // coordinate instead of falling back to a blind Directions geocode.
+  // Genuine stops don't have a coordinate of their own; parseCoords covers
+  // the "lat, lng"-text fixture convention, and stopCoords (resolved via
+  // Photon below, same reliability reasoning as PlannedRouteMap) covers a
+  // real address. Only once every stop's lookup has settled (or there are
+  // none) does the route actually get computed -- see stopCoordsReady below.
+  const unresolvedStopLocations = (stops || []).filter((s) => !s.coords).map((s) => s.location)
+  const { coordsByLocation: stopCoords, isReady: stopCoordsReady } = useResolvedStopCoords(unresolvedStopLocations)
   const waypoints = (stops || []).map((stop) => ({
-    location: parseCoords(stop.location) || stop.location,
+    location: stop.coords || parseCoords(stop.location) || stopCoords[stop.location] || stop.location,
     stopover: true,
   }))
   const stopsKey = waypoints.map((w) => (typeof w.location === 'string' ? w.location : `${w.location.lat},${w.location.lng}`)).join('|')
@@ -767,10 +810,10 @@ function LiveNavigationMap({
   // deviation effect below for the one case a live position should trigger a
   // fresh route.
   useEffect(() => {
-    if (!isLoaded || !destination) return
+    if (!isLoaded || !destination || !stopCoordsReady) return
     computeRoute(livePosition || origin, destination, waypoints)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, destination?.lat, destination?.lng, stopsKey])
+  }, [isLoaded, destination?.lat, destination?.lng, stopsKey, stopCoordsReady])
 
   // Recenter/follow as new positions arrive, and derive a heading (like
   // Waze/Google Maps' navigation-mode arrow) from consecutive GPS ticks --
@@ -1048,10 +1091,24 @@ function LiveNavigationMap({
               <GoogleMapMarker position={pickupCoords} icon={pickupMarkerIcon()} zIndex={10} />
             )}
             {dropoffCoords && isCurrentNavTarget(dropoffCoords, legEnd) && (
-              <GoogleMapMarker position={dropoffCoords} icon={dropoffMarkerIcon()} zIndex={10} />
+              isDropoffFinal ? (
+                // The real dropoff genuinely is the last remaining stop --
+                // the flag icon's "this is the end" connotation is accurate.
+                <GoogleMapMarker position={dropoffCoords} icon={dropoffMarkerIcon()} zIndex={10} />
+              ) : (
+                // Dynamic Nearest-Dropoff Ordering routed here before a
+                // stop that's still left -- same subdued pin treatment as
+                // the Stop markers below (distinguished by color, not
+                // shape) so it doesn't read as "the end" when it isn't.
+                <GoogleMapMarker position={dropoffCoords} icon={dropoffPinIcon('#059669', true)} zIndex={10} />
+              )
             )}
             {(allStops || []).map((stop, i) => {
-              const coords = parseCoords(stop.location)
+              // parseCoords-first, stopCoords (Photon, resolved above) as
+              // the real-address fallback -- without this, a stop pin
+              // simply never rendered for a real street address (silently
+              // returned null here), not just routed less accurately.
+              const coords = parseCoords(stop.location) || stopCoords[stop.location]
               if (!coords || !isCurrentNavTarget(coords, legEnd)) return null
               return (
                 <GoogleMapMarker
@@ -1882,7 +1939,7 @@ const DRIVER_STATUS_TO_DB = {
 // rather than a street address — parse those back into coords for the maps.
 function parseCoords(value) {
   if (!value) return null
-  const m = String(value).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/)
+  const m = String(value).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/)
   if (!m) return null
   const lat = parseFloat(m[1])
   const lng = parseFloat(m[2])
@@ -1975,6 +2032,10 @@ function mapDelivery(d) {
     pickupTime: str(d.pickupTime),
     pickupAddress: str(d.pickupAddress),
     deliveryAddress: str(d.deliveryAddress),
+    pickupLat: d.pickupLat,
+    pickupLng: d.pickupLng,
+    dropoffLat: d.dropoffLat,
+    dropoffLng: d.dropoffLng,
     // Reference-only intermediate stops between pickup/dropoff, customer-entered
     // at booking time — feeds LiveNavigationMap's dropoff-leg waypoints only,
     // never delivery_requests.status (02B_MULTI_STOP_DELIVERIES.md).
@@ -2001,8 +2062,8 @@ function mapDelivery(d) {
         ? { plateNumber: str(d.truck.plateNumber), truckType: str(d.truck.truckType), capacity: str(d.truck.capacity || '') }
         : { plateNumber: '—', truckType: '', capacity: '' },
     },
-    pickupCoords: parseCoords(d.pickupAddress),
-    destinationCoords: parseCoords(d.deliveryAddress),
+    pickupCoords: (d.pickupLat != null && d.pickupLng != null) ? { lat: d.pickupLat, lng: d.pickupLng } : parseCoords(d.pickupAddress),
+    destinationCoords: (d.dropoffLat != null && d.dropoffLng != null) ? { lat: d.dropoffLat, lng: d.dropoffLng } : parseCoords(d.deliveryAddress),
   }
 }
 
@@ -2420,6 +2481,8 @@ function DeliveryDetailView({ delivery, onBack, isReportExpanded, onToggleReport
               <PlannedRouteMap
                 pickupAddress={delivery.pickupAddress}
                 dropoffAddress={delivery.deliveryAddress}
+                pickupCoordsProp={delivery.pickupCoords}
+                dropoffCoordsProp={delivery.destinationCoords}
                 stops={delivery.stops}
                 suggestedRoute={delivery.suggestedRoute}
                 deliveryRequestId={delivery.id}
@@ -2639,15 +2702,24 @@ function DriverDeliveries() {
   // reordering mid-drive.
   const remainingDropoffCandidates = active && !activeNeedsPickup
     ? [
-        ...(active.dropoffCompletedAt ? [] : [{ location: active.deliveryAddress, coords: active.destinationCoords }]),
+        ...(active.dropoffCompletedAt ? [] : [{ location: active.deliveryAddress, coords: active.destinationCoords, key: 'dropoff' }]),
         ...(active.stops || [])
           .filter((s) => !s.completed)
-          .map((s) => ({ location: s.location, coords: parseCoords(s.location) })),
+          .map((s) => ({ location: s.location, coords: parseCoords(s.location), key: 'stop' })),
       ]
     : []
   const orderedRemainingDropoffs = remainingDropoffCandidates.length > 0
     ? nearestDropoffOrder(livePosition || activeNavOrigin, remainingDropoffCandidates)
     : []
+  // Whether the real dropoff is the LAST item left in the nearest-ordered
+  // chain (as opposed to merely the current/nearest one) -- Dynamic
+  // Nearest-Dropoff Ordering can legitimately route the driver to the real
+  // dropoff before a stop, but LiveNavigationMap's flag icon means "this is
+  // the actual end of the trip," which would be misleading if a stop still
+  // follows. Only true once dropoff is both incomplete and the farthest
+  // remaining item in the walk.
+  const isDropoffFinal = orderedRemainingDropoffs.length > 0
+    && orderedRemainingDropoffs[orderedRemainingDropoffs.length - 1]?.key === 'dropoff'
 
   // Current dropoff target in the chain -- the nearest remaining dropoff per
   // the greedy ordering above, falling back to the main dropoff once every
@@ -3381,6 +3453,7 @@ function DriverDeliveries() {
                   needsPickup={activeNeedsPickup}
                   pickupCoords={active?.pickupCoords}
                   dropoffCoords={active?.destinationCoords}
+                  isDropoffFinal={isDropoffFinal}
                   allStops={active?.stops}
                   livePosition={livePosition}
                   isPaused={isPausedTrip}
@@ -3409,6 +3482,8 @@ function DriverDeliveries() {
                   <PlannedRouteMap
                     pickupAddress={active.pickupAddress}
                     dropoffAddress={active.deliveryAddress}
+                    pickupCoordsProp={active.pickupCoords}
+                    dropoffCoordsProp={active.destinationCoords}
                     stops={active.stops}
                     suggestedRoute={active.suggestedRoute}
                     deliveryRequestId={active.id}

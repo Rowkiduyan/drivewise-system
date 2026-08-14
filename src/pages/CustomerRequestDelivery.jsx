@@ -156,7 +156,7 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
 
   const handleConfirm = () => {
     if (selectedLocation) {
-      onSelect(selectedLocation.display)
+      onSelect(selectedLocation.display, selectedLocation.lat, selectedLocation.lon)
       onClose()
     }
   }
@@ -327,13 +327,13 @@ function LocationInput({ id, label, value, onChange, required }) {
   }
 
   const handleSuggestionClick = (suggestion) => {
-    onChange({ target: { name: id, value: suggestion.display } })
+    onChange({ target: { name: id, value: suggestion.display, lat: suggestion.lat, lng: suggestion.lon } })
     setShowSuggestions(false)
     setSuggestions([])
   }
 
-  const handleLocationSelect = (address) => {
-    onChange({ target: { name: id, value: address } })
+  const handleLocationSelect = (address, lat, lng) => {
+    onChange({ target: { name: id, value: address, lat, lng } })
   }
 
   return (
@@ -415,7 +415,11 @@ function CustomerRequestDelivery() {
     dropoffDate: '',
     dropoffTime: '',
     pickupLocation: '',
+    pickupLat: null,
+    pickupLng: null,
     dropoffLocation: '',
+    dropoffLat: null,
+    dropoffLng: null,
     stops: [],
     truckType: '',
     itemType: '',
@@ -439,8 +443,18 @@ function CustomerRequestDelivery() {
   const goBackToDeliveries = () => navigate('/customer/deliveries')
 
   const handleChange = (e) => {
-    const { name, value } = e.target
+    const { name, value, lat, lng } = e.target
     const next = { ...formData, [name]: value }
+
+    // LocationInput passes lat/lng alongside the address text when the
+    // value came from a search suggestion or the map picker (both already
+    // resolve real coordinates via Photon); a manually-typed address has
+    // none, so clear any stale coordinate from a previously picked value.
+    if (name === 'pickupLocation' || name === 'dropoffLocation') {
+      const prefix = name === 'pickupLocation' ? 'pickup' : 'dropoff'
+      next[`${prefix}Lat`] = lat ?? null
+      next[`${prefix}Lng`] = lng ?? null
+    }
 
     if (name === 'pickupDate') {
       setDateError(value && value < minDeliveryDate ? `Delivery date must be on or after ${minDeliveryDate}.` : '')
@@ -533,7 +547,11 @@ function CustomerRequestDelivery() {
       dropoff_date: formData.dropoffDate,
       dropoff_time: formData.dropoffTime,
       pickup_location: formData.pickupLocation,
+      pickup_lat: formData.pickupLat,
+      pickup_lng: formData.pickupLng,
       dropoff_location: formData.dropoffLocation,
+      dropoff_lat: formData.dropoffLat,
+      dropoff_lng: formData.dropoffLng,
       stops: formData.stops
         .filter((location) => location.trim())
         .map((location) => ({ location })),
