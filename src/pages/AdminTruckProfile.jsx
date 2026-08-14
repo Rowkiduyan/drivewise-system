@@ -491,6 +491,8 @@ function AdminTruckProfile() {
   const [maintenanceStatusFilter, setMaintenanceStatusFilter] = useState("All");
   const [isEditModalOpen, setEditModalOpen] = useState(false);
   const [toast, setToast] = useState(null);
+  // Devices list for mapping assigned device IDs to trucks (similar to AdminTrucks)
+  const [devices, setDevices] = useState([]);
   // Fetch the latest truck data after an edit. Uses plate_number as identifier.
   const fetchTruck = async () => {
     if (!truck?.plate_number) return;
@@ -514,6 +516,22 @@ function AdminTruckProfile() {
       return () => clearTimeout(timer);
     }
   }, [toast]);
+
+  // Fetch devices for assignment lookup (mirrors AdminTrucks logic)
+  useEffect(() => {
+    async function loadDevices() {
+      const { data, error } = await supabase
+        .from("devices")
+        .select("device_id, plate_number")
+        .order("device_id", { ascending: true });
+      if (error) {
+        console.error("Failed to fetch devices", error);
+        return;
+      }
+      setDevices(data || []);
+    }
+    loadDevices();
+  }, []);
 
   const trips = useMemo(() => (truck ? buildMockTrips(truck) : []), [truck]);
   const maintenanceRecords = useMemo(
@@ -713,6 +731,17 @@ function AdminTruckProfile() {
               <InfoRow
                 label="Date Acquired"
                 value={formatMonthYear(truck.date_acquired)}
+              />
+              {/* New fields: Status and Assigned Device */}
+              <InfoRow label="Status" value={truck.status ?? "-"} />
+              <InfoRow
+                label="Assigned Device"
+                value={(() => {
+                  const dev = devices.find(
+                    (d) => d.plate_number === truck.plate_number,
+                  );
+                  return dev?.device_id ?? "NONE";
+                })()}
               />
               {/* Additional truck details fetched from Supabase */}
               {truck.brand && <InfoRow label="Brand" value={truck.brand} />}
@@ -1062,13 +1091,13 @@ function AdminTruckProfile() {
           initialData={truck}
           onSuccess={() => {
             // Show success toast, then refresh data.
+            // Include plate number in success toast for updated truck
             setToast({
-              message: "Truck updated successfully",
+              message: `Truck ${truck.plate_number} updated successfully`,
               type: "success",
             });
-            if (typeof fetchTruck === "function") {
-              fetchTruck();
-            }
+            // Refreshing the page after edit caused the toast to disappear instantly.
+            // Instead, simply close the edit modal and rely on the existing toast.
             setEditModalOpen(false);
           }}
         />

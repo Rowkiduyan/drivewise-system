@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import AdminLayout from "../layout/AdminLayout.jsx";
 import AddTruckModal from "../components/AddTruckModal.jsx";
-import { Search, ChevronRight, Trash2 } from "lucide-react";
+import { Search, ChevronRight, Trash2, Edit, RefreshCw } from "lucide-react";
 // Truck type options are defined directly here as mockTrucks.js has been removed.
 const TRUCK_TYPES = [
   "L300",
@@ -76,7 +76,7 @@ function FilterSelect({
 }
 
 function PaginationBar({ page, setPage, totalPages }) {
-  if (totalPages <= 1) return null;
+  // Always render the pagination bar to provide a consistent UI, even when there is only a single page.
   return (
     <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
       <p className="text-sm text-slate-500">
@@ -218,8 +218,11 @@ function AdminTrucks() {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedType, setSelectedType] = useState("All");
+  const [selectedStatus, setSelectedStatus] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [truckToEdit, setTruckToEdit] = useState(null);
   // Load trucks from Supabase on component mount. Fallback to empty array if fetch fails.
   const [trucks, setTrucks] = useState([]);
   // Toast state: message and type ('success' | 'error')
@@ -231,6 +234,9 @@ function AdminTrucks() {
 
   // Loading state for initial data fetch
   const [loading, setLoading] = useState(true);
+
+  // Devices list for mapping assigned device IDs to trucks
+  const [devices, setDevices] = useState([]);
 
   // Persist trucks to localStorage for offline fallback (optional)
   useEffect(() => {
@@ -269,10 +275,36 @@ function AdminTrucks() {
     loadTrucks();
   }, []);
 
+  // Fetch devices for assignment lookup
+  useEffect(() => {
+    async function loadDevices() {
+      const { data, error } = await supabase
+        .from("devices")
+        .select("device_id, plate_number")
+        .order("device_id", { ascending: true });
+      if (error) {
+        console.error("Failed to fetch devices", error);
+        return;
+      }
+      setDevices(data || []);
+    }
+    loadDevices();
+  }, []);
+
   const typeCounts = useMemo(() => {
     const counts = { All: trucks.length };
     TYPE_OPTIONS.forEach((type) => {
       counts[type] = trucks.filter((t) => t.truck_type === type).length;
+    });
+    return counts;
+  }, [trucks]);
+
+  // Compute status counts for the status filter dropdown.
+  const statusCounts = useMemo(() => {
+    const counts = { All: trucks.length };
+    trucks.forEach((t) => {
+      const status = t.status ?? "-";
+      counts[status] = (counts[status] || 0) + 1;
     });
     return counts;
   }, [trucks]);
@@ -289,7 +321,7 @@ function AdminTrucks() {
               truck.brand,
               truck.model,
               truck.truck_type,
-              truck.assignedDeviceNo,
+              truck.device_id,
               truck.assignedDriver || "",
             ]
               .join(" ")
@@ -298,18 +330,28 @@ function AdminTrucks() {
 
         const matchesType =
           selectedType === "All" || truck.truck_type === selectedType;
+        const matchesStatus =
+          selectedStatus === "All" || (truck.status ?? "-") === selectedStatus;
 
-        return matchesSearch && matchesType;
+        return matchesSearch && matchesType && matchesStatus;
       })
       .sort((leftTruck, rightTruck) => {
+        // First, sort by creation date (most recent first).
+        const leftCreated = new Date(leftTruck.created_at).getTime();
+        const rightCreated = new Date(rightTruck.created_at).getTime();
+        if (leftCreated !== rightCreated) return rightCreated - leftCreated;
+
+        // If creation dates are equal, fall back to type order.
         const leftOrder =
           TRUCK_TYPE_ORDER[leftTruck.truck_type] ?? Number.MAX_SAFE_INTEGER;
         const rightOrder =
           TRUCK_TYPE_ORDER[rightTruck.truck_type] ?? Number.MAX_SAFE_INTEGER;
         if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+
+        // Finally, sort by plate number for deterministic ordering.
         return leftTruck.plate_number.localeCompare(rightTruck.plate_number);
       });
-  }, [searchTerm, selectedType, trucks]);
+  }, [searchTerm, selectedType, selectedStatus, trucks]);
   // Handler for adding a new truck from the modal
   // Add a new truck entry – now persists to Supabase and updates local state.
   // Insert a new truck via Supabase and update UI state.
@@ -329,7 +371,12 @@ function AdminTrucks() {
 
       // Close modal and show success toast.
       setIsAddModalOpen(false);
-      setToast({ message: "Truck added successfully", type: "success" });
+      // Include plate number in success toast for added truck
+      const addedPlate = data && data.length > 0 ? data[0].plate_number : "";
+      setToast({
+        message: `Truck ${addedPlate} added successfully`,
+        type: "success",
+      });
     } catch (err) {
       console.error("Failed to add truck:", err.message);
       setToast({
@@ -337,6 +384,20 @@ function AdminTrucks() {
         type: "error",
       });
     }
+  };
+
+  // Refresh trucks list from Supabase – used after edit to reflect changes.
+  const refreshTrucks = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from("trucks").select("*");
+    if (!error && data) setTrucks(data);
+    setLoading(false);
+  };
+
+  // Edit truck handler – opens edit modal with selected truck data
+  const handleEditTruck = (truck) => {
+    setTruckToEdit(truck);
+    setIsEditModalOpen(true);
   };
 
   const totalPages = Math.max(1, Math.ceil(filteredTrucks.length / PAGE_SIZE));
@@ -356,6 +417,12 @@ function AdminTrucks() {
     setCurrentPage(1);
   };
 
+  // Update selected status for the status filter
+  const updateStatus = (value) => {
+    setSelectedStatus(value);
+    setCurrentPage(1);
+  };
+
   const openProfile = (truck) => {
     navigate("/admin/trucks/profile", { state: { truck } });
   };
@@ -371,21 +438,26 @@ function AdminTrucks() {
       if (deleteError) throw deleteError;
 
       // If the truck had an assigned device, clear its plate_number reference
-      if (truck.assignedDeviceNo) {
+      if (truck.device_id) {
         const { error: deviceError } = await supabase
           .from("devices")
           .update({ plate_number: null })
-          .eq("device_id", truck.assignedDeviceNo);
+          .eq("device_id", truck.device_id);
         if (deviceError) throw deviceError;
       }
 
       // Update UI state
       setTrucks((prev) => prev.filter((t) => t.id !== truck.id));
-      setToast({ message: "Truck deleted successfully", type: "success" });
+      // Include plate number in success toast for deleted truck
+      setToast({
+        message: `Truck ${truck.plate_number} deleted successfully`,
+        type: "success",
+      });
     } catch (err) {
       console.error("Failed to delete truck:", err.message);
+      // Include plate number in error toast for delete failure
       setToast({
-        message: "Failed to delete truck: " + err.message,
+        message: `Failed to delete truck ${truck.plate_number}: ${err.message}`,
         type: "error",
       });
     } finally {
@@ -425,7 +497,23 @@ function AdminTrucks() {
             </div>
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-2 sm:flex-none sm:justify-end">
-              {/* Status filter removed as status field is no longer used */}
+              {/* Status filter */}
+              <FilterSelect
+                id="status-filter"
+                label="Status"
+                value={selectedStatus}
+                onChange={updateStatus}
+                // Display "On Delivery" for the "Active" status while keeping the underlying value unchanged.
+                options={[
+                  "Available",
+                  "On Delivery",
+                  "Inactive",
+                  "Maintenance",
+                ]}
+                counts={statusCounts}
+                allLabel="Status"
+              />
+              {/* Truck Type filter */}
               <FilterSelect
                 id="type-filter"
                 label="Truck Type"
@@ -435,6 +523,14 @@ function AdminTrucks() {
                 counts={typeCounts}
                 allLabel="Truck Type"
               />
+              {/* Manual refresh button (icon) */}
+              <button
+                onClick={refreshTrucks}
+                className="rounded-full bg-gray-200 p-2 hover:bg-gray-300"
+                title="Refresh data"
+              >
+                <RefreshCw className="h-4 w-4 text-slate-800" />
+              </button>
             </div>
             {/* Add Truck button (rightmost) */}
             <button
@@ -468,7 +564,7 @@ function AdminTrucks() {
         {/* Truck List */}
         <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex h-full min-h-0 flex-col">
-            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto">
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
               {loading ? (
                 <div className="flex h-full items-center justify-center px-4 py-6 text-center text-sm text-slate-500">
                   Loading trucks…
@@ -479,7 +575,7 @@ function AdminTrucks() {
                   filters.
                 </div>
               ) : (
-                <table className="w-full min-w-[1080px] text-left text-sm">
+                <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
@@ -494,8 +590,14 @@ function AdminTrucks() {
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Truck Type
                       </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Status
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Assigned Device
+                      </th>
                       <th className="sticky top-0 z-10 bg-slate-50 py-3 pl-2 pr-5 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-                        &nbsp;
+                        ACTIONS
                       </th>
                     </tr>
                   </thead>
@@ -526,7 +628,30 @@ function AdminTrucks() {
                           <TypeTag type={truck.truck_type} />
                         </td>
                         {/* Device Status column removed */}
-                        <td className="py-2.5 pl-2 pr-5 text-right flex items-center justify-end space-x-2">
+                        {/* Status column */}
+                        <td className="px-5 py-2.5 text-slate-700">
+                          {truck.status ?? "-"}
+                        </td>
+                        <td className="px-5 py-2.5 text-slate-700">
+                          {(() => {
+                            const dev = devices.find(
+                              (d) => d.plate_number === truck.plate_number,
+                            );
+                            return dev?.device_id ?? "NONE";
+                          })()}
+                        </td>
+                        <td className="py-2.5 pl-2 pr-5 flex items-center justify-center space-x-2">
+                          {/* Edit button */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEditTruck(truck);
+                            }}
+                            className="text-blue-600 hover:text-blue-800"
+                            title="Edit truck"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
                           {/* Delete button */}
                           <button
                             onClick={(e) => {
@@ -563,6 +688,20 @@ function AdminTrucks() {
         onClose={() => setIsAddModalOpen(false)}
         onSubmit={handleAddTruck}
       />
+      {/* Edit Truck Modal */}
+      {truckToEdit && (
+        <AddTruckModal
+          mode="edit"
+          isOpen={isEditModalOpen}
+          onClose={() => {
+            setIsEditModalOpen(false);
+            setTruckToEdit(null);
+          }}
+          initialData={truckToEdit}
+          onSubmit={handleAddTruck} // reuse same submit for add (creates new) – not used in edit mode
+          onSuccess={refreshTrucks}
+        />
+      )}
       {/* Delete Confirmation Modal */}
       {isDeleteModalOpen && truckToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-30">

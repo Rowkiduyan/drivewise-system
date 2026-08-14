@@ -80,6 +80,8 @@ export default function AddTruckModal({
     // Default maintenance values as requested
     maintenance_interval: 6,
     maintenance_mileage_interval: 5000,
+    // New status field for edit mode – safely handle null initialData
+    status: initialData?.status || "",
   });
 
   // New state for edit mode handling
@@ -130,6 +132,7 @@ export default function AddTruckModal({
         maintenance_interval: initialData.maintenance_interval || "",
         maintenance_mileage_interval:
           initialData.maintenance_mileage_interval || "",
+        status: initialData.status || "",
       });
       setOriginalDeviceId(initialData.device_id || null);
 
@@ -169,6 +172,8 @@ export default function AddTruckModal({
         // Default maintenance values as requested
         maintenance_interval: 6,
         maintenance_mileage_interval: 5000,
+        // Default status to avoid null values
+        status: "Available",
       });
       setOriginalDeviceId(null);
       const fetchDevices = async () => {
@@ -237,6 +242,7 @@ export default function AddTruckModal({
       maintenance_mileage_interval:
         formData.maintenance_mileage_interval || null,
       maintenance_interval: formData.maintenance_interval || null,
+      status: formData.status || null,
     };
     try {
       const { data: existing, error: dupError } = await supabase
@@ -310,6 +316,7 @@ export default function AddTruckModal({
           maintenance_interval: formData.maintenance_interval || null,
           maintenance_mileage_interval:
             formData.maintenance_mileage_interval || null,
+          status: formData.status || null,
         })
         .eq("plate_number", formData.plate_number);
       if (truckError) throw truckError;
@@ -521,6 +528,26 @@ export default function AddTruckModal({
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
             />
+          </div>
+          {/* Status dropdown */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Status
+            </label>
+            <select
+              name="status"
+              value={formData.status}
+              onChange={handleChange}
+              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            >
+              <option value="" disabled>
+                Select status
+              </option>
+              <option value="Available">Available</option>
+              <option value="Active">On Delivery</option>
+              <option value="Inactive">Inactive</option>
+              <option value="Maintenance">Maintenance</option>
+            </select>
           </div>
           {/* Row 4: Device ID */}
           <div>
