@@ -271,16 +271,34 @@ def parse_gps_nmea(line):
         pass  # malformed NMEA line -- skip
 
 
+GPS_RECONNECT_DELAY_SEC = 5.0
+
+
 def gps_reader_thread():
-    try:
-        ser = serial.Serial("/dev/serial0", baudrate=GPS_BAUD_RATE, timeout=1)
-        while running:
-            if ser.in_waiting > 0:
-                line = ser.readline().decode("ascii", errors="replace").strip()
-                parse_gps_nmea(line)
-            time.sleep(0.1)
-    except Exception as e:
-        print(f"[GPS] could not open serial port: {e}")
+    # Was previously a single try/except around the whole open+read loop --
+    # any exception (initial open failure, or a transient read error mid-
+    # stream from e.g. a loose/disconnected serial cable) fell through to the
+    # except below and ended this thread for good, silently: no more NMEA
+    # parsing, current_lat/current_lon frozen at whatever they last were
+    # (possibly still 0.0,0.0 if it died before ever getting a fix), and
+    # nothing printed again after the one-time failure message. gps_upload_
+    # thread would then either upload a stale frozen position forever or
+    # never upload at all, with no further indication anything was wrong.
+    # Now retries indefinitely: a failure (open or mid-read) is caught,
+    # logged, and the port is reopened after a short delay instead of
+    # ending the thread.
+    while running:
+        try:
+            ser = serial.Serial("/dev/serial0", baudrate=GPS_BAUD_RATE, timeout=1)
+            print("[GPS] serial port opened")
+            while running:
+                if ser.in_waiting > 0:
+                    line = ser.readline().decode("ascii", errors="replace").strip()
+                    parse_gps_nmea(line)
+                time.sleep(0.1)
+        except Exception as e:
+            print(f"[GPS] serial error, reconnecting in {GPS_RECONNECT_DELAY_SEC:.0f}s: {type(e).__name__}: {e}")
+            time.sleep(GPS_RECONNECT_DELAY_SEC)
 
 
 def gps_upload_thread():

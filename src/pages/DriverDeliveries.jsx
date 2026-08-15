@@ -331,6 +331,17 @@ const GOOGLE_MAP_CONTAINER_STYLE = { width: '100%', height: '100%' }
 const NAV_REROUTE_TOLERANCE_DEGREES = 0.0009
 const NAV_STEP_ADVANCE_METERS = 35
 const NAV_REROUTE_DEBOUNCE_MS = 12000
+// A DirectionsService request that never resolves at all (a real network
+// failure on a weak/flaky connection, not just an error response) leaves
+// neither the success nor failure branch of computeRoute() ever running --
+// there's no built-in timeout on the SDK's own call. Past this many ms with
+// no response, the request is treated as failed so the retry loop below can
+// take over, instead of the UI sitting on "Computing route..." forever.
+const ROUTE_REQUEST_TIMEOUT_MS = 15000
+// How long to wait before automatically retrying a failed/timed-out route
+// computation -- previously routeError's "retrying shortly" message had
+// nothing behind it; nothing ever actually retried.
+const ROUTE_RETRY_DELAY_MS = 5000
 // Street-level nav zoom (Waze/Google Nav "Start" view) -- 16 read as a
 // regular browsing zoom, not a close-in driving view. User feedback
 // 2026-08-12 after live-testing the tilt/rotation fixes; bumped in steps
@@ -744,12 +755,28 @@ function LiveNavigationMap({
   // through moveCamera() below instead, which doesn't have that problem.
   const [initialCenter] = useState(() => origin || destination)
 
+  // Identifies the most recent computeRoute() call -- a watchdog timeout
+  // captures its own request's id and only acts if it's still the latest one
+  // by the time it fires, so a slow-but-eventually-successful earlier
+  // request can't clobber a later, already-succeeded one, and a timeout that
+  // fires after its own request already resolved is a no-op.
+  const routeRequestIdRef = useRef(0)
+  // Args of the most recent call, so the retry effect below can re-issue the
+  // exact same request rather than needing its own separate retry path.
+  const lastRouteRequestRef = useRef(null)
+
   // legOffset is how many real-world legs are already behind this route
   // before its own legs[0] -- 0 for a fresh mount/destination change, or
   // completedLegsOffset + currentLegIndex when called from the reroute
   // effect (see completedLegsOffset's own comment above).
   const computeRoute = (routeOrigin, routeDestination, routeWaypoints, legOffset = 0) => {
     if (!window.google || !routeOrigin || !routeDestination) return
+    lastRouteRequestRef.current = { routeOrigin, routeDestination, routeWaypoints, legOffset }
+    const requestId = ++routeRequestIdRef.current
+    const timeoutId = setTimeout(() => {
+      if (routeRequestIdRef.current !== requestId) return
+      setRouteError(true)
+    }, ROUTE_REQUEST_TIMEOUT_MS)
     new window.google.maps.DirectionsService().route(
       {
         origin: routeOrigin,
@@ -767,6 +794,12 @@ function LiveNavigationMap({
         drivingOptions: { departureTime: new Date(), trafficModel: 'bestguess' },
       },
       (result, status) => {
+        // A later request has already superseded this one (e.g. the
+        // watchdog above already marked it failed, or a newer reroute fired
+        // first) -- a late response landing after that shouldn't overwrite
+        // whatever the newer request already did.
+        if (routeRequestIdRef.current !== requestId) return
+        clearTimeout(timeoutId)
         if (status === 'OK' && result) {
           setDirections(result)
           setCurrentStepIndex(0)
@@ -779,6 +812,20 @@ function LiveNavigationMap({
       },
     )
   }
+
+  // Actually retry a failed/timed-out route computation -- previously
+  // routeError's "retrying shortly" message had nothing behind it, so a
+  // driver on a flaky connection got permanently stuck on that message with
+  // no recovery short of a manual reload. Re-issues the exact same request
+  // every ROUTE_RETRY_DELAY_MS until one succeeds.
+  useEffect(() => {
+    if (!routeError || !lastRouteRequestRef.current) return undefined
+    const { routeOrigin, routeDestination, routeWaypoints, legOffset } = lastRouteRequestRef.current
+    const timer = setTimeout(() => {
+      computeRoute(routeOrigin, routeDestination, routeWaypoints, legOffset)
+    }, ROUTE_RETRY_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [routeError])
 
   // Stops (reference-only locations between pickup and dropoff) become
   // DirectionsService waypoints -- one extra `legs[]` entry per stop.
@@ -811,6 +858,29 @@ function LiveNavigationMap({
     computeRoute(livePosition || origin, destination, waypoints)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, destination?.lat, destination?.lng, stopsKey, stopCoordsReady])
+
+  // Upgrade the route's origin from the Warehouse/pickup fallback to the
+  // truck's real GPS position the moment one first arrives. The initial
+  // effect above deliberately excludes livePosition from its own deps (to
+  // avoid recomputing on every GPS tick) -- but that means if it happened to
+  // run before any real gps_logs reading had landed yet (a real race: the
+  // Pi/GSM link can take a while to get a fix after the page is opened), the
+  // drawn route stays anchored to the fallback origin indefinitely, even
+  // after live GPS starts flowing, until the driver manually reloads. Fires
+  // once per destination (tracked via the ref below, reset on a leg/delivery
+  // change), not on every tick -- ongoing corrections after this point are
+  // already handled by the reroute-on-deviation effect further down.
+  const hasUsedRealOriginRef = useRef(false)
+  useEffect(() => {
+    hasUsedRealOriginRef.current = false
+  }, [destination?.lat, destination?.lng])
+  useEffect(() => {
+    if (!isLoaded || !livePosition || !destination || !stopCoordsReady || isPaused) return
+    if (hasUsedRealOriginRef.current) return
+    hasUsedRealOriginRef.current = true
+    computeRoute(livePosition, destination, waypoints)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded, livePosition, destination?.lat, destination?.lng, stopCoordsReady, isPaused])
 
   // Recenter/follow as new positions arrive, and derive a heading (like
   // Waze/Google Maps' navigation-mode arrow) from consecutive GPS ticks --
