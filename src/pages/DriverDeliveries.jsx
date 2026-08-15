@@ -330,7 +330,11 @@ const GOOGLE_MAP_CONTAINER_STYLE = { width: '100%', height: '100%' }
 // fine for a "has the driver visibly left the route" check.
 const NAV_REROUTE_TOLERANCE_DEGREES = 0.0009
 const NAV_STEP_ADVANCE_METERS = 35
-const NAV_REROUTE_DEBOUNCE_MS = 12000
+// Was 12000 -- shortened per explicit user request 2026-08-15 (felt too
+// unresponsive during real-hardware testing, stacking on top of the
+// DirectionsService round-trip itself). Still a real throttle, not 0, so an
+// off-route driver doesn't spam DirectionsService on every single GPS tick.
+const NAV_REROUTE_DEBOUNCE_MS = 5000
 // A DirectionsService request that never resolves at all (a real network
 // failure on a weak/flaky connection, not just an error response) leaves
 // neither the success nor failure branch of computeRoute() ever running --
