@@ -16,6 +16,7 @@ import {
   MIN_SCHEDULING_DAYS,
   getMinDeliveryDate,
   getScheduleErrors,
+  getPickupWindowError,
   getBudgetError
 } from '../lib/deliveryOptions.js'
 import { photonGeocode } from '../lib/forwardGeocode.js'
@@ -403,6 +404,7 @@ function LocationInput({ id, label, value, onChange, required }) {
 function CustomerRequestDelivery() {
   const navigate = useNavigate()
   const [dateError, setDateError] = useState('')
+  const [pickupWindowError, setPickupWindowError] = useState('')
   const [dropoffDateError, setDropoffDateError] = useState('')
   const [dropoffTimeError, setDropoffTimeError] = useState('')
   const [budgetError, setBudgetError] = useState('')
@@ -413,6 +415,7 @@ function CustomerRequestDelivery() {
   const [formData, setFormData] = useState({
     pickupDate: '',
     pickupTime: '',
+    pickupTimeEnd: '',
     dropoffDate: '',
     dropoffTime: '',
     pickupLocation: '',
@@ -430,6 +433,10 @@ function CustomerRequestDelivery() {
     budgetMax: '',
     notes: ''
   })
+  // Drop Off Date auto-fills to match Pick Up Date as a same-day-delivery
+  // convenience default, but stays fully editable -- once the customer picks
+  // a dropoff date themselves, further pickup date edits stop overwriting it.
+  const dropoffDateTouched = useRef(false)
   const recommendedTruckValue = getRecommendedTruckValue(formData.itemType, formData.cargoWeight)
 
   // Recommended truck first, then other compatible trucks, then unavailable ones last
@@ -459,9 +466,20 @@ function CustomerRequestDelivery() {
 
     if (name === 'pickupDate') {
       setDateError(value && value < minDeliveryDate ? `Delivery date must be on or after ${minDeliveryDate}.` : '')
+      if (!dropoffDateTouched.current) {
+        next.dropoffDate = value
+      }
     }
 
-    if (['pickupDate', 'pickupTime', 'dropoffDate', 'dropoffTime'].includes(name)) {
+    if (name === 'dropoffDate') {
+      dropoffDateTouched.current = true
+    }
+
+    if (name === 'pickupTime' || name === 'pickupTimeEnd') {
+      setPickupWindowError(getPickupWindowError(next))
+    }
+
+    if (['pickupDate', 'pickupTime', 'pickupTimeEnd', 'dropoffDate', 'dropoffTime'].includes(name)) {
       const { dropoffDateError, dropoffTimeError } = getScheduleErrors(next)
       setDropoffDateError(dropoffDateError)
       setDropoffTimeError(dropoffTimeError)
@@ -514,6 +532,12 @@ function CustomerRequestDelivery() {
 
     if (formData.pickupDate < minDeliveryDate) {
       setDateError(`Delivery date must be on or after ${minDeliveryDate}.`)
+      return
+    }
+
+    const pickupWindowErrorMessage = getPickupWindowError(formData)
+    if (pickupWindowErrorMessage) {
+      setPickupWindowError(pickupWindowErrorMessage)
       return
     }
 
@@ -573,6 +597,7 @@ function CustomerRequestDelivery() {
       customer_auth_id: user.id,
       pickup_date: formData.pickupDate,
       pickup_time: formData.pickupTime,
+      pickup_time_end: formData.pickupTimeEnd,
       dropoff_date: formData.dropoffDate,
       dropoff_time: formData.dropoffTime,
       pickup_location: formData.pickupLocation,
@@ -659,17 +684,38 @@ function CustomerRequestDelivery() {
                     <p className="absolute left-0 top-full mt-1 text-xs text-red-600">{dateError}</p>
                   )}
                 </div>
-                <div className="space-y-2">
-                  <label htmlFor="pickupTime" className="text-sm font-medium text-slate-700">Pick Up Time</label>
-                  <input
-                    type="time"
-                    id="pickupTime"
-                    name="pickupTime"
-                    value={formData.pickupTime}
-                    onChange={handleChange}
-                    required
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                  />
+                <div className="relative space-y-2">
+                  <label className="text-sm font-medium text-slate-700">Pick Up Window</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="time"
+                      id="pickupTime"
+                      name="pickupTime"
+                      aria-label="Pick Up Window Start"
+                      value={formData.pickupTime}
+                      onChange={handleChange}
+                      required
+                      className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
+                        pickupWindowError ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20' : 'border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20'
+                      }`}
+                    />
+                    <span className="shrink-0 text-sm text-slate-400">to</span>
+                    <input
+                      type="time"
+                      id="pickupTimeEnd"
+                      name="pickupTimeEnd"
+                      aria-label="Pick Up Window End"
+                      value={formData.pickupTimeEnd}
+                      onChange={handleChange}
+                      required
+                      className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
+                        pickupWindowError ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20' : 'border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20'
+                      }`}
+                    />
+                  </div>
+                  {pickupWindowError && (
+                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">{pickupWindowError}</p>
+                  )}
                 </div>
                 <div className="relative space-y-2">
                   <label htmlFor="dropoffDate" className="text-sm font-medium text-slate-700">Drop Off Date</label>
@@ -697,7 +743,7 @@ function CustomerRequestDelivery() {
                     name="dropoffTime"
                     value={formData.dropoffTime}
                     onChange={handleChange}
-                    min={formData.dropoffDate === formData.pickupDate ? formData.pickupTime : undefined}
+                    min={formData.dropoffDate === formData.pickupDate ? (formData.pickupTimeEnd || formData.pickupTime) : undefined}
                     required
                     className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
                       dropoffTimeError ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20' : 'border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20'
@@ -713,7 +759,7 @@ function CustomerRequestDelivery() {
             {/* Location Section */}
             <div className="space-y-4">
               <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Location</h3>
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-4 grid-cols-1">
                 <LocationInput
                   id="pickupLocation"
                   label="Pick Up Location"

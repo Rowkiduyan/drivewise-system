@@ -44,7 +44,7 @@ function HelperLayout({ title, background, children }) {
   })
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const navigate = useNavigate()
-  const { initials: userInitials, profilePicture } = useUserProfile()
+  const { initials: userInitials, profilePicture, role } = useUserProfile()
   const deactivationWarning = useDeactivationGuard()
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false)
@@ -173,6 +173,11 @@ function HelperLayout({ title, background, children }) {
               userInitials || '...'
             )}
           </div>
+          {role ? (
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-teal-100">
+              {role}
+            </span>
+          ) : null}
         </button>
 
         {renderHelperNav(true, navigateAfterMobileClose, true)}
@@ -212,6 +217,11 @@ function HelperLayout({ title, background, children }) {
                 userInitials || '...'
               )}
             </div>
+            {isExpanded && role ? (
+              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-100">
+                {role}
+              </span>
+            ) : null}
           </button>
 
           {/* Navigation */}

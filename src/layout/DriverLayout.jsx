@@ -63,7 +63,7 @@ function DriverLayout({ title, background, children }) {
   })
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const navigate = useNavigate()
-  const { initials: userInitials, profilePicture } = useUserProfile()
+  const { initials: userInitials, profilePicture, role } = useUserProfile()
   const deactivationWarning = useDeactivationGuard()
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false)
@@ -192,6 +192,11 @@ function DriverLayout({ title, background, children }) {
               userInitials || '...'
             )}
           </div>
+          {role ? (
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-100">
+              {role}
+            </span>
+          ) : null}
         </button>
 
         {renderDriverNav(true, navigateAfterMobileClose, true)}
@@ -231,6 +236,11 @@ function DriverLayout({ title, background, children }) {
                 userInitials || '...'
               )}
             </div>
+            {isExpanded && role ? (
+              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-100">
+                {role}
+              </span>
+            ) : null}
           </button>
 
           {/* Navigation */}

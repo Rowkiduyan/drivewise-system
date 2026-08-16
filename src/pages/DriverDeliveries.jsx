@@ -2125,6 +2125,12 @@ function formatAssignedAt(iso) {
 // renders (the same one the old mock data used to provide). A delivery may
 // have no quotation yet (supervisor hasn't priced it), so quotation is null
 // and every render site below guards on it.
+// Pickup Time is a customer-selected window (start + end), e.g. "07:00 -
+// 07:15" -- falls back to a single time for legacy rows with no window end.
+function pickupWindowLabel(pickupTime, pickupTimeEnd) {
+  return pickupTimeEnd ? `${pickupTime} - ${pickupTimeEnd}` : pickupTime
+}
+
 function mapDelivery(d) {
   const str = (v) => (v == null ? '' : String(v))
   return {
@@ -2134,6 +2140,7 @@ function mapDelivery(d) {
     itemType: str(d.itemType),
     pickupDate: str(d.pickupDate),
     pickupTime: str(d.pickupTime),
+    pickupTimeEnd: d.pickupTimeEnd ? str(d.pickupTimeEnd) : '',
     pickupAddress: str(d.pickupAddress),
     deliveryAddress: str(d.deliveryAddress),
     pickupLat: d.pickupLat,
@@ -2275,7 +2282,7 @@ function DeliveryRow({ delivery, showTime, todayISO, onSelect }) {
           </span>
           <span className="inline-flex items-center gap-1">
             <Calendar className="h-3 w-3" />
-            {delivery.pickupDate}{showTime ? ` • ${delivery.pickupTime}` : ''}
+            {delivery.pickupDate}{showTime ? ` • ${pickupWindowLabel(delivery.pickupTime, delivery.pickupTimeEnd)}` : ''}
           </span>
         </div>
       </div>
@@ -2434,7 +2441,7 @@ function DeliveryDetailView({ delivery, onBack, isReportExpanded, onToggleReport
               </div>
               <div>
                 <p className="text-[10px] text-slate-500">Schedule</p>
-                <p className="font-medium text-slate-900">{delivery.pickupDate} at {delivery.pickupTime}</p>
+                <p className="font-medium text-slate-900">{delivery.pickupDate} at {pickupWindowLabel(delivery.pickupTime, delivery.pickupTimeEnd)}</p>
               </div>
             </div>
             <div className="mt-3 space-y-2.5 border-t border-amber-100 pt-3 text-xs">
@@ -3508,7 +3515,7 @@ function DriverDeliveries() {
                       <Clock className="h-3 w-3 shrink-0 text-amber-700" />
                       <p className="text-[9px] text-slate-500">Pickup</p>
                     </div>
-                    <p className="truncate text-xs font-bold text-slate-900">{active.pickupTime}</p>
+                    <p className="truncate text-xs font-bold text-slate-900">{pickupWindowLabel(active.pickupTime, active.pickupTimeEnd)}</p>
                   </div>
                   <div className="rounded-lg bg-amber-50 px-2 py-1.5">
                     <div className="flex items-center gap-1">
@@ -3674,7 +3681,7 @@ function DriverDeliveries() {
                     </div>
                     <div>
                       <p className="text-[10px] text-slate-500">Schedule</p>
-                      <p className="font-medium text-slate-900">{active.pickupDate} at {active.pickupTime}</p>
+                      <p className="font-medium text-slate-900">{active.pickupDate} at {pickupWindowLabel(active.pickupTime, active.pickupTimeEnd)}</p>
                     </div>
                   </div>
                 </section>

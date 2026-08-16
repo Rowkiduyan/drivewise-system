@@ -84,15 +84,27 @@ export function getMinDeliveryDate() {
   return date.toISOString().split('T')[0]
 }
 
-// Drop-off marks when goods arrive, so it can never be scheduled before the pickup that collects them.
-// Returns errors keyed by field so each message anchors to the input that actually needs fixing.
-export function getScheduleErrors({ pickupDate, pickupTime, dropoffDate, dropoffTime }) {
+// Pickup Time is a customer-selected window (start + end), not a single
+// instant -- returns an error if the end isn't strictly after the start.
+export function getPickupWindowError({ pickupTime, pickupTimeEnd }) {
+  if (pickupTime && pickupTimeEnd && pickupTimeEnd <= pickupTime) {
+    return 'Pickup window end must be later than the start time.'
+  }
+  return ''
+}
+
+// Drop-off marks when goods arrive, so it can never be scheduled before the
+// pickup that collects them -- compared against the pickup window's end
+// (the latest the crew could still be there), falling back to pickupTime
+// for legacy rows with no window end.
+export function getScheduleErrors({ pickupDate, pickupTime, pickupTimeEnd, dropoffDate, dropoffTime }) {
   if (pickupDate && dropoffDate && dropoffDate < pickupDate) {
     return { dropoffDateError: 'Drop-off date cannot be before the pick up date.', dropoffTimeError: '' }
   }
 
-  if (pickupDate && dropoffDate && pickupDate === dropoffDate && pickupTime && dropoffTime && dropoffTime <= pickupTime) {
-    return { dropoffDateError: '', dropoffTimeError: 'Drop-off time must be later than the pickup time.' }
+  const pickupWindowEnd = pickupTimeEnd || pickupTime
+  if (pickupDate && dropoffDate && pickupDate === dropoffDate && pickupWindowEnd && dropoffTime && dropoffTime <= pickupWindowEnd) {
+    return { dropoffDateError: '', dropoffTimeError: 'Drop-off time must be later than the pickup window.' }
   }
 
   return { dropoffDateError: '', dropoffTimeError: '' }

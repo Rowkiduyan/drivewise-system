@@ -117,13 +117,12 @@ export default function AddTruckModal({
       });
       setOriginalDeviceId(initialData.device_id || null);
 
-      // Fetch devices: unassigned + currently assigned device
+      // Fetch every device (including ones taken by other trucks) so taken
+      // devices still show up, just disabled — see the Device ID <select> below.
       const fetchDevices = async () => {
-        const currentId = initialData.device_id || "";
         const { data, error } = await supabase
           .from("devices")
-          .select("device_id, device_status, plate_number")
-          .or(`plate_number.is.null,device_id.eq.${currentId}`);
+          .select("device_id, device_status, plate_number");
         if (error) {
           console.error("Failed to fetch devices:", error);
           setAvailableDevices([]);
@@ -165,11 +164,10 @@ export default function AddTruckModal({
           console.error("Failed to fetch devices:", error);
           setAvailableDevices([]);
         } else {
-          // Only keep devices that are not assigned to any truck (plate_number null)
-          const unassigned = (data || []).filter(
-            (d) => d.plate_number === null,
-          );
-          setAvailableDevices(unassigned);
+          // Keep every device (including ones already assigned to a truck) so
+          // taken devices still show up, just disabled — see the Device ID
+          // <select> below.
+          setAvailableDevices(data || []);
         }
       };
       fetchDevices();
@@ -511,26 +509,28 @@ export default function AddTruckModal({
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
             />
           </div>
-          {/* Status dropdown */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Status
-            </label>
-            <select
-              name="status"
-              value={formData.status}
-              onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-            >
-              <option value="" disabled>
-                Select status
-              </option>
-              <option value="Available">Available</option>
-              <option value="Active">On Delivery</option>
-              <option value="Inactive">Inactive</option>
-              <option value="Maintenance">Maintenance</option>
-            </select>
-          </div>
+          {/* Status dropdown — edit only; new trucks start as "Available" */}
+          {mode === "edit" && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700">
+                Status
+              </label>
+              <select
+                name="status"
+                value={formData.status}
+                onChange={handleChange}
+                className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+              >
+                <option value="" disabled>
+                  Select status
+                </option>
+                <option value="Available">Available</option>
+                <option value="Active">On Delivery</option>
+                <option value="Inactive">Inactive</option>
+                <option value="Maintenance">Maintenance</option>
+              </select>
+            </div>
+          )}
           {/* Row 4: Device ID */}
           <div>
             <label className="block text-sm font-medium text-slate-700">
@@ -547,11 +547,17 @@ export default function AddTruckModal({
               </option>
               {availableDevices
                 .filter((d) => d.device_id) // Ensure device_id is defined
-                .map((d) => (
-                  <option key={d.device_id} value={d.device_id}>
-                    {d.device_id} ({d.device_status})
-                  </option>
-                ))}
+                .map((d) => {
+                  const isTaken =
+                    d.plate_number !== null &&
+                    d.plate_number !== formData.plate_number;
+                  return (
+                    <option key={d.device_id} value={d.device_id} disabled={isTaken}>
+                      {d.device_id} ({d.device_status})
+                      {isTaken ? ` — Taken (${d.plate_number})` : ""}
+                    </option>
+                  );
+                })}
             </select>
           </div>
           {/* New fields: Vehicle Height (m) */}

@@ -59,6 +59,7 @@ export function useUserProfile() {
   const [profile, setProfile] = useState({
     initials: "",
     profilePicture: null,
+    role: "",
   });
 
   useEffect(() => {
@@ -85,6 +86,7 @@ export function useUserProfile() {
           data.profile.last_name,
         ),
         profilePicture: data.profile.profile_picture || null,
+        role: data.profile.role || "",
       });
     }
 

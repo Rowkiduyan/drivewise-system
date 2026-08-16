@@ -877,6 +877,7 @@ Deno.serve(async (req) => {
           itemType: r.item_type ? String(r.item_type).charAt(0).toUpperCase() + String(r.item_type).slice(1) : r.item_type,
           pickupDate: r.pickup_date,
           pickupTime: r.pickup_time ? String(r.pickup_time).slice(0, 5) : null,
+          pickupTimeEnd: r.pickup_time_end ? String(r.pickup_time_end).slice(0, 5) : null,
           dropoffDate: r.dropoff_date,
           dropoffTime: r.dropoff_time ? String(r.dropoff_time).slice(0, 5) : null,
           pickupAddress: r.pickup_location,

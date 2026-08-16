@@ -68,7 +68,7 @@ function CustomerLayout({ title, background, children, bg = "bg-white" }) {
   })
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const navigate = useNavigate()
-  const { initials: userInitials, profilePicture } = useUserProfile()
+  const { initials: userInitials, profilePicture, role } = useUserProfile()
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false)
   const deactivationWarning = useDeactivationGuard()
 
@@ -197,6 +197,11 @@ function CustomerLayout({ title, background, children, bg = "bg-white" }) {
               userInitials || '...'
             )}
           </div>
+          {role ? (
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-emerald-100">
+              {role}
+            </span>
+          ) : null}
         </div>
 
         {renderClientNav(true, navigateAfterMobileClose, true)}
@@ -235,6 +240,11 @@ function CustomerLayout({ title, background, children, bg = "bg-white" }) {
                 userInitials || '...'
               )}
             </div>
+            {isExpanded && role ? (
+              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">
+                {role}
+              </span>
+            ) : null}
           </div>
 
           {/* Navigation */}

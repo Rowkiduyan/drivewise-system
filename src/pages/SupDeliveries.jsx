@@ -121,7 +121,17 @@ const statusBadge = {
   CANCELLED: 'bg-rose-100 text-rose-700',
 }
 
-function formatDateTime(dateStr, timeStr) {
+function format12Hour(timeStr) {
+  const [h, min] = timeStr.split(':').map(Number)
+  const suffix = h >= 12 ? 'PM' : 'AM'
+  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+  return `${hour12}:${String(min).padStart(2, '0')} ${suffix}`
+}
+
+// timeEndStr, when given, renders a Pickup window ("7:00 AM - 7:15 AM")
+// instead of a single instant -- Drop Off (and legacy rows with no window
+// end) still pass only timeStr and get the old single-time format.
+function formatDateTime(dateStr, timeStr, timeEndStr) {
   if (!dateStr) return 'TBD'
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const parts = dateStr.split('-')
@@ -130,10 +140,7 @@ function formatDateTime(dateStr, timeStr) {
   const monthLabel = months[m - 1] || ''
   let formattedTime = timeStr || ''
   if (timeStr) {
-    const [h, min] = timeStr.split(':').map(Number)
-    const suffix = h >= 12 ? 'PM' : 'AM'
-    const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
-    formattedTime = `${hour12}:${String(min).padStart(2, '0')} ${suffix}`
+    formattedTime = timeEndStr ? `${format12Hour(timeStr)} - ${format12Hour(timeEndStr)}` : format12Hour(timeStr)
   }
   return formattedTime ? `${monthLabel} ${d}, ${y}, ${formattedTime}` : `${monthLabel} ${d}, ${y}`
 }
@@ -152,8 +159,33 @@ function formatMessageTimestamp(iso) {
   return formatManilaDateTime(iso, { includeYear: false })
 }
 
-function getTruckType(r) {
-  return r.crew?.truck?.truckType || r.truckType || 'AUV'
+// What the customer actually asked for -- unlike getTruckType below, this
+// never falls back to the assigned truck's own type, so a mismatched
+// assignment (e.g. requested L300, assigned a 1T Dry Van truck) stays
+// visible instead of being silently overwritten by whatever got assigned.
+function getRequestedTruckType(r) {
+  return r.truckType || 'AUV'
+}
+// Fleet trucks (AddTruckModal/trucks.truck_type) and customer requests
+// (CustomerRequestDelivery/delivery_requests.truck_type) use two different
+// spellings for the same truck types -- "1T DRY" (space) vs "1T_DRY"
+// (underscore) -- so a direct string match against the requested type would
+// never hit. Strip spaces/underscores and case before comparing.
+function normalizeTruckType(value) {
+  return String(value || '').replace(/[\s_]+/g, '').toUpperCase()
+}
+// Trucks matching the request's truck type first, then the rest -- same
+// "recommended first, nothing fully hidden" pattern CustomerRequestDelivery
+// already uses for its own truck-selection table, so a Supervisor is never
+// blocked from assigning an off-type truck when the fleet has no exact match.
+function sortTrucksByRequestedType(trucks, requestedType) {
+  const wanted = normalizeTruckType(requestedType)
+  return [...trucks].sort((a, b) => {
+    const aMatches = normalizeTruckType(a.truckType) === wanted
+    const bMatches = normalizeTruckType(b.truckType) === wanted
+    if (aMatches === bMatches) return 0
+    return aMatches ? -1 : 1
+  })
 }
 function getTruckCapacity(r) {
   return r.crew?.truck?.capacity || '1.2 tons'
@@ -1567,7 +1599,7 @@ function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
             Schedule
           </h4>
           <div className="space-y-1.5">
-            <Row label="Pickup" value={formatDateTime(request.pickupDate, request.pickupTime)} />
+            <Row label="Pickup" value={formatDateTime(request.pickupDate, request.pickupTime, request.pickupTimeEnd)} />
             <Row label="Drop-off" value={formatDateTime(request.dropoffDate, request.dropoffTime)} />
           </div>
         </div>
@@ -1578,7 +1610,13 @@ function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
             Vehicle Type
           </h4>
           <div className="space-y-1.5">
-            <Row label="Truck Type" value={getTruckType(request)} />
+            <Row label="Truck Type" value={getRequestedTruckType(request)} />
+            {request.crew?.truck && normalizeTruckType(request.crew.truck.truckType) !== normalizeTruckType(getRequestedTruckType(request)) && (
+              <Row
+                label="Assigned Truck Type"
+                value={<span className="text-amber-600">{request.crew.truck.truckType} (mismatch)</span>}
+              />
+            )}
             <Row label="Capacity" value={getTruckCapacity(request)} />
             <Row label="Commodity Type" value={getCommodityType(request.itemType)} />
             <Row label="Plate Number" value={request.crew?.truck?.plateNumber || 'Not yet assigned'} />
@@ -2753,7 +2791,6 @@ function mapFleetCrewMember(m) {
     id: (m.record_id || '').trim(),
     authId: m.id,
     name: [m.first_name, m.middle_name, m.last_name].filter(Boolean).join(' ').trim(),
-    position: m.position || '',
     role: m.role,
   }
 }
@@ -2781,6 +2818,7 @@ function mapDbRequest(row, clientName, fleet) {
     cargoWeight: row.cargo_weight,
     pickupDate: row.pickup_date,
     pickupTime: row.pickup_time,
+    pickupTimeEnd: row.pickup_time_end || null,
     dropoffDate: row.dropoff_date,
     dropoffTime: row.dropoff_time,
     pickupAddress: row.pickup_location,
@@ -3098,13 +3136,14 @@ function SupDeliveries() {
   }, [selectedIssue, issueMessages])
 
   const inboxRows = useMemo(
-    () => dbRequests.filter((r) => ['PENDING_REQUEST', 'QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED', 'ASSIGNED'].includes(r.status)),
+    () => dbRequests.filter((r) => ['PENDING_REQUEST', 'QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED', 'APPROVED', 'ASSIGNED'].includes(r.status)),
     [dbRequests],
   )
 
   // Real approved/assigned requests awaiting (or carrying) a vehicle+crew
-  // assignment — read from dbRequests (not the mock array) so a request the
-  // customer has approved shows up here once it leaves the inbox.
+  // assignment — read from dbRequests (not the mock array). APPROVED/ASSIGNED
+  // requests also stay visible in inboxRows above; this is the same rows,
+  // just surfaced separately for the Assign Vehicle tab's workflow.
   const pendingAssignments = useMemo(
     () => dbRequests.filter((r) => r.status === 'APPROVED' || r.status === 'ASSIGNED'),
     [dbRequests],
@@ -3932,7 +3971,7 @@ function SupDeliveries() {
                         Schedule
                       </h4>
                       <div className="space-y-1.5">
-                        <Row label="Pickup" value={formatDateTime(selectedRequest.pickupDate, selectedRequest.pickupTime)} />
+                        <Row label="Pickup" value={formatDateTime(selectedRequest.pickupDate, selectedRequest.pickupTime, selectedRequest.pickupTimeEnd)} />
                         <Row label="Drop-off" value={formatDateTime(selectedRequest.dropoffDate, selectedRequest.dropoffTime)} />
                       </div>
                     </div>
@@ -3944,7 +3983,13 @@ function SupDeliveries() {
                         Vehicle Type
                       </h4>
                       <div className="space-y-1.5">
-                        <Row label="Truck Type" value={getTruckType(selectedRequest)} />
+                        <Row label="Truck Type" value={getRequestedTruckType(selectedRequest)} />
+                        {selectedRequest.crew?.truck && normalizeTruckType(selectedRequest.crew.truck.truckType) !== normalizeTruckType(getRequestedTruckType(selectedRequest)) && (
+                          <Row
+                            label="Assigned Truck Type"
+                            value={<span className="text-amber-600">{selectedRequest.crew.truck.truckType} (mismatch)</span>}
+                          />
+                        )}
                         <Row label="Capacity" value={getTruckCapacity(selectedRequest)} />
                         <Row label="Commodity Type" value={getCommodityType(selectedRequest.itemType)} />
                         <Row label="Plate Number" value={selectedRequest.crew?.truck?.plateNumber || 'Not yet assigned'} />
@@ -4096,7 +4141,7 @@ function SupDeliveries() {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Truck Type</p>
-                        <p className="text-sm font-semibold text-slate-800">{getTruckType(selectedRequest)}</p>
+                        <p className="text-sm font-semibold text-slate-800">{getRequestedTruckType(selectedRequest)}</p>
                       </div>
                       <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Capacity</p>
@@ -4551,7 +4596,7 @@ function SupDeliveries() {
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold text-slate-900">{selectedRequest.crew.driver.name}</p>
                             <p className="text-xs text-slate-500">
-                              {selectedRequest.crew.driver.id} • {selectedRequest.crew.driver.position}
+                              {selectedRequest.crew.driver.id}
                             </p>
                           </div>
                         </div>
@@ -4582,7 +4627,7 @@ function SupDeliveries() {
                     <div className="relative">
                       <button
                         type="button"
-                        onClick={() => setAssignment(prev => ({ ...prev, _showTrucks: !prev._showTrucks }))}
+                        onClick={() => setAssignment(prev => ({ ...prev, _showTrucks: !prev._showTrucks, _showDrivers: false, _showHelpers: false }))}
                         className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
                       >
                         {selectedTruck ? (
@@ -4602,8 +4647,9 @@ function SupDeliveries() {
                       </button>
                       {assignment._showTrucks && (
                         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {fleet.trucks.map(truck => {
+                          {sortTrucksByRequestedType(fleet.trucks, selectedRequest.truckType).map(truck => {
                             const defaultDriver = getDefaultDriverForTruck(truck)
+                            const isRequestedType = normalizeTruckType(truck.truckType) === normalizeTruckType(selectedRequest.truckType)
                             return (
                               <button
                                 key={truck.plateNumber}
@@ -4619,12 +4665,21 @@ function SupDeliveries() {
                                   }))
                                 }}
                                 className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
-                                  assignment.plateNumber === truck.plateNumber ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
+                                  assignment.plateNumber === truck.plateNumber
+                                    ? 'bg-indigo-50 ring-1 ring-indigo-300'
+                                    : isRequestedType ? '' : 'opacity-60'
                                 }`}
                               >
                                 <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-center text-[10px] font-bold leading-tight text-slate-600">{truck.truckType}</span>
                                 <div className="min-w-0 flex-1">
-                                  <p className="truncate text-sm font-semibold text-slate-900">{truck.plateNumber}</p>
+                                  <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
+                                    {truck.plateNumber}
+                                    {isRequestedType && (
+                                      <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700">
+                                        Requested type
+                                      </span>
+                                    )}
+                                  </p>
                                   <p className="text-xs text-slate-500">{truck.truckType} • {truck.capacity}</p>
                                   {defaultDriver && (
                                     <p className="mt-0.5 text-[10px] text-slate-400">Default driver: {defaultDriver.name}</p>
@@ -4651,7 +4706,7 @@ function SupDeliveries() {
                     <div className="relative">
                       <button
                         type="button"
-                        onClick={() => setAssignment(prev => ({ ...prev, _showDrivers: !prev._showDrivers }))}
+                        onClick={() => setAssignment(prev => ({ ...prev, _showDrivers: !prev._showDrivers, _showTrucks: false, _showHelpers: false }))}
                         className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
                       >
                         {selectedDriver ? (
@@ -4659,7 +4714,7 @@ function SupDeliveries() {
                             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">{getInitials(selectedDriver.name)}</span>
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-sm font-semibold text-slate-900">{selectedDriver.name}</p>
-                              <p className="text-xs text-slate-500">{selectedDriver.id} • {selectedDriver.position}</p>
+                              <p className="text-xs text-slate-500">{selectedDriver.id}</p>
                             </div>
                           </>
                         ) : (
@@ -4690,7 +4745,7 @@ function SupDeliveries() {
                               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(driver.name)}</span>
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-semibold text-slate-900">{driver.name}</p>
-                                <p className="text-xs text-slate-500">{driver.position}</p>
+                                <p className="text-xs text-slate-500">{driver.id}</p>
                               </div>
                               {assignment.driverId === driver.id && (
                                 <svg className="h-5 w-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -4712,7 +4767,7 @@ function SupDeliveries() {
                     <div className="relative">
                       <button
                         type="button"
-                        onClick={() => setAssignment(prev => ({ ...prev, _showHelpers: !prev._showHelpers }))}
+                        onClick={() => setAssignment(prev => ({ ...prev, _showHelpers: !prev._showHelpers, _showTrucks: false, _showDrivers: false }))}
                         className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
                       >
                         {selectedHelpers.length > 0 ? (
@@ -4748,7 +4803,7 @@ function SupDeliveries() {
                                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(helper.name)}</span>
                                 <div className="min-w-0 flex-1">
                                   <p className={`truncate text-sm font-semibold ${isSelected ? 'text-indigo-900' : 'text-slate-900'}`}>{helper.name}</p>
-                                  <p className="text-xs text-slate-500">{helper.id} • {helper.position}</p>
+                                  <p className="text-xs text-slate-500">{helper.id}</p>
                                 </div>
                                 <span className={`flex h-5 w-5 items-center justify-center rounded border-2 ${
                                   isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
@@ -5092,6 +5147,7 @@ function SupDeliveries() {
                       <>
                         <option value="PENDING_REQUEST">Pending Request</option>
                         <option value="PROCESSING">Processing</option>
+                        <option value="APPROVED">Approved</option>
                         <option value="ASSIGNED">Assigned</option>
                       </>
                     )}

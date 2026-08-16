@@ -140,7 +140,7 @@ function AdminLayout({ title, background, children, bg = "bg-white" }) {
 
     return window.localStorage.getItem(adminSidebarStorageKey) === "true";
   });
-  const { initials: userInitials, profilePicture } = useUserProfile();
+  const { initials: userInitials, profilePicture, role } = useUserProfile();
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
   const deactivationWarning = useDeactivationGuard();
 
@@ -188,6 +188,13 @@ function AdminLayout({ title, background, children, bg = "bg-white" }) {
                 userInitials || "..."
               )}
             </div>
+            {isExpanded && role ? (
+              <span
+                className={`text-xs font-semibold uppercase tracking-[0.2em] ${adminSidebarTheme.labelText}`}
+              >
+                {role}
+              </span>
+            ) : null}
           </div>
 
           {/* Navigation */}

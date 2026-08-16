@@ -15,7 +15,6 @@ const EMPTY_NEW_USER_FORM = {
   firstName: '',
   middleName: '',
   role: '',
-  position: '',
   clientName: '',
   personalEmail: '',
   contactNumber: '',
@@ -52,6 +51,20 @@ function calculateAge(birthdate) {
   return age >= 0 ? age : null
 }
 
+const MIN_USER_AGE = 16
+
+function sanitizeContactNumber(value) {
+  return value.replace(/\D/g, '').slice(0, 11)
+}
+
+// Latest birthdate that still meets MIN_USER_AGE as of today, used both to
+// cap the date picker and to validate on submit.
+function maxBirthdateForMinAge() {
+  const today = new Date()
+  const cutoff = new Date(Date.UTC(today.getUTCFullYear() - MIN_USER_AGE, today.getUTCMonth(), today.getUTCDate()))
+  return cutoff.toISOString().slice(0, 10)
+}
+
 function buildFullName({ firstName, middleName, lastName }) {
   return [firstName, middleName, lastName]
     .map((part) => (part || '').trim())
@@ -67,7 +80,6 @@ const BULK_COLUMNS = [
   { label: 'First Name', key: 'firstName' },
   { label: 'Middle Name', key: 'middleName' },
   { label: 'Role', key: 'role' },
-  { label: 'Position', key: 'position' },
   { label: 'Client Name', key: 'clientName' },
   { label: 'Personal Email', key: 'personalEmail' },
   { label: 'Contact Number', key: 'contactNumber' },
@@ -157,7 +169,6 @@ function validateBulkRow(record) {
     firstName: (record.firstName || '').trim(),
     middleName: (record.middleName || '').trim(),
     role: (record.role || '').trim(),
-    position: (record.position || '').trim(),
     clientName: (record.clientName || '').trim(),
     personalEmail: (record.personalEmail || '').trim().toLowerCase(),
     contactNumber: (record.contactNumber || '').trim(),
@@ -171,7 +182,6 @@ function validateBulkRow(record) {
     !payload.lastName ||
     !payload.firstName ||
     !payload.role ||
-    !payload.position ||
     !payload.personalEmail ||
     !payload.contactNumber ||
     !payload.birthdate ||
@@ -194,6 +204,14 @@ function validateBulkRow(record) {
     return { payload, error: 'Birthdate must be in YYYY-MM-DD format.' }
   }
 
+  if (payload.birthdate > maxBirthdateForMinAge()) {
+    return { payload, error: `User must be at least ${MIN_USER_AGE} years old.` }
+  }
+
+  if (!/^\d{1,11}$/.test(payload.contactNumber)) {
+    return { payload, error: 'Contact Number must be numeric and at most 11 digits.' }
+  }
+
   if (!EMAIL_PATTERN.test(payload.personalEmail)) {
     return { payload, error: 'Personal Email is not a valid email address.' }
   }
@@ -208,7 +226,6 @@ function downloadBulkUploadTemplate() {
     'Juan',
     'Santos',
     'Driver',
-    'Delivery Driver',
     '',
     'juan.delacruz@gmail.com',
     '09171234567',
@@ -250,7 +267,6 @@ function mapListedUser(row) {
     firstName: person.firstName,
     middleName: person.middleName,
     lastName: person.lastName,
-    position: row.position || '',
     clientName: row.client_name || '',
     email: row.email || '',
     contactNumber: row.contact_number || '',
@@ -274,7 +290,9 @@ function FormField({
   required = false,
   as = 'input',
   options = [],
-  className = ''
+  className = '',
+  maxLength,
+  max
 }) {
   const fieldId = `field-${name}`
 
@@ -311,6 +329,8 @@ function FormField({
           value={value}
           onChange={onChange}
           placeholder={placeholder}
+          maxLength={maxLength}
+          max={max}
           className={fieldInputClassName}
         />
       )}
@@ -381,7 +401,6 @@ function AdminHome() {
     firstName: '',
     middleName: '',
     role: '',
-    position: '',
     clientName: '',
     email: '',
     contactNumber: '',
@@ -540,8 +559,9 @@ function AdminHome() {
 
   const handleAddInputChange = (event) => {
     const { name, value } = event.target
+    const nextValue = name === 'contactNumber' ? sanitizeContactNumber(value) : value
     setNewUserForm((current) => {
-      const next = { ...current, [name]: value }
+      const next = { ...current, [name]: nextValue }
       if (name === 'province' && value !== current.province) {
         next.city = ''
       }
@@ -669,7 +689,6 @@ function AdminHome() {
           firstName: payload.firstName,
           middleName: payload.middleName,
           role: payload.role,
-          position: payload.position,
           clientName: payload.role === 'Customer' ? payload.clientName : null,
           email: payload.personalEmail,
           contactNumber: payload.contactNumber,
@@ -710,7 +729,6 @@ function AdminHome() {
     const lastName = newUserForm.lastName.trim()
     const firstName = newUserForm.firstName.trim()
     const role = newUserForm.role.trim()
-    const position = newUserForm.position.trim()
     const clientName = newUserForm.clientName.trim()
     const personalEmail = newUserForm.personalEmail.trim().toLowerCase()
     const contactNumber = newUserForm.contactNumber.trim()
@@ -723,7 +741,6 @@ function AdminHome() {
       !lastName ||
       !firstName ||
       !role ||
-      !position ||
       !personalEmail ||
       !contactNumber ||
       !birthdate ||
@@ -733,6 +750,16 @@ function AdminHome() {
       (role === 'Customer' && !clientName)
     ) {
       setFormError('All fields except Middle Name are required.')
+      return
+    }
+
+    if (!/^\d{1,11}$/.test(contactNumber)) {
+      setFormError('Contact Number must be numeric and at most 11 digits.')
+      return
+    }
+
+    if (birthdate > maxBirthdateForMinAge()) {
+      setFormError(`User must be at least ${MIN_USER_AGE} years old.`)
       return
     }
 
@@ -757,7 +784,6 @@ function AdminHome() {
       lastName: newUserForm.lastName.trim(),
       firstName: newUserForm.firstName.trim(),
       middleName: newUserForm.middleName.trim(),
-      position: newUserForm.position.trim(),
       clientName: role === 'Customer' ? newUserForm.clientName.trim() : null,
       email: newUserForm.personalEmail.trim().toLowerCase(),
       contactNumber: newUserForm.contactNumber.trim(),
@@ -818,7 +844,6 @@ function AdminHome() {
       firstName: user.firstName,
       middleName: user.middleName,
       role: user.role,
-      position: user.position,
       clientName: user.clientName,
       email: user.email,
       contactNumber: user.contactNumber,
@@ -834,8 +859,9 @@ function AdminHome() {
 
   const handleManageInputChange = (event) => {
     const { name, value } = event.target
+    const nextValue = name === 'contactNumber' ? sanitizeContactNumber(value) : value
     setManageForm((current) => {
-      const next = { ...current, [name]: value }
+      const next = { ...current, [name]: nextValue }
       if (name === 'province' && value !== current.province) {
         next.city = ''
       }
@@ -851,6 +877,18 @@ function AdminHome() {
     }
 
     setManageError('')
+
+    const contactNumber = manageForm.contactNumber.trim()
+    if (!/^\d{1,11}$/.test(contactNumber)) {
+      setManageError('Contact Number must be numeric and at most 11 digits.')
+      return
+    }
+
+    if (manageForm.birthdate && manageForm.birthdate > maxBirthdateForMinAge()) {
+      setManageError(`User must be at least ${MIN_USER_AGE} years old.`)
+      return
+    }
+
     setIsSavingAccount(true)
 
     const role = manageForm.role.trim()
@@ -860,7 +898,6 @@ function AdminHome() {
       lastName: manageForm.lastName.trim(),
       firstName: manageForm.firstName.trim(),
       middleName: manageForm.middleName.trim(),
-      position: manageForm.position.trim(),
       clientName: role === 'Customer' ? manageForm.clientName.trim() : null,
       email: manageForm.email.trim().toLowerCase(),
       contactNumber: manageForm.contactNumber.trim(),
@@ -1253,12 +1290,13 @@ function AdminHome() {
                   name="birthdate"
                   value={newUserForm.birthdate}
                   onChange={handleAddInputChange}
+                  max={maxBirthdateForMinAge()}
                   required
                 />
               </div>
 
-              {/* Role & Position */}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+              {/* Role */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <FormField
                   as="select"
                   label="Role"
@@ -1267,15 +1305,6 @@ function AdminHome() {
                   onChange={handleAddInputChange}
                   options={ROLE_OPTIONS}
                   required
-                />
-                <FormField
-                  label="Position"
-                  name="position"
-                  placeholder="e.g. Delivery Driver"
-                  value={newUserForm.position}
-                  onChange={handleAddInputChange}
-                  required
-                  className="sm:col-span-3"
                 />
               </div>
 
@@ -1308,6 +1337,7 @@ function AdminHome() {
                   placeholder="09987676766"
                   value={newUserForm.contactNumber}
                   onChange={handleAddInputChange}
+                  maxLength={11}
                   required
                 />
               </div>
@@ -1421,7 +1451,7 @@ function AdminHome() {
                   {bulkFileName || 'Click to browse for a CSV file'}
                 </p>
                 <p className="text-xs text-slate-400">
-                  Columns: Last Name, First Name, Middle Name, Role, Position, Client Name,
+                  Columns: Last Name, First Name, Middle Name, Role, Client Name,
                   Personal Email, Contact Number, Birthdate, Street, City, Province
                 </p>
                 <p className="text-xs text-slate-400">
@@ -1577,12 +1607,13 @@ function AdminHome() {
                   name="birthdate"
                   value={manageForm.birthdate || ''}
                   onChange={handleManageInputChange}
+                  max={maxBirthdateForMinAge()}
                   required
                 />
               </div>
               <div
                 className={`grid grid-cols-1 gap-4 ${
-                  manageForm.role === 'Customer' ? 'sm:grid-cols-3' : 'sm:grid-cols-2'
+                  manageForm.role === 'Customer' ? 'sm:grid-cols-2' : 'sm:grid-cols-1'
                 }`}
               >
                 <FormField
@@ -1592,13 +1623,6 @@ function AdminHome() {
                   value={manageForm.role}
                   onChange={handleManageInputChange}
                   options={ROLE_OPTIONS}
-                  required
-                />
-                <FormField
-                  label="Position"
-                  name="position"
-                  value={manageForm.position}
-                  onChange={handleManageInputChange}
                   required
                 />
                 {manageForm.role === 'Customer' ? (
@@ -1628,6 +1652,7 @@ function AdminHome() {
                   name="contactNumber"
                   value={manageForm.contactNumber}
                   onChange={handleManageInputChange}
+                  maxLength={11}
                   required
                 />
               </div>
@@ -1843,10 +1868,6 @@ function AdminHome() {
               <div className="flex justify-between gap-4">
                 <dt className="text-slate-500">Role</dt>
                 <dd className="font-medium text-slate-900">{newUserForm.role}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-slate-500">Position</dt>
-                <dd className="font-medium text-slate-900">{newUserForm.position}</dd>
               </div>
               {newUserForm.role === 'Customer' ? (
                 <div className="flex justify-between gap-4">

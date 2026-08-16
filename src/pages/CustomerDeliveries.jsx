@@ -14,9 +14,18 @@ const background = null
 // own font stack instead of relying solely on inherited font-family.
 const interFontStyle = { fontFamily: 'Inter, system-ui, sans-serif' }
 
+function format12Hour(timeStr) {
+  const [hour, minute] = timeStr.split(':').map(Number)
+  const period = hour >= 12 ? 'PM' : 'AM'
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12
+  return `${hour12}:${String(minute).padStart(2, '0')} ${period}`
+}
+
 // "2026-08-05" + "11:04:00" -> "Aug 5, 2026, 11:04 AM" — human-readable
 // pickup/drop-off datetime, matching the supervisor's deliveries page.
-function formatDisplayDateTime(dateStr, timeStr) {
+// timeEndStr, when given, renders a Pickup window ("11:04 AM - 11:19 AM")
+// instead of a single instant.
+function formatDisplayDateTime(dateStr, timeStr, timeEndStr) {
   if (!dateStr) return 'TBD'
   const parts = dateStr.split('-')
   if (parts.length !== 3) return dateStr
@@ -24,10 +33,8 @@ function formatDisplayDateTime(dateStr, timeStr) {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const monthLabel = months[month - 1] || ''
   if (!timeStr) return `${monthLabel} ${day}, ${year}`
-  const [hour, minute] = timeStr.split(':').map(Number)
-  const period = hour >= 12 ? 'PM' : 'AM'
-  const hour12 = hour % 12 === 0 ? 12 : hour % 12
-  return `${monthLabel} ${day}, ${year}, ${hour12}:${String(minute).padStart(2, '0')} ${period}`
+  const formattedTime = timeEndStr ? `${format12Hour(timeStr)} - ${format12Hour(timeEndStr)}` : format12Hour(timeStr)
+  return `${monthLabel} ${day}, ${year}, ${formattedTime}`
 }
 
 // Whole calendar days between Manila-local "today" and a delivery's
@@ -338,12 +345,6 @@ function getInitials(name) {
   return name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
 }
 
-function toGoogleMapEmbed(location) {
-  if (!location) return 'https://maps.google.com/maps?q=14.5995,120.9842&z=12&output=embed'
-  if (typeof location === 'string') return `https://maps.google.com/maps?q=${encodeURIComponent(location)}&z=14&output=embed`
-  return `https://maps.google.com/maps?q=${location.lat},${location.lng}&z=14&output=embed`
-}
-
 function fmPeso(v) {
   return `₱${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
 }
@@ -628,82 +629,6 @@ function CompletedSummary({ request }) {
   )
 }
 
-// Real-time Monitoring — desktop (md+) only, copied layout-for-layout from
-// the Supervisor's In Transit Deliveries tab: the right-side "Real-time
-// Monitoring" card (map + driver/truck row + Speed/Last Update grid) that
-// sits beside the delivery list itself, not inside a per-request detail
-// page — same placement here, used on the Customer Deliveries LIST page
-// (see CustomerDeliveries below) for whichever request is "monitored" in
-// the FOR_PICKUP/OUT_FOR_DELIVERY tabs. The Supervisor's DriveWise Alerts
-// card next to it is driver-behavior telemetry and stays supervisor-only —
-// not copied here. Mobile is unaffected; it keeps its own separate
-// "Confirmed Pickup Schedule" / "Live Tracking" cards on the detail page.
-function RealTimeMonitoringCard({ request, status }) {
-  const isOutForDelivery = request.status === 'OUT_FOR_DELIVERY' && request.liveTracking
-  const mapSrc = isOutForDelivery ? toGoogleMapEmbed(request.liveTracking) : toGoogleMapEmbed(request.pickupCoords || request.pickupLocation)
-  const driverName = request.crew?.driver?.name
-  const truck = request.crew?.truck
-
-  return (
-    <div className="hidden md:block md:overflow-hidden md:rounded-2xl md:border md:border-slate-200 md:bg-white">
-      <div className="border-b border-slate-200 px-4 py-3">
-        <h3 className="text-base font-semibold text-slate-900">Real-time Monitoring</h3>
-        <p className="text-xs text-slate-500">{request.id} • {status.label}</p>
-      </div>
-      <div className="p-4">
-        <iframe
-          title="Live Delivery Map"
-          src={mapSrc}
-          className="h-56 w-full rounded-xl"
-          loading="lazy"
-          referrerPolicy="no-referrer-when-downgrade"
-        />
-        {isOutForDelivery ? (
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
-                {getInitials(driverName || '?')}
-              </div>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-900">{driverName || 'Driver TBA'}</p>
-                <p className="truncate text-xs text-slate-500">
-                  <Truck className="mr-1 inline h-3.5 w-3.5" />
-                  {truck?.plateNumber || 'Truck TBA'}
-                  {truck?.truckType && ` • ${truck.truckType}`}
-                </p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl bg-slate-50 p-3">
-                <p className="text-xs text-slate-500">Speed</p>
-                <p className="text-xl font-bold text-slate-900">{request.liveTracking.speedKmh} km/h</p>
-              </div>
-              <div className="rounded-xl bg-slate-50 p-3">
-                <p className="text-xs text-slate-500">Last Update</p>
-                <p className="text-sm font-bold text-slate-900">{request.liveTracking.lastUpdate}</p>
-              </div>
-            </div>
-          </div>
-        ) : request.status === 'FOR_PICKUP' && request.confirmedPickupDate ? (
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
-                <Package className="h-4 w-4" />
-              </div>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-900">Pickup Scheduled</p>
-                <p className="truncate text-xs text-slate-500">{request.confirmedPickupDate} at {request.confirmedPickupTime}</p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <p className="py-10 text-center text-sm text-slate-500">No active truck to monitor.</p>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // Mobile-only unifying wrapper — folds every read-only info section
 // (Delivery Overview, Cargo & Budget, Truck & Crew, Trip Details, Quotation
 // Negotiation/Summary, Notes) into one flowing page instead of each living
@@ -911,13 +836,8 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
   // Whether the second (mobile-only-ordered) section should render at all —
   // needed for DELIVERED too, since its confirmation card lives there via
   // the order-1 trick above on mobile, even though that card is md:hidden.
-  // Real-time monitoring for FOR_PICKUP/OUT_FOR_DELIVERY now lives on the
-  // list page instead (matching the Supervisor's In Transit Deliveries tab,
-  // which is a list, not a per-request detail view) — this detail page
-  // stays a single stacked column for every status.
   const hasRightContent = hasQuotationContent ||
     (request.status === 'FOR_PICKUP' && request.confirmedPickupDate) ||
-    (request.status === 'OUT_FOR_DELIVERY' && request.liveTracking) ||
     request.status === 'DELIVERED'
   const quotationAmount = request.quotation
     ? (typeof request.quotation === 'object' ? request.quotation.amount : request.quotation)
@@ -1121,7 +1041,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                 <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[10px] font-bold text-blue-600">P</span>
                 <div className="min-w-0 flex-1">
                   <p className="text-slate-900">
-                    <span className="font-medium">{formatDisplayDateTime(request.pickupDate, request.pickupTime)}</span>
+                    <span className="font-medium">{formatDisplayDateTime(request.pickupDate, request.pickupTime, request.pickupTimeEnd)}</span>
                   </p>
                   <p className="mt-0.5 text-slate-500">{request.pickupLocation}</p>
                 </div>
@@ -1147,7 +1067,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                 <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0 md:h-4 md:w-4" />
                 <div>
                   <p className="text-[10px] text-slate-500 md:text-xs">Pickup</p>
-                  <p className="font-medium text-slate-900">{formatDisplayDateTime(request.pickupDate, request.pickupTime)}</p>
+                  <p className="font-medium text-slate-900">{formatDisplayDateTime(request.pickupDate, request.pickupTime, request.pickupTimeEnd)}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -1352,7 +1272,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                       Delivery Overview
                     </h4>
                     <div className="space-y-1.5">
-                      <Row label="Pickup" value={formatDisplayDateTime(request.pickupDate, request.pickupTime)} />
+                      <Row label="Pickup" value={formatDisplayDateTime(request.pickupDate, request.pickupTime, request.pickupTimeEnd)} />
                       <Row label="Drop-off" value={formatDisplayDateTime(request.dropoffDate, request.dropoffTime)} />
                     </div>
                   </div>
@@ -1426,51 +1346,6 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                       <p className="text-sm text-slate-700 leading-relaxed">{request.notes}</p>
                     </div>
                   )}
-                </div>
-
-                <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-                  <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
-                    Location
-                  </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <div className="flex items-start gap-2">
-                        <div className="h-5 w-5 shrink-0 rounded-full bg-blue-100 flex items-center justify-center mt-0.5">
-                          <span className="text-[10px] font-bold text-blue-600">P</span>
-                        </div>
-                        <div className="min-w-0">
-                          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">Pick-up Location</span>
-                          <span className="text-sm font-medium text-slate-900 block truncate">{request.pickupLocation}</span>
-                        </div>
-                      </div>
-                      <iframe
-                        title="Pickup - Google Map"
-                        src={toGoogleMapEmbed(request.pickupCoords || request.pickupLocation)}
-                        className="h-36 w-full rounded-lg border border-slate-200"
-                        loading="lazy"
-                        referrerPolicy="no-referrer-when-downgrade"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-start gap-2">
-                        <div className="h-5 w-5 shrink-0 rounded-full bg-rose-100 flex items-center justify-center mt-0.5">
-                          <span className="text-[10px] font-bold text-rose-600">D</span>
-                        </div>
-                        <div className="min-w-0">
-                          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">Drop-off Location</span>
-                          <span className="text-sm font-medium text-slate-900 block truncate">{request.dropoffLocation}</span>
-                        </div>
-                      </div>
-                      <iframe
-                        title="Drop-off - Google Map"
-                        src={toGoogleMapEmbed(request.dropoffCoords || request.dropoffLocation)}
-                        className="h-36 w-full rounded-lg border border-slate-200"
-                        loading="lazy"
-                        referrerPolicy="no-referrer-when-downgrade"
-                      />
-                    </div>
-                  </div>
                 </div>
 
                 <div className="mt-3">
@@ -1747,36 +1622,6 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
             md:order-none restores the original side-by-side placement. */}
         {hasRightContent && (
           <div className="order-1 space-y-2.5 md:order-none md:space-y-4">
-            {/* Live Tracking — OUT_FOR_DELIVERY with live coordinates. Mobile
-                only now (md:hidden) — the desktop equivalent is the
-                Real-time Monitoring card below, copied from the
-                Supervisor's In Transit Delivery Details page. */}
-            {request.status === 'OUT_FOR_DELIVERY' && request.liveTracking && (
-              <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-2.5 md:hidden">
-                <h3 className="flex items-center gap-2 text-xs font-semibold text-indigo-800">
-                  <Truck className="h-3.5 w-3.5" />
-                  Live Tracking
-                </h3>
-                <iframe
-                  title="Live delivery location"
-                  src={`https://maps.google.com/maps?q=${request.liveTracking.lat},${request.liveTracking.lng}&z=14&output=embed`}
-                  className="mt-2 h-40 w-full rounded-xl border border-indigo-100"
-                  loading="lazy"
-                  referrerPolicy="no-referrer-when-downgrade"
-                />
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <div className="rounded-xl bg-white/70 p-2 text-center">
-                    <p className="text-[10px] text-slate-500">Speed</p>
-                    <p className="text-sm font-bold text-indigo-900">{request.liveTracking.speedKmh} km/h</p>
-                  </div>
-                  <div className="rounded-xl bg-white/70 p-2 text-center">
-                    <p className="text-[10px] text-slate-500">Last Update</p>
-                    <p className="text-sm font-bold text-indigo-900">{request.liveTracking.lastUpdate}</p>
-                  </div>
-                </div>
-              </div>
-            )}
-
             {/* Quotation section — PROCESSING with quotation. Mobile only now
                 (md:hidden) — the desktop equivalent is folded into the
                 Quotation collapsible in the main column above. */}
@@ -1875,10 +1720,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
               </div>
             )}
 
-            {/* Confirmed Pickup — FOR_PICKUP. Mobile only now (md:hidden) —
-                the desktop equivalent is the Real-time Monitoring card
-                above, copied from the Supervisor's In Transit Delivery
-                Details page. */}
+            {/* Confirmed Pickup — FOR_PICKUP. Mobile only now (md:hidden). */}
             {request.status === 'FOR_PICKUP' && request.confirmedPickupDate && (
               <div className="rounded-2xl border border-purple-200 bg-purple-50 p-2.5 md:hidden">
                 <h3 className="text-xs font-semibold text-purple-800">Confirmed Pickup Schedule</h3>
@@ -2254,7 +2096,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
 }
 
 // Request Card Component
-function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue, desktopHidden = false }) {
+function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue }) {
   const status = statusConfig[request.status] || statusConfig.PENDING_REQUEST
   const itemLabel = request.itemType === 'other'
     ? `Other: ${request.otherItemType}`
@@ -2402,15 +2244,10 @@ function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue,
           Delivery Details page now (reviewed there, not from the table) —
           rows stay a plain single line, and the "needs a response" signal
           moves up to a dot on the Delivered tab itself instead of
-          repeating a label on every affected row.
-          `desktopHidden` suppresses this row entirely at desktop — used by
-          the FOR_PICKUP/OUT_FOR_DELIVERY tabs, which render their own
-          Supervisor-style monitoring row (MonitoringRequestRow) instead. */}
+          repeating a label on every affected row. */}
       <article
         onClick={() => onViewDetails(request)}
-        className={`gap-4 border-b border-emerald-100 px-5 py-4 transition [&>*]:min-w-0 last:border-b-0 hover:bg-emerald-50/40 md:items-center ${
-          desktopHidden ? 'hidden' : 'hidden cursor-pointer md:grid md:grid-cols-[0.7fr_0.6fr_1.7fr_1.6fr_1.6fr_0.3fr]'
-        }`}
+        className="hidden cursor-pointer gap-4 border-b border-emerald-100 px-5 py-4 transition [&>*]:min-w-0 last:border-b-0 hover:bg-emerald-50/40 md:grid md:grid-cols-[0.7fr_0.6fr_1.7fr_1.6fr_1.6fr_0.3fr] md:items-center"
       >
         <div className="flex justify-center">
           <span className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-center text-[11px] font-semibold leading-tight ${status.color}`}>
@@ -2435,49 +2272,6 @@ function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue,
   )
 }
 
-// Desktop (md+) only — the FOR_PICKUP/OUT_FOR_DELIVERY list row, copied
-// layout-for-layout from the Supervisor's In Transit Deliveries tab row
-// (Status | Request ID | Customer | View Details). The Customer/Company
-// column becomes Item Type + Pick-up (this is the customer's own list, so
-// their own name doesn't need repeating). Clicking the row selects it for
-// the Real-time Monitoring panel on the right, same as the supervisor
-// page's `setMonitoredDeliveryId`; the "View Details" button stops
-// propagation and opens the full Delivery Details page instead, exactly
-// like the supervisor's separate `openDetails` action on the same row.
-function MonitoringRequestRow({ request, isMonitored, onSelect, onViewDetails }) {
-  const status = statusConfig[request.status] || statusConfig.PENDING_REQUEST
-  const itemLabel = request.itemType === 'other'
-    ? `Other: ${request.otherItemType}`
-    : itemTypes.find((i) => i.value === request.itemType)?.label || request.itemType
-
-  return (
-    <article
-      onClick={() => onSelect(request.id)}
-      className={`grid cursor-pointer grid-cols-[0.55fr_0.55fr_1.5fr_0.5fr] items-center gap-4 px-5 py-4 transition [&>*]:min-w-0 ${
-        isMonitored ? 'bg-sky-50 hover:bg-sky-50' : 'hover:bg-slate-50'
-      }`}
-    >
-      <div className="flex justify-center">
-        <span className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight ${status.color}`}>
-          {status.label}
-        </span>
-      </div>
-      <p className="text-center text-sm font-semibold text-slate-900">{request.id}</p>
-      <div>
-        <p className="text-sm font-semibold text-slate-900">{itemLabel}</p>
-        <p className="truncate text-xs text-slate-500">{request.pickupLocation}</p>
-      </div>
-      <button
-        onClick={(e) => { e.stopPropagation(); onViewDetails(request) }}
-        className="flex items-center justify-end gap-0.5 text-sm font-semibold text-sky-600 hover:text-sky-700"
-      >
-        View Details
-        <ChevronRight className="h-4 w-4" />
-      </button>
-    </article>
-  )
-}
-
 // Map a snake_case `delivery_requests` row to the camelCase shape the rest of
 // this page expects (detail view, timeline, cards, status helpers). `status`
 // is translated to this page's vocabulary (see CUSTOMER_STATUS_MAP); the raw
@@ -2487,6 +2281,7 @@ function mapDeliveryRow(row) {
     id: row.id,
     pickupDate: row.pickup_date,
     pickupTime: row.pickup_time,
+    pickupTimeEnd: row.pickup_time_end || null,
     dropoffDate: row.dropoff_date,
     dropoffTime: row.dropoff_time,
     pickupLocation: row.pickup_location,
@@ -2585,10 +2380,7 @@ function attachQuotationState(row, qtnsByType) {
 function CustomerDeliveries() {
   const [selectedRequest, setSelectedRequest] = useState(null)
   const [activeTab, setActiveTab] = useState('all')
-  const [searchQuery, setSearchQuery] = useState('')  // Desktop (md+) only — which request is selected for the Real-time
-  // Monitoring panel on the FOR_PICKUP/OUT_FOR_DELIVERY tabs, matching the
-  // Supervisor's In Transit Deliveries tab (`monitoredDeliveryId`).
-  const [monitoredRequestId, setMonitoredRequestId] = useState(null)
+  const [searchQuery, setSearchQuery] = useState('')
   // Card-level "Delivered" quick actions (mobile) open these shared modals
   // instead of updating instantly — same deliberate-confirm pattern as the
   // detail view, without leaving the list.
@@ -2793,13 +2585,6 @@ function CustomerDeliveries() {
     return true
   })
 
-  // Whether this tab gets the Supervisor-style list+monitoring split.
-  const isMonitoringTab = activeTab === 'FOR_PICKUP' || activeTab === 'OUT_FOR_DELIVERY'
-  const monitoredRequest = isMonitoringTab
-    ? (filteredRequests.find((r) => r.id === monitoredRequestId) || filteredRequests[0] || null)
-    : null
-  const monitoredStatus = monitoredRequest ? (statusConfig[monitoredRequest.status] || statusConfig.PENDING_REQUEST) : null
-
   const tabs = [
     { id: 'all', mobileLabel: 'All' },
     { id: 'PENDING_REQUEST', mobileLabel: 'Pending' },
@@ -2932,13 +2717,9 @@ function CustomerDeliveries() {
               Tailwind's divide-y sibling selector only excludes the HTML
               `hidden` attribute, not CSS-hidden elements, so a
               container-level utility here would misfire onto the wrong
-              sibling.
-              On the FOR_PICKUP/OUT_FOR_DELIVERY tabs, this table's own
-              desktop row/header are suppressed (desktopHidden) in favor of
-              the Supervisor-style list+monitoring split rendered below —
-              mobile keeps using this same list either way. */}
-          <div className={isMonitoringTab ? '' : 'md:overflow-hidden md:rounded-2xl md:border md:border-slate-200 md:bg-white'}>
-            <div className={isMonitoringTab ? 'hidden' : 'hidden gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 md:grid md:grid-cols-[0.7fr_0.6fr_1.7fr_1.6fr_1.6fr_0.3fr]'}>
+              sibling. */}
+          <div className="md:overflow-hidden md:rounded-2xl md:border md:border-slate-200 md:bg-white">
+            <div className="hidden gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 md:grid md:grid-cols-[0.7fr_0.6fr_1.7fr_1.6fr_1.6fr_0.3fr]">
               <span className="text-center">Status</span>
               <span className="text-center">Request ID</span>
               <span>Item Type</span>
@@ -2982,44 +2763,10 @@ function CustomerDeliveries() {
                   onViewDetails={setSelectedRequest}
                   onConfirmReceived={setConfirmingRequest}
                   onReportIssue={setReportingRequest}
-                  desktopHidden={isMonitoringTab}
                 />
               ))
             )}
           </div>
-
-          {/* Desktop (md+) only — Supervisor-style list+monitoring split for
-              FOR_PICKUP/OUT_FOR_DELIVERY, copied from the Supervisor's In
-              Transit Deliveries tab: a list on the left (MonitoringRequestRow)
-              and the Real-time Monitoring card on the right for whichever
-              request is selected. Mobile keeps the plain list above. */}
-          {isMonitoringTab && filteredRequests.length > 0 && (
-            <div className="hidden md:grid md:grid-cols-[1.15fr_0.85fr] md:gap-4">
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                <div className="grid grid-cols-[0.55fr_0.55fr_1.5fr_0.5fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  <span className="text-center">Status</span>
-                  <span className="text-center">Request ID</span>
-                  <span className="text-left">Item Type</span>
-                  <span></span>
-                </div>
-                <div className="divide-y divide-slate-100">
-                  {filteredRequests.map((request) => (
-                    <MonitoringRequestRow
-                      key={request.id}
-                      request={request}
-                      isMonitored={monitoredRequest?.id === request.id}
-                      onSelect={setMonitoredRequestId}
-                      onViewDetails={setSelectedRequest}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                {monitoredRequest && <RealTimeMonitoringCard request={monitoredRequest} status={monitoredStatus} />}
-              </div>
-            </div>
-          )}
         </TabPanel>
       </div>
 

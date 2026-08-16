@@ -75,7 +75,7 @@
 
     ### Purpose
 
-    Each role has its own profile table, holding the fields captured by the "Add User" form: name (split into parts), position, personal email, contact number, birthdate, and address. This generalizes the `driver_records` table (which already existed) to the other four roles instead of collapsing everyone's profile into one wide `users` row.
+    Each role has its own profile table, holding the fields captured by the "Add User" form: name (split into parts), personal email, contact number, birthdate, and address. This generalizes the `driver_records` table (which already existed) to the other four roles instead of collapsing everyone's profile into one wide `users` row.
 
     Tables: `driver_records` (pre-existing), `supervisor_records`, `admin_records`, `helper_records`, `customer_records`.
 
@@ -86,10 +86,10 @@
     - first_name
     - middle_name (nullable)
     - last_name
-    - position (nullable — not meaningful for every role)
-    - birthdate
+    - position (nullable — no longer collected by the "Add User"/"Edit User" forms; kept as an unused nullable column rather than dropped)
+    - birthdate — the Add/Edit User forms reject birthdates that would make the user under 16 years old
     - email — personal/contact email entered by the admin. Account credential emails are sent here; this is **not** the Supabase Auth login (`users.login_email`).
-    - contact_number (new field; also being added to the existing `driver_records`, which did not have it before)
+    - contact_number (new field; also being added to the existing `driver_records`, which did not have it before) — the Add/Edit User forms restrict this to digits only, max 11
     - address (JSONB; `{ "street": ..., "city": ..., "province": ... }`. New field; also being added to the existing `driver_records`, which did not have it before. Structured as JSONB rather than flat text so the three parts round-trip cleanly into a 3-field edit form and remain individually queryable — Philippines-only, no country field. `city`/`province` are chosen from a static bundled PSGC-based dataset in the frontend, not a live API — `street` stays free text.)
     - profile_picture (nullable) — public Storage URL (with a `?v=` cache-busting query param) into the `driver-profile-pics` bucket, keyed by `auth_id + ".jpg"` (client always crops/re-encodes to a 256x256 JPEG before upload, so re-uploads overwrite the same object — see `src/lib/profilePicture.js`). Written only by the `admin-users` Edge Function's `upload-profile-picture` action.
 
@@ -334,6 +334,7 @@ create index on public.gps_logs (delivery_request_id, timestamp);
     - id (text, Primary Key, default `'DR-' || zero-padded sequence`, e.g. `DR-0001`)
     - customer_auth_id (uuid, not null) — references `users.id`.
     - pickup_date / pickup_time, dropoff_date / dropoff_time (not null)
+    - pickup_time_end (time, nullable) — **deployed 2026-08-16** (`supabase/migrations/20260816095039_delivery_requests_pickup_time_window.sql`). Pickup Time is a customer-selected window, not a single instant: `pickup_time` is the window's start, this is its end. Nullable so pre-existing rows (created before this feature) keep rendering as a single time rather than being backfilled with an invented value — see `CustomerRequestDelivery.jsx`'s Pick Up Window fields and `getScheduleErrors`/`getPickupWindowError` in `lib/deliveryOptions.js`.
     - pickup_location / dropoff_location (text, not null)
     - truck_type (text, not null) — requested truck type
     - item_type (text, not null), other_item_type (text, nullable)

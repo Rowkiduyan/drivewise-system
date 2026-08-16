@@ -286,6 +286,12 @@ function formatAssignedAt(iso) {
 // renders — mirrors DriverDeliveries.jsx's mapDelivery for the same reason:
 // the client can't read delivery_requests/*_records directly (service_role
 // only, see DATABASE.md / SUPABASE_GOTCHAS.md #8).
+// Pickup Time is a customer-selected window (start + end), e.g. "07:00 -
+// 07:15" -- falls back to a single time for legacy rows with no window end.
+function pickupWindowLabel(pickupTime, pickupTimeEnd) {
+  return pickupTimeEnd ? `${pickupTime} - ${pickupTimeEnd}` : pickupTime
+}
+
 function mapDelivery(d) {
   const str = (v) => (v == null ? '' : String(v))
   return {
@@ -295,6 +301,7 @@ function mapDelivery(d) {
     itemType: str(d.itemType),
     pickupDate: str(d.pickupDate),
     pickupTime: str(d.pickupTime),
+    pickupTimeEnd: d.pickupTimeEnd ? str(d.pickupTimeEnd) : '',
     pickupAddress: str(d.pickupAddress),
     deliveryAddress: str(d.deliveryAddress),
     // Pickup -> Dropoff -> Stops chain the Helper completes with a required
@@ -578,7 +585,7 @@ function DeliveryRow({ delivery, showTime, todayISO, onSelect }) {
           </span>
           <span className="inline-flex items-center gap-1">
             <Calendar className="h-3 w-3" />
-            {delivery.pickupDate}{showTime ? ` • ${delivery.pickupTime}` : ''}
+            {delivery.pickupDate}{showTime ? ` • ${pickupWindowLabel(delivery.pickupTime, delivery.pickupTimeEnd)}` : ''}
           </span>
         </div>
       </div>
@@ -715,7 +722,7 @@ function DeliveryDetailView({ delivery, onBack, currentHelperName }) {
               </div>
               <div>
                 <p className="text-[10px] text-slate-500">Schedule</p>
-                <p className="font-medium text-slate-900">{delivery.pickupDate} at {delivery.pickupTime}</p>
+                <p className="font-medium text-slate-900">{delivery.pickupDate} at {pickupWindowLabel(delivery.pickupTime, delivery.pickupTimeEnd)}</p>
               </div>
             </div>
             <div className="mt-3 space-y-2.5 border-t border-teal-100 pt-3 text-xs">
@@ -1412,7 +1419,7 @@ function HelperDeliveries() {
                       <Clock className="h-3 w-3 shrink-0 text-teal-700" />
                       <p className="text-[9px] text-slate-500">Pickup</p>
                     </div>
-                    <p className="truncate text-xs font-bold text-slate-900">{active.pickupTime}</p>
+                    <p className="truncate text-xs font-bold text-slate-900">{pickupWindowLabel(active.pickupTime, active.pickupTimeEnd)}</p>
                   </div>
                   <div className="rounded-lg bg-teal-50 px-2 py-1.5">
                     <div className="flex items-center gap-1">
@@ -1521,7 +1528,7 @@ function HelperDeliveries() {
                     </div>
                     <div>
                       <p className="text-[10px] text-slate-500">Schedule</p>
-                      <p className="font-medium text-slate-900">{active.pickupDate} at {active.pickupTime}</p>
+                      <p className="font-medium text-slate-900">{active.pickupDate} at {pickupWindowLabel(active.pickupTime, active.pickupTimeEnd)}</p>
                     </div>
                   </div>
                 </section>
