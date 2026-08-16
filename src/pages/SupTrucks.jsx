@@ -1,6 +1,8 @@
 import { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
+import MaintenanceSummaryWidget from "../components/trucks/MaintenanceSummaryWidget.jsx";
+import { getPmsStatus } from "../components/trucks/utils/pms.js";
 // import AddTruckModal from "../components/AddTruckModal.jsx"; // Not used in read‑only view
 // Import only the icons that are still needed (Search, ChevronRight, RefreshCw)
 import { Search, ChevronRight, RefreshCw } from "lucide-react";
@@ -16,6 +18,7 @@ const TRUCK_TYPES = [
   "4T REF",
 ];
 import { supabase } from "../lib/supabaseClient.js";
+import useUserRole from "../hooks/useUserRole.js";
 
 // STATUS_BADGE_CLASSES removed as status field is no longer used.
 
@@ -220,6 +223,7 @@ function SupTrucks() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedType, setSelectedType] = useState("All");
   const [selectedStatus, setSelectedStatus] = useState("All");
+  const [selectedPmsStatus, setSelectedPmsStatus] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   // const [isAddModalOpen, setIsAddModalOpen] = useState(false); // Add modal disabled for supervisor view
   // const [isEditModalOpen, setIsEditModalOpen] = useState(false); // Edit modal disabled
@@ -235,6 +239,7 @@ function SupTrucks() {
 
   // Loading state for initial data fetch
   const [loading, setLoading] = useState(true);
+  const userRole = useUserRole();
 
   // Devices list for mapping assigned device IDs to trucks
   const [devices, setDevices] = useState([]);
@@ -333,8 +338,12 @@ function SupTrucks() {
           selectedType === "All" || truck.truck_type === selectedType;
         const matchesStatus =
           selectedStatus === "All" || (truck.status ?? "-") === selectedStatus;
+        // PMS status filter
+        const matchesPms =
+          selectedPmsStatus === "All" ||
+          getPmsStatus(truck) === selectedPmsStatus;
 
-        return matchesSearch && matchesType && matchesStatus;
+        return matchesSearch && matchesType && matchesStatus && matchesPms;
       })
       .sort((leftTruck, rightTruck) => {
         // First, sort by creation date (most recent first).
@@ -352,7 +361,7 @@ function SupTrucks() {
         // Finally, sort by plate number for deterministic ordering.
         return leftTruck.plate_number.localeCompare(rightTruck.plate_number);
       });
-  }, [searchTerm, selectedType, selectedStatus, trucks]);
+  }, [searchTerm, selectedType, selectedStatus, selectedPmsStatus, trucks]);
   // Handler for adding a new truck from the modal
   // Add a new truck entry – now persists to Supabase and updates local state.
   // Insert a new truck via Supabase and update UI state.
@@ -362,6 +371,9 @@ function SupTrucks() {
 
   // Refresh trucks list from Supabase – used after edit to reflect changes.
   const refreshTrucks = async () => {
+    // Reset widget filter to default (All) and pagination to first page
+    setSelectedPmsStatus("All");
+    setCurrentPage(1);
     setLoading(true);
     const { data, error } = await supabase.from("trucks").select("*");
     if (!error && data) setTrucks(data);
@@ -495,6 +507,15 @@ function SupTrucks() {
           </div>
         )}
 
+        {/* Maintenance Summary Widget */}
+        <MaintenanceSummaryWidget
+          trucks={trucks}
+          onSelect={(status) => {
+            setSelectedPmsStatus(status);
+            // Reset pagination to first page when filter changes
+            setCurrentPage(1);
+          }}
+        />
         {/* Truck List */}
         <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex h-full min-h-0 flex-col">
@@ -530,7 +551,11 @@ function SupTrucks() {
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Assigned Device
                       </th>
-                      {/* Actions column header removed for supervisor view */}
+                      {userRole.toLowerCase() !== "supervisor" && (
+                        <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                          ACTIONS
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -572,11 +597,14 @@ function SupTrucks() {
                             return dev?.device_id ?? "NONE";
                           })()}
                         </td>
-                        {/* Action buttons (Edit/Delete) removed for supervisor view */}
-                        <td className="py-2.5 pl-2 pr-5 flex items-center justify-center space-x-2">
-                          {/* Navigation chevron remains */}
-                          <ChevronRight className="ml-1 h-4 w-4 text-slate-400" />
-                        </td>
+                        {userRole !== "supervisor" ? (
+                          <td className="py-2.5 pl-2 pr-5 flex items-center justify-center space-x-2">
+                            {/* Navigation chevron remains */}
+                            <ChevronRight className="ml-1 h-4 w-4 text-slate-400" />
+                          </td>
+                        ) : (
+                          <td className="py-2.5 pl-2 pr-5"></td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

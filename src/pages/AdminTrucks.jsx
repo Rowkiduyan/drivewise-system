@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import AdminLayout from "../layout/AdminLayout.jsx";
 import AddTruckModal from "../components/AddTruckModal.jsx";
 import { Search, ChevronRight, Trash2, Edit, RefreshCw } from "lucide-react";
+import MaintenanceSummaryWidget from "../components/trucks/MaintenanceSummaryWidget.jsx";
+import { getPmsStatus } from "../components/trucks/utils/pms.js";
 // Truck type options are defined directly here as mockTrucks.js has been removed.
 const TRUCK_TYPES = [
   "L300",
@@ -15,6 +17,7 @@ const TRUCK_TYPES = [
   "4T REF",
 ];
 import { supabase } from "../lib/supabaseClient.js";
+import useUserRole from "../hooks/useUserRole.js";
 
 // STATUS_BADGE_CLASSES removed as status field is no longer used.
 
@@ -219,6 +222,7 @@ function AdminTrucks() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedType, setSelectedType] = useState("All");
   const [selectedStatus, setSelectedStatus] = useState("All");
+  const [selectedPmsStatus, setSelectedPmsStatus] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -234,6 +238,7 @@ function AdminTrucks() {
 
   // Loading state for initial data fetch
   const [loading, setLoading] = useState(true);
+  const userRole = useUserRole();
 
   // Devices list for mapping assigned device IDs to trucks
   const [devices, setDevices] = useState([]);
@@ -250,7 +255,9 @@ function AdminTrucks() {
       try {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
+          // eslint-disable-next-line react-hooks/set-state-in-effect
           setTrucks(parsed);
+          // eslint-disable-next-line react-hooks/set-state-in-effect
           setLoading(false);
         }
       } catch (e) {
@@ -310,6 +317,7 @@ function AdminTrucks() {
   }, [trucks]);
 
   // Filter trucks based on search term and selected type, then sort by type order and plate number.
+
   const filteredTrucks = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
     return trucks
@@ -332,8 +340,11 @@ function AdminTrucks() {
           selectedType === "All" || truck.truck_type === selectedType;
         const matchesStatus =
           selectedStatus === "All" || (truck.status ?? "-") === selectedStatus;
+        const matchesPms =
+          selectedPmsStatus === "All" ||
+          getPmsStatus(truck) === selectedPmsStatus;
 
-        return matchesSearch && matchesType && matchesStatus;
+        return matchesSearch && matchesType && matchesStatus && matchesPms;
       })
       .sort((leftTruck, rightTruck) => {
         // First, sort by creation date (most recent first).
@@ -351,7 +362,7 @@ function AdminTrucks() {
         // Finally, sort by plate number for deterministic ordering.
         return leftTruck.plate_number.localeCompare(rightTruck.plate_number);
       });
-  }, [searchTerm, selectedType, selectedStatus, trucks]);
+  }, [searchTerm, selectedType, selectedStatus, selectedPmsStatus, trucks]);
   // Handler for adding a new truck from the modal
   // Add a new truck entry – now persists to Supabase and updates local state.
   // Insert a new truck via Supabase and update UI state.
@@ -388,6 +399,9 @@ function AdminTrucks() {
 
   // Refresh trucks list from Supabase – used after edit to reflect changes.
   const refreshTrucks = async () => {
+    // Reset widget filter to default (All) and pagination to first page
+    setSelectedPmsStatus("All");
+    setCurrentPage(1);
     setLoading(true);
     const { data, error } = await supabase.from("trucks").select("*");
     if (!error && data) setTrucks(data);
@@ -532,13 +546,15 @@ function AdminTrucks() {
                 <RefreshCw className="h-4 w-4 text-slate-800" />
               </button>
             </div>
-            {/* Add Truck button (rightmost) */}
-            <button
-              onClick={() => setIsAddModalOpen(true)}
-              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700"
-            >
-              Add Truck
-            </button>
+            {/* Add Truck button (rightmost) – visible to admins only */}
+            {userRole !== "supervisor" && (
+              <button
+                onClick={() => setIsAddModalOpen(true)}
+                className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700"
+              >
+                Add Truck
+              </button>
+            )}
           </div>
         </section>
         {/* Toast message with slide‑down animation */}
@@ -560,6 +576,12 @@ function AdminTrucks() {
             </p>
           </div>
         )}
+
+        {/* Maintenance Summary Widget */}
+        <MaintenanceSummaryWidget
+          trucks={trucks}
+          onSelect={setSelectedPmsStatus}
+        />
 
         {/* Truck List */}
         <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -596,9 +618,11 @@ function AdminTrucks() {
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Assigned Device
                       </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 py-3 pl-2 pr-5 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-                        ACTIONS
-                      </th>
+                      {userRole !== "supervisor" && (
+                        <th className="sticky top-0 z-10 bg-slate-50 py-3 pl-2 pr-5 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                          ACTIONS
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -640,33 +664,37 @@ function AdminTrucks() {
                             return dev?.device_id ?? "NONE";
                           })()}
                         </td>
-                        <td className="py-2.5 pl-2 pr-5 flex items-center justify-center space-x-2">
-                          {/* Edit button */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleEditTruck(truck);
-                            }}
-                            className="text-blue-600 hover:text-blue-800"
-                            title="Edit truck"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </button>
-                          {/* Delete button */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setTruckToDelete(truck);
-                              setIsDeleteModalOpen(true);
-                            }}
-                            className="text-red-600 hover:text-red-800"
-                            title="Delete truck"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                          {/* Navigation chevron */}
-                          <ChevronRight className="ml-1 h-4 w-4 text-slate-400" />
-                        </td>
+                        {userRole !== "supervisor" ? (
+                          <td className="py-2.5 pl-2 pr-5 flex items-center justify-center space-x-2">
+                            {/* Edit button */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEditTruck(truck);
+                              }}
+                              className="text-blue-600 hover:text-blue-800"
+                              title="Edit truck"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </button>
+                            {/* Delete button */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTruckToDelete(truck);
+                                setIsDeleteModalOpen(true);
+                              }}
+                              className="text-red-600 hover:text-red-800"
+                              title="Delete truck"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                            {/* Navigation chevron */}
+                            <ChevronRight className="ml-1 h-4 w-4 text-slate-400" />
+                          </td>
+                        ) : (
+                          <td className="py-2.5 pl-2 pr-5"></td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -699,7 +727,13 @@ function AdminTrucks() {
           }}
           initialData={truckToEdit}
           onSubmit={handleAddTruck} // reuse same submit for add (creates new) – not used in edit mode
-          onSuccess={refreshTrucks}
+          onSuccess={() => {
+            refreshTrucks();
+            setToast({
+              message: `Truck ${truckToEdit?.plate_number || ""} updated successfully`,
+              type: "success",
+            });
+          }}
         />
       )}
       {/* Delete Confirmation Modal */}

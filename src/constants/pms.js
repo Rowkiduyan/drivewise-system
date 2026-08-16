@@ -1,0 +1,4 @@
+export const DEFAULT_PMS_INTERVAL_KM = 10000;
+export const DEFAULT_PMS_INTERVAL_MONTHS = 6;
+export const WARNING_THRESHOLD_KM = 1000;
+export const WARNING_THRESHOLD_DAYS = 30;

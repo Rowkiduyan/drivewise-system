@@ -30,23 +30,6 @@ const INITIAL_MODEL_OPTIONS = [
 ];
 
 // Month and year options for Date Acquired dropdowns
-const MONTH_OPTIONS = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-const YEAR_OPTIONS = Array.from({ length: 2027 - 2000 }, (_, i) =>
-  (2000 + i).toString(),
-);
 
 export default function AddTruckModal({
   isOpen,
@@ -77,9 +60,9 @@ export default function AddTruckModal({
     container_height: "",
     container_length: "",
     current_mileage: "",
-    // Default maintenance values as requested
-    maintenance_interval: 6,
-    maintenance_mileage_interval: 5000,
+    // New PMS baseline fields
+    last_pms_date: "",
+    last_pms_mileage: "",
     // New status field for edit mode – safely handle null initialData
     status: initialData?.status || "",
   });
@@ -107,7 +90,6 @@ export default function AddTruckModal({
 
   useEffect(() => {
     if (!isOpen) {
-      setShowConfirmModal(false);
       return;
     }
 
@@ -129,9 +111,8 @@ export default function AddTruckModal({
         container_height: initialData.container_height || "",
         container_length: initialData.container_length || "",
         current_mileage: initialData.current_mileage || "",
-        maintenance_interval: initialData.maintenance_interval || "",
-        maintenance_mileage_interval:
-          initialData.maintenance_mileage_interval || "",
+        last_pms_date: initialData.last_pms_date || "",
+        last_pms_mileage: initialData.last_pms_mileage || "",
         status: initialData.status || "",
       });
       setOriginalDeviceId(initialData.device_id || null);
@@ -169,9 +150,9 @@ export default function AddTruckModal({
         container_height: "",
         container_length: "",
         current_mileage: "",
-        // Default maintenance values as requested
-        maintenance_interval: 6,
-        maintenance_mileage_interval: 5000,
+        // New PMS baseline fields
+        last_pms_date: "",
+        last_pms_mileage: "",
         // Default status to avoid null values
         status: "Available",
       });
@@ -239,9 +220,8 @@ export default function AddTruckModal({
       container_length: formData.container_length || null,
       max_capacity: formData.max_capacity || null,
       current_mileage: formData.current_mileage || null,
-      maintenance_mileage_interval:
-        formData.maintenance_mileage_interval || null,
-      maintenance_interval: formData.maintenance_interval || null,
+      last_pms_mileage: formData.last_pms_mileage || null,
+      last_pms_date: formData.last_pms_date || null,
       status: formData.status || null,
     };
     try {
@@ -268,7 +248,9 @@ export default function AddTruckModal({
           .eq("device_id", formData.device_id);
         if (deviceError) throw deviceError;
       }
+      // Close modal and optionally notify parent of success
       onClose();
+      if (onSuccess) onSuccess();
       // Add custom options if needed
       if (
         formData.brand === "Custom" &&
@@ -313,9 +295,8 @@ export default function AddTruckModal({
           container_width: formData.container_width || null,
           container_length: formData.container_length || null,
           current_mileage: formData.current_mileage || null,
-          maintenance_interval: formData.maintenance_interval || null,
-          maintenance_mileage_interval:
-            formData.maintenance_mileage_interval || null,
+          last_pms_date: formData.last_pms_date || null,
+          last_pms_mileage: formData.last_pms_mileage || null,
           status: formData.status || null,
         })
         .eq("plate_number", formData.plate_number);
@@ -358,6 +339,7 @@ export default function AddTruckModal({
         }
       }
       setShowConfirmModal(false);
+      // Close modal and notify parent of successful update
       onClose();
       if (onSuccess) onSuccess();
     } catch (err) {
@@ -653,34 +635,31 @@ export default function AddTruckModal({
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
             />
           </div>
-          {/* Maintenance Mileage Interval */}
+          {/* Last PMS Date */}
           <div>
             <label className="block text-sm font-medium text-slate-700">
-              Maintenance Mileage Interval (km)
+              Last Service Date
             </label>
             <input
-              name="maintenance_mileage_interval"
-              type="number"
-              step="1"
-              min="0"
-              placeholder="5000"
-              value={formData.maintenance_mileage_interval}
+              name="last_pms_date"
+              type="date"
+              value={formData.last_pms_date}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
             />
           </div>
-          {/* Maintenance Interval */}
+          {/* Last PMS Mileage */}
           <div>
             <label className="block text-sm font-medium text-slate-700">
-              Maintenance Interval (month/s)
+              Last Service Mileage (km)
             </label>
             <input
-              name="maintenance_interval"
+              name="last_pms_mileage"
               type="number"
               step="1"
               min="0"
-              placeholder="6"
-              value={formData.maintenance_interval}
+              placeholder="12000"
+              value={formData.last_pms_mileage}
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
             />

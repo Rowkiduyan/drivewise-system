@@ -137,7 +137,7 @@ export default function AdminDevices() {
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
               >
-                <option value="All">All Statuses</option>
+                <option value="All">Status</option>
                 <option value="Active">Active</option>
                 <option value="Inactive">Inactive</option>
                 <option value="Maintenance">Maintenance</option>
@@ -147,7 +147,7 @@ export default function AdminDevices() {
                 onChange={(e) => setAssignmentFilter(e.target.value)}
                 className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
               >
-                <option value="All">All Assignments</option>
+                <option value="All">Assignments</option>
                 <option value="Assigned">Assigned</option>
                 <option value="Unassigned">Unassigned</option>
               </select>
