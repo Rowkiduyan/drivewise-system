@@ -268,6 +268,7 @@ create index on public.gps_logs (delivery_request_id, timestamp);
     - brand (text, not null)
     - model (text, not null)
     - truck_type (text, not null)
+    - commodity_type (text, not null, default `'Ordinary'`) — the truck's commodity handling capability: `'Ordinary'` or `'Chilled'`. Added 2026-08-17 (migration `20260817000000_trucks_commodity_type.sql`). Set via `AddTruckModal.jsx`. Distinct from `delivery_requests.item_type` — the Deliveries tab's "Commodity Type" label is computed from the shipped item (see `SupDeliveries.jsx` `getCommodityType`), not this column.
     - year_model (integer, nullable)
     - container_height / container_width / container_length (numeric, nullable)
     - max_capacity (numeric, nullable)

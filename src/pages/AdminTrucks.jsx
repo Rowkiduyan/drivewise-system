@@ -47,6 +47,12 @@ function TypeTag({ type }) {
   );
 }
 
+// REF truck types (1T REF / 2T REF / 4T REF) are Chilled; any other truck
+// type is Ordinary.
+function getCommodityLabel(truck) {
+  return /REF/i.test(truck.truck_type || "") ? "Chilled" : "Ordinary";
+}
+
 function FilterSelect({
   id,
   label,
@@ -329,6 +335,8 @@ function AdminTrucks() {
               truck.brand,
               truck.model,
               truck.truck_type,
+              truck.commodity_type,
+              getCommodityLabel(truck),
               truck.device_id,
               truck.assignedDriver || "",
             ]
@@ -613,6 +621,9 @@ function AdminTrucks() {
                         Truck Type
                       </th>
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Commodity Type
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Status
                       </th>
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
@@ -650,6 +661,10 @@ function AdminTrucks() {
                         </td>
                         <td className="px-5 py-2.5">
                           <TypeTag type={truck.truck_type} />
+                        </td>
+                        {/* Commodity Type column */}
+                        <td className="px-5 py-2.5 text-slate-700">
+                          {getCommodityLabel(truck)}
                         </td>
                         {/* Device Status column removed */}
                         {/* Status column */}

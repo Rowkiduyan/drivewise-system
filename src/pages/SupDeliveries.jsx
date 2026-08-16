@@ -190,9 +190,17 @@ function sortTrucksByRequestedType(trucks, requestedType) {
 function getTruckCapacity(r) {
   return r.crew?.truck?.capacity || '1.2 tons'
 }
+// Commodity classification for a delivery, derived from its item type.
+// Real items are stored as deliveryOptions.js itemTypes codes (frozen, dairy,
+// fresh_food, pharmaceuticals) — the four that only reefer (REF) trucks can
+// carry per ITEM_TRUCK_COMPATIBILITY — plus mapDbRequest capitalizes the code.
+// Human-readable mock labels (e.g. "Frozen Goods") are also accepted. Anything
+// else is Ordinary.
 function getCommodityType(itemType) {
-  const t = String(itemType || '').toLowerCase()
-  return ['frozen goods', 'pharmaceuticals'].includes(t) ? 'Chilled' : 'Ordinary'
+  const t = String(itemType || '').replace(/[\s_]+/g, '').toLowerCase()
+  return ['freshfood', 'frozen', 'dairy', 'pharmaceuticals'].some((key) => t.includes(key))
+    ? 'Chilled'
+    : 'Ordinary'
 }
 function isLargeTruck(r) {
   const cap = parseFloat(getTruckCapacity(r))
@@ -2769,8 +2777,11 @@ function PaginationBar({ page, setPage, totalPages }) {
 // #7), so the display name comes from the admin-users Edge Function's
 // list-clients action instead.
 // Map a real `trucks` row to the assignment picker shape. Real trucks have no
-// availability status, commodity type, or default-driver mapping (those only
-// exist on the mock fleet), so only the fields real data provides are kept.
+// availability status or default-driver mapping (those only exist on the mock
+// fleet); `commodity_type` exists on real trucks too but is intentionally not
+// surfaced here — the Deliveries tab's Commodity Type label is computed from
+// the request's item_type (see getCommodityType), not the truck's. So only the
+// fields real data provides for the picker are kept.
 function mapFleetTruck(t) {
   return {
     id: t.id,
@@ -3745,6 +3756,14 @@ function SupDeliveries() {
   const assignCrew = async () => {
     if (!selectedRequest || !canConfirmAssignment) return
 
+    // Truck-type guard: a delivery must be assigned a truck whose type matches
+    // the requested one — prevents historic "Assigned Truck Type (mismatch)"
+    // rows from being recreated.
+    if (normalizeTruckType(selectedTruck?.truckType) !== normalizeTruckType(selectedRequest.truckType)) {
+      alert(`Truck ${selectedTruck.plateNumber} is ${selectedTruck.truckType}, but this delivery requires ${selectedRequest.truckType}. Only matching truck types can be assigned.`)
+      return
+    }
+
     const assignedAtIso = new Date().toISOString()
     const assignedAt = new Date().toLocaleString('en-PH', {
       timeZone: MANILA_TIMEZONE,
@@ -4654,7 +4673,9 @@ function SupDeliveries() {
                               <button
                                 key={truck.plateNumber}
                                 type="button"
+                                disabled={!isRequestedType}
                                 onClick={() => {
+                                  if (!isRequestedType) return
                                   const defaultDriver = getDefaultDriverForTruck(truck)
                                   setAssignment(prev => ({
                                     ...prev,
@@ -4664,10 +4685,12 @@ function SupDeliveries() {
                                     _showTrucks: false,
                                   }))
                                 }}
-                                className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
+                                className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition ${
+                                  !isRequestedType ? 'cursor-not-allowed opacity-40' : 'hover:bg-indigo-50'
+                                } ${
                                   assignment.plateNumber === truck.plateNumber
                                     ? 'bg-indigo-50 ring-1 ring-indigo-300'
-                                    : isRequestedType ? '' : 'opacity-60'
+                                    : ''
                                 }`}
                               >
                                 <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-center text-[10px] font-bold leading-tight text-slate-600">{truck.truckType}</span>
@@ -4681,8 +4704,11 @@ function SupDeliveries() {
                                     )}
                                   </p>
                                   <p className="text-xs text-slate-500">{truck.truckType} • {truck.capacity}</p>
-                                  {defaultDriver && (
+                                  {isRequestedType && defaultDriver && (
                                     <p className="mt-0.5 text-[10px] text-slate-400">Default driver: {defaultDriver.name}</p>
+                                  )}
+                                  {!isRequestedType && (
+                                    <p className="mt-0.5 text-[10px] font-medium text-amber-600">Not compatible — only {selectedRequest.truckType} can be assigned</p>
                                   )}
                                 </div>
                                 {assignment.plateNumber === truck.plateNumber && (
@@ -4693,6 +4719,11 @@ function SupDeliveries() {
                               </button>
                             )
                           })}
+                          {!sortTrucksByRequestedType(fleet.trucks, selectedRequest.truckType).some((t) => normalizeTruckType(t.truckType) === normalizeTruckType(selectedRequest.truckType)) && (
+                            <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
+                              No truck matches the requested type ({selectedRequest.truckType}).
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>

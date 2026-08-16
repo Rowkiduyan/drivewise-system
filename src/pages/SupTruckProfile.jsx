@@ -734,6 +734,12 @@ function AdminTruckProfile() {
               <InfoRow label="Plate Number" value={truck.plate_number} />
               <InfoRow label="Model" value={truck.model} />
               <InfoRow label="Truck Type" value={truck.truck_type} />
+              <InfoRow
+                label="Commodity Type"
+                value={
+                  /REF/i.test(truck.truck_type || "") ? "Chilled" : "Ordinary"
+                }
+              />
               <InfoRow label="Year Model" value={truck.year_model} />
               {/* Removed Assigned Driver InfoRow */}
               <InfoRow

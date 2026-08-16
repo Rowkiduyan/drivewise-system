@@ -52,6 +52,7 @@ export default function AddTruckModal({
     customModel: "",
     truck_type: TRUCK_TYPES[0],
     customtruck_type: "",
+    commodity_type: initialData?.commodity_type || "Ordinary",
     device_id: "",
     year_model: 2026,
     date_acquired: "",
@@ -103,6 +104,7 @@ export default function AddTruckModal({
         customModel: "",
         truck_type: initialData.truck_type || TRUCK_TYPES[0],
         customtruck_type: "",
+        commodity_type: initialData.commodity_type || "Ordinary",
         device_id: initialData.device_id || "",
         year_model: initialData.year_model || 2026,
         date_acquired: initialData.date_acquired || "",
@@ -141,6 +143,7 @@ export default function AddTruckModal({
         customModel: "",
         truck_type: TRUCK_TYPES[0],
         customtruck_type: "",
+        commodity_type: "Ordinary",
         device_id: "",
         year_model: 2026,
         date_acquired: "",
@@ -192,6 +195,16 @@ export default function AddTruckModal({
       }
     }
     // No special formatting for device_id (handled via dropdown)
+    // Truck type change: REF types (1T REF / 2T REF / 4T REF, or a custom
+    // type containing "REF") automatically set Commodity Type to Chilled.
+    if (name === "truck_type" || name === "customtruck_type") {
+      setFormData((prev) => ({
+        ...prev,
+        [name]: newValue,
+        commodity_type: /REF/i.test(newValue) ? "Chilled" : "Ordinary",
+      }));
+      return;
+    }
     setFormData((prev) => ({ ...prev, [name]: newValue }));
   };
 
@@ -211,6 +224,7 @@ export default function AddTruckModal({
       brand: finalBrand,
       model: finalModel,
       truck_type: finaltruck_type,
+      commodity_type: formData.commodity_type || "Ordinary",
       date_acquired: formData.date_acquired || null,
       year_model: formData.year_model || null,
       container_height: formData.container_height || null,
@@ -286,6 +300,7 @@ export default function AddTruckModal({
           brand: formData.brand,
           model: formData.model,
           truck_type: formData.truck_type,
+          commodity_type: formData.commodity_type || "Ordinary",
           year_model: formData.year_model,
           date_acquired: formData.date_acquired || null,
           max_capacity: formData.max_capacity || null,
@@ -508,6 +523,21 @@ export default function AddTruckModal({
               onChange={handleChange}
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
             />
+          </div>
+          {/* Commodity Type – Chilled or Ordinary */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Commodity Type
+            </label>
+            <select
+              name="commodity_type"
+              value={formData.commodity_type}
+              onChange={handleChange}
+              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            >
+              <option value="Ordinary">Ordinary</option>
+              <option value="Chilled">Chilled</option>
+            </select>
           </div>
           {/* Status dropdown — edit only; new trucks start as "Available" */}
           {mode === "edit" && (
