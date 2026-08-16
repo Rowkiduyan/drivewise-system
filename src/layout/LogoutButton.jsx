@@ -1,35 +1,39 @@
-import { useState } from 'react'
-import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabaseClient.js'
+import { useState } from "react";
+import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "../lib/supabaseClient.js";
 
-function LogoutButton({ isExpanded, iconClassName = 'h-5 w-5 stroke-current', compact = false }) {
-  const navigate = useNavigate()
-  const [isConfirmOpen, setIsConfirmOpen] = useState(false)
-  const [isLoggingOut, setIsLoggingOut] = useState(false)
+function LogoutButton({
+  isExpanded,
+  iconClassName = "h-5 w-5 stroke-current",
+  compact = false,
+}) {
+  const navigate = useNavigate();
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const openConfirm = (event) => {
-    event.stopPropagation()
-    setIsConfirmOpen(true)
-  }
+    event.stopPropagation();
+    setIsConfirmOpen(true);
+  };
 
   const cancelLogout = (event) => {
-    event.stopPropagation()
+    event.stopPropagation();
     if (isLoggingOut) {
-      return
+      return;
     }
-    setIsConfirmOpen(false)
-  }
+    setIsConfirmOpen(false);
+  };
 
   const confirmLogout = async (event) => {
-    event.stopPropagation()
+    event.stopPropagation();
     if (isLoggingOut) {
-      return
+      return;
     }
-    setIsLoggingOut(true)
-    await supabase.auth.signOut()
-    navigate('/', { replace: true })
-  }
+    setIsLoggingOut(true);
+    await supabase.auth.signOut();
+    navigate("/", { replace: true });
+  };
 
   return (
     <>
@@ -38,10 +42,8 @@ function LogoutButton({ isExpanded, iconClassName = 'h-5 w-5 stroke-current', co
         aria-label="Log out"
         onClick={openConfirm}
         className={`flex items-center justify-start rounded-lg border border-transparent text-sm text-red-300 transition-all duration-200 hover:border-red-700 hover:bg-red-900/30 ${
-          compact ? 'px-2.5 py-2' : 'px-3 py-2.5'
-        } ${
-          isExpanded ? 'gap-3' : 'gap-0'
-        }`}
+          compact ? "px-2.5 py-2" : "px-3 py-2.5"
+        } ${isExpanded ? "gap-3" : "gap-0"}`}
       >
         <svg
           viewBox="0 0 24 24"
@@ -56,9 +58,11 @@ function LogoutButton({ isExpanded, iconClassName = 'h-5 w-5 stroke-current', co
         </svg>
         <span
           className={`inline-flex overflow-hidden whitespace-nowrap font-semibold uppercase transition-all duration-200 ease-out ${
-            compact ? 'text-[11px] tracking-wide' : 'text-xs tracking-[0.2em]'
+            compact ? "text-[11px] tracking-wide" : "text-xs tracking-[0.2em]"
           } ${
-            isExpanded ? 'max-w-40 opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'
+            isExpanded
+              ? "max-w-40 opacity-100 translate-x-0"
+              : "max-w-0 opacity-0 -translate-x-2"
           }`}
         >
           Log Out
@@ -71,8 +75,13 @@ function LogoutButton({ isExpanded, iconClassName = 'h-5 w-5 stroke-current', co
               className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 px-4"
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white p-6 shadow-xl sm:p-8">
-                <p className="text-xs uppercase tracking-[0.24em] text-red-600">Log Out</p>
+              <div
+                className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white p-6 shadow-xl sm:p-8"
+                style={{ fontFamily: "Inter, system-ui, sans-serif" }}
+              >
+                <p className="text-xs uppercase tracking-[0.24em] text-red-600">
+                  Log Out
+                </p>
                 <h2 className="mt-2 text-xl font-semibold text-slate-900">
                   Log out of your account?
                 </h2>
@@ -94,16 +103,16 @@ function LogoutButton({ isExpanded, iconClassName = 'h-5 w-5 stroke-current', co
                     onClick={confirmLogout}
                     disabled={isLoggingOut}
                   >
-                    {isLoggingOut ? 'Logging out...' : 'Log Out'}
+                    {isLoggingOut ? "Logging out..." : "Log Out"}
                   </button>
                 </div>
               </div>
             </div>,
-            document.body
+            document.body,
           )
         : null}
     </>
-  )
+  );
 }
 
-export default LogoutButton
+export default LogoutButton;

@@ -6,6 +6,13 @@ import { useUserProfile } from "../lib/useUserInitials.js";
 import { useDeactivationGuard } from "../lib/useDeactivationGuard.js";
 import { formatCutoff } from "../lib/deactivation.js";
 
+// Order of modules as requested:
+// 1. User Management
+// 2. Admin Analysis
+// 3. Device Management
+// 4. Trucks
+// 5. System Logs
+// 6. Profile
 const adminModules = [
   {
     label: "User Management",
@@ -13,27 +20,27 @@ const adminModules = [
     description: "Users, roles, and accounts",
   },
   {
-    label: "Device Management",
-    path: "/admin/device-management",
-    description: "Fleet devices and status",
-  },
-  {
     label: "Admin Analysis",
     path: "/admin/analysis",
     description: "Delivery and alert analysis",
   },
-  // New Trucks module – mirrors the supervisor Trucks entry but for admin routes
+  {
+    label: "Device Management",
+    path: "/admin/device-management",
+    description: "Fleet devices and status",
+  },
+  // Trucks module – mirrors the supervisor's Trucks entry but for admin routes
   {
     label: "Trucks",
     path: "/admin/trucks",
     description: "Fleet availability",
   },
-  { label: "Profile", path: "/admin/profile", description: "Admin account" },
   {
     label: "System Logs",
     path: "/admin/system-logs",
     description: "Audit trail of system actions",
   },
+  { label: "Profile", path: "/admin/profile", description: "Admin account" },
 ];
 
 const adminIconClassName = "h-5 w-5 stroke-current";
