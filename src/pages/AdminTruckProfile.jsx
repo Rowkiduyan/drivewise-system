@@ -489,7 +489,9 @@ function PaginationBar({ page, setPage, totalPages }) {
 
 function AdminTruckProfile() {
   const location = useLocation();
-  const truck = location.state?.truck;
+  // Seeded from nav state, then kept in sync with the DB below (fetchTruck)
+  // so an edit updates what's shown here without a full page reload.
+  const [truck, setTruck] = useState(location.state?.truck);
 
   const [activeTab, setActiveTab] = useState("overview");
   const [tripStatusFilter, setTripStatusFilter] = useState("All");
@@ -510,9 +512,7 @@ function AdminTruckProfile() {
     if (error) {
       setToast({ message: error.message, type: "error" });
     } else if (data) {
-      // Simple approach: reload the page to reflect updated data.
-      // In a more refined implementation we could store truck data in state.
-      window.location.reload();
+      setTruck(data);
     }
   };
   // Auto‑clear toast after a short period (3 seconds)
@@ -1090,8 +1090,10 @@ function AdminTruckProfile() {
               message: `Truck ${truck.plate_number} updated successfully`,
               type: "success",
             });
-            // Refreshing the page after edit caused the toast to disappear instantly.
-            // Instead, simply close the edit modal and rely on the existing toast.
+            // A full page reload here made the toast disappear instantly, so
+            // this refetches into state (see fetchTruck above) instead --
+            // updates the displayed data without losing the toast.
+            fetchTruck();
             setEditModalOpen(false);
           }}
         />

@@ -3314,13 +3314,10 @@ function SupDeliveries() {
   const assignCrew = async () => {
     if (!selectedRequest || !canConfirmAssignment) return
 
-    // Truck-type guard: a delivery must be assigned a truck whose type matches
-    // the requested one — prevents historic "Assigned Truck Type (mismatch)"
-    // rows from being recreated.
-    if (normalizeTruckType(selectedTruck?.truckType) !== normalizeTruckType(selectedRequest.truckType)) {
-      alert(`Truck ${selectedTruck.plateNumber} is ${selectedTruck.truckType}, but this delivery requires ${selectedRequest.truckType}. Only matching truck types can be assigned.`)
-      return
-    }
+    // Off-type trucks are intentionally assignable -- the picker already
+    // surfaces the mismatch (amber note + "Assigned Truck Type (mismatch)"
+    // row elsewhere on this page), but the Supervisor makes the final call,
+    // not a hard block here.
 
     const assignedAtIso = new Date().toISOString()
     const assignedAt = new Date().toLocaleString('en-PH', {
