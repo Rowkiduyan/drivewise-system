@@ -169,14 +169,13 @@ async function main() {
 
     // end-trip currently leaves status at DELIVERED, not COMPLETED --
     // reaching COMPLETED today only happens via a separate flow (the
-    // Customer's own "Confirm Receive" action, CustomerDeliveries.jsx; or a
-    // Supervisor resolving a reported issue, SupDeliveries.jsx's
-    // `resolveIssue`). Per user clarification 2026-08-14: neither of those
-    // is *supposed* to be a required gate -- once a delivery is actually
-    // done, it should just be COMPLETED, not stuck at DELIVERED awaiting a
-    // separate confirmation step. That's a real product-behavior question
-    // for `driver-trip`'s end-trip action itself, out of scope for this
-    // GPS-pipeline test -- flagged in STATUS.md, not silently fixed here.
+    // Customer's own "Confirm Receive" action, CustomerDeliveries.jsx). Per
+    // user clarification 2026-08-14: that isn't *supposed* to be a required
+    // gate -- once a delivery is actually done, it should just be COMPLETED,
+    // not stuck at DELIVERED awaiting a separate confirmation step. That's a
+    // real product-behavior question for `driver-trip`'s end-trip action
+    // itself, out of scope for this GPS-pipeline test -- flagged in STATUS.md,
+    // not silently fixed here.
     // This line stays a test-only shortcut to reach the Completed list.
     await admin.from('delivery_requests').update({ status: 'COMPLETED' }).eq('id', DELIVERY_ID)
 

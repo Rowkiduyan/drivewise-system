@@ -35,7 +35,6 @@ import {
   Fuel,
   AlertCircle,
   Lock,
-  MessageSquare,
   CameraOff,
 } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
@@ -152,11 +151,6 @@ function formatDateTime(dateStr, timeStr, timeEndStr) {
 // dev machines already set to Manila time.
 function formatIsoDateTime(iso) {
   return formatManilaDateTime(iso, { includeYear: true })
-}
-
-// Short timestamp for chat bubbles: "Aug 3, 11:02 PM". Same Manila-pinned fix.
-function formatMessageTimestamp(iso) {
-  return formatManilaDateTime(iso, { includeYear: false })
 }
 
 // What the customer actually asked for -- unlike getTruckType below, this
@@ -549,11 +543,9 @@ const stageStatus = {
  *      OUT_FOR_DROPOFF            — crew is on the way to the dropoff location.
  *      ARRIVED_DROPOFF            — crew has arrived at the dropoff location.
  * 7. DELIVERED                   — crew confirmed delivery. If the customer
- *                                  reports an issue, status STAYS DELIVERED
- *                                  (issueReported=true, issueReportedAt set)
- *                                  until the customer confirms it is resolved;
- *                                  the timeline shows an "Issue Reported"
- *                                  substep while it is open.
+ *                                  confirms receipt, the request moves to
+ *                                  COMPLETED; otherwise it auto-completes
+ *                                  7 days later (see `autoCompleteDelivered`).
  * 8. COMPLETED                   — customer confirmed the delivery, OR the
  *                                  request auto-completes 7 days after
  *                                  DELIVERED with no other action
@@ -597,9 +589,6 @@ const stageStatus = {
  * 7) delivered
  *      - Crew confirmed delivery → done when status reaches DELIVERED (or
  *        later) and `request.deliveredAt` (or `dropoffDate`) is recorded.
- *      - Issue Reported → added when `request.issueReported` is true and the
- *        issue is not yet resolved. It is REMOVED once `resolvedAt` is set
- *        (customer confirmed the issue is resolved).
  * 8) completed
  *      - Delivery completed → done when status is COMPLETED (`request.completedAt`).
  *
@@ -609,8 +598,6 @@ const stageStatus = {
  * - Map each `request.status` to the `stageStatus` index so the correct stage
  *   is marked current/completed. Keep `stageStatus`, `statusLabel` and
  *   `statusBadge` in sync when adding statuses.
- * - Delivery request keeps status DELIVERED while an issue is unresolved;
- *   the Issues module reads `request.issueReported`, not a separate status.
  * - COMPLETED after customer confirmation, or auto after 7 days (see
  *   `autoCompleteDelivered`).
  */
@@ -627,8 +614,6 @@ function buildProgressData(request) {
   const dropoffOutDone = ['OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(request.status)
   const dropoffArrivedDone = ['ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(request.status)
   const deliveredDone = ['DELIVERED', 'COMPLETED'].includes(request.status)
-  const issueOpen = Boolean(request.issueReported && !request.resolvedAt)
-  const issueResolved = Boolean(request.issueReported && request.resolvedAt)
 
   const processingSubsteps = [
     { label: 'Quotation Submitted', detail: request.quotation ? `by Supervisor · ${registeredAt}` : null },
@@ -645,11 +630,6 @@ function buildProgressData(request) {
       detail: deliveredDone ? `by Crew · ${request.deliveredAt || request.dropoffDate || registeredAt}` : null,
     },
   ]
-  if (issueOpen) {
-    deliveredSubsteps.push({ label: 'Issue Reported', detail: request.issueReportedAt ? `by Customer · ${request.issueReportedAt}` : `by Customer · ${registeredAt}`, warning: true })
-  } else if (issueResolved) {
-    deliveredSubsteps.push({ label: 'Issue Resolved', detail: `by Customer · ${request.resolvedAt}` })
-  }
 
   const stages = [
     {
@@ -712,7 +692,7 @@ function buildProgressData(request) {
       label: 'Completed',
       completedLabel: 'Delivery Completed',
       substeps: [
-        { label: 'Delivery confirmed completed', detail: request.completedAt || request.resolvedAt ? `· ${request.completedAt || request.resolvedAt}` : null },
+        { label: 'Delivery confirmed completed', detail: request.completedAt ? `· ${request.completedAt}` : null },
       ],
     },
   ]
@@ -739,133 +719,6 @@ for (const c of delivery_cancellations) {
     cancellationReason: c.cancellation_reason,
   }
 }
-
-const reportedIssues = [
-  {
-    id: 'DEL-071',
-    customerName: 'Maria Santos',
-    companyName: 'Santos Enterprises',
-    itemType: 'Beverages',
-    truckType: '4T',
-    cargoWeight: '3100',
-    status: 'DELIVERED',
-    pickupDate: '2026-07-28',
-    pickupTime: '09:00',
-    dropoffDate: '2026-07-28',
-    dropoffTime: '13:00',
-    pickupAddress: '321 Roxas Boulevard, Pasay',
-    deliveryAddress: '222 BGC, Taguig',
-    createdAt: '2026-07-28T09:00:00',
-    issueCategory: 'Item damaged',
-    issueReported: true,
-    issueDescription: 'Two cases of bottles arrived with visible damage. Reported on receipt.',
-    issueReportedAt: 'Jul 28, 2026 14:32',
-    phone: '0917 555 0131',
-    email: 'maria.santos@santosent.example',
-    resolvedAt: null,
-    destinationCoords: { lat: 14.555, lng: 121.051 },
-    currentLocation: { lat: 14.5378, lng: 120.9963 },
-    messages: [
-      { id: 'm1', sender: 'customer', text: 'Two cases of beverages arrived with visible damage on the cartons. Can we request a replacement?', at: 'Jul 28, 2026 14:32' },
-      { id: 'm2', sender: 'supervisor', text: 'We are sorry for the inconvenience. Our team will verify the load-out records and get back to you within the day.', at: 'Jul 28, 2026 15:10' },
-    ],
-    quotation: { amount: 12500 },
-    crew: { driver: { name: 'Ramon Aquino' }, truck: { plateNumber: 'GHI 9012', truckType: '4T' } },
-  },
-  {
-    id: 'DEL-072',
-    customerName: 'Jose Dela Cruz',
-    companyName: 'Dela Cruz Trading',
-    itemType: 'Dry Food',
-    truckType: '6T',
-    cargoWeight: '4800',
-    status: 'DELIVERED',
-    pickupDate: '2026-07-30',
-    pickupTime: '08:00',
-    dropoffDate: '2026-07-31',
-    dropoffTime: '12:00',
-    pickupAddress: '789 Quezon Avenue, Quezon City',
-    deliveryAddress: '888 Ortigas Center, Pasig',
-    createdAt: '2026-07-30T10:15:00',
-    issueCategory: 'Missing item(s)',
-    issueReported: true,
-    issueDescription: 'Three boxes short on the manifest. Customer asked to verify the count.',
-    issueReportedAt: 'Jul 30, 2026 17:40',
-    phone: '0918 555 0212',
-    email: 'jose.delacruz@delacruztrading.example',
-    resolvedAt: null,
-    destinationCoords: { lat: 14.5855, lng: 121.0586 },
-    currentLocation: { lat: 14.6333, lng: 121.0217 },
-    messages: [
-      { id: 'm1', sender: 'customer', text: 'The manifest shows 48 boxes but we only received 45. Three boxes are missing.', at: 'Jul 30, 2026 17:40' },
-      { id: 'm2', sender: 'supervisor', text: 'We are re-checking the truck inventory and the drop-off checklist right now. Will confirm the count shortly.', at: 'Jul 30, 2026 18:05' },
-      { id: 'm3', sender: 'customer', text: 'Thank you. Please also confirm the scheduled replacement delivery once verified.', at: 'Jul 31, 2026 08:20' },
-    ],
-    quotation: { amount: '9800' },
-    crew: { driver: { name: 'Nestor Villareal' }, truck: { plateNumber: 'DEF 9012', truckType: '6T' } },
-  },
-  {
-    id: 'DEL-073',
-    customerName: 'Ana Reyes',
-    companyName: 'Ana’s Grocery',
-    itemType: 'Fast Food',
-    truckType: '2T',
-    cargoWeight: '1500',
-    status: 'DELIVERED',
-    pickupDate: '2026-08-01',
-    pickupTime: '07:00',
-    dropoffDate: '2026-08-01',
-    dropoffTime: '11:00',
-    pickupAddress: '555 Boni Avenue, Mandaluyong',
-    deliveryAddress: '777 Greenbelt, Makati',
-    createdAt: '2026-08-01T08:05:00',
-    issueCategory: 'Wrong item delivered',
-    issueReported: true,
-    issueDescription: 'Received saturated goods instead of the ordered stock. Awaiting supervisor reply.',
-    issueReportedAt: 'Aug 1, 2026 13:12',
-    phone: '0919 555 0404',
-    email: 'ana.reyes@anasgrocery.example',
-    resolvedAt: null,
-    destinationCoords: { lat: 14.5531, lng: 121.0231 },
-    currentLocation: { lat: 14.5741, lng: 121.0347 },
-    messages: [
-      { id: 'm1', sender: 'customer', text: 'We received saturated goods instead of the stock we ordered. Kindly advise on the exchange.', at: 'Aug 1, 2026 13:12' },
-    ],
-    quotation: { amount: '7600' },
-    crew: { driver: { name: 'Teodoro Salazar' }, truck: { plateNumber: 'JKL 3456', truckType: '2T' } },
-  },
-  {
-    id: 'DEL-074',
-    customerName: 'Ramon Bautista',
-    companyName: 'Bautista Merchandising',
-    itemType: 'Frozen Goods',
-    truckType: '2T_REF',
-    cargoWeight: '2100',
-    status: 'DELIVERED',
-    pickupDate: '2026-08-02',
-    pickupTime: '09:30',
-    dropoffDate: '2026-08-02',
-    dropoffTime: '14:00',
-    pickupAddress: '890 Aurora Boulevard, Cubao, Quezon City',
-    deliveryAddress: '456 Trade Center, Binondo, Manila',
-    createdAt: '2026-08-02T10:00:00',
-    issueCategory: 'Delivery delay',
-    issueReported: true,
-    issueDescription: 'Shipment arrived 4 hours behind the scheduled window, affecting the store’s cold-chain timeline.',
-    issueReportedAt: 'Aug 2, 2026 18:05',
-    phone: '0920 555 0707',
-    email: 'ramon.bautista@bautistamerch.example',
-    resolvedAt: null,
-    destinationCoords: { lat: 14.5995, lng: 120.9842 },
-    currentLocation: { lat: 14.6018, lng: 120.9789 },
-    messages: [
-      { id: 'm1', sender: 'customer', text: 'Our frozen shipment arrived 4 hours late. The scheduled window was 10:00 AM - 12:00 PM but the truck arrived past 2:00 PM.', at: 'Aug 2, 2026 18:05' },
-      { id: 'm2', sender: 'supervisor', text: 'We apologize for the delay. The truck was held up in heavy traffic along EDSA. We will review the route plan for this area.', at: 'Aug 2, 2026 18:40' },
-    ],
-    quotation: { amount: '11800' },
-    crew: { driver: { name: 'Lito Ramos' }, truck: { plateNumber: 'ABC 1234', truckType: '2T_REF' } },
-  },
-]
 
 const mockRequests = [...customer_deliveries.map((row) => {
   const qtns = quotationsByDelivery[row.id] || {}
@@ -894,7 +747,7 @@ const mockRequests = [...customer_deliveries.map((row) => {
     cancellation: cancellationsByDelivery[row.id] || null,
     ...delivery_supervisor_data[row.id],
   }
-}), ...reportedIssues]
+})]
 const mockDrivers = delivery_drivers.map((d) => ({
   id: d.id,
   name: d.name,
@@ -2475,179 +2328,6 @@ function CancelledDeliveryDetails({ delivery }) {
   )
 }
 
-function IssueDetailView({ delivery, onResolve, onSendMessage }) {
-  const [confirmResolve, setConfirmResolve] = useState(false)
-  const [message, setMessage] = useState('')
-  const [reportTab, setReportTab] = useState('details')
-  const isResolved = Boolean(delivery.resolvedAt)
-  const report = completed_delivery_reports[delivery.id]
-  const messages = delivery.messages || []
-
-  const handleSend = () => {
-    if (!message.trim()) return
-    onSendMessage(message.trim())
-    setMessage('')
-  }
-
-  return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 md:px-5">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${
-            isResolved ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-          }`}>
-            {isResolved ? 'Resolved' : 'Issue'}
-          </span>
-          <h3 className="text-sm font-semibold text-slate-900">Delivery Report — {delivery.id}</h3>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <Package className="h-3.5 w-3.5" />
-          {delivery.companyName} • {delivery.deliveryAddress}
-        </div>
-      </div>
-
-      {isResolved ? (
-        <div className="flex items-start gap-2 border-b border-emerald-200 bg-emerald-50 px-4 py-3 md:px-5">
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
-          <div>
-            <h3 className="text-sm font-semibold text-emerald-800">Issue Resolved</h3>
-            <p className="mt-1 text-xs text-emerald-700">
-              This issue was resolved on {delivery.resolvedAt}. The delivery status has been automatically updated to Completed.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="border-b border-amber-200 bg-amber-50/70 px-4 py-4 md:px-5">
-          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            Reported Issue
-          </p>
-          <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-            <Row label="Issue" value={delivery.issueCategory} />
-            <Row label="Reported at" value={delivery.issueReportedAt} />
-            <div className="sm:col-span-2">
-              <span className="block text-sm text-slate-500">Details</span>
-              <p className="mt-0.5 text-sm font-medium text-slate-900">{delivery.issueDescription}</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="border-b border-slate-200 p-4 md:p-5">
-        <div className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          <MessageSquare className="h-3.5 w-3.5" />
-          Conversation
-        </div>
-
-        <div className="max-h-72 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-          {messages.length === 0 && (
-            <p className="py-6 text-center text-xs text-slate-400">
-              No messages yet. Start the conversation with the customer.
-            </p>
-          )}
-          {messages.map((m) => {
-            const isSupervisor = m.sender === 'supervisor'
-            return (
-              <div key={m.id} className={`flex ${isSupervisor ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
-                  isSupervisor
-                    ? 'rounded-br-sm bg-slate-900 text-white'
-                    : 'rounded-bl-sm bg-white text-slate-800 ring-1 ring-inset ring-slate-200'
-                }`}>
-                  <p className="whitespace-pre-wrap">{m.text}</p>
-                  <p className={`mt-1 text-[10px] ${isSupervisor ? 'text-slate-300' : 'text-slate-400'}`}>{m.at}</p>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        {!isResolved && (
-          <div className="mt-3 flex gap-2">
-            <input
-              type="text"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleSend() }}
-              placeholder="Type a message to the customer..."
-              className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
-            />
-            <button
-              onClick={handleSend}
-              disabled={!message.trim()}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Send className="h-4 w-4" />
-              Send
-            </button>
-          </div>
-        )}
-      </div>
-
-      {!isResolved && (
-        <div className="border-b border-slate-200 p-4 md:p-5">
-          {confirmResolve ? (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
-              <p className="text-sm text-slate-600">Mark this issue as resolved?</p>
-              <p className="mt-0.5 text-xs text-slate-400">The delivery status will automatically be set to Completed.</p>
-              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                <button
-                  onClick={() => setConfirmResolve(false)}
-                  className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={onResolve}
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                  Confirm Resolve
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => setConfirmResolve(true)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              Mark as Resolved
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="flex gap-2 overflow-x-auto border-b border-slate-200 bg-slate-50 px-4 py-2.5 md:px-5">
-        {(report ? REPORT_TABS : REPORT_TABS.filter((t) => t.id === 'details' || t.id === 'quotation')).map((tab) => {
-          const Icon = tab.icon
-          const isActive = reportTab === tab.id
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setReportTab(tab.id)}
-              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                isActive ? 'bg-slate-900 text-white shadow-sm' : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-100'
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {tab.label}
-            </button>
-          )
-        })}
-      </div>
-
-      <div className="p-4 md:p-5">
-        {reportTab === 'details' && <DeliveryRequestDetails request={delivery} realDistanceKm={report?.trip?.distance} />}
-        {reportTab === 'quotation' && <QuotationTab delivery={delivery} />}
-        {report && reportTab === 'trip' && <TripDetailsTab delivery={delivery} report={report} />}
-        {report && reportTab === 'behavior' && <DriveWiseAnalysisTab report={report} />}
-        {report && reportTab === 'route' && <RouteDeviationTab report={report} />}
-      </div>
-    </div>
-  )
-}
-
 function toGoogleMapEmbed(coords, zoom = 14) {
   if (!coords) return 'https://maps.google.com/maps?q=14.5995,120.9842&z=12&output=embed'
   return `https://maps.google.com/maps?q=${coords.lat},${coords.lng}&z=${zoom}&output=embed`
@@ -2675,7 +2355,6 @@ function autoCompleteDelivered(list) {
   let changed = false
   const next = list.map((r) => {
     if (r.status !== 'DELIVERED') return r
-    if (r.issueReported && !r.resolvedAt) return r
     const deliveredRef = r.deliveredAt
       ? new Date(r.deliveredAt)
       : r.dropoffDate
@@ -2864,14 +2543,10 @@ function mapDbRequest(row, clientName, fleet) {
     cancelReason: row.cancel_reason,
     cancelledAt: row.cancelled_at ? formatIsoDateTime(row.cancelled_at) : null,
     cancelledFromStatus: row.cancelled_from_status,
-    // Customer confirmation / issue-report state (written by the customer via
-    // CustomerDeliveries.jsx; the Issues and Completed modules read these).
+    // Customer confirmation state (written by the customer via
+    // CustomerDeliveries.jsx; the Completed module reads these).
     receivedConfirmed: row.received_confirmed,
     receivedConfirmedAt: row.received_confirmed_at ? formatIsoDateTime(row.received_confirmed_at) : null,
-    issueReported: row.issue_reported,
-    issueReportedAt: row.issue_reported_at ? formatIsoDateTime(row.issue_reported_at) : null,
-    issueDescription: row.issue_description || '',
-    resolvedAt: row.resolved_at ? formatIsoDateTime(row.resolved_at) : null,
     completedAt: row.completed_at ? formatIsoDateTime(row.completed_at) : null,
     // Rebuild the assigned crew (same shape the assignment pickers produce)
     // from the persisted columns so an assigned request still shows its
@@ -2893,8 +2568,7 @@ function getCounterOfferRange(r) {
 
 function SupDeliveries() {
   // Mock inbox state kept for the legacy mock modules (writes only — the UI
-  // reads the real dbRequests inbox now, and chat messages come from
-  // delivery_messages).
+  // reads the real dbRequests inbox now).
   const [, setRequests] = useState(() => autoCompleteDelivered(mockRequests))
   const [dbRequests, setDbRequests] = useState([])
   // Real fleet for the Assign Vehicle pickers — trucks (from the RLS-open
@@ -2974,9 +2648,7 @@ function SupDeliveries() {
   const [itemsPerPage, setItemsPerPage] = useState(() => Math.max(4, Math.floor((window.innerHeight - 280) / 68)))
   const [completedPage, setCompletedPage] = useState(1)
   const [cancelledPage, setCancelledPage] = useState(1)
-  const [issuesPage, setIssuesPage] = useState(1)
   const [transitPage, setTransitPage] = useState(1)
-  const [selectedIssue, setSelectedIssue] = useState(null)
   const quotationSectionRef = useRef(null)
 
   useEffect(() => {
@@ -3079,7 +2751,7 @@ function SupDeliveries() {
   }, [loadInbox])
 
   // Keep the supervisor's lists live: any change to delivery_requests (customer
-  // reports an issue, confirms receipt, etc.) refreshes the inbox/issues lists.
+  // confirms receipt, etc.) refreshes the inbox/completed lists.
   useEffect(() => {
     const channel = supabase
       .channel('sup-delivery-requests-live')
@@ -3091,60 +2763,6 @@ function SupDeliveries() {
       supabase.removeChannel(channel)
     }
   }, [loadInbox])
-
-  // Live conversation for the currently open issue: load existing messages from
-  // `delivery_messages` and append any new ones as they arrive via Realtime.
-  // Keyed by delivery id so switching issues never flashes stale messages.
-  const [issueMessages, setIssueMessages] = useState({ deliveryId: null, messages: [] })
-  useEffect(() => {
-    const deliveryId = selectedIssue?.id
-    if (!deliveryId) return undefined
-    let isMounted = true
-    supabase
-      .from('delivery_messages')
-      .select('*')
-      .eq('delivery_id', deliveryId)
-      .order('created_at', { ascending: true })
-      .then(({ data, error }) => {
-        if (!error && isMounted) setIssueMessages({ deliveryId, messages: data || [] })
-      })
-    const channel = supabase
-      .channel(`sup-issue-${deliveryId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'delivery_messages', filter: `delivery_id=eq.${deliveryId}` },
-        (payload) => {
-          const row = payload.new
-          if (!isMounted || row.delivery_id !== deliveryId) return
-          setIssueMessages((prev) =>
-            prev.deliveryId !== deliveryId || prev.messages.some((m) => m.id === row.id)
-              ? prev
-              : { deliveryId, messages: [...prev.messages, row] },
-          )
-        },
-      )
-      .subscribe()
-    return () => {
-      isMounted = false
-      supabase.removeChannel(channel)
-    }
-  }, [selectedIssue?.id])
-
-  // Map the raw delivery_messages rows (id, sender, message, created_at) into
-  // the { id, sender, text, at } shape the IssueDetailView chat renders.
-  const selectedIssueWithMessages = useMemo(() => {
-    if (!selectedIssue) return null
-    const messages = issueMessages.deliveryId === selectedIssue.id ? issueMessages.messages : []
-    return {
-      ...selectedIssue,
-      messages: messages.map((m) => ({
-        id: m.id,
-        sender: m.sender,
-        text: m.message,
-        at: formatMessageTimestamp(m.created_at),
-      })),
-    }
-  }, [selectedIssue, issueMessages])
 
   const inboxRows = useMemo(
     () => dbRequests.filter((r) => ['PENDING_REQUEST', 'QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED', 'APPROVED', 'ASSIGNED'].includes(r.status)),
@@ -3413,19 +3031,6 @@ function SupDeliveries() {
   const cancelledSafePage = Math.min(cancelledPage, cancelledTotalPages)
   const paginatedCancelled = filteredCancelled.slice((cancelledSafePage - 1) * itemsPerPage, cancelledSafePage * itemsPerPage)
 
-  const reportedIssuesList = useMemo(
-    () => dbRequests.filter((r) => r.issueReported),
-    [dbRequests],
-  )
-
-  const filteredIssues = useMemo(
-    () => sortNewestFirst(filterDeliveryList(reportedIssuesList, search)),
-    [reportedIssuesList, search],
-  )
-  const issuesTotalPages = Math.max(1, Math.ceil(filteredIssues.length / itemsPerPage))
-  const issuesSafePage = Math.min(issuesPage, issuesTotalPages)
-  const paginatedIssues = filteredIssues.slice((issuesSafePage - 1) * itemsPerPage, issuesSafePage * itemsPerPage)
-
   const selectedDriver = fleet.drivers.find((d) => d.id === assignment.driverId)
   const selectedTruck = fleet.trucks.find((t) => t.plateNumber === assignment.plateNumber)
   const selectedHelpers = fleet.helpers.filter((h) => assignment.helperIds.includes(h.id))
@@ -3436,7 +3041,6 @@ function SupDeliveries() {
     { id: 'inbox', label: 'Delivery Requests Inbox', mobileLabel: 'Inbox', count: inboxRows.length },
     { id: 'assignment', label: 'Assign Vehicle', mobileLabel: 'Assign', count: pendingAssignments.length },
     { id: 'transit', label: 'In Transit Deliveries', mobileLabel: 'In Transit', count: ongoingDeliveries.length },
-    { id: 'issues', label: 'Reported Issues', mobileLabel: 'Issues', count: reportedIssuesList.length },
     { id: 'completed', label: 'Completed Deliveries', mobileLabel: 'Completed', count: completedDeliveries.length },
     { id: 'cancelled', label: 'Cancellations', mobileLabel: 'Cancellations', count: cancelledDeliveries.length },
   ]
@@ -3448,7 +3052,6 @@ function SupDeliveries() {
     setAssignPage(1)
     setCompletedPage(1)
     setCancelledPage(1)
-    setIssuesPage(1)
     setTransitPage(1)
   }
 
@@ -3458,51 +3061,7 @@ function SupDeliveries() {
     setAssignPage(1)
     setCompletedPage(1)
     setCancelledPage(1)
-    setIssuesPage(1)
     setTransitPage(1)
-  }
-
-  const resolveIssue = (id) => {
-    const resolvedAt = new Date().toLocaleString('en-PH', {
-      timeZone: MANILA_TIMEZONE,
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-    setRequests((prev) =>
-      prev.map((issue) => (issue.id === id ? { ...issue, resolvedAt, completedAt: resolvedAt, status: 'COMPLETED' } : issue)),
-    )
-    setSelectedIssue((prev) => (prev && prev.id === id ? { ...prev, resolvedAt, completedAt: resolvedAt, status: 'COMPLETED' } : prev))
-    // Persist the resolution to the backend so it survives a reload and the
-    // Completed module picks the request up (status COMPLETED + resolved_at).
-    supabase
-      .from('delivery_requests')
-      .update({ status: 'COMPLETED', resolved_at: new Date().toISOString(), completed_at: new Date().toISOString() })
-      .eq('id', id)
-      .then(({ error }) => {
-        if (error) return
-        setDbRequests((prev) => prev.map((row) =>
-          row.id === id
-            ? { ...row, status: 'COMPLETED', resolvedAt: formatIsoDateTime(new Date().toISOString()), completedAt: formatIsoDateTime(new Date().toISOString()) }
-            : row,
-        ))
-      })
-  }
-
-  const sendIssueMessage = async (id, text) => {
-    const { data, error } = await supabase
-      .from('delivery_messages')
-      .insert({ delivery_id: id, sender: 'supervisor', message: text })
-      .select()
-      .single()
-    if (error || !data) return
-    setIssueMessages((prev) =>
-      prev.deliveryId !== id || prev.messages.some((m) => m.id === data.id)
-        ? prev
-        : { deliveryId: id, messages: [...prev.messages, data] },
-    )
   }
 
   const openDetails = (request) => {
@@ -5139,7 +4698,7 @@ function SupDeliveries() {
         </>
       ) : (
         <div className="flex h-full flex-col gap-4 overflow-hidden" style={interFontStyle}>
-          {!selectedReportId && !selectedIssue && (
+          {!selectedReportId && (
           <>
             {/* Global toolbar — search + status filter, styled to mirror
                 CustomerDeliveries.jsx (no card wrapper); keeps the supervisor's
@@ -5613,91 +5172,6 @@ function SupDeliveries() {
             <div className="shrink-0 rounded-2xl border border-slate-200 bg-white">
               <PaginationBar page={transitSafePage} setPage={setTransitPage} totalPages={transitTotalPages} />
             </div>
-          </section>
-        )}
-
-        {activeModule === 'issues' && (
-          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-            {selectedIssue ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
-                  <button
-                    onClick={() => setSelectedIssue(null)}
-                    className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                    Back
-                  </button>
-                </div>
-                <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
-                  <IssueDetailView
-                    delivery={selectedIssueWithMessages}
-                    onResolve={() => resolveIssue(selectedIssue.id)}
-                    onSendMessage={(text) => sendIssueMessage(selectedIssue.id, text)}
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                <div className="shrink-0 hidden grid-cols-[0.6fr_0.7fr_1.1fr_1.3fr_1.3fr_1.5fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
-                  <span className="text-center">Status</span>
-                  <span className="text-center">Request ID</span>
-                  <span className="text-left">Customer</span>
-                  <span className="text-left">Pick-up</span>
-                  <span className="text-left">Drop-off</span>
-                  <span className="text-left">Reported Issue</span>
-                  <span></span>
-                </div>
-
-                <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-                  {paginatedIssues.length === 0 && (
-                    <div className="flex flex-col items-center justify-center px-5 py-16 text-center">
-                      <AlertTriangle className="h-10 w-10 text-amber-300 mb-3" />
-                      <p className="text-sm font-medium text-slate-900">No reported issues found</p>
-                      <p className="mt-1 text-xs text-slate-500">Adjust your search or check back later.</p>
-                    </div>
-                  )}
-
-                  {paginatedIssues.map((delivery) => (
-                    <article
-                      key={delivery.id}
-                      onClick={() => setSelectedIssue(delivery)}
-                      className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.6fr_0.7fr_1.1fr_1.3fr_1.3fr_1.5fr_0.3fr] lg:items-center hover:bg-slate-50"
-                    >
-                      <div className="flex justify-center">
-                        {delivery.status === 'COMPLETED' ? (
-                          <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-green-700 xl:text-[11px]">
-                            <CheckCircle2 className="h-3 w-3" />
-                            Completed
-                          </span>
-                        ) : (
-                          <span className="inline-flex max-w-full rounded-full bg-emerald-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-emerald-700 xl:text-[11px]">
-                            Delivered
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm font-mono font-semibold text-slate-900 text-center">{delivery.id}</p>
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">{delivery.customerName}</p>
-                        <p className="text-xs text-slate-500">{delivery.companyName}</p>
-                      </div>
-                      <p className="text-sm text-slate-700 line-clamp-2">{delivery.pickupAddress}</p>
-                      <p className="text-sm text-slate-700 line-clamp-2">{delivery.deliveryAddress}</p>
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-amber-700">{delivery.issueCategory}</p>
-                        <p className="mt-0.5 text-xs text-slate-500 line-clamp-2">{delivery.issueDescription}</p>
-                        <p className="mt-0.5 text-[10px] text-slate-400">Reported {delivery.issueReportedAt}</p>
-                      </div>
-                      <div className="flex justify-center">
-                        <ChevronRight className="h-4 w-4 text-slate-400" />
-                      </div>
-                    </article>
-                  ))}
-                </div>
-
-                <PaginationBar page={issuesSafePage} setPage={setIssuesPage} totalPages={issuesTotalPages} />
-              </div>
-            )}
           </section>
         )}
 
