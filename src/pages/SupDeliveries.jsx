@@ -2765,14 +2765,13 @@ function SupDeliveries() {
   }, [loadInbox])
 
   const inboxRows = useMemo(
-    () => dbRequests.filter((r) => ['PENDING_REQUEST', 'QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED', 'APPROVED', 'ASSIGNED'].includes(r.status)),
+    () => dbRequests.filter((r) => ['PENDING_REQUEST', 'QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED'].includes(r.status)),
     [dbRequests],
   )
 
   // Real approved/assigned requests awaiting (or carrying) a vehicle+crew
-  // assignment — read from dbRequests (not the mock array). APPROVED/ASSIGNED
-  // requests also stay visible in inboxRows above; this is the same rows,
-  // just surfaced separately for the Assign Vehicle tab's workflow.
+  // assignment — read from dbRequests (not the mock array). These live
+  // exclusively in the Assign Vehicle tab's workflow, not the inbox.
   const pendingAssignments = useMemo(
     () => dbRequests.filter((r) => r.status === 'APPROVED' || r.status === 'ASSIGNED'),
     [dbRequests],
@@ -4737,8 +4736,6 @@ function SupDeliveries() {
                       <>
                         <option value="PENDING_REQUEST">Pending Request</option>
                         <option value="PROCESSING">Processing</option>
-                        <option value="APPROVED">Approved</option>
-                        <option value="ASSIGNED">Assigned</option>
                       </>
                     )}
                     {activeModule === 'assignment' && (
