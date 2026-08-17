@@ -292,7 +292,16 @@ function FormField({
   options = [],
   className = '',
   maxLength,
-  max
+  max,
+  // Defaults to disabling browser autofill -- these identity fields
+  // (first/middle/last name, etc.) have no autoComplete attribute set
+  // previously, so the browser fell back to guessing based on nearby field
+  // names/labels and could silently inject a saved name/address from the
+  // device's own autofill profile into a field the Admin never touched
+  // (confirmed live: entering "Jin"/"Kazama" produced a stored middle name
+  // of "Duain T." that was never typed). "off" isn't honored by every
+  // browser for every field type, but it's the correct signal to send.
+  autoComplete = 'off'
 }) {
   const fieldId = `field-${name}`
 
@@ -331,6 +340,7 @@ function FormField({
           placeholder={placeholder}
           maxLength={maxLength}
           max={max}
+          autoComplete={autoComplete}
           className={fieldInputClassName}
         />
       )}

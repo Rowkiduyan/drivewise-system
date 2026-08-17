@@ -489,19 +489,15 @@ function CustomerRequestDelivery() {
       setBudgetError(getBudgetError(next))
     }
 
-    if (name === 'itemType' || name === 'cargoWeight') {
-      const selectedTruck = truckTypes.find(t => t.value === next.truckType)
-      if (selectedTruck && !getTruckAvailability(selectedTruck, next.itemType, next.cargoWeight).available) {
-        next.truckType = ''
-        setTruckSelectionError('')
-      }
-    }
-
     setFormData(next)
   }
 
+  // No availability gate here -- any truck stays selectable regardless of
+  // fit for the chosen item type/weight, same "recommended first, nothing
+  // fully hidden" pattern SupDeliveries.jsx's assignment picker already
+  // uses; the Supervisor makes the final call on truck suitability when
+  // assigning, so the customer isn't blocked from picking their preference.
   const handleTruckSelect = (truck) => {
-    if (!getTruckAvailability(truck, formData.itemType, formData.cargoWeight).available) return
     setFormData(prev => ({ ...prev, truckType: truck.value }))
     setTruckSelectionError('')
   }
@@ -911,20 +907,18 @@ function CustomerRequestDelivery() {
                             <tr
                               key={truck.value}
                               onClick={() => handleTruckSelect(truck)}
-                              className={`transition ${
-                                !available
-                                  ? 'cursor-not-allowed bg-slate-50 opacity-60'
-                                  : isSelected
-                                    ? 'cursor-pointer bg-emerald-50'
-                                    : isRecommended
-                                      ? 'cursor-pointer bg-emerald-50/40 hover:bg-emerald-50'
-                                      : 'cursor-pointer bg-white hover:bg-emerald-50/50'
+                              className={`cursor-pointer transition ${
+                                isSelected
+                                  ? 'bg-emerald-50'
+                                  : isRecommended
+                                    ? 'bg-emerald-50/40 hover:bg-emerald-50'
+                                    : 'bg-white hover:bg-emerald-50/50'
                               }`}
                             >
                               <td className="px-4 py-3 align-top">
                                 <div className="flex items-center gap-2">
                                   <span className="text-sm font-semibold text-slate-900">{truck.label}</span>
-                                  {isRecommended && available && (
+                                  {isRecommended && (
                                     <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
                                       Recommended
                                     </span>
@@ -932,7 +926,7 @@ function CustomerRequestDelivery() {
                                 </div>
                                 <p className="mt-0.5 max-w-xs text-xs text-slate-500 leading-relaxed">{truck.description}</p>
                                 {!available && (
-                                  <p className="mt-1 text-[11px] font-medium text-red-500">{reason}</p>
+                                  <p className="mt-1 text-[11px] font-medium text-amber-600">{reason} — the Supervisor can still confirm this truck when assigning.</p>
                                 )}
                               </td>
                               <td className="px-4 py-3 align-top">
@@ -957,13 +951,9 @@ function CustomerRequestDelivery() {
                               </td>
                               <td className="px-4 py-3 align-top">
                                 <span className={`flex h-5 w-5 items-center justify-center rounded-full border-2 ${
-                                  !available
-                                    ? 'border-slate-300'
-                                    : isSelected
-                                      ? 'border-emerald-600 bg-emerald-600'
-                                      : 'border-slate-300'
+                                  isSelected ? 'border-emerald-600 bg-emerald-600' : 'border-slate-300'
                                 }`}>
-                                  {isSelected && available && <Check className="h-3 w-3 text-white" />}
+                                  {isSelected && <Check className="h-3 w-3 text-white" />}
                                 </span>
                               </td>
                             </tr>

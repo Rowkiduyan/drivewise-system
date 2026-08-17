@@ -464,6 +464,10 @@ try:
             no_face_duration = current_time - no_face_start
             if no_face_duration >= NO_EYES_PULSE_START_SEC:
                 pulse_mode = True
+                if current_time - last_pulse_toggle >= PULSE_INTERVAL_SEC:
+                    pulse_on = not pulse_on
+                    last_pulse_toggle = current_time
+                    set_vibration(pulse_on)
                 # face_not_detected is its own event_type (06_DROWSINESS_
                 # ALERT_PIPELINE.md) -- fire once per continuous no-face
                 # episode, same "fire once, reset on recovery" pattern the
@@ -471,10 +475,6 @@ try:
                 if not face_not_detected_fired:
                     face_not_detected_fired = True
                     call_alert_upload("face_not_detected", no_face_duration)
-                if current_time - last_pulse_toggle >= PULSE_INTERVAL_SEC:
-                    pulse_on = not pulse_on
-                    last_pulse_toggle = current_time
-                    set_vibration(pulse_on)
         else:
             no_face_start = None
             face_not_detected_fired = False
@@ -537,8 +537,8 @@ try:
 
                 if closure_duration >= CLOSURE_3S_THRESH and not ALARM_ON:
                     ALARM_ON = True
-                    call_alert_upload("prolonged_eye_closure", closure_duration)
                     set_vibration(True)
+                    call_alert_upload("prolonged_eye_closure", closure_duration)
 
                 if closure_duration >= CLOSURE_1_5S_THRESH and not closure_1_5s_fired:
                     closure_1_5s_fired = True
@@ -548,8 +548,8 @@ try:
                         open_eyes_start = current_time
                         if not ALARM_ON:
                             ALARM_ON = True
-                            call_alert_upload("pattern_repeated_eye_closure", CLOSURE_1_5S_THRESH)
                             set_vibration(True)
+                            call_alert_upload("pattern_repeated_eye_closure", CLOSURE_1_5S_THRESH)
             else:
                 eye_closure_start = None
                 closure_2s_fired = False
@@ -581,6 +581,7 @@ try:
             if (pattern_eye_closure_yawn or pattern_repeated) and not ALARM_ON:
                 ALARM_ON = True
                 open_eyes_start = current_time
+                set_vibration(True)
                 if pattern_eye_closure_yawn:
                     last_closure_ts = closure_2s_events[-1]
                     last_yawn = yawn_events[-1]
@@ -591,7 +592,6 @@ try:
                     call_alert_upload("pattern_eye_closure_yawn", duration)
                 else:
                     call_alert_upload("pattern_repeated_eye_closure", CLOSURE_1_5S_THRESH)
-                set_vibration(True)
             if pattern_repeated:
                 repeat_lock_armed = True
 
