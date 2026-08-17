@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  AlertTriangle, ArrowLeft, Calendar, Camera, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardList, Clock, FileText, MapPin, MessageSquare, Package, Search, Send, Truck, Users, X
+  AlertTriangle, ArrowLeft, Calendar, Camera, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardList, Clock, FileText, MapPin, Package, Search, Send, Truck, Users, X
 } from 'lucide-react'
 import CustomerLayout from '../layout/CustomerLayout.jsx'
 import { truckTypes, itemTypes } from '../lib/deliveryOptions.js'
@@ -105,14 +105,6 @@ const cancellationReasons = [
   'Pricing or budget concerns',
   'Duplicate or mistaken request',
   'No longer needed',
-  'Other'
-]
-
-const deliveryIssueReasons = [
-  'Item damaged',
-  'Missing item(s)',
-  'Wrong item delivered',
-  'Never received',
   'Other'
 ]
 
@@ -300,7 +292,6 @@ function buildCustomerTimeline(request) {
       label: 'Delivered',
       substeps: [
         ...(request.receivedConfirmed ? [{ label: 'You Confirmed Receipt', timestamp: formatTimestamp(request.receivedConfirmedAt) }] : []),
-        ...(request.issueReported ? [{ label: 'You Reported an Issue', timestamp: formatTimestamp(request.issueReportedAt) }] : []),
       ],
     },
     {
@@ -706,7 +697,7 @@ function ProofOfDeliverySection({ request }) {
   )
 }
 
-function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onCancellation, onReceivedConfirmation, onIssueReport }) {
+function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onCancellation, onReceivedConfirmation }) {
   const [showQuotationResponse, setShowQuotationResponse] = useState(false)
   const [quotationAction, setQuotationAction] = useState(null)
   const [priceRange, setPriceRange] = useState({ min: '', max: '' })
@@ -720,47 +711,8 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
   const [cancelReason, setCancelReason] = useState('')
   const [cancelReasonOther, setCancelReasonOther] = useState('')
   const [showConfirmModal, setShowConfirmModal] = useState(false)
-  const [showIssueModal, setShowIssueModal] = useState(false)
-  const [issueReason, setIssueReason] = useState('')
-  const [issueDescription, setIssueDescription] = useState('')
 
-  // Backend-persisted conversation with DriveWise for the "Report an Issue"
-  // flow: messages live in delivery_messages and stream in via Realtime.
-  const [chatMessages, setChatMessages] = useState([])
-  const [chatDraft, setChatDraft] = useState('')
-  const chatResolved = Boolean(request.resolvedAt)
-
-  useEffect(() => {
-    if (!request.issueReported) return undefined
-    let isMounted = true
-    supabase
-      .from('delivery_messages')
-      .select('id, sender, message, created_at')
-      .eq('delivery_id', request.id)
-      .order('created_at', { ascending: true })
-      .then(({ data, error }) => {
-        if (!error && isMounted) setChatMessages(data || [])
-      })
-    const channel = supabase
-      .channel(`customer-chat-${request.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'delivery_messages', filter: `delivery_id=eq.${request.id}` },
-        (payload) => {
-          const row = payload.new
-          if (!isMounted || row.delivery_id !== request.id) return
-          setChatMessages((prev) => (prev.some((m) => m.id === row.id) ? prev : [...prev, row]))
-        },
-      )
-      .subscribe()
-    return () => {
-      isMounted = false
-      supabase.removeChannel(channel)
-    }
-  }, [request.id, request.issueReported])
-
-  // Keep this delivery row in sync live (supervisor resolves the issue, etc.)
-  // so the chat becomes read-only the moment the resolution lands.
+  // Keep this delivery row in sync live (customer confirms receipt, etc.).
   const onUpdateRef = useRef(onUpdate)
   useEffect(() => {
     onUpdateRef.current = onUpdate
@@ -777,9 +729,6 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
             status: row.status,
             receivedConfirmed: row.received_confirmed,
             receivedConfirmedAt: row.received_confirmed_at,
-            issueReported: row.issue_reported,
-            issueDescription: row.issue_description,
-            resolvedAt: row.resolved_at,
             completedAt: row.completed_at,
           })
         },
@@ -789,19 +738,6 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
       supabase.removeChannel(channel)
     }
   }, [request.id])
-
-  const handleSendChat = async () => {
-    const text = chatDraft.trim()
-    if (!text) return
-    const { data, error } = await supabase
-      .from('delivery_messages')
-      .insert({ delivery_id: request.id, sender: 'customer', message: text })
-      .select()
-      .single()
-    if (error) return
-    setChatMessages((prev) => (prev.some((m) => m.id === data.id) ? prev : [...prev, data]))
-    setChatDraft('')
-  }
 
   const status = statusConfig[request.status] || statusConfig.PENDING_REQUEST
   const StatusIcon = status.icon
@@ -854,7 +790,6 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
   const isCancellable = CANCELLABLE_STATUSES.includes(request.status)
     && pickupDaysAway != null && pickupDaysAway >= CANCEL_MIN_DAYS_BEFORE_PICKUP
   const isCancelReasonValid = cancelReason && (cancelReason !== 'Other' || cancelReasonOther.trim())
-  const isIssueReasonValid = issueReason && (issueReason !== 'Other' || issueDescription.trim())
 
   const handleQuotationSubmit = () => {
     if (quotationAction === 'approve') {
@@ -863,7 +798,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
         quotationApproved: true,
         quotation: request.quotation,
         // Real timestamp for the Delivery Timeline's "Quotation Approved"
-        // entry — same pattern as receivedConfirmedAt/issueReportedAt below.
+        // entry — same pattern as receivedConfirmedAt below.
         quotationRespondedAt: new Date().toISOString()
       })
       onQuotationResponse?.(request.id, 'approve', {})
@@ -892,20 +827,6 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
     onUpdate(request.id, { status: 'DELIVERY_COMPLETED', receivedConfirmed: true, receivedConfirmedAt: new Date().toISOString() })
     onReceivedConfirmation?.(request.id)
     setShowConfirmModal(false)
-  }
-
-  const handleReportIssue = () => {
-    if (!isIssueReasonValid) return
-    const reason = issueReason === 'Other' ? issueDescription.trim() : issueReason
-    onUpdate(request.id, {
-      issueReported: true,
-      issueDescription: reason,
-      issueReportedAt: new Date().toISOString()
-    })
-    onIssueReport?.(request.id, { issueDescription: reason })
-    setShowIssueModal(false)
-    setIssueReason('')
-    setIssueDescription('')
   }
 
   const handleCancelSubmit = () => {
@@ -1733,19 +1654,15 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
 
             {/* Delivery confirmation — DELIVERED. A lightweight, optional
                 acknowledgement from the customer; separate from the driver/
-                supervisor-driven status pipeline, so confirming or reporting
-                an issue here doesn't change the request's status itself.
+                supervisor-driven status pipeline, so confirming here doesn't
+                change the request's status itself.
                 Mobile only now (md:hidden) — this card sits first on mobile
                 via the order-1 trick above, which is exactly the prominence
                 mobile already had and keeps. Desktop gets its own version
                 below, positioned after the full review instead of living in
                 a side panel. */}
             {request.status === 'DELIVERED' && (
-              <div className={`rounded-2xl border p-2.5 md:hidden ${
-                request.issueReported && !request.receivedConfirmed
-                  ? 'border-amber-200 bg-amber-50'
-                  : 'border-emerald-200 bg-emerald-50'
-              }`}>
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-2.5 md:hidden">
                 {request.receivedConfirmed ? (
                   <>
                     <h3 className="flex items-center gap-2 text-xs font-semibold text-emerald-800 md:text-sm">
@@ -1757,17 +1674,6 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                       {request.receivedConfirmedAt ? ` on ${new Date(request.receivedConfirmedAt).toLocaleDateString('en-US', { timeZone: MANILA_TIMEZONE })}` : ''}. Thank you!
                     </p>
                   </>
-                ) : request.issueReported ? (
-                  <>
-                    <h3 className="flex items-center gap-2 text-xs font-semibold text-amber-800 md:text-sm">
-                      <AlertTriangle className="h-3.5 w-3.5 md:h-4 md:w-4" />
-                      Issue Reported
-                    </h3>
-                    <p className="mt-1.5 text-xs text-amber-800 md:mt-2 md:text-sm">Our team has been notified and will follow up with you shortly.</p>
-                    {request.issueDescription && (
-                      <p className="mt-1.5 rounded-lg bg-white/70 p-2 text-[11px] italic text-slate-700 md:mt-2 md:p-2.5 md:text-xs">&ldquo;{request.issueDescription}&rdquo;</p>
-                    )}
-                  </>
                 ) : (
                   <>
                     {/* Shared content simplification (both breakpoints): a
@@ -1776,27 +1682,12 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                         what this is, so the sentence was just extra height
                         for no added clarity. */}
                     <h3 className="text-xs font-semibold text-emerald-800 md:text-sm">Received your delivery?</h3>
-
-                    {/* Compact primary button + secondary destructive text
-                        action instead of two full-width stacked buttons.
-                        Centered as a pair with a modest gap (not stretched
-                        to the row's edges), and the secondary action gets
-                        its own padded, rounded tap target (subtle red
-                        hover/press fill) so it reads as an intentional,
-                        comfortably-sized action rather than a bare floating
-                        link next to a real button. */}
-                    <div className="mt-2 flex items-center justify-center gap-4">
+                    <div className="mt-2 flex items-center justify-center">
                       <button
                         onClick={() => setShowConfirmModal(true)}
                         className="rounded-full bg-emerald-600 px-3.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-emerald-700 active:bg-emerald-800"
                       >
                         Confirm Received
-                      </button>
-                      <button
-                        onClick={() => setShowIssueModal(true)}
-                        className="rounded-md px-2 py-1.5 text-[11px] font-semibold text-red-600 transition hover:bg-red-50 hover:text-red-700 active:bg-red-100"
-                      >
-                        Report an Issue
                       </button>
                     </div>
                   </>
@@ -1816,11 +1707,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
           card. Mobile keeps its existing right-column placement above
           (that version is md:hidden; this one is hidden below md). */}
       {request.status === 'DELIVERED' && (
-        <div className={`hidden rounded-2xl border p-6 text-center md:block md:shadow-sm ${
-          request.issueReported && !request.receivedConfirmed
-            ? 'border-amber-200 bg-amber-50'
-            : 'border-emerald-200 bg-emerald-50'
-        }`}>
+        <div className="hidden rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center md:block md:shadow-sm">
           {request.receivedConfirmed ? (
             <>
               <h3 className="flex items-center justify-center gap-2 text-sm font-semibold text-emerald-800">
@@ -1832,102 +1719,21 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                 {request.receivedConfirmedAt ? ` on ${new Date(request.receivedConfirmedAt).toLocaleDateString('en-US', { timeZone: MANILA_TIMEZONE })}` : ''}. Thank you!
               </p>
             </>
-          ) : request.issueReported ? (
-            <>
-              <h3 className="flex items-center justify-center gap-2 text-sm font-semibold text-amber-800">
-                <AlertTriangle className="h-4 w-4" />
-                Issue Reported
-              </h3>
-              <p className="mt-1.5 text-sm text-amber-800">Our team has been notified and will follow up with you shortly.</p>
-              {request.issueDescription && (
-                <p className="mx-auto mt-2 max-w-md rounded-lg bg-white/70 p-2.5 text-xs italic text-slate-700">&ldquo;{request.issueDescription}&rdquo;</p>
-              )}
-            </>
           ) : (
             <>
               <h3 className="text-sm font-semibold text-emerald-800">Received your delivery?</h3>
               <p className="mx-auto mt-1 max-w-sm text-xs text-emerald-700">
-                You've reviewed the delivery details and timeline above — let us know it arrived safely, or report an issue if something's wrong.
+                Confirm once you've reviewed the delivery details and timeline above.
               </p>
-              <div className="mt-4 flex items-center justify-center gap-3">
+              <div className="mt-4 flex items-center justify-center">
                 <button
                   onClick={() => setShowConfirmModal(true)}
                   className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 active:bg-emerald-800"
                 >
                   Confirm Received
                 </button>
-                <button
-                  onClick={() => setShowIssueModal(true)}
-                  className="rounded-xl border border-red-300 px-5 py-2.5 text-sm font-semibold text-red-600 transition hover:bg-red-50 active:bg-red-100"
-                >
-                  Report an Issue
-                </button>
               </div>
             </>
-          )}
-        </div>
-      )}
-
-      {request.issueReported && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
-          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            <MessageSquare className="h-4 w-4 text-amber-600" />
-            Conversation with DriveWise
-          </h3>
-          <p className="mt-1 text-xs text-slate-500">
-            Chat with the delivery team about your reported issue.
-            {chatResolved && <span className="font-medium text-emerald-700"> This issue is resolved — the conversation is now read-only.</span>}
-          </p>
-
-          <div className="mt-3 max-h-72 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-            {chatMessages.length === 0 && (
-              <p className="py-6 text-center text-xs text-slate-400">
-                No messages yet. The DriveWise team will follow up with you here.
-              </p>
-            )}
-            {chatMessages.map((m) => {
-              const isCustomer = m.sender === 'customer'
-              return (
-                <div key={m.id} className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
-                    isCustomer
-                      ? 'rounded-br-sm bg-emerald-600 text-white'
-                      : 'rounded-bl-sm bg-white text-slate-800 ring-1 ring-inset ring-slate-200'
-                  }`}>
-                    <p className="whitespace-pre-wrap">{m.message}</p>
-                    <p className={`mt-1 text-[10px] ${isCustomer ? 'text-emerald-100' : 'text-slate-400'}`}>
-                      {formatTimestamp(m.created_at)}
-                    </p>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {!chatResolved ? (
-            <div className="mt-3 flex gap-2">
-              <input
-                type="text"
-                value={chatDraft}
-                onChange={(e) => setChatDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleSendChat() }}
-                placeholder="Type a message..."
-                className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
-              />
-              <button
-                onClick={handleSendChat}
-                disabled={!chatDraft.trim()}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Send className="h-4 w-4" />
-                Send
-              </button>
-            </div>
-          ) : (
-            <div className="mt-3 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-medium text-emerald-700">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              This conversation is now read-only because the issue has been resolved.
-            </div>
           )}
         </div>
       )}
@@ -2031,72 +1837,12 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
           </div>
         </div>
       )}
-
-      {/* Report-an-issue modal */}
-      {showIssueModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="report-issue-title"
-        >
-          <div className="w-full max-w-sm rounded-2xl border border-amber-200/70 bg-white p-3.5 shadow-xl md:p-5">
-            <div className="flex items-center gap-2 text-amber-700">
-              <AlertTriangle className="h-4 w-4 md:h-5 md:w-5" />
-              <h2 id="report-issue-title" className="text-xs font-bold text-slate-900 md:text-sm">Report an Issue</h2>
-            </div>
-            <p className="mt-1 text-[11px] text-slate-600 md:mt-1.5 md:text-xs">
-              Let us know what went wrong with <span className="font-semibold text-slate-800">{request.id}</span>.
-            </p>
-            <div className="mt-2 space-y-2 md:mt-3 md:space-y-3">
-              <div>
-                <label htmlFor="issueReason" className="text-[11px] font-medium text-slate-700 md:text-xs">Reason</label>
-                <select
-                  id="issueReason"
-                  value={issueReason}
-                  onChange={(e) => setIssueReason(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 md:px-3.5 md:py-2.5 md:text-xs"
-                >
-                  <option value="">Select a reason...</option>
-                  {deliveryIssueReasons.map(reason => (
-                    <option key={reason} value={reason}>{reason}</option>
-                  ))}
-                </select>
-              </div>
-              {issueReason === 'Other' && (
-                <textarea
-                  value={issueDescription}
-                  onChange={(e) => setIssueDescription(e.target.value)}
-                  rows={3}
-                  placeholder="Tell us what happened..."
-                  className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-900 placeholder:text-slate-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 md:px-3.5 md:py-2.5 md:text-xs"
-                />
-              )}
-            </div>
-            <div className="mt-3 flex gap-2 md:mt-4">
-              <button
-                onClick={() => { setShowIssueModal(false); setIssueReason(''); setIssueDescription('') }}
-                className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 md:py-2.5 md:text-xs"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleReportIssue}
-                disabled={!isIssueReasonValid}
-                className="flex-1 rounded-lg bg-amber-600 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50 md:py-2.5 md:text-xs"
-              >
-                Submit
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
 
 // Request Card Component
-function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue }) {
+function RequestCard({ request, onViewDetails, onConfirmReceived }) {
   const status = statusConfig[request.status] || statusConfig.PENDING_REQUEST
   const itemLabel = request.itemType === 'other'
     ? `Other: ${request.otherItemType}`
@@ -2195,21 +1941,13 @@ function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue 
         </div>
 
         {/* Delivered — optional one-tap receipt confirmation, visible right on
-            the row so the customer doesn't have to open the request to act.
-            Spans the full row width (not just the left content column) so
-            "Confirm Received" and "Report an Issue" can anchor to the true
-            left/right edges — the same edges the status badge/chevron use. */}
+            the row so the customer doesn't have to open the request to act. */}
         {request.status === 'DELIVERED' && (
           <div className="mt-2.5 border-t border-slate-100 pt-2.5" onClick={(e) => e.stopPropagation()}>
             {request.receivedConfirmed ? (
               <p className="flex items-center gap-1.5 text-xs font-medium text-emerald-600">
                 <CheckCircle2 className="h-3.5 w-3.5" />
                 Receipt confirmed
-              </p>
-            ) : request.issueReported ? (
-              <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                Issue reported — we're on it
               </p>
             ) : (
               <div className="flex flex-nowrap items-center gap-2">
@@ -2219,14 +1957,6 @@ function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue 
                     className="shrink-0 whitespace-nowrap rounded-full bg-emerald-600 px-2.5 py-1 text-[10px] font-semibold text-white transition hover:bg-emerald-700 active:bg-emerald-800"
                   >
                     Confirm Received
-                  </button>
-                </div>
-                <div className="flex flex-1 justify-center">
-                  <button
-                    onClick={() => onReportIssue(request)}
-                    className="shrink-0 whitespace-nowrap text-[10px] font-medium text-red-600 hover:text-red-700 hover:underline"
-                  >
-                    Report an Issue
                   </button>
                 </div>
               </div>
@@ -2240,8 +1970,8 @@ function RequestCard({ request, onViewDetails, onConfirmReceived, onReportIssue 
           instead of a stacked card. The Supervisor's Customer/Company
           column is dropped (redundant — this is the customer's own list),
           and internal-only columns never existed here to begin with.
-          The Confirm Received / Report an Issue actions live on the
-          Delivery Details page now (reviewed there, not from the table) —
+          The Confirm Received action lives on the Delivery Details page now
+          (reviewed there, not from the table) —
           rows stay a plain single line, and the "needs a response" signal
           moves up to a dot on the Delivered tab itself instead of
           repeating a label on every affected row. */}
@@ -2313,10 +2043,6 @@ function mapDeliveryRow(row) {
     cancelledFromStatus: row.cancelled_from_status,
     receivedConfirmed: row.received_confirmed,
     receivedConfirmedAt: row.received_confirmed_at,
-    issueReported: row.issue_reported,
-    issueReportedAt: row.issue_reported_at,
-    issueDescription: row.issue_description || '',
-    resolvedAt: row.resolved_at,
     completedAt: row.completed_at,
     createdAt: row.created_at
   }
@@ -2385,9 +2111,6 @@ function CustomerDeliveries() {
   // instead of updating instantly — same deliberate-confirm pattern as the
   // detail view, without leaving the list.
   const [confirmingRequest, setConfirmingRequest] = useState(null)
-  const [reportingRequest, setReportingRequest] = useState(null)
-  const [cardIssueReason, setCardIssueReason] = useState('')
-  const [cardIssueText, setCardIssueText] = useState('')
   // +1 = new tab is to the right of the old one (slide in from the right),
   // -1 = to the left — mirrors how a mobile app's screen stack usually feels.
   const [tabDirection, setTabDirection] = useState(1)
@@ -2549,24 +2272,6 @@ function CustomerDeliveries() {
     }
   }
 
-  // Persist a customer "Report an Issue" to the backend: status stays DELIVERED
-  // (per the SupDeliveries status-flow contract — the Issues module reads
-  // issue_reported, not a separate status), with the reason and timestamp.
-  const persistIssueReport = async (id, payload) => {
-    try {
-      await supabase
-        .from('delivery_requests')
-        .update({
-          issue_reported: true,
-          issue_reported_at: new Date().toISOString(),
-          issue_description: payload?.issueDescription || null,
-        })
-        .eq('id', id)
-    } catch {
-      // Optimistic local state already applied.
-    }
-  }
-
   const filteredRequests = deliveryRequests.filter(req => {
     // Filter by tab
     if (activeTab !== 'all' && req.status !== activeTab) return false
@@ -2601,7 +2306,7 @@ function CustomerDeliveries() {
   // on the tab itself instead of repeating a label on every matching row.
   const tabNeedsAttention = {
     PROCESSING: deliveryRequests.some(r => r.status === 'PROCESSING' && r.quotation && !r.quotationApproved),
-    DELIVERED: deliveryRequests.some(r => r.status === 'DELIVERED' && !r.receivedConfirmed && !r.issueReported),
+    DELIVERED: deliveryRequests.some(r => r.status === 'DELIVERED' && !r.receivedConfirmed),
   }
 
   const handleTabChange = (newTabId) => {
@@ -2620,7 +2325,6 @@ function CustomerDeliveries() {
           onQuotationResponse={persistQuotationResponse}
           onCancellation={persistCancellation}
           onReceivedConfirmation={persistReceivedConfirmation}
-          onIssueReport={persistIssueReport}
         />
       </CustomerLayout>
     )
@@ -2762,7 +2466,6 @@ function CustomerDeliveries() {
                   request={request}
                   onViewDetails={setSelectedRequest}
                   onConfirmReceived={setConfirmingRequest}
-                  onReportIssue={setReportingRequest}
                 />
               ))
             )}
@@ -2802,79 +2505,6 @@ function CustomerDeliveries() {
                 className="flex-1 rounded-lg bg-emerald-600 px-3 py-2.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
               >
                 Yes, Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Report-an-issue modal for the card-level quick action */}
-      {reportingRequest && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="card-report-issue-title"
-        >
-          <div className="w-full max-w-sm rounded-2xl border border-amber-200/70 bg-white p-4 shadow-xl sm:p-5">
-            <div className="flex items-center gap-2 text-amber-700">
-              <AlertTriangle className="h-5 w-5" />
-              <h2 id="card-report-issue-title" className="text-sm font-bold text-slate-900">Report an Issue</h2>
-            </div>
-            <p className="mt-1.5 text-xs text-slate-600">
-              Let us know what went wrong with <span className="font-semibold text-slate-800">{reportingRequest.id}</span>.
-            </p>
-            <div className="mt-3 space-y-3">
-              <div>
-                <label htmlFor="cardIssueReason" className="text-xs font-medium text-slate-700">Reason</label>
-                <select
-                  id="cardIssueReason"
-                  value={cardIssueReason}
-                  onChange={(e) => setCardIssueReason(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-                >
-                  <option value="">Select a reason...</option>
-                  {deliveryIssueReasons.map(reason => (
-                    <option key={reason} value={reason}>{reason}</option>
-                  ))}
-                </select>
-              </div>
-              {cardIssueReason === 'Other' && (
-                <textarea
-                  value={cardIssueText}
-                  onChange={(e) => setCardIssueText(e.target.value)}
-                  rows={3}
-                  placeholder="Tell us what happened..."
-                  className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-                />
-              )}
-            </div>
-            <div className="mt-4 flex gap-2">
-              <button
-                onClick={() => { setReportingRequest(null); setCardIssueReason(''); setCardIssueText('') }}
-                className="flex-1 rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  const isValid = cardIssueReason && (cardIssueReason !== 'Other' || cardIssueText.trim())
-                  if (!isValid) return
-                  const reason = cardIssueReason === 'Other' ? cardIssueText.trim() : cardIssueReason
-                  handleUpdateRequest(reportingRequest.id, {
-                    issueReported: true,
-                    issueDescription: reason,
-                    issueReportedAt: new Date().toISOString()
-                  })
-                  persistIssueReport(reportingRequest.id, { issueDescription: reason })
-                  setReportingRequest(null)
-                  setCardIssueReason('')
-                  setCardIssueText('')
-                }}
-                disabled={!cardIssueReason || (cardIssueReason === 'Other' && !cardIssueText.trim())}
-                className="flex-1 rounded-lg bg-amber-600 px-3 py-2.5 text-xs font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Submit
               </button>
             </div>
           </div>
