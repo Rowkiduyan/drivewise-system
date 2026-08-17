@@ -44,6 +44,7 @@ export default function AddTruckModal({
   const [modelOptions, setModelOptions] = useState(INITIAL_MODEL_OPTIONS);
 
   const [truck_typeOptions, settruck_typeOptions] = useState(TRUCK_TYPES);
+  // Form state without container dimension fields (removed from DB schema)
   const [formData, setFormData] = useState({
     plate_number: "",
     brand: "",
@@ -57,9 +58,7 @@ export default function AddTruckModal({
     year_model: 2026,
     date_acquired: "",
     max_capacity: "",
-    container_width: "",
-    container_height: "",
-    container_length: "",
+    // max_capacity remains (kg)
     current_mileage: "",
     // New PMS baseline fields
     last_pms_date: "",
@@ -95,13 +94,24 @@ export default function AddTruckModal({
     }
 
     if (mode === "edit" && initialData) {
-      // Populate form with existing truck data
+      // Populate form with existing truck data, handling custom brand/model values
+      // Normalize values for comparison (trim whitespace and case‑insensitive)
+      const normalizedBrand = (initialData.brand || "").trim();
+      const normalizedModel = (initialData.model || "").trim();
+      const brandInOptions = INITIAL_BRAND_OPTIONS.some(
+        (b) => b.toLowerCase() === normalizedBrand.toLowerCase(),
+      );
+      const modelInOptions = INITIAL_MODEL_OPTIONS.some(
+        (m) => m.toLowerCase() === normalizedModel.toLowerCase(),
+      );
       setFormData({
         plate_number: initialData.plate_number || "",
-        brand: initialData.brand || "",
-        customBrand: "",
-        model: initialData.model || "",
-        customModel: "",
+        // If the brand exists in the predefined options, use it; otherwise set to "Custom"
+        brand: brandInOptions ? normalizedBrand : "Custom",
+        customBrand: brandInOptions ? "" : normalizedBrand,
+        // Same logic for model
+        model: modelInOptions ? normalizedModel : "Custom",
+        customModel: modelInOptions ? "" : normalizedModel,
         truck_type: initialData.truck_type || TRUCK_TYPES[0],
         customtruck_type: "",
         commodity_type: initialData.commodity_type || "Ordinary",
@@ -109,9 +119,7 @@ export default function AddTruckModal({
         year_model: initialData.year_model || 2026,
         date_acquired: initialData.date_acquired || "",
         max_capacity: initialData.max_capacity || "",
-        container_width: initialData.container_width || "",
-        container_height: initialData.container_height || "",
-        container_length: initialData.container_length || "",
+        // container dimensions removed (no longer in DB schema)
         current_mileage: initialData.current_mileage || "",
         last_pms_date: initialData.last_pms_date || "",
         last_pms_mileage: initialData.last_pms_mileage || "",
@@ -148,9 +156,7 @@ export default function AddTruckModal({
         year_model: 2026,
         date_acquired: "",
         max_capacity: "",
-        container_width: "",
-        container_height: "",
-        container_length: "",
+        // container dimensions removed (no longer in DB schema)
         current_mileage: "",
         // New PMS baseline fields
         last_pms_date: "",
@@ -227,9 +233,6 @@ export default function AddTruckModal({
       commodity_type: formData.commodity_type || "Ordinary",
       date_acquired: formData.date_acquired || null,
       year_model: formData.year_model || null,
-      container_height: formData.container_height || null,
-      container_width: formData.container_width || null,
-      container_length: formData.container_length || null,
       max_capacity: formData.max_capacity || null,
       current_mileage: formData.current_mileage || null,
       last_pms_mileage: formData.last_pms_mileage || null,
@@ -294,19 +297,22 @@ export default function AddTruckModal({
     try {
       setIsSubmitting(true);
       // Update truck fields (excluding primary key)
+      // Resolve custom brand/model values before updating
+      const finalBrand =
+        formData.brand === "Custom" ? formData.customBrand : formData.brand;
+      const finalModel =
+        formData.model === "Custom" ? formData.customModel : formData.model;
       const { error: truckError } = await supabase
         .from("trucks")
         .update({
-          brand: formData.brand,
-          model: formData.model,
+          brand: finalBrand,
+          model: finalModel,
           truck_type: formData.truck_type,
           commodity_type: formData.commodity_type || "Ordinary",
           year_model: formData.year_model,
           date_acquired: formData.date_acquired || null,
           max_capacity: formData.max_capacity || null,
-          container_height: formData.container_height || null,
-          container_width: formData.container_width || null,
-          container_length: formData.container_length || null,
+          // container dimensions removed (no longer in DB schema)
           current_mileage: formData.current_mileage || null,
           last_pms_date: formData.last_pms_date || null,
           last_pms_mileage: formData.last_pms_mileage || null,
@@ -582,7 +588,11 @@ export default function AddTruckModal({
                     d.plate_number !== null &&
                     d.plate_number !== formData.plate_number;
                   return (
-                    <option key={d.device_id} value={d.device_id} disabled={isTaken}>
+                    <option
+                      key={d.device_id}
+                      value={d.device_id}
+                      disabled={isTaken}
+                    >
                       {d.device_id} ({d.device_status})
                       {isTaken ? ` — Taken (${d.plate_number})` : ""}
                     </option>
@@ -590,55 +600,7 @@ export default function AddTruckModal({
                 })}
             </select>
           </div>
-          {/* New fields: Vehicle Height (m) */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Container Height (m)
-            </label>
-            <input
-              name="container_height"
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder="1.8"
-              value={formData.container_height}
-              onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-            />
-          </div>
-          {/* New fields: Vehicle Width (m) */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Container Width (m)
-            </label>
-            <input
-              name="container_width"
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder="2.5"
-              value={formData.container_width}
-              onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-            />
-          </div>
-          {/* New field: Vehicle Length (m) */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Container Length (m)
-            </label>
-            <input
-              name="container_length"
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder="5.0"
-              value={formData.container_length}
-              onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
-              required
-            />
-          </div>
+          {/* Container dimension fields removed as they are no longer part of the schema */}
           {/* New fields: Maximum Capacity (kg) */}
           <div>
             <label className="block text-sm font-medium text-slate-700">

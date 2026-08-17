@@ -133,7 +133,8 @@ function buildMockTrips(truck) {
 
     return {
       id: `TRIP-${2100 - i}`,
-      dateLabel: date.toLocaleDateString("en-US", { timeZone: MANILA_TIMEZONE,
+      dateLabel: date.toLocaleDateString("en-US", {
+        timeZone: MANILA_TIMEZONE,
         month: "short",
         day: "numeric",
         year: "numeric",
@@ -177,7 +178,8 @@ function buildMockMaintenance(truck) {
     return {
       id: `MTN-${3100 - i}`,
       date: actualDate,
-      dateLabel: actualDate.toLocaleDateString("en-US", { timeZone: MANILA_TIMEZONE,
+      dateLabel: actualDate.toLocaleDateString("en-US", {
+        timeZone: MANILA_TIMEZONE,
         month: "short",
         day: "numeric",
         year: "numeric",
@@ -752,24 +754,6 @@ function AdminTruckProfile() {
               <InfoRow label="Assigned Device" value="-" />
               {/* Additional truck details fetched from Supabase */}
               {truck.brand && <InfoRow label="Brand" value={truck.brand} />}
-              {truck.containerHeight && (
-                <InfoRow
-                  label="Container Height (m)"
-                  value={truck.containerHeight}
-                />
-              )}
-              {truck.container_width && (
-                <InfoRow
-                  label="Container Width (m)"
-                  value={truck.container_width}
-                />
-              )}
-              {truck.container_length && (
-                <InfoRow
-                  label="Container Length (m)"
-                  value={truck.container_length}
-                />
-              )}
               {truck.max_capacity && (
                 <InfoRow label="Max Capacity (kg)" value={truck.max_capacity} />
               )}
