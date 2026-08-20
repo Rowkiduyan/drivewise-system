@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import ConfirmationModal from "../components/common/ConfirmationModal.jsx";
 import HelperLayout from "../layout/HelperLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { cropImageToSquareBase64 } from "../lib/profilePicture.js";
@@ -24,7 +25,8 @@ function calculateAge(birthdate) {
   let age = today.getUTCFullYear() - dob.getUTCFullYear();
   const hasHadBirthdayThisYear =
     today.getUTCMonth() > dob.getUTCMonth() ||
-    (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() >= dob.getUTCDate());
+    (today.getUTCMonth() === dob.getUTCMonth() &&
+      today.getUTCDate() >= dob.getUTCDate());
 
   if (!hasHadBirthdayThisYear) {
     age -= 1;
@@ -56,13 +58,19 @@ function formatAddress(address) {
     return "N/A";
   }
 
-  return [address.street, address.city, address.province].filter(Boolean).join(", ") || "N/A";
+  return (
+    [address.street, address.city, address.province]
+      .filter(Boolean)
+      .join(", ") || "N/A"
+  );
 }
 
 // Mirrors AdminHome.jsx's mapListedUser shape — both read the same
 // *_records columns via the admin-users Edge Function.
 function mapProfile(row) {
-  const fullName = [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ");
+  const fullName = [row.first_name, row.middle_name, row.last_name]
+    .filter(Boolean)
+    .join(" ");
 
   return {
     id: row.id,
@@ -83,7 +91,9 @@ function SectionCard({ title, description, children }) {
       <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 sm:text-xs sm:tracking-[0.16em]">
         {title}
       </h2>
-      {description && <p className="mt-1 text-xs text-slate-500 sm:text-sm">{description}</p>}
+      {description && (
+        <p className="mt-1 text-xs text-slate-500 sm:text-sm">{description}</p>
+      )}
       <div className="mt-3 sm:mt-4">{children}</div>
     </section>
   );
@@ -103,7 +113,10 @@ function InfoField({ label, value, wide = false }) {
 function PasswordField({ id, label, value, onChange, placeholder }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-slate-700 sm:text-sm" htmlFor={id}>
+      <label
+        className="block text-xs font-medium text-slate-700 sm:text-sm"
+        htmlFor={id}
+      >
         {label} <span className="text-red-600">*</span>
       </label>
       <input
@@ -121,6 +134,7 @@ function PasswordField({ id, label, value, onChange, placeholder }) {
 
 function HelperProfile() {
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [confirmingRemovePicture, setConfirmingRemovePicture] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -131,18 +145,34 @@ function HelperProfile() {
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [pictureError, setPictureError] = useState("");
   const [isUpdatingPicture, setIsUpdatingPicture] = useState(false);
+  // Toast state for success/error messages
+  const [toast, setToast] = useState(null);
+  // Confirmation modal for password change
+  const [confirmingPasswordChange, setConfirmingPasswordChange] =
+    useState(false);
 
   useEffect(() => {
-    let isCurrent = true;
+    // Load cached profile if available
+    const cached = sessionStorage.getItem("helperProfile");
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        setHelper(parsed);
+        setIsLoadingProfile(false);
+      } catch (e) {
+        console.warn("Failed to parse cached helper profile", e);
+        setIsLoadingProfile(true);
+      }
+    }
 
+    // Always fetch fresh data in background to keep UI up‑to‑date
+    let isCurrent = true;
     const loadProfile = async () => {
       const { data, error } = await supabase.functions.invoke("admin-users", {
         body: { action: "get-own-profile" },
       });
 
-      if (!isCurrent) {
-        return;
-      }
+      if (!isCurrent) return;
 
       if (error) {
         setProfileError(error.message || "Unable to load your profile.");
@@ -150,8 +180,15 @@ function HelperProfile() {
         return;
       }
 
-      setHelper(mapProfile(data.profile));
+      const mapped = mapProfile(data.profile);
+      setHelper(mapped);
       setIsLoadingProfile(false);
+      // Update cache with fresh data
+      try {
+        sessionStorage.setItem("helperProfile", JSON.stringify(mapped));
+      } catch (e) {
+        console.warn("Failed to cache helper profile", e);
+      }
     };
 
     loadProfile();
@@ -160,6 +197,14 @@ function HelperProfile() {
       isCurrent = false;
     };
   }, []);
+
+  // Auto‑clear toast after 3 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   const handleProfilePictureChange = async (event) => {
     const file = event.target.files?.[0];
@@ -187,10 +232,33 @@ function HelperProfile() {
         return;
       }
 
-      setHelper((current) => (current ? { ...current, profilePicture: data.profile_picture } : current));
+      const updatedProfile = (current) =>
+        current
+          ? { ...current, profilePicture: data.profile_picture }
+          : current;
+      setHelper(updatedProfile);
+      // Update cached profile after picture change
+      try {
+        const cached = sessionStorage.getItem("helperProfile");
+        const parsed = cached ? JSON.parse(cached) : {};
+        const merged = { ...parsed, profilePicture: data.profile_picture };
+        sessionStorage.setItem("helperProfile", JSON.stringify(merged));
+      } catch (e) {
+        console.warn(
+          "Failed to update cached helper profile after picture change",
+          e,
+        );
+      }
+      // Show success toast after photo change
+      setToast({
+        message: "Profile picture updated successfully.",
+        type: "success",
+      });
     } catch (uploadException) {
       setPictureError(
-        uploadException instanceof Error ? uploadException.message : "Unable to process the selected image."
+        uploadException instanceof Error
+          ? uploadException.message
+          : "Unable to process the selected image.",
       );
     } finally {
       setIsUpdatingPicture(false);
@@ -215,7 +283,26 @@ function HelperProfile() {
         return;
       }
 
-      setHelper((current) => (current ? { ...current, profilePicture: "" } : current));
+      const updatedProfile = (current) =>
+        current ? { ...current, profilePicture: "" } : current;
+      setHelper(updatedProfile);
+      // Update cached profile after picture removal
+      try {
+        const cached = sessionStorage.getItem("helperProfile");
+        const parsed = cached ? JSON.parse(cached) : {};
+        const merged = { ...parsed, profilePicture: "" };
+        sessionStorage.setItem("helperProfile", JSON.stringify(merged));
+      } catch (e) {
+        console.warn(
+          "Failed to update cached helper profile after picture removal",
+          e,
+        );
+      }
+      // Show success modal after picture removal
+      setToast({
+        message: "Profile picture removed successfully.",
+        type: "success",
+      });
     } finally {
       setIsUpdatingPicture(false);
     }
@@ -252,11 +339,17 @@ function HelperProfile() {
       return;
     }
 
+    // Open confirmation modal before applying changes
+    setConfirmingPasswordChange(true);
+  };
+
+  // Execute password change after user confirms
+  const executePasswordChange = () => {
     setCurrentPassword("");
     setNewPassword("");
     setConfirmPassword("");
     setIsPasswordModalOpen(false);
-    setFormSuccess("Password updated successfully.");
+    setToast({ message: "Password updated successfully.", type: "success" });
   };
 
   return (
@@ -270,7 +363,9 @@ function HelperProfile() {
 
         {isLoadingProfile ? (
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-            <p className="text-xs text-slate-500 sm:text-sm">Loading profile…</p>
+            <p className="text-xs text-slate-500 sm:text-sm">
+              Loading profile…
+            </p>
           </div>
         ) : helper ? (
           <>
@@ -281,7 +376,11 @@ function HelperProfile() {
             <section className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:gap-4 sm:p-6">
               <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-teal-50 text-sm font-semibold text-teal-700 sm:h-28 sm:w-28 sm:text-xl">
                 {helper.profilePicture ? (
-                  <img src={helper.profilePicture} alt="" className="h-full w-full object-cover" />
+                  <img
+                    src={helper.profilePicture}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
                 ) : (
                   getInitials(helper.fullName)
                 )}
@@ -290,7 +389,9 @@ function HelperProfile() {
                 <p className="truncate text-sm font-semibold text-slate-900 sm:text-lg">
                   {helper.fullName}
                 </p>
-                <p className="truncate text-xs text-slate-500 sm:text-sm">{helper.workEmail}</p>
+                <p className="truncate text-xs text-slate-500 sm:text-sm">
+                  {helper.workEmail}
+                </p>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5 sm:mt-2 sm:gap-2">
                   <label
                     htmlFor="helper-profile-picture"
@@ -303,7 +404,7 @@ function HelperProfile() {
                   {helper.profilePicture ? (
                     <button
                       type="button"
-                      onClick={handleRemoveProfilePicture}
+                      onClick={() => setConfirmingRemovePicture(true)}
                       disabled={isUpdatingPicture}
                       className="rounded-xl border border-red-200 px-2.5 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60 sm:px-3 sm:py-1.5 sm:text-xs"
                     >
@@ -319,7 +420,11 @@ function HelperProfile() {
                   disabled={isUpdatingPicture}
                   className="sr-only"
                 />
-                {pictureError ? <p className="mt-1.5 text-[11px] text-red-600 sm:text-xs">{pictureError}</p> : null}
+                {pictureError ? (
+                  <p className="mt-1.5 text-[11px] text-red-600 sm:text-xs">
+                    {pictureError}
+                  </p>
+                ) : null}
               </div>
             </section>
 
@@ -327,7 +432,10 @@ function HelperProfile() {
               <dl className="grid grid-cols-1 gap-x-6 gap-y-3.5 sm:grid-cols-2 sm:gap-x-8 sm:gap-y-5">
                 <InfoField label="Full Name" value={helper.fullName} />
                 <InfoField label="Role" value={helper.role} />
-                <InfoField label="Personal Email" value={helper.personalEmail} />
+                <InfoField
+                  label="Personal Email"
+                  value={helper.personalEmail}
+                />
                 <InfoField label="Work Email" value={helper.workEmail} />
                 <InfoField label="Age" value={helper.age ?? "N/A"} />
                 <InfoField label="Birthdate" value={helper.birthdate} />
@@ -339,12 +447,18 @@ function HelperProfile() {
 
         <SectionCard title="Change Password">
           <div className="max-w-md">
-            <p className="text-xs font-medium text-slate-700 sm:text-sm">Password</p>
+            <p className="text-xs font-medium text-slate-700 sm:text-sm">
+              Password
+            </p>
             <div className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs tracking-widest text-slate-500 sm:py-2.5 sm:text-sm">
               ••••••••••••
             </div>
 
-            {formSuccess && <p className="mt-2 text-xs text-emerald-600 sm:text-sm">{formSuccess}</p>}
+            {formSuccess && (
+              <p className="mt-2 text-xs text-emerald-600 sm:text-sm">
+                {formSuccess}
+              </p>
+            )}
 
             <button
               type="button"
@@ -369,11 +483,17 @@ function HelperProfile() {
             className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl sm:p-6"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 id="change-password-title" className="text-sm font-semibold text-slate-900 sm:text-base">
+            <h3
+              id="change-password-title"
+              className="text-sm font-semibold text-slate-900 sm:text-base"
+            >
               Change Password
             </h3>
 
-            <form onSubmit={handleChangePassword} className="mt-3 flex flex-col gap-3 sm:mt-4 sm:gap-4">
+            <form
+              onSubmit={handleChangePassword}
+              className="mt-3 flex flex-col gap-3 sm:mt-4 sm:gap-4"
+            >
               <PasswordField
                 id="current-password"
                 label="Current Password"
@@ -396,7 +516,9 @@ function HelperProfile() {
                 placeholder="Re-enter new password"
               />
 
-              {formError && <p className="text-xs text-red-600 sm:text-sm">{formError}</p>}
+              {formError && (
+                <p className="text-xs text-red-600 sm:text-sm">{formError}</p>
+              )}
 
               <div className="mt-1 flex items-center justify-end gap-2">
                 <button
@@ -415,6 +537,60 @@ function HelperProfile() {
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* Confirmation modal for removing profile picture */}
+      {confirmingRemovePicture && (
+        <ConfirmationModal
+          isOpen={true}
+          onClose={() => setConfirmingRemovePicture(false)}
+          onConfirm={async () => {
+            await handleRemoveProfilePicture();
+            setConfirmingRemovePicture(false);
+          }}
+          title="Remove Profile Picture"
+          message="Are you sure you want to remove your profile picture? This action cannot be undone."
+          confirmText="Remove"
+          confirmVariant="danger"
+          isLoading={isUpdatingPicture}
+        />
+      )}
+
+      {/* Confirmation modal for password change */}
+      {confirmingPasswordChange && (
+        <ConfirmationModal
+          isOpen={true}
+          onClose={() => setConfirmingPasswordChange(false)}
+          onConfirm={() => {
+            executePasswordChange();
+            setConfirmingPasswordChange(false);
+          }}
+          title="Change Password"
+          message="Are you sure you want to change your password?"
+          confirmText="Change"
+          confirmVariant="primary"
+          isLoading={false}
+        />
+      )}
+
+      {/* Toast message with slide‑down animation */}
+      {toast && (
+        <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+          <p
+            className={`
+                px-4 py-2 rounded-md shadow-md text-sm font-medium
+                transition-transform duration-300 ease-out
+                ${
+                  toast.type === "success"
+                    ? "bg-green-100 text-green-800 border border-green-300"
+                    : "bg-red-100 text-red-800 border border-red-300"
+                }
+                transform translate-y-0 opacity-100
+              `}
+          >
+            {toast.message}
+          </p>
         </div>
       )}
     </HelperLayout>

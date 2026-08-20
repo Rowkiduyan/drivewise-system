@@ -32,6 +32,12 @@ function LogoutButton({
     }
     setIsLoggingOut(true);
     await supabase.auth.signOut();
+    // Clear all session‑scoped caches on logout (rule 2)
+    try {
+      sessionStorage.clear();
+    } catch (e) {
+      console.warn("Failed to clear sessionStorage on logout", e);
+    }
     navigate("/", { replace: true });
   };
 
