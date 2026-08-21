@@ -563,9 +563,7 @@ function SupTrucks() {
                         Assigned Device
                       </th>
                       {userRole.toLowerCase() !== "supervisor" && (
-                        <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-                          ACTIONS
-                        </th>
+                        <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]"></th>
                       )}
                     </tr>
                   </thead>

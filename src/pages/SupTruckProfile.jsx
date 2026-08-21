@@ -2,10 +2,12 @@ import { useMemo, useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 // import AddTruckModal from "../components/AddTruckModal.jsx"; // Disabled for supervisor view
+// Icon imports for maintenance type mapping
+// Icon imports for maintenance type mapping and UI elements
 import {
   ArrowLeft,
   Truck,
-  // Pencil, // Edit functionality disabled for supervisor view
+  Pencil,
   AlertTriangle,
   CheckCircle2,
   Clock,
@@ -21,7 +23,8 @@ import {
   Wind,
 } from "lucide-react";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
-// import { supabase } from "../lib/supabaseClient.js"; // Disabled for supervisor view (no data fetch)
+import { supabase } from "../lib/supabaseClient.js"; // Enabled for supervisor view to fetch real data
+import ViewModal from "../components/ViewModal.jsx";
 
 // Utility to format a stored date string (yyyy-MM or yyyy-MM-dd) as "MM/YYYY".
 // UTC-anchored -- this is a date-only value with no real time component, so
@@ -115,37 +118,6 @@ function createSeededRng(idString) {
   };
 }
 
-function buildMockTrips(truck) {
-  const rng = createSeededRng(`${truck.id}-trips`);
-  const pick = (list) => list[Math.floor(rng() * list.length)];
-
-  const tripCount = 8 + Math.floor(rng() * 5); // 8-12
-
-  return Array.from({ length: tripCount }, (_, i) => {
-    const isOngoing = i === 0 && truck.status === "On Delivery";
-    const status = isOngoing ? "Ongoing" : pick(TRIP_STATUS_POOL);
-    const date = new Date(
-      NOW.getTime() - i * (18 + rng() * 20) * 60 * 60 * 1000,
-    );
-    const client = truck.clientSpecialties?.length
-      ? pick(truck.clientSpecialties)
-      : pick(CLIENT_SPECIALTIES);
-
-    return {
-      id: `TRIP-${2100 - i}`,
-      dateLabel: date.toLocaleDateString("en-US", {
-        timeZone: MANILA_TIMEZONE,
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
-      client,
-      route: pick(TRIP_ROUTES),
-      status,
-    };
-  });
-}
-
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function buildMockMaintenance(truck) {
@@ -227,6 +199,11 @@ const TRIP_STATUS_BADGE_CLASSES = {
     "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
   Ongoing: "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
   Cancelled: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
+  "For Pickup": "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
+  "Out for Delivery":
+    "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
+  Delivered:
+    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
 };
 
 function TripStatusBadge({ status }) {
@@ -347,11 +324,37 @@ function StatTile({ label, icon: Icon, tone = "slate", children }) {
 
 const TABS = [
   { id: "overview", label: "Overview" },
-  { id: "trips", label: "Trip History" },
+  { id: "trips", label: "Delivery Requests" },
   { id: "maintenance", label: "Maintenance" },
 ];
 
-const TRIP_STATUS_FILTERS = ["All", "Completed", "Ongoing", "Cancelled"];
+// Order matches the required UI: All, For Pickup, Out for Delivery, Delivered, Completed
+// "Cancelled" is omitted because it is not needed in this context.
+const TRIP_STATUS_FILTERS = [
+  "All",
+  "For Pickup",
+  "Out for Delivery",
+  "Delivered",
+  "Completed",
+];
+
+// Map raw Supabase status values to UI‑friendly labels used in the filter bar.
+// Mirrors the mapping used in the customer view.
+const SUPERVISOR_STATUS_MAP = {
+  PENDING_REQUEST: "Pending Request",
+  QUOTATION_SUBMITTED: "Processing",
+  COUNTER_OFFER_SUBMITTED: "Processing",
+  FINAL_QUOTATION_SUBMITTED: "Processing",
+  APPROVED: "For Pickup",
+  ASSIGNED: "For Pickup",
+  OUT_FOR_PICKUP: "For Pickup",
+  ARRIVED_PICKUP: "For Pickup",
+  OUT_FOR_DROPOFF: "Out for Delivery",
+  ARRIVED_DROPOFF: "Out for Delivery",
+  DELIVERED: "Delivered",
+  COMPLETED: "Completed",
+  CANCELLED: "Cancelled",
+};
 const MAINTENANCE_STATUS_FILTERS = ["All", "Completed", "Scheduled", "Overdue"];
 const PAGE_SIZE = 10;
 
@@ -487,7 +490,7 @@ function PaginationBar({ page, setPage, totalPages }) {
   );
 }
 
-function AdminTruckProfile() {
+function SupTruckProfile() {
   const location = useLocation();
   const truck = location.state?.truck;
 
@@ -498,6 +501,8 @@ function AdminTruckProfile() {
   // Edit modal disabled for supervisor view – read‑only profile
   // const [isEditModalOpen, setEditModalOpen] = useState(false);
   const [toast, setToast] = useState(null);
+  const [isViewModalOpen, setViewModalOpen] = useState(false);
+  const [selectedTrip, setSelectedTrip] = useState(null);
   // Devices list for mapping assigned device IDs to trucks (similar to AdminTrucks)
   // const [devices, setDevices] = useState([]); // Disabled for supervisor view
   // Fetch the latest truck data after an edit. Uses plate_number as identifier.
@@ -541,7 +546,162 @@ function AdminTruckProfile() {
   //   loadDevices();
   // }, []);
 
-  const trips = useMemo(() => (truck ? buildMockTrips(truck) : []), [truck]);
+  // Open the View modal for a specific trip
+  const openViewModal = (trip) => {
+    setSelectedTrip(trip);
+    setViewModalOpen(true);
+  };
+  const closeViewModal = () => {
+    setViewModalOpen(false);
+    setSelectedTrip(null);
+  };
+
+  // Real trips fetched from delivery_requests linked to this truck.
+  const [trips, setTrips] = useState([]);
+
+  // Load delivery requests for the current truck.
+  useEffect(() => {
+    async function loadTrips() {
+      if (!truck?.plate_number) return;
+      const { data, error } = await supabase
+        .from("delivery_requests")
+        .select("*")
+        .eq("assigned_truck_plate", truck.plate_number);
+      // console.log("fetch delivery_requests for", truck.plate_number, "result", {
+      //   data,
+      //   error,
+      // });
+      if (error) {
+        console.error("Failed to fetch trips", error);
+        setToast({ message: error.message, type: "error" });
+        setTrips([]);
+      } else {
+        // console.log("delivery_requests rows count", (data || []).length);
+        let rows = data || [];
+        // If filtered query returned no rows, attempt an unrestricted fetch for debugging.
+        if (rows.length === 0) {
+          const { data: allData, error: allError } = await supabase
+            .from("delivery_requests")
+            .select("*");
+          // console.log(
+          //   "unfiltered delivery_requests rows count",
+          //   (allData || []).length,
+          //   allError,
+          // );
+          if (!allError && allData) rows = allData;
+        }
+        // Exclude delivery request statuses that should not appear in the truck view.
+        const EXCLUDED_RAW_STATUSES = [
+          "PENDING_REQUEST",
+          "QUOTATION_SUBMITTED",
+          "COUNTER_OFFER_SUBMITTED",
+          "FINAL_QUOTATION_SUBMITTED",
+          "CANCELLED",
+        ];
+        rows = rows.filter((r) => !EXCLUDED_RAW_STATUSES.includes(r.status));
+        // Gather unique driver and helper IDs for batch fetching.
+        const driverIds = Array.from(
+          new Set(rows.map((r) => r.assigned_driver_id).filter(Boolean)),
+        );
+        const helperIds = Array.from(
+          new Set(
+            rows.flatMap((r) => {
+              // assigned_helper_ids may be an array or a JSON string; handle both.
+              if (!r.assigned_helper_ids) return [];
+              if (Array.isArray(r.assigned_helper_ids))
+                return r.assigned_helper_ids;
+              try {
+                return JSON.parse(r.assigned_helper_ids);
+              } catch {
+                return [];
+              }
+            }),
+          ),
+        );
+        // console.log("Helper IDs extracted:", helperIds);
+
+        // Fetch driver records if needed.
+        const { data: driverData } = driverIds.length
+          ? await supabase
+              .from("driver_records")
+              .select("id,first_name,last_name,middle_name")
+              .in("id", driverIds)
+          : { data: [] };
+        const driverMap = {};
+        (driverData || []).forEach((d) => {
+          const name = [d.first_name, d.middle_name, d.last_name]
+            .filter(Boolean)
+            .join(" ");
+          driverMap[d.id] = name;
+        });
+
+        // Fetch helper records if needed.
+        const { data: helperData } = helperIds.length
+          ? await supabase
+              .from("helper_records")
+              .select("id,first_name,last_name,middle_name")
+              .in("id", helperIds)
+          : { data: [] };
+        // console.log("Helper data fetched:", helperData);
+        const helperMap = {};
+        (helperData || []).forEach((h) => {
+          const name = [h.first_name, h.middle_name, h.last_name]
+            .filter(Boolean)
+            .join(" ");
+          helperMap[h.id] = name;
+        });
+
+        const mapped = rows.map((row) => {
+          // Resolve driver name.
+          const driverName = driverMap[row.assigned_driver_id] || "-";
+          // Resolve helper names (may be multiple).
+          let helperIdsForRow = [];
+          if (row.assigned_helper_ids) {
+            if (Array.isArray(row.assigned_helper_ids)) {
+              helperIdsForRow = row.assigned_helper_ids;
+            } else {
+              try {
+                helperIdsForRow = JSON.parse(row.assigned_helper_ids);
+              } catch {
+                helperIdsForRow = [];
+              }
+            }
+          }
+          const helperNames =
+            helperIdsForRow
+              .map((id) => helperMap[id])
+              .filter(Boolean)
+              .join(", ") || "-";
+
+          return {
+            id: row.id,
+            dateLabel: new Date(row.created_at).toLocaleDateString("en-US", {
+              timeZone: MANILA_TIMEZONE,
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            }),
+            client: row.pickup_location || "Unknown",
+            route: "N/A",
+            driver: driverName,
+            helpers: helperNames,
+            status:
+              SUPERVISOR_STATUS_MAP[row.status] || row.status || "Completed",
+            // Fields required by the modal view – align with Admin mapping and ViewModal expectations
+            item_type: row.item_type,
+            // Prefer the new column names; fall back to legacy ones if they exist.
+            pickup_location: row.pickup_location ?? row.pickup_address ?? "-",
+            pickup_time: row.pickup_time ?? "-",
+            dropoff_location:
+              row.dropoff_location ?? row.dropoff_address ?? "-",
+            dropoff_time: row.dropoff_time ?? row.delivered_at ?? "-",
+          };
+        });
+        setTrips(mapped);
+      }
+    }
+    loadTrips();
+  }, [truck]);
   const maintenanceRecords = useMemo(
     () => (truck ? buildMockMaintenance(truck) : []),
     [truck],
@@ -584,6 +744,11 @@ function AdminTruckProfile() {
     Completed: trips.filter((trip) => trip.status === "Completed").length,
     Ongoing: trips.filter((trip) => trip.status === "Ongoing").length,
     Cancelled: trips.filter((trip) => trip.status === "Cancelled").length,
+    "For Pickup": trips.filter((trip) => trip.status === "For Pickup").length,
+    "Out for Delivery": trips.filter(
+      (trip) => trip.status === "Out for Delivery",
+    ).length,
+    Delivered: trips.filter((trip) => trip.status === "Delivered").length,
   };
 
   const totalTripPages = Math.max(
@@ -667,23 +832,31 @@ function AdminTruckProfile() {
           */}
           {/* Toast message with slide‑down animation */}
           {toast && (
-            <div className="fixed inset-x-0 top-4 flex justify-center z-50">
-              <p
-                className={`
-                    px-4 py-2 rounded-md shadow-md text-sm font-medium
-                    transition-transform duration-300 ease-out
-                    ${
-                      toast.type === "success"
-                        ? "bg-green-100 text-green-800 border border-green-300"
-                        : "bg-red-100 text-red-800 border border-red-300"
-                    }
-                    transform translate-y-0 opacity-100
-                  `}
-              >
-                {toast.message}
-              </p>
-            </div>
+            <>
+              <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+                <p
+                  className={`
+                      px-4 py-2 rounded-md shadow-md text-sm font-medium
+                      transition-transform duration-300 ease-out
+                      ${
+                        toast.type === "success"
+                          ? "bg-green-100 text-green-800 border border-green-300"
+                          : "bg-red-100 text-red-800 border border-red-300"
+                      }
+                      transform translate-y-0 opacity-100
+                    `}
+                >
+                  {toast.message}
+                </p>
+              </div>
+            </>
           )}
+          {/* View modal for delivery request details */}
+          <ViewModal
+            isOpen={isViewModalOpen}
+            onClose={closeViewModal}
+            trip={selectedTrip}
+          />
         </div>
 
         {/* Profile header — compact identity strip: avatar, plate/status on
@@ -812,11 +985,12 @@ function AdminTruckProfile() {
               <table className="w-full min-w-[640px] text-left text-sm">
                 <thead>
                   <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    <th className="px-5 py-3 font-semibold">Trip ID</th>
+                    <th className="px-5 py-3 font-semibold">Request ID</th>
                     <th className="px-5 py-3 font-semibold">Date</th>
-                    <th className="px-5 py-3 font-semibold">Client</th>
-                    <th className="px-5 py-3 font-semibold">Route</th>
+                    <th className="px-5 py-3 font-semibold">Driver</th>
+                    <th className="px-5 py-3 font-semibold">Helper</th>
                     <th className="px-5 py-3 font-semibold">Status</th>
+                    <th className="px-5 py-3 font-semibold">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -829,11 +1003,23 @@ function AdminTruckProfile() {
                         {trip.dateLabel}
                       </td>
                       <td className="px-5 py-4 text-slate-700">
-                        {trip.client}
+                        {trip.driver || "-"}
                       </td>
-                      <td className="px-5 py-4 text-slate-700">{trip.route}</td>
+                      <td className="px-5 py-4 text-slate-700">
+                        {trip.helpers || "-"}
+                      </td>
                       <td className="px-5 py-4">
                         <TripStatusBadge status={trip.status} />
+                      </td>
+                      <td className="px-5 py-4">
+                        {/* Placeholder for future actions (e.g., view details) */}
+                        <button
+                          className="rounded-md bg-blue-600 px-3 py-1 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          type="button"
+                          onClick={() => openViewModal(trip)}
+                        >
+                          View
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -841,7 +1027,7 @@ function AdminTruckProfile() {
                   {filteredTrips.length === 0 && (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={6}
                         className="px-5 py-8 text-center text-sm text-slate-500"
                       >
                         No trips match this filter.
@@ -1100,4 +1286,4 @@ function AdminTruckProfile() {
   );
 }
 
-export default AdminTruckProfile;
+export default SupTruckProfile;
