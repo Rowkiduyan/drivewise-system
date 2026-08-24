@@ -38,7 +38,10 @@ export default function AddTruckModal({
   initialData = null,
   onSubmit,
   onSuccess,
+  userRole = "Admin",
 }) {
+  const isSupervisor = userRole?.toLowerCase() === "supervisor";
+
   // Dynamic option lists that can be extended with custom entries
   const [brandOptions, setBrandOptions] = useState(INITIAL_BRAND_OPTIONS);
   const [modelOptions, setModelOptions] = useState(INITIAL_MODEL_OPTIONS);
@@ -296,30 +299,41 @@ export default function AddTruckModal({
   const executeUpdateTruck = async () => {
     try {
       setIsSubmitting(true);
-      // Update truck fields (excluding primary key)
-      // Resolve custom brand/model values before updating
       const finalBrand =
         formData.brand === "Custom" ? formData.customBrand : formData.brand;
       const finalModel =
         formData.model === "Custom" ? formData.customModel : formData.model;
-      const { error: truckError } = await supabase
-        .from("trucks")
-        .update({
-          brand: finalBrand,
-          model: finalModel,
-          truck_type: formData.truck_type,
-          commodity_type: formData.commodity_type || "Ordinary",
-          year_model: formData.year_model,
-          date_acquired: formData.date_acquired || null,
-          max_capacity: formData.max_capacity || null,
-          // container dimensions removed (no longer in DB schema)
-          current_mileage: formData.current_mileage || null,
-          last_pms_date: formData.last_pms_date || null,
-          last_pms_mileage: formData.last_pms_mileage || null,
-          status: formData.status || null,
-        })
-        .eq("plate_number", formData.plate_number);
-      if (truckError) throw truckError;
+      const editPayload = isSupervisor
+        ? {
+            status: formData.status || null,
+            current_mileage: formData.current_mileage || null,
+            last_pms_date: formData.last_pms_date || null,
+            last_pms_mileage: formData.last_pms_mileage || null,
+          }
+        : {
+            brand: finalBrand,
+            model: finalModel,
+            truck_type: formData.truck_type,
+            commodity_type: formData.commodity_type || "Ordinary",
+            year_model: formData.year_model,
+            date_acquired: formData.date_acquired || null,
+            max_capacity: formData.max_capacity || null,
+            // container dimensions removed (no longer in DB schema)
+            current_mileage: formData.current_mileage || null,
+            last_pms_date: formData.last_pms_date || null,
+            last_pms_mileage: formData.last_pms_mileage || null,
+            status: formData.status || null,
+          };
+
+      if (onSubmit) {
+        await onSubmit(editPayload);
+      } else {
+        const { error: truckError } = await supabase
+          .from("trucks")
+          .update(editPayload)
+          .eq("plate_number", formData.plate_number);
+        if (truckError) throw truckError;
+      }
 
       const newDeviceId = formData.device_id || null;
       // Validate that the selected device is not already linked to a different truck
@@ -407,9 +421,11 @@ export default function AddTruckModal({
               placeholder="NGP 1234"
               value={formData.plate_number}
               onChange={handleChange}
-              disabled={mode === "edit"}
+              disabled={mode === "edit" || isSupervisor}
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
-                mode === "edit" ? "bg-gray-100 cursor-not-allowed" : "bg-white"
+                mode === "edit" || isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
               }`}
             />
           </div>
@@ -423,7 +439,12 @@ export default function AddTruckModal({
               name="date_acquired"
               value={formData.date_acquired}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+              disabled={isSupervisor}
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
+              }`}
             />
           </div>
           {/* Row 2: Brand | Model */}
@@ -435,7 +456,12 @@ export default function AddTruckModal({
               name="brand"
               value={formData.brand}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+              disabled={isSupervisor}
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
+              }`}
             >
               <option value="" disabled>
                 Select brand
@@ -453,7 +479,12 @@ export default function AddTruckModal({
                 placeholder="Enter custom brand"
                 value={formData.customBrand}
                 onChange={handleChange}
-                className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                disabled={isSupervisor}
+                className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                  isSupervisor
+                    ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                    : "bg-white"
+                }`}
                 required
               />
             )}
@@ -466,7 +497,12 @@ export default function AddTruckModal({
               name="model"
               value={formData.model}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+              disabled={isSupervisor}
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
+              }`}
             >
               <option value="" disabled>
                 Select model
@@ -484,7 +520,12 @@ export default function AddTruckModal({
                 placeholder="Enter custom model"
                 value={formData.customModel}
                 onChange={handleChange}
-                className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                disabled={isSupervisor}
+                className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                  isSupervisor
+                    ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                    : "bg-white"
+                }`}
                 required
               />
             )}
@@ -498,7 +539,12 @@ export default function AddTruckModal({
               name="truck_type"
               value={formData.truck_type}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+              disabled={isSupervisor}
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
+              }`}
             >
               {truck_typeOptions.map((type) => (
                 <option key={type} value={type}>
@@ -513,7 +559,12 @@ export default function AddTruckModal({
                 placeholder="Enter custom truck type"
                 value={formData.customtruck_type}
                 onChange={handleChange}
-                className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                disabled={isSupervisor}
+                className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                  isSupervisor
+                    ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                    : "bg-white"
+                }`}
                 required
               />
             )}
@@ -527,7 +578,12 @@ export default function AddTruckModal({
               type="number"
               value={formData.year_model}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              disabled={isSupervisor}
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
+              }`}
             />
           </div>
           {/* Commodity Type – Chilled or Ordinary */}
@@ -539,7 +595,12 @@ export default function AddTruckModal({
               name="commodity_type"
               value={formData.commodity_type}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+              disabled={isSupervisor}
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
+              }`}
             >
               <option value="Ordinary">Ordinary</option>
               <option value="Chilled">Chilled</option>
@@ -576,7 +637,12 @@ export default function AddTruckModal({
               name="device_id"
               value={formData.device_id}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+              disabled={isSupervisor}
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
+              }`}
             >
               <option value="" disabled>
                 Select device
@@ -614,7 +680,12 @@ export default function AddTruckModal({
               placeholder="2000"
               value={formData.max_capacity}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              disabled={isSupervisor}
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
+              }`}
             />
           </div>
           {/* Current Mileage */}
@@ -643,7 +714,7 @@ export default function AddTruckModal({
               type="date"
               value={formData.last_pms_date}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm bg-white`}
             />
           </div>
           {/* Last PMS Mileage */}
@@ -659,7 +730,7 @@ export default function AddTruckModal({
               placeholder="12000"
               value={formData.last_pms_mileage}
               onChange={handleChange}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm bg-white`}
             />
           </div>
           {/* Action buttons */}

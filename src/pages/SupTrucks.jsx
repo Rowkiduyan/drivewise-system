@@ -3,9 +3,9 @@ import { useNavigate } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import MaintenanceSummaryWidget from "../components/trucks/MaintenanceSummaryWidget.jsx";
 import { getPmsStatus } from "../components/trucks/utils/pms.js";
-// import AddTruckModal from "../components/AddTruckModal.jsx"; // Not used in read‑only view
+import AddTruckModal from "../components/AddTruckModal.jsx";
 // Import only the icons that are still needed (Search, ChevronRight, RefreshCw)
-import { Search, ChevronRight, RefreshCw } from "lucide-react";
+import { Search, ChevronRight, RefreshCw, Edit } from "lucide-react";
 // Truck type options are defined directly here as mockTrucks.js has been removed.
 const TRUCK_TYPES = [
   "L300",
@@ -46,6 +46,30 @@ function TypeTag({ type }) {
       {type}
     </span>
   );
+}
+
+const STATUS_TEXT_CLASSES = {
+  available: "text-green-700 font-bold",
+  maintenance: "text-red-700 font-bold",
+  active: "text-orange-600 font-bold",
+  inactive: "text-gray-800 font-bold",
+};
+
+function StatusText({ status }) {
+  const key = status?.toLowerCase();
+  const className = STATUS_TEXT_CLASSES[key] || "text-slate-700 font-bold";
+  return <span className={className}>{status ?? "-"}</span>;
+}
+
+const COMMODITY_TEXT_CLASSES = {
+  ordinary: "text-orange-700 font-bold",
+  chilled: "text-sky-700 font-bold",
+};
+
+function CommodityText({ commodity }) {
+  const key = commodity?.toLowerCase();
+  const className = COMMODITY_TEXT_CLASSES[key] || "text-slate-700 font-bold";
+  return <span className={className}>{commodity ?? "-"}</span>;
 }
 
 // REF truck types (1T REF / 2T REF / 4T REF) are Chilled; any other truck
@@ -232,8 +256,8 @@ function SupTrucks() {
   const [selectedPmsStatus, setSelectedPmsStatus] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   // const [isAddModalOpen, setIsAddModalOpen] = useState(false); // Add modal disabled for supervisor view
-  // const [isEditModalOpen, setIsEditModalOpen] = useState(false); // Edit modal disabled
-  // const [truckToEdit, setTruckToEdit] = useState(null); // Edit modal data placeholder
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [truckToEdit, setTruckToEdit] = useState(null);
   // Load trucks from Supabase on component mount. Fallback to empty array if fetch fails.
   const [trucks, setTrucks] = useState([]);
   // Toast state: message and type ('success' | 'error')
@@ -246,6 +270,8 @@ function SupTrucks() {
   // Loading state for initial data fetch
   const [loading, setLoading] = useState(true);
   const userRole = useUserRole();
+  const isSupervisor = userRole?.toLowerCase() === "supervisor";
+  console.log("DEBUG: userRole =", userRole, "isSupervisor =", isSupervisor);
 
   // Devices list for mapping assigned device IDs to trucks
   const [devices, setDevices] = useState([]);
@@ -389,9 +415,35 @@ function SupTrucks() {
   };
 
   // Edit truck handler – opens edit modal with selected truck data
-  // const handleEditTruck = (truck) => {
-  //   // Edit functionality disabled for supervisor view
-  // };
+  const handleEditTruck = (truck) => {
+    setTruckToEdit(truck);
+    setIsEditModalOpen(true);
+  };
+
+  const handleSubmitEdit = async (payload) => {
+    if (!truckToEdit) return;
+
+    const { error } = await supabase
+      .from("trucks")
+      .update(payload)
+      .eq("id", truckToEdit.id);
+
+    if (error) {
+      setToast({
+        message: `Failed to update truck: ${error.message}`,
+        type: "error",
+      });
+      return;
+    }
+
+    setToast({
+      message: `Truck ${truckToEdit.plate_number} updated successfully`,
+      type: "success",
+    });
+    setIsEditModalOpen(false);
+    setTruckToEdit(null);
+    await refreshTrucks();
+  };
 
   const totalPages = Math.max(1, Math.ceil(filteredTrucks.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
@@ -562,8 +614,10 @@ function SupTrucks() {
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Assigned Device
                       </th>
-                      {userRole.toLowerCase() !== "supervisor" && (
-                        <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]"></th>
+                      {isSupervisor && (
+                        <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                          ACTIONS
+                        </th>
                       )}
                     </tr>
                   </thead>
@@ -594,15 +648,15 @@ function SupTrucks() {
                           <TypeTag type={truck.truck_type} />
                         </td>
                         {/* Commodity Type column */}
-                        <td className="px-5 py-2.5 text-slate-700">
-                          {getCommodityLabel(truck)}
+                        <td className="px-5 py-2.5 text-center">
+                          <CommodityText commodity={getCommodityLabel(truck)} />
                         </td>
                         {/* Device Status column removed */}
                         {/* Status column */}
-                        <td className="px-5 py-2.5 text-slate-700">
-                          {truck.status ?? "-"}
+                        <td className="px-5 py-2.5">
+                          <StatusText status={truck.status} />
                         </td>
-                        <td className="px-5 py-2.5 text-slate-700">
+                        <td className="px-5 py-2.5 text-center text-slate-700">
                           {(() => {
                             const dev = devices.find(
                               (d) => d.plate_number === truck.plate_number,
@@ -610,13 +664,26 @@ function SupTrucks() {
                             return dev?.device_id ?? "NONE";
                           })()}
                         </td>
-                        {userRole !== "supervisor" ? (
+                        {isSupervisor ? (
                           <td className="py-2.5 pl-2 pr-5 flex items-center justify-center space-x-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEditTruck(truck);
+                              }}
+                              className="text-blue-600 hover:text-blue-800"
+                              title="Edit truck"
+                              type="button"
+                            >
+                              <Edit className="h-6 w-6" />
+                            </button>
                             {/* Navigation chevron remains */}
-                            <ChevronRight className="ml-1 h-4 w-4 text-slate-400" />
+                            <ChevronRight className="ml-1 h-6 w-6 text-slate-400" />
                           </td>
                         ) : (
-                          <td className="py-2.5 pl-2 pr-5"></td>
+                          <td className="py-2.5 pl-2 pr-5 flex items-center justify-center">
+                            <ChevronRight className="ml-1 h-6 w-6 text-slate-400" />
+                          </td>
                         )}
                       </tr>
                     ))}
@@ -634,7 +701,19 @@ function SupTrucks() {
         </div>
       </div>
       {/* Add Truck Modal */}
-      {/* Modals disabled for supervisor view */}
+      {truckToEdit && (
+        <AddTruckModal
+          mode="edit"
+          isOpen={isEditModalOpen}
+          onClose={() => {
+            setIsEditModalOpen(false);
+            setTruckToEdit(null);
+          }}
+          initialData={truckToEdit}
+          userRole={userRole}
+          onSubmit={handleSubmitEdit}
+        />
+      )}
     </SupLayout>
   );
 }

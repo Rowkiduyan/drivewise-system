@@ -47,6 +47,30 @@ function TypeTag({ type }) {
   );
 }
 
+const STATUS_TEXT_CLASSES = {
+  available: "text-green-700 font-bold",
+  maintenance: "text-red-700 font-bold",
+  active: "text-orange-600 font-bold",
+  inactive: "text-gray-800 font-bold",
+};
+
+function StatusText({ status }) {
+  const key = status?.toLowerCase();
+  const className = STATUS_TEXT_CLASSES[key] || "text-slate-700 font-bold";
+  return <span className={className}>{status ?? "-"}</span>;
+}
+
+const COMMODITY_TEXT_CLASSES = {
+  ordinary: "text-orange-700 font-bold",
+  chilled: "text-sky-700 font-bold",
+};
+
+function CommodityText({ commodity }) {
+  const key = commodity?.toLowerCase();
+  const className = COMMODITY_TEXT_CLASSES[key] || "text-slate-700 font-bold";
+  return <span className={className}>{commodity ?? "-"}</span>;
+}
+
 // REF truck types (1T REF / 2T REF / 4T REF) are Chilled; any other truck
 // type is Ordinary.
 function getCommodityLabel(truck) {
@@ -663,15 +687,15 @@ function AdminTrucks() {
                           <TypeTag type={truck.truck_type} />
                         </td>
                         {/* Commodity Type column */}
-                        <td className="px-5 py-2.5 text-slate-700">
-                          {getCommodityLabel(truck)}
+                        <td className="px-5 py-2.5 text-center">
+                          <CommodityText commodity={getCommodityLabel(truck)} />
                         </td>
                         {/* Device Status column removed */}
                         {/* Status column */}
-                        <td className="px-5 py-2.5 text-slate-700">
-                          {truck.status ?? "-"}
+                        <td className="px-5 py-2.5">
+                          <StatusText status={truck.status} />
                         </td>
-                        <td className="px-5 py-2.5 text-slate-700">
+                        <td className="px-5 py-2.5 text-center text-slate-700">
                           {(() => {
                             const dev = devices.find(
                               (d) => d.plate_number === truck.plate_number,
@@ -690,7 +714,7 @@ function AdminTrucks() {
                               className="text-blue-600 hover:text-blue-800"
                               title="Edit truck"
                             >
-                              <Edit className="h-4 w-4" />
+                              <Edit className="h-6 w-6" />
                             </button>
                             {/* Delete button */}
                             <button
@@ -702,10 +726,10 @@ function AdminTrucks() {
                               className="text-red-600 hover:text-red-800"
                               title="Delete truck"
                             >
-                              <Trash2 className="h-4 w-4" />
+                              <Trash2 className="h-6 w-6" />
                             </button>
                             {/* Navigation chevron */}
-                            <ChevronRight className="ml-1 h-4 w-4 text-slate-400" />
+                            <ChevronRight className="ml-1 h-6 w-6 text-slate-400" />
                           </td>
                         ) : (
                           <td className="py-2.5 pl-2 pr-5"></td>
