@@ -2,6 +2,10 @@ import { useState, useEffect } from "react";
 // Real device data will be fetched from Supabase instead of using mock data.
 import { supabase } from "../lib/supabaseClient.js";
 import { X } from "lucide-react";
+import {
+  DEFAULT_MAINTENANCE_INTERVAL_KM,
+  DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
+} from "../constants/pms.js";
 
 // Duplicate options to avoid circular imports
 const TRUCK_TYPES = [
@@ -64,8 +68,10 @@ export default function AddTruckModal({
     // max_capacity remains (kg)
     current_mileage: "",
     // New PMS baseline fields
-    last_pms_date: "",
-    last_pms_mileage: "",
+    previous_maintenance_date: "",
+    previous_mileage: "",
+    maintenance_interval_km: DEFAULT_MAINTENANCE_INTERVAL_KM,
+    maintenance_interval_months: DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
     // New status field for edit mode – safely handle null initialData
     status: initialData?.status || "",
   });
@@ -124,8 +130,14 @@ export default function AddTruckModal({
         max_capacity: initialData.max_capacity || "",
         // container dimensions removed (no longer in DB schema)
         current_mileage: initialData.current_mileage || "",
-        last_pms_date: initialData.last_pms_date || "",
-        last_pms_mileage: initialData.last_pms_mileage || "",
+        previous_maintenance_date: initialData.previous_maintenance_date || "",
+        previous_mileage: initialData.previous_mileage || "",
+        maintenance_interval_km:
+          initialData.maintenance_interval_km ||
+          DEFAULT_MAINTENANCE_INTERVAL_KM,
+        maintenance_interval_months:
+          initialData.maintenance_interval_months ||
+          DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
         status: initialData.status || "",
       });
       setOriginalDeviceId(initialData.device_id || null);
@@ -162,8 +174,10 @@ export default function AddTruckModal({
         // container dimensions removed (no longer in DB schema)
         current_mileage: "",
         // New PMS baseline fields
-        last_pms_date: "",
-        last_pms_mileage: "",
+        previous_maintenance_date: "",
+        previous_mileage: "",
+        maintenance_interval_km: DEFAULT_MAINTENANCE_INTERVAL_KM,
+        maintenance_interval_months: DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
         // Default status to avoid null values
         status: "Available",
       });
@@ -238,8 +252,10 @@ export default function AddTruckModal({
       year_model: formData.year_model || null,
       max_capacity: formData.max_capacity || null,
       current_mileage: formData.current_mileage || null,
-      last_pms_mileage: formData.last_pms_mileage || null,
-      last_pms_date: formData.last_pms_date || null,
+      previous_mileage: formData.previous_mileage || null,
+      previous_maintenance_date: formData.previous_maintenance_date || null,
+      maintenance_interval_km: formData.maintenance_interval_km || null,
+      maintenance_interval_months: formData.maintenance_interval_months || null,
       status: formData.status || null,
     };
     try {
@@ -307,8 +323,12 @@ export default function AddTruckModal({
         ? {
             status: formData.status || null,
             current_mileage: formData.current_mileage || null,
-            last_pms_date: formData.last_pms_date || null,
-            last_pms_mileage: formData.last_pms_mileage || null,
+            previous_maintenance_date:
+              formData.previous_maintenance_date || null,
+            previous_mileage: formData.previous_mileage || null,
+            maintenance_interval_km: formData.maintenance_interval_km || null,
+            maintenance_interval_months:
+              formData.maintenance_interval_months || null,
           }
         : {
             brand: finalBrand,
@@ -320,8 +340,12 @@ export default function AddTruckModal({
             max_capacity: formData.max_capacity || null,
             // container dimensions removed (no longer in DB schema)
             current_mileage: formData.current_mileage || null,
-            last_pms_date: formData.last_pms_date || null,
-            last_pms_mileage: formData.last_pms_mileage || null,
+            previous_maintenance_date:
+              formData.previous_maintenance_date || null,
+            previous_mileage: formData.previous_mileage || null,
+            maintenance_interval_km: formData.maintenance_interval_km || null,
+            maintenance_interval_months:
+              formData.maintenance_interval_months || null,
             status: formData.status || null,
           };
 
@@ -704,33 +728,75 @@ export default function AddTruckModal({
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
             />
           </div>
-          {/* Last PMS Date */}
+          {/* Previous Maintenance Date */}
           <div>
             <label className="block text-sm font-medium text-slate-700">
-              Last Service Date
+              Previous Maintenance Date
             </label>
             <input
-              name="last_pms_date"
+              name="previous_maintenance_date"
               type="date"
-              value={formData.last_pms_date}
+              value={formData.previous_maintenance_date}
               onChange={handleChange}
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm bg-white`}
             />
           </div>
-          {/* Last PMS Mileage */}
+          {/* Previous Mileage */}
           <div>
             <label className="block text-sm font-medium text-slate-700">
-              Last Service Mileage (km)
+              Previous Mileage (km)
             </label>
             <input
-              name="last_pms_mileage"
+              name="previous_mileage"
               type="number"
               step="1"
               min="0"
               placeholder="12000"
-              value={formData.last_pms_mileage}
+              value={formData.previous_mileage}
               onChange={handleChange}
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm bg-white`}
+            />
+          </div>
+          {/* Maintenance Mileage Interval */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Maintenance Mileage Interval (km)
+            </label>
+            <input
+              name="maintenance_interval_km"
+              type="number"
+              step="1"
+              min="0"
+              placeholder="10000"
+              value={formData.maintenance_interval_km}
+              onChange={handleChange}
+              disabled={isSupervisor}
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
+              }`}
+            />
+          </div>
+          {/* Maintenance Time Interval */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Maintenance Interval (months)
+            </label>
+            <input
+              name="maintenance_interval_months"
+              type="number"
+              step="1"
+              min="0"
+              placeholder="6"
+              value={formData.maintenance_interval_months}
+              onChange={handleChange}
+              disabled={isSupervisor}
+              className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
+                isSupervisor
+                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                  : "bg-white"
+              }`}
             />
           </div>
           {/* Action buttons */}

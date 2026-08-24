@@ -1,6 +1,6 @@
 import {
-  DEFAULT_PMS_INTERVAL_KM,
-  DEFAULT_PMS_INTERVAL_MONTHS,
+  DEFAULT_MAINTENANCE_INTERVAL_KM,
+  DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
   WARNING_THRESHOLD_KM,
   WARNING_THRESHOLD_DAYS,
 } from "../../../constants/pms.js";
@@ -12,12 +12,14 @@ import {
 export function getPmsStatus(truck) {
   const now = new Date();
   const mileageDiff =
-    (truck.current_mileage ?? 0) - (truck.last_pms_mileage ?? 0);
+    (truck.current_mileage ?? 0) - (truck.previous_mileage ?? 0);
   const daysDiff =
-    (now - new Date(truck.last_pms_date)) / (1000 * 60 * 60 * 24);
+    (now - new Date(truck.previous_maintenance_date)) / (1000 * 60 * 60 * 24);
 
-  const targetKm = truck.pms_interval_km ?? DEFAULT_PMS_INTERVAL_KM;
-  const targetMonths = truck.pms_interval_months ?? DEFAULT_PMS_INTERVAL_MONTHS;
+  const targetKm =
+    truck.maintenance_interval_km ?? DEFAULT_MAINTENANCE_INTERVAL_KM;
+  const targetMonths =
+    truck.maintenance_interval_months ?? DEFAULT_MAINTENANCE_INTERVAL_MONTHS;
   const targetDays = targetMonths * 30; // approximate month length
 
   // Overdue if mileage or time exceeds target

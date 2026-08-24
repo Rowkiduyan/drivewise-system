@@ -936,16 +936,16 @@ function SupTruckProfile() {
                   value={truck.current_mileage}
                 />
               )}
-              {truck.maintenance_mileage_interval && (
+              {truck.maintenance_interval_km && (
                 <InfoRow
                   label="Maintenance Mileage Interval (km)"
-                  value={truck.maintenance_mileage_interval}
+                  value={truck.maintenance_interval_km}
                 />
               )}
-              {truck.maintenance_interval && (
+              {truck.maintenance_interval_months && (
                 <InfoRow
                   label="Maintenance Interval (months)"
-                  value={truck.maintenance_interval}
+                  value={truck.maintenance_interval_months}
                 />
               )}
             </div>
