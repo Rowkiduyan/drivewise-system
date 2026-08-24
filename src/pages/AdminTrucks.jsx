@@ -429,6 +429,31 @@ function AdminTrucks() {
     }
   };
 
+  const handleEditTruckSubmit = async (formData) => {
+    if (!truckToEdit?.id) return;
+    try {
+      const { error } = await supabase
+        .from("trucks")
+        .update(formData)
+        .eq("id", truckToEdit.id);
+      if (error) throw error;
+
+      setIsEditModalOpen(false);
+      setTruckToEdit(null);
+      await refreshTrucks();
+      setToast({
+        message: `Truck ${truckToEdit.plate_number} updated successfully`,
+        type: "success",
+      });
+    } catch (err) {
+      console.error("Failed to update truck:", err.message);
+      setToast({
+        message: "Failed to update truck: " + err.message,
+        type: "error",
+      });
+    }
+  };
+
   // Refresh trucks list from Supabase – used after edit to reflect changes.
   const refreshTrucks = async () => {
     // Reset widget filter to default (All) and pagination to first page
@@ -765,7 +790,7 @@ function AdminTrucks() {
             setTruckToEdit(null);
           }}
           initialData={truckToEdit}
-          onSubmit={handleAddTruck} // reuse same submit for add (creates new) – not used in edit mode
+          onSubmit={handleEditTruckSubmit}
           onSuccess={() => {
             refreshTrucks();
             setToast({
