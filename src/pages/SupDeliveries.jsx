@@ -38,6 +38,8 @@ import {
   CameraOff,
 } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
+import QuotationSettingsModal from '../components/QuotationSettingsModal.jsx'
+import { CREW_ACTIVE_STATUSES, getCrewAvailability } from '../lib/crewStatus.js'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { useSearchParams } from 'react-router-dom'
@@ -181,18 +183,41 @@ function sortTrucksByRequestedType(trucks, requestedType) {
     return aMatches ? -1 : 1
   })
 }
+
+// Does this crew member specialize in the requesting client? Specialties are
+// stored/displayed as client names (customer_records.client_name), and the
+// request's customerName IS that client name — compare case/whitespace-safe.
+function isSpecializedForClient(crewMember, clientName) {
+  if (!crewMember || !clientName) return false
+  const wanted = String(clientName).trim().toLowerCase()
+  return (crewMember.clientSpecialties || [])
+    .some((s) => String(s).trim().toLowerCase() === wanted)
+}
+
+// Drivers/helpers specializing in the requesting client first, then the rest
+// — same "recommended first, nothing fully hidden" pattern as
+// sortTrucksByRequestedType above.
+function sortCrewByClientSpecialty(crew, clientName) {
+  return [...crew].sort((a, b) => {
+    const aMatch = isSpecializedForClient(a, clientName)
+    const bMatch = isSpecializedForClient(b, clientName)
+    if (aMatch === bMatch) return 0
+    return aMatch ? -1 : 1
+  })
+}
 function getTruckCapacity(r) {
   return r.crew?.truck?.capacity || '1.2 tons'
 }
 // Commodity classification for a delivery, derived from its item type.
-// Real items are stored as deliveryOptions.js itemTypes codes (frozen, dairy,
-// fresh_food, pharmaceuticals) — the four that only reefer (REF) trucks can
-// carry per ITEM_TRUCK_COMPATIBILITY — plus mapDbRequest capitalizes the code.
-// Human-readable mock labels (e.g. "Frozen Goods") are also accepted. Anything
-// else is Ordinary.
+// Real items are stored as deliveryOptions.js itemTypes codes — fresh_produce,
+// meat_seafood and frozen_dairy are the ones only reefer (REF) trucks can
+// carry per ITEM_TRUCK_COMPATIBILITY (legacy pre-trim codes fresh_food,
+// frozen, dairy, pharmaceuticals kept matching for older rows), plus
+// mapDbRequest capitalizes the code. Human-readable mock labels (e.g.
+// "Frozen Goods") are also accepted. Anything else is Ordinary.
 function getCommodityType(itemType) {
   const t = String(itemType || '').replace(/[\s_]+/g, '').toLowerCase()
-  return ['freshfood', 'frozen', 'dairy', 'pharmaceuticals'].some((key) => t.includes(key))
+  return ['freshfood', 'freshproduce', 'meat', 'seafood', 'frozen', 'dairy', 'pharmaceuticals'].some((key) => t.includes(key))
     ? 'Chilled'
     : 'Ordinary'
 }
@@ -231,6 +256,148 @@ function getTotalDays(r) {
   const diff = Math.ceil((d2 - d1) / (1000 * 60 * 60 * 24))
   return Math.max(1, diff)
 }
+
+// ---------------------------------------------------------------------------
+// Dynamic quotation defaults, driven by configurable pricing rules.
+//
+// Sensible pre-filled expenses so Supervisors don't retype the same numbers
+// all day. Every value scales with THIS request's own specs (requested truck
+// size, haversine pickup↔dropoff distance, day count, cargo weight, stop
+// count) AND with the Supervisor-configured rules in quotation_settings —
+// e.g. updating the diesel ₱/liter before the workday immediately changes
+// every new quotation's diesel rate. Every field remains editable — these
+// are starting points, not locked values.
+// ---------------------------------------------------------------------------
+
+// Built-in fallbacks: used until a saved rule set is loaded and for any key
+// an older saved rule set doesn't include yet.
+const DEFAULT_QUOTATION_RULES = {
+  dieselPesoPerLiter: 57,
+  tiresPer10KmPeso: 60,
+  tollPer10KmPeso: 30,
+  tollMinPeso: 100,
+  tollMaxPeso: 800,
+  depreciationPerDay: 800,
+  batteriesPerDay: 250,
+  insurancePerDay: 400,
+  garageRentalPerDay: 200,
+  motorVehicleRegFlat: 250,
+  driverWagePerDay: 850,
+  driverLargeTruckPremium: 150,
+  helperWagePerDay: 600,
+  tripAllowancePerHeadPerDay: 150,
+  lodgingAllowancePerNightPerHead: 450,
+  adminFeeRatePercent: 4,
+  secondHelperMinWeightKg: 2000,
+  secondHelperMinStops: 2,
+  truckProfiles: {
+    auv: { label: 'AUV', sizeFactor: 0.6, kmPerLiter: 8.5 },
+    l300: { label: 'L300', sizeFactor: 0.8, kmPerLiter: 6.5 },
+    '1t': { label: '1T Van', sizeFactor: 1, kmPerLiter: 4.5 },
+    '2t': { label: '2T Van', sizeFactor: 1.4, kmPerLiter: 3.5 },
+    '4t': { label: '4T Van', sizeFactor: 1.8, kmPerLiter: 2.5 },
+  },
+}
+
+// Match a requested truck type ("1T_DRY", "1T REF", "L300"…) to its profile
+// by normalized prefix — dry/reefer variants share one fuel/size profile.
+function lookupTruckProfile(truckType, rules) {
+  const t = normalizeTruckType(truckType)
+  const profiles = rules.truckProfiles || DEFAULT_QUOTATION_RULES.truckProfiles
+  const entry = Object.entries(profiles).find(([key]) => t.startsWith(normalizeTruckType(key)))
+  if (!entry) return Object.values(profiles)[0] || DEFAULT_QUOTATION_RULES.truckProfiles['1t']
+  return entry[1]
+}
+
+// Haversine pickup↔dropoff distance (×2 for the round trip), falling back to
+// getTotalDistance's placeholder when coordinates aren't parseable. Uses the
+// request's own captured lat/lng columns first.
+function estimateRequestDistanceKm(r) {
+  if (r?.pickupLat != null && r?.pickupLng != null && r?.dropoffLat != null && r?.dropoffLng != null) {
+    const R = 6371
+    const dLat = (r.dropoffLat - r.pickupLat) * Math.PI / 180
+    const dLng = (r.dropoffLng - r.pickupLng) * Math.PI / 180
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(r.pickupLat * Math.PI / 180) * Math.cos(r.dropoffLat * Math.PI / 180) *
+      Math.sin(dLng / 2) ** 2
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 2
+  }
+  return parseFloat(getTotalDistance(r)) || 0
+}
+
+function buildQuotationDefaults(request, rules = DEFAULT_QUOTATION_RULES) {
+  // Merge so a partially-saved rule set never yields undefined math inputs.
+  const r = { ...DEFAULT_QUOTATION_RULES, ...rules }
+  const fmt = (v) => Number(v).toLocaleString('en-US', { minimumFractionDigits: 2 })
+  // Round money up to tidy steps so defaults look hand-entered, not computed.
+  const round = (v, step = 50) => Math.max(step, Math.round(v / step) * step)
+
+  const distKm = estimateRequestDistanceKm(request)
+  const days = Math.min(14, Math.max(1, parseInt(getTotalDays(request)) || 1))
+  const profile = lookupTruckProfile(request.truckType, r)
+  const size = Number(profile.sizeFactor) || 1
+  const weight = Number(request.cargoWeight) || 0
+  const stopCount = Array.isArray(request.stops) ? request.stops.length : 0
+  // Heavy loads or multi-stop trips get a second helper by default.
+  const needsSecondHelper =
+    weight > Number(r.secondHelperMinWeightKg) ||
+    stopCount >= Number(r.secondHelperMinStops)
+  const helperCount = needsSecondHelper ? 2 : 1
+  // Diesel ₱/km straight from the Supervisor's current pump price ÷ that
+  // truck's fuel efficiency — updating the liter price updates every quote.
+  const dieselPerKm = Number(r.dieselPesoPerLiter) / Math.max(0.5, Number(profile.kmPerLiter))
+
+  const depreciation = round(Number(r.depreciationPerDay) * days * size)
+  const batteries = round(Number(r.batteriesPerDay) * days * size)
+  const tires = round((distKm / 10) * Number(r.tiresPer10KmPeso) * size)
+  // Larger trucks pay their driver a bit more per day.
+  const driverWage =
+    Number(r.driverWagePerDay) * days + (size >= 1.4 ? Number(r.driverLargeTruckPremium) : 0)
+  const helperWage = Number(r.helperWagePerDay) * days
+  const tripAllowance = round(Number(r.tripAllowancePerHeadPerDay) * days * helperCount, 25)
+  // Lodging only makes sense when the job spans multiple days.
+  const lodgingAllowance =
+    days > 1 ? round(Number(r.lodgingAllowancePerNightPerHead) * (days - 1) * helperCount) : 0
+  // Toll/parking grows with distance but is capped — long hauls hit expressway ceilings.
+  const tollParking = distKm > 0
+    ? Math.min(
+        Number(r.tollMaxPeso),
+        Math.max(Number(r.tollMinPeso), Math.round((distKm / 10) * Number(r.tollPer10KmPeso))),
+      )
+    : 0
+
+  // Admin fees are estimated as a cut of the projected direct subtotal so
+  // indirects track the direct side instead of being one flat number.
+  const directEstimate =
+    depreciation + batteries + tires + driverWage + helperWage * helperCount +
+    tripAllowance + lodgingAllowance + tollParking + dieselPerKm * distKm
+
+  return {
+    directExpenses: {
+      depreciation: fmt(depreciation),
+      dieselRate: dieselPerKm.toFixed(2),
+      repairsAndMaintenance: {
+        batteries: fmt(batteries),
+        tires: fmt(tires),
+      },
+      salariesAndWages: {
+        driver: fmt(driverWage),
+        helper1: fmt(helperWage),
+        helper2: needsSecondHelper ? fmt(helperWage) : '',
+      },
+      tripAllowance: fmt(tripAllowance),
+      lodgingAllowance: days > 1 ? fmt(lodgingAllowance) : '',
+      tollParking: distKm > 0 ? fmt(tollParking) : '',
+    },
+    indirectExpenses: {
+      adminFees: fmt(round(directEstimate * (Number(r.adminFeeRatePercent) / 100))),
+      insurance: fmt(round(Number(r.insurancePerDay) * days * size)),
+      motorVehicleReg: fmt(round(Number(r.motorVehicleRegFlat), 10)),
+      garageRental: fmt(round(Number(r.garageRentalPerDay) * days)),
+    },
+  }
+}
+
 function getPickupCoords(r) {
   if (r.currentLocation) return r.currentLocation
   if (r.pickupLat != null && r.pickupLng != null) return { lat: r.pickupLat, lng: r.pickupLng }
@@ -306,6 +473,7 @@ function MoneyInput({ value, onValueChange, accent = 'blue' }) {
 function QuotationExpenseForm({
   form,
   onFormChange,
+  onOpenPricingSettings,
   distanceKm,
   distanceLabel,
   isLargeTruckFlag,
@@ -343,6 +511,21 @@ function QuotationExpenseForm({
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-slate-500">
+          Amounts are pre-filled from your configured pricing rules — edit any line before submitting.
+        </p>
+        {onOpenPricingSettings && (
+          <button
+            type="button"
+            onClick={onOpenPricingSettings}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-blue-300 hover:text-blue-700"
+            title="Configure the default values and pricing rules used to pre-fill quotations"
+          >
+            Pricing Rules
+          </button>
+        )}
+      </div>
       <div className="rounded-xl border-2 border-blue-200 bg-blue-50/60 p-4">
         <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-blue-800 mb-4">
           <span className="h-3 w-3 rounded-full bg-blue-600" />
@@ -2482,6 +2665,12 @@ function mapFleetCrewMember(m) {
     authId: m.id,
     name: [m.first_name, m.middle_name, m.last_name].filter(Boolean).join(' ').trim(),
     role: m.role,
+    // Client names (customer_records.client_name) this crew member
+    // specializes in, attached by list-crew via crew_client_specialties.
+    clientSpecialties: m.client_specialties || [],
+    // Self-set weekly working days (crew_availability) — feeds the
+    // Available/Unavailable badge in the assignment pickers.
+    workingDays: m.working_days || [],
   }
 }
 
@@ -2500,6 +2689,7 @@ function mapDbRequest(row, clientName, fleet) {
   const name = clientName || 'Client'
   return {
     id: row.id,
+    customerAuthId: row.customer_auth_id,
     customerName: name,
     companyName: name,
     itemType: row.item_type ? row.item_type.charAt(0).toUpperCase() + row.item_type.slice(1) : row.item_type,
@@ -2593,6 +2783,14 @@ function SupDeliveries() {
   // back to the pricing-estimate figure the "Total Distance" Row used
   // before).
   const [realDistanceKmBySelected, setRealDistanceKmBySelected] = useState({})
+  // Auth ids of customers that have at least one crew_client_specialties row
+  // (loaded via the admin-users list-specialized-clients action) — requests
+  // from these clients show the "Requires Specialized Crew" flag.
+  const [specializedClientIds, setSpecializedClientIds] = useState(() => new Set())
+  // Record ids of crew currently committed to an active trip (ASSIGNED →
+  // OUT_FOR_DELIVERY) — drives the Available/Assigned badge in the
+  // driver/helper assignment pickers.
+  const [busyCrewIds, setBusyCrewIds] = useState(() => new Set())
   // Deep-link from SupDashboard's "View Trip" (Driver Safety list) --
   // ?deliveryId=DR-0020 opens straight to the In Transit tab with that
   // delivery already selected in Real-time Monitoring / DriveWise Alerts.
@@ -2627,6 +2825,10 @@ function SupDeliveries() {
     },
   }
   const [quotationForm, setQuotationForm] = useState({ ...defaultQuotationForm })
+  // Supervisor-configured pricing rules for buildQuotationDefaults — loaded
+  // once with the inbox, edited via the Pricing Rules modal.
+  const [quotationRules, setQuotationRules] = useState(DEFAULT_QUOTATION_RULES)
+  const [showQuotationSettings, setShowQuotationSettings] = useState(false)
   const [assignment, setAssignment] = useState({ driverId: '', helperIds: [], plateNumber: '', _showDrivers: false, _showHelpers: false, _showTrucks: false })
   const [hasApproved, setHasApproved] = useState(false)
   const [quotationSubmitted, setQuotationSubmitted] = useState(false)
@@ -2675,6 +2877,32 @@ function SupDeliveries() {
         }
       }
 
+      // Customers with at least one crew_client_specialties row — requests
+      // from these clients get the "Requires Specialized Crew" flag so the
+      // Supervisor assigns a crew that actually specializes in them.
+      const { data: specializedData } = await supabase.functions.invoke('admin-users', {
+        body: { action: 'list-specialized-clients' },
+      })
+      if (mountedRef.current && Array.isArray(specializedData?.specializedClientIds)) {
+        setSpecializedClientIds(new Set(specializedData.specializedClientIds))
+      }
+
+      // Supervisor's saved pricing rules for the quotation default generator.
+      // Fail open to the built-in defaults when nothing is saved yet or the
+      // read errors — a broken settings table must never block quotations.
+      try {
+        const { data: settingsRow } = await supabase
+          .from('quotation_settings')
+          .select('rules')
+          .eq('id', 1)
+          .maybeSingle()
+        if (mountedRef.current && settingsRow?.rules && typeof settingsRow.rules === 'object') {
+          setQuotationRules({ ...DEFAULT_QUOTATION_RULES, ...settingsRow.rules })
+        }
+      } catch {
+        // Keep built-in defaults.
+      }
+
       // Real fleet for the Assign Vehicle pickers: trucks from the `trucks`
       // table (RLS-open, so the supervisor can query directly) and crew from
       // the admin-users list-crew action (drivers/helpers + *_records rows).
@@ -2695,6 +2923,24 @@ function SupDeliveries() {
         }
       }
       if (mountedRef.current) setFleet(fleet)
+
+      // Live crew status for the assignment pickers: record ids currently
+      // committed to an active trip. Refreshed by the same Realtime channel
+      // that keeps the inbox current.
+      const { data: activeTrips, error: activeError } = await supabase
+        .from('delivery_requests')
+        .select('assigned_driver_id, assigned_helper_ids')
+        .in('status', CREW_ACTIVE_STATUSES)
+      if (!activeError && mountedRef.current) {
+        const busy = new Set()
+        for (const trip of activeTrips || []) {
+          if (trip.assigned_driver_id) busy.add(trip.assigned_driver_id)
+          for (const helperId of trip.assigned_helper_ids || []) {
+            if (helperId) busy.add(helperId)
+          }
+        }
+        setBusyCrewIds(busy)
+      }
 
       const { data, error } = await supabase
         .from('delivery_requests')
@@ -3074,8 +3320,8 @@ function SupDeliveries() {
     // so the dispatch/assignment section is seen first.
     setShowQuotation(request.status !== 'APPROVED' || !request.quotation)
     setQuotationForm({
-      directExpenses: request.quotation?.breakdown?.directExpenses || { ...defaultQuotationForm.directExpenses },
-      indirectExpenses: request.quotation?.breakdown?.indirectExpenses || { ...defaultQuotationForm.indirectExpenses },
+      directExpenses: request.quotation?.breakdown?.directExpenses || buildQuotationDefaults(request, quotationRules).directExpenses,
+      indirectExpenses: request.quotation?.breakdown?.indirectExpenses || buildQuotationDefaults(request, quotationRules).indirectExpenses,
     })
     setAssignment({
       driverId: request.crew?.driver?.id || '',
@@ -3178,23 +3424,9 @@ function SupDeliveries() {
     if (!selectedRequest) return
     setHasApproved(true)
     setQuotationSubmitted(false)
-    setQuotationForm({
-      directExpenses: {
-        depreciation: '',
-        dieselRate: '',
-        repairsAndMaintenance: { batteries: '', tires: '' },
-        salariesAndWages: { driver: '', helper1: '', helper2: '' },
-        tripAllowance: '',
-        lodgingAllowance: '',
-        tollParking: '',
-      },
-      indirectExpenses: {
-        adminFees: '',
-        insurance: '',
-        motorVehicleReg: '',
-        garageRental: '',
-      },
-    })
+    // Pre-fill every category with this request's dynamic defaults — the
+    // Supervisor can still override any line before submitting.
+    setQuotationForm(buildQuotationDefaults(selectedRequest, quotationRules))
     setShowDetails(false)
   }
 
@@ -3379,6 +3611,12 @@ function SupDeliveries() {
                     <span className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge[selectedRequest.status]}`}>
                       {statusLabel[selectedRequest.status] ?? selectedRequest.status.replaceAll('_', ' ')}
                     </span>
+                    {specializedClientIds.has(selectedRequest.customerAuthId) && (
+                      <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">
+                        <Users className="h-3 w-3" />
+                        Requires Specialized Crew
+                      </span>
+                    )}
                   </div>
                   <p className="mt-0.5 text-xs text-slate-500">{selectedRequest.customerName}</p>
                 </div>
@@ -3732,6 +3970,7 @@ function SupDeliveries() {
                       <QuotationExpenseForm
                         form={quotationForm}
                         onFormChange={setQuotationForm}
+                        onOpenPricingSettings={() => setShowQuotationSettings(true)}
                         distanceKm={selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0}
                         distanceLabel={selectedRequest ? getTotalDistance(selectedRequest) : '0'}
                         isLargeTruckFlag={selectedRequest ? isLargeTruck(selectedRequest) : false}
@@ -4090,6 +4329,7 @@ function SupDeliveries() {
                       <QuotationExpenseForm
                         form={quotationForm}
                         onFormChange={setQuotationForm}
+                        onOpenPricingSettings={() => setShowQuotationSettings(true)}
                         distanceKm={selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0}
                         distanceLabel={selectedRequest ? getTotalDistance(selectedRequest) : '0'}
                         isLargeTruckFlag={selectedRequest ? isLargeTruck(selectedRequest) : false}
@@ -4308,7 +4548,10 @@ function SupDeliveries() {
                       </button>
                       {assignment._showDrivers && (
                         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {fleet.drivers.map(driver => (
+                          {sortCrewByClientSpecialty(fleet.drivers, selectedRequest.customerName).map(driver => {
+                            const isSpecialized = isSpecializedForClient(driver, selectedRequest.customerName)
+                            const availability = getCrewAvailability({ recordId: driver.id, workingDays: driver.workingDays }, busyCrewIds)
+                            return (
                             <button
                               key={driver.id}
                               type="button"
@@ -4326,8 +4569,24 @@ function SupDeliveries() {
                             >
                               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(driver.name)}</span>
                               <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-semibold text-slate-900">{driver.name}</p>
-                                <p className="text-xs text-slate-500">{driver.id}</p>
+                                <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
+                                  {driver.name}
+                                  {isSpecialized && (
+                                    <span
+                                      className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700"
+                                      title="This driver has a Client Specialty for this customer"
+                                    >
+                                      Specialized Driver for this Client
+                                    </span>
+                                  )}
+                                </p>
+                                <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                  {driver.id}
+                                  <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${availability.badge}`}>
+                                    <span className={`h-1.5 w-1.5 rounded-full ${availability.dot}`} />
+                                    {availability.label}
+                                  </span>
+                                </p>
                               </div>
                               {assignment.driverId === driver.id && (
                                 <svg className="h-5 w-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -4335,7 +4594,8 @@ function SupDeliveries() {
                                 </svg>
                               )}
                             </button>
-                          ))}
+                            )
+                          })}
                         </div>
                       )}
                     </div>
@@ -4369,9 +4629,11 @@ function SupDeliveries() {
                       </button>
                       {assignment._showHelpers && (
                         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {fleet.helpers.map(helper => {
+                          {sortCrewByClientSpecialty(fleet.helpers, selectedRequest.customerName).map(helper => {
                             const isSelected = assignment.helperIds.includes(helper.id)
                             const disabled = !isSelected && assignment.helperIds.length >= 2
+                            const isSpecialized = isSpecializedForClient(helper, selectedRequest.customerName)
+                            const availability = getCrewAvailability({ recordId: helper.id, workingDays: helper.workingDays }, busyCrewIds)
                             return (
                               <button
                                 key={helper.id}
@@ -4384,8 +4646,24 @@ function SupDeliveries() {
                               >
                                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(helper.name)}</span>
                                 <div className="min-w-0 flex-1">
-                                  <p className={`truncate text-sm font-semibold ${isSelected ? 'text-indigo-900' : 'text-slate-900'}`}>{helper.name}</p>
-                                  <p className="text-xs text-slate-500">{helper.id}</p>
+                                  <p className={`flex items-center gap-1.5 truncate text-sm font-semibold ${isSelected ? 'text-indigo-900' : 'text-slate-900'}`}>
+                                    {helper.name}
+                                    {isSpecialized && (
+                                      <span
+                                        className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700"
+                                        title="This helper has a Client Specialty for this customer"
+                                      >
+                                        Specialized Helper for this Client
+                                      </span>
+                                    )}
+                                  </p>
+                                  <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    {helper.id}
+                                    <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${availability.badge}`}>
+                                      <span className={`h-1.5 w-1.5 rounded-full ${availability.dot}`} />
+                                      {availability.label}
+                                    </span>
+                                  </p>
                                 </div>
                                 <span className={`flex h-5 w-5 items-center justify-center rounded border-2 ${
                                   isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
@@ -4650,6 +4928,29 @@ function SupDeliveries() {
             </div>
           )}
 
+          {showQuotationSettings && (
+            <QuotationSettingsModal
+              rules={quotationRules}
+              onClose={() => setShowQuotationSettings(false)}
+              onSave={async (nextRules) => {
+                const { data: { user } } = await supabase.auth.getUser()
+                const { error } = await supabase
+                  .from('quotation_settings')
+                  .upsert({
+                    id: 1,
+                    rules: nextRules,
+                    updated_at: new Date().toISOString(),
+                    updated_by: user?.id ?? null,
+                  })
+                if (error) {
+                  throw new Error(error.message)
+                }
+                setQuotationRules({ ...DEFAULT_QUOTATION_RULES, ...nextRules })
+                setShowQuotationSettings(false)
+              }}
+            />
+          )}
+
           {showDeclineCounterOfferDialog && (
             <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
               <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden">
@@ -4814,7 +5115,18 @@ function SupDeliveries() {
                     </div>
                     <p className="text-sm font-mono font-semibold text-slate-900 text-center">{row.id}</p>
                     <div>
-                      <p className="text-sm font-semibold text-slate-900">{row.customerName}</p>
+                      <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+                        {row.customerName}
+                        {specializedClientIds.has(row.customerAuthId) && (
+                          <span
+                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
+                            title="This client has crew specialized for them — assign a driver/helper with their Client Specialty"
+                          >
+                            <Users className="h-3 w-3" />
+                            Specialized Crew
+                          </span>
+                        )}
+                      </p>
                       <p className="text-xs text-slate-500">{row.companyName}</p>
                     </div>
                     <p className="text-sm text-slate-700 line-clamp-2">{row.pickupAddress}</p>
@@ -4867,7 +5179,18 @@ function SupDeliveries() {
                     </div>
                     <p className="text-sm font-mono font-semibold text-slate-900 text-center">{row.id}</p>
                     <div>
-                      <p className="text-sm font-semibold text-slate-900">{row.customerName}</p>
+                      <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+                        {row.customerName}
+                        {specializedClientIds.has(row.customerAuthId) && (
+                          <span
+                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
+                            title="This client has crew specialized for them — assign a driver/helper with their Client Specialty"
+                          >
+                            <Users className="h-3 w-3" />
+                            Specialized Crew
+                          </span>
+                        )}
+                      </p>
                       <p className="text-xs text-slate-500">{row.companyName}</p>
                     </div>
                     <p className="text-sm text-slate-700 line-clamp-2">{row.pickupAddress}</p>

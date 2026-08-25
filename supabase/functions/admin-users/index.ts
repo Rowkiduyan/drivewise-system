@@ -543,6 +543,44 @@ async function attachClientSpecialties(
   }));
 }
 
+// Attaches each crew member's self-set weekly working days
+// (crew_availability, 0=Sunday..6=Saturday) as `working_days` — fetched once
+// for the whole roster alongside client specialties. Crew members edit these
+// on their own profile page (DriverProfile.jsx / HelperProfile.jsx); this is
+// the Supervisor's read-only view.
+async function attachWorkingDays(
+  adminClient: ReturnType<typeof createClient>,
+  crew: Array<Record<string, unknown>>,
+) {
+  const crewIds = crew.map((member) => member.id as string);
+  if (crewIds.length === 0) {
+    return crew.map((member) => ({ ...member, working_days: [] as number[] }));
+  }
+
+  const { data: rows, error: rowsError } = await adminClient
+    .from("crew_availability")
+    .select("crew_auth_id, day_of_week")
+    .in("crew_auth_id", crewIds)
+    .order("day_of_week", { ascending: true });
+
+  if (rowsError) {
+    throw new Error(rowsError.message);
+  }
+
+  const daysByCrewId = new Map<string, number[]>();
+  for (const row of rows || []) {
+    const crewId = row.crew_auth_id as string;
+    const existing = daysByCrewId.get(crewId) || [];
+    existing.push(row.day_of_week as number);
+    daysByCrewId.set(crewId, existing);
+  }
+
+  return crew.map((member) => ({
+    ...member,
+    working_days: daysByCrewId.get(member.id as string) || [],
+  }));
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
@@ -643,7 +681,8 @@ Deno.serve(async (req) => {
     try {
       const crew = await listUsersWithProfiles(adminClient, ["Driver", "Helper"]);
       const crewWithSpecialties = await attachClientSpecialties(adminClient, crew);
-      return json({ ok: true, crew: crewWithSpecialties });
+      const crewWithAvailability = await attachWorkingDays(adminClient, crewWithSpecialties);
+      return json({ ok: true, crew: crewWithAvailability });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to list crew";
       return json({ error: message }, 400);
@@ -656,7 +695,7 @@ Deno.serve(async (req) => {
   // customer_records.client_name — see DATABASE.md "crew_client_specialties".
   // Same Admin-or-Supervisor gate as list-crew, since Supervisors manage
   // this from the crew profile page.
-  const CLIENT_SPECIALTY_ACTIONS = ["list-clients", "list-crew-clients", "add-crew-client", "remove-crew-client"];
+  const CLIENT_SPECIALTY_ACTIONS = ["list-clients", "list-crew-clients", "add-crew-client", "remove-crew-client", "list-specialized-clients"];
   if (CLIENT_SPECIALTY_ACTIONS.includes(action)) {
     if (!CREW_VIEW_ROLES.includes(callerRow.role)) {
       return json({ error: "Forbidden" }, 403);
@@ -675,6 +714,24 @@ Deno.serve(async (req) => {
 
       const clients = (data || []).map((row) => ({ id: row.auth_id, name: row.client_name }));
       return json({ ok: true, clients });
+    }
+
+    // Distinct customers that have at least one crew_client_specialties row
+    // pointing at them — SupDeliveries.jsx uses this to flag requests from
+    // clients that require specialized crews.
+    if (action === "list-specialized-clients") {
+      const { data, error } = await adminClient
+        .from("crew_client_specialties")
+        .select("client_auth_id");
+
+      if (error) {
+        return json({ error: error.message }, 400);
+      }
+
+      const specializedClientIds = Array.from(
+        new Set((data || []).map((row) => row.client_auth_id as string)),
+      );
+      return json({ ok: true, specializedClientIds });
     }
 
     if (action === "list-crew-clients") {

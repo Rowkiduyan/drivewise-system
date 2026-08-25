@@ -4,6 +4,8 @@ import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Search, Truck, Users, CircleCheck, ChevronRight } from "lucide-react";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
+import { formatWorkingDays } from "../lib/workingDays.js";
+import { CREW_ACTIVE_STATUSES, CREW_STATUS_META, getCrewAvailability } from "../lib/crewStatus.js";
 
 // ---------------------------------------------------------------------------
 // Crew roster — loaded from the admin-users Edge Function's `list-crew`
@@ -42,19 +44,21 @@ function buildDisplayName(firstName, middleName, lastName) {
 
 // Maps one row from the `list-crew` Edge Function response (users merged
 // with their driver_records/helper_records row) into the shape this page
-// and SupCrewProfile.jsx expect. Status/Shift/Client Specialty/Weekly
-// Performance have no real data source yet (see module comment above) and
-// are left as neutral placeholders rather than fabricated values.
+// and SupCrewProfile.jsx expect. Status/Weekly Performance have no real data
+// source yet (see module comment above) and are left as neutral placeholders
+// rather than fabricated values. Client Specialties and Working Days are
+// real — specialties via crew_client_specialties/customer_records, working
+// days via crew_availability, both attached by the Edge Function's list-crew.
 function mapCrewRow(row) {
   const birthDate = row.birthdate ? new Date(row.birthdate) : null;
 
   return {
     id: row.id,
+    recordId: row.record_id || "",
     fullName: buildDisplayName(row.first_name, row.middle_name, row.last_name),
     position: row.role,
-    status: "Off Duty",
     clientSpecialties: row.client_specialties || [],
-    shift: "—",
+    workingDays: row.working_days || [],
     contactNumber: row.contact_number || "—",
     employeeId: row.record_id || "—",
     birthday: birthDate
@@ -76,20 +80,13 @@ function getInitials(fullName) {
   return (`${last.charAt(0)}${first.charAt(0)}`.toUpperCase()) || "?";
 }
 
-const STATUS_BADGE_CLASSES = {
-  Available: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  "On Delivery": "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
-  "Off Duty": "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
-};
-
 function StatusBadge({ status }) {
+  const meta = CREW_STATUS_META[status] || CREW_STATUS_META.unavailable;
   return (
     <span
-      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${
-        STATUS_BADGE_CLASSES[status] || STATUS_BADGE_CLASSES["Off Duty"]
-      }`}
+      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${meta.badge}`}
     >
-      {status}
+      {meta.label}
     </span>
   );
 }
@@ -264,7 +261,7 @@ function PaginationBar({ page, setPage, totalPages }) {
   );
 }
 
-const STATUS_OPTIONS = ["Available", "On Delivery", "Off Duty"];
+const STATUS_OPTIONS = ["Available", "Assigned", "Unavailable"];
 const POSITION_OPTIONS = ["Driver", "Helper"];
 const PAGE_SIZE = 10;
 
@@ -279,6 +276,12 @@ function SupDeliveryCrew() {
   const [selectedClient, setSelectedClient] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   const [clientOptions, setClientOptions] = useState([]);
+  // Record ids (D001/H001) of crew currently on an ACTIVE trip — derived
+  // from delivery_requests, refreshed live via Realtime below.
+  const [busyRecordIds, setBusyRecordIds] = useState(() => new Set());
+  // Helper record id → the driver member they're assigned with on an active
+  // trip (powers each helper's "with driver" line).
+  const [helperDriverByRecordId, setHelperDriverByRecordId] = useState(() => new Map());
 
   useEffect(() => {
     let isMounted = true;
@@ -330,52 +333,141 @@ function SupDeliveryCrew() {
     };
   }, []);
 
+  // Live crew-assignment status: which record ids are on an ACTIVE trip
+  // right now, and (for helpers) which driver they're riding with. Derived
+  // from delivery_requests directly (Supervisor read policy), refreshed on
+  // every request change via Realtime so assignment decisions always see
+  // current availability without a manual reload.
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadAssignments() {
+      const { data, error } = await supabase
+        .from("delivery_requests")
+        .select("id, assigned_driver_id, assigned_helper_ids")
+        .in("status", CREW_ACTIVE_STATUSES);
+
+      if (!isMounted || error || !data) {
+        return;
+      }
+
+      const busy = new Set();
+      const helperDriver = new Map();
+      const driverById = new Map(
+        roster.map((member) => [member.recordId, member]),
+      );
+
+      for (const row of data) {
+        if (row.assigned_driver_id) {
+          busy.add(row.assigned_driver_id);
+          for (const helperId of row.assigned_helper_ids || []) {
+            busy.add(helperId);
+            // Only remember the FIRST active driver per helper — a helper
+            // can't be on two active trips at once in practice.
+            if (!helperDriver.has(helperId)) {
+              helperDriver.set(helperId, driverById.get(row.assigned_driver_id) || null);
+            }
+          }
+        }
+      }
+
+      setBusyRecordIds(busy);
+      setHelperDriverByRecordId(helperDriver);
+    }
+
+    loadAssignments();
+
+    const channel = supabase
+      .channel(`crew-assignments-${Math.random().toString(36).slice(2)}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "delivery_requests" },
+        () => {
+          loadAssignments();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
+    // roster dependency: the helper→driver map needs the full roster loaded
+    // to resolve record ids into members.
+  }, [roster]);
+
+  // Derive each member's live availability (Available / Assigned /
+  // Unavailable) from their weekly working days + current active trips.
+  const rosterWithStatus = useMemo(
+    () =>
+      roster.map((member) => ({
+        ...member,
+        status: getCrewAvailability(member, busyRecordIds).key,
+        statusLabel: getCrewAvailability(member, busyRecordIds).label,
+      })),
+    [roster, busyRecordIds],
+  );
+
   const statusCounts = useMemo(
     () => ({
-      All: roster.length,
-      Available: roster.filter((crew) => crew.status === "Available").length,
-      "On Delivery": roster.filter((crew) => crew.status === "On Delivery").length,
-      "Off Duty": roster.filter((crew) => crew.status === "Off Duty").length,
+      All: rosterWithStatus.length,
+      Available: rosterWithStatus.filter((crew) => crew.status === "available").length,
+      Assigned: rosterWithStatus.filter((crew) => crew.status === "assigned").length,
+      Unavailable: rosterWithStatus.filter((crew) => crew.status === "unavailable").length,
     }),
-    [roster],
+    [rosterWithStatus],
   );
 
   const positionCounts = useMemo(
     () => ({
-      All: roster.length,
-      Driver: roster.filter((crew) => crew.position === "Driver").length,
-      Helper: roster.filter((crew) => crew.position === "Helper").length,
+      All: rosterWithStatus.length,
+      Driver: rosterWithStatus.filter((crew) => crew.position === "Driver").length,
+      Helper: rosterWithStatus.filter((crew) => crew.position === "Helper").length,
     }),
-    [roster],
+    [rosterWithStatus],
   );
 
   const clientCounts = useMemo(() => {
-    const counts = { All: roster.length };
+    const counts = { All: rosterWithStatus.length };
     clientOptions.forEach((client) => {
-      counts[client] = roster.filter((crew) => crew.clientSpecialties.includes(client)).length;
+      counts[client] = rosterWithStatus.filter((crew) => crew.clientSpecialties.includes(client)).length;
     });
     return counts;
-  }, [roster, clientOptions]);
+  }, [rosterWithStatus, clientOptions]);
 
   const filteredCrew = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
 
-    return roster.filter((crew) => {
+    return rosterWithStatus.filter((crew) => {
       const matchesSearch = !query
         ? true
-        : [crew.fullName, crew.position, crew.status, ...crew.clientSpecialties, crew.employeeId]
+        : [crew.fullName, crew.position, crew.statusLabel, ...crew.clientSpecialties, crew.employeeId]
             .join(" ")
             .toLowerCase()
             .includes(query);
 
-      const matchesStatus = selectedStatus === "All" || crew.status === selectedStatus;
+      const matchesStatus =
+        selectedStatus === "All" ||
+        crew.status === selectedStatus.toLowerCase();
       const matchesPosition = selectedPosition === "All" || crew.position === selectedPosition;
       const matchesClient =
         selectedClient === "All" || crew.clientSpecialties.includes(selectedClient);
 
       return matchesSearch && matchesStatus && matchesPosition && matchesClient;
     }).sort((leftCrew, rightCrew) => leftCrew.fullName.localeCompare(rightCrew.fullName));
-  }, [roster, searchTerm, selectedStatus, selectedPosition, selectedClient]);
+  }, [rosterWithStatus, searchTerm, selectedStatus, selectedPosition, selectedClient]);
+
+  // Quick-view tiles — today's crew availability at a glance without opening
+  // a single profile. "This week" coverage is the Working Days column.
+  const quickView = useMemo(
+    () => ({
+      available: rosterWithStatus.filter((crew) => crew.status === "available").length,
+      assigned: rosterWithStatus.filter((crew) => crew.status === "assigned").length,
+      unavailable: rosterWithStatus.filter((crew) => crew.status === "unavailable").length,
+      total: rosterWithStatus.length,
+    }),
+    [rosterWithStatus],
+  );
 
   const totalPages = Math.max(1, Math.ceil(filteredCrew.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
@@ -423,6 +515,26 @@ function SupDeliveryCrew() {
   return (
     <SupLayout title="Delivery Crew" background={null} bg="bg-[#F6F7FB]">
       <div className="flex h-full min-h-0 flex-col gap-3">
+        {/* Quick view — today's availability at a glance. Counts are live:
+            they move a member between tiles automatically as trips start/end
+            (Realtime) or as members edit their weekly working days. */}
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {[
+            { label: "Available Today", value: quickView.available, dot: CREW_STATUS_META.available.dot },
+            { label: "Assigned on Trips", value: quickView.assigned, dot: CREW_STATUS_META.assigned.dot },
+            { label: "Unavailable Today", value: quickView.unavailable, dot: CREW_STATUS_META.unavailable.dot },
+            { label: "Total Crew", value: quickView.total, dot: "bg-slate-300" },
+          ].map((tile) => (
+            <div key={tile.label} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${tile.dot}`} />
+              <div>
+                <p className="text-xl font-bold leading-none text-slate-900">{tile.value}</p>
+                <p className="mt-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">{tile.label}</p>
+              </div>
+            </div>
+          ))}
+        </section>
+
         {/* Search and Filter Toolbar — search and filters share one row, with
             filters right-aligned. This is the common modern dashboard layout
             (e.g. Linear, Notion tables): the search stays the primary, most
@@ -515,6 +627,9 @@ function SupDeliveryCrew() {
                         Client Specialty
                       </th>
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Working Days
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Contact
                       </th>
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
@@ -541,6 +656,13 @@ function SupDeliveryCrew() {
                               <p className="truncate text-sm font-semibold text-slate-900">
                                 {crew.fullName}
                               </p>
+                              {/* Helper team line — which driver this helper is
+                                  currently assigned with on an active trip. */}
+                              {crew.position === "Helper" && helperDriverByRecordId.get(crew.recordId) && (
+                                <p className="truncate text-[11px] text-indigo-600">
+                                  with {helperDriverByRecordId.get(crew.recordId).fullName}
+                                </p>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -552,6 +674,9 @@ function SupDeliveryCrew() {
                         </td>
                         <td className="px-5 py-2.5 text-slate-700">
                           {crew.clientSpecialties.join(", ")}
+                        </td>
+                        <td className="px-5 py-2.5 text-slate-700">
+                          {formatWorkingDays(crew.workingDays) || "—"}
                         </td>
                         <td className="px-5 py-2.5 text-slate-700">{crew.contactNumber}</td>
                         <td className="px-5 py-2.5">

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import DriverLayout from "../layout/DriverLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { cropImageToSquareBase64 } from "../lib/profilePicture.js";
+import WorkingDaysEditor from "../components/WorkingDaysEditor.jsx";
 
 function getInitials(fullName) {
   const parts = fullName.trim().split(" ");
@@ -336,6 +337,8 @@ function DriverProfile() {
                 <InfoField label="Address" value={driver.address} wide />
               </dl>
             </SectionCard>
+
+            <WorkingDaysEditor />
           </>
         ) : null}
 

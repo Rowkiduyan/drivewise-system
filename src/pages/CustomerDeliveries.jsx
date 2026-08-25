@@ -4,7 +4,7 @@ import {
   AlertTriangle, ArrowLeft, Calendar, Camera, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardList, Clock, FileText, MapPin, Package, Search, Send, Truck, Users, X
 } from 'lucide-react'
 import CustomerLayout from '../layout/CustomerLayout.jsx'
-import { truckTypes, itemTypes } from '../lib/deliveryOptions.js'
+import { truckTypes, getItemTypeLabel } from '../lib/deliveryOptions.js'
 import { supabase } from '../lib/supabaseClient.js'
 import { manilaTodayISO, MANILA_TIMEZONE } from '../lib/manilaTime.js'
 
@@ -337,7 +337,13 @@ function getInitials(name) {
 }
 
 function fmPeso(v) {
-  return `₱${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+  // Breakdown values come from the supervisor's MoneyInput, which stores them
+  // as locale-formatted strings ("1,500.00") — Number() alone returns NaN on
+  // the thousands separator, so strip everything but digits/sign/dot first.
+  const num = typeof v === 'number'
+    ? v
+    : parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''))
+  return `₱${(Number.isNaN(num) ? 0 : num).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
 }
 
 function BreakdownLine({ label, value, indent = false }) {
@@ -751,8 +757,8 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
       : 'Delivery Details'
   const itemLabel = request.itemType === 'other'
     ? `Other: ${request.otherItemType}`
-    : itemTypes.find(i => i.value === request.itemType)?.label || request.itemType
-  // The requested truck type (what the customer asked for) vs. the actual
+    : getItemTypeLabel(request.itemType)
+// The requested truck type (what the customer asked for) vs. the actual
   // truck the supervisor assigned (from the fleet). Once a truck is assigned,
   // the assigned truck's real type is shown as the primary "Truck Type" on
   // both the customer and supervisor sides; the requested type is kept only
@@ -803,20 +809,37 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
       })
       onQuotationResponse?.(request.id, 'approve', {})
     } else if (quotationAction === 'reject') {
-      onUpdate(request.id, {
-        status: 'PROCESSING',
-        quotationRejected: true,
-        priceRange: priceRange,
-        // Keep the declined quotation as history (instead of discarding it)
-        // so the negotiation trail — what was offered, what you asked for
-        // instead — stays visible once a revised quotation arrives, the same
-        // way the supervisor's Quotation tab keeps both an "Initial" and an
-        // "Updated" round visible.
-        previousQuotation: request.quotation,
-        quotation: null,
-        quotationRespondedAt: new Date().toISOString()
-      })
-      onQuotationResponse?.(request.id, 'reject', { priceRange })
+      // Negotiation is capped at one round: once a revised quotation is on
+      // the table (previousQuotation exists), rejecting it is final and
+      // cancels the request — no second price-range counter.
+      if (request.previousQuotation) {
+        const cancelledAt = new Date().toISOString()
+        const cancelledFromStatus = request.dbStatus || request.status
+        onUpdate(request.id, {
+          status: 'CANCELLED',
+          quotationRejected: true,
+          cancelReason: 'Declined the revised quotation',
+          cancelledBy: 'customer',
+          cancelledAt,
+          cancelledFromStatus
+        })
+        onCancellation?.(request.id, { cancelledBy: 'customer', cancelReason: 'Declined the revised quotation', cancelledAt, cancelledFromStatus })
+      } else {
+        onUpdate(request.id, {
+          status: 'PROCESSING',
+          quotationRejected: true,
+          priceRange: priceRange,
+          // Keep the declined quotation as history (instead of discarding it)
+          // so the negotiation trail — what was offered, what you asked for
+          // instead — stays visible once a revised quotation arrives, the same
+          // way the supervisor's Quotation tab keeps both an "Initial" and an
+          // "Updated" round visible.
+          previousQuotation: request.quotation,
+          quotation: null,
+          quotationRespondedAt: new Date().toISOString()
+        })
+        onQuotationResponse?.(request.id, 'reject', { priceRange })
+      }
     }
     setShowQuotationResponse(false)
     setQuotationAction(null)
@@ -1406,7 +1429,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                             className="inline-flex items-center gap-2 rounded-xl border border-rose-300 px-5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 transition"
                           >
                             <X className="h-4 w-4" />
-                            Reject &amp; Price Range
+                            {request.previousQuotation ? 'Reject' : 'Reject & Price Range'}
                           </button>
                         </div>
                       )}
@@ -1414,7 +1437,11 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                       {showQuotationResponse && (
                         <div className="rounded-xl border-2 border-blue-200 bg-blue-50/60 p-4 space-y-3">
                           <h4 className="text-sm font-bold uppercase tracking-wider text-blue-800">
-                            {quotationAction === 'approve' ? 'Confirm Approval' : 'Request Price Range'}
+                            {quotationAction === 'approve'
+                              ? 'Confirm Approval'
+                              : request.previousQuotation
+                                ? 'Decline Revised Quotation'
+                                : 'Request Price Range'}
                           </h4>
                           {quotationAction === 'approve' ? (
                             <>
@@ -1424,6 +1451,20 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                               <div className="flex gap-3">
                                 <button onClick={handleQuotationSubmit} className="rounded-xl bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 transition">
                                   Confirm
+                                </button>
+                                <button onClick={() => setShowQuotationResponse(false)} className="rounded-xl border border-slate-300 px-5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition">
+                                  Cancel
+                                </button>
+                              </div>
+                            </>
+                          ) : request.previousQuotation ? (
+                            <>
+                              <p className="text-sm text-slate-700">
+                                Declining this revised quotation is <span className="font-bold">final</span> and cancels the request — negotiation is limited to one round.
+                              </p>
+                              <div className="flex gap-3">
+                                <button onClick={handleQuotationSubmit} className="rounded-xl bg-rose-600 px-5 py-2 text-sm font-semibold text-white hover:bg-rose-700 transition">
+                                  Confirm Rejection
                                 </button>
                                 <button onClick={() => setShowQuotationResponse(false)} className="rounded-xl border border-slate-300 px-5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition">
                                   Cancel
@@ -1569,7 +1610,7 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
                     onClick={() => { setQuotationAction('reject'); setShowQuotationResponse(true) }}
                     className="flex-1 rounded-xl border border-red-300 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 active:bg-red-100 md:px-4 md:py-2.5 md:text-sm"
                   >
-                    Reject & Price Range
+                    {request.previousQuotation ? 'Reject' : 'Reject & Price Range'}
                   </button>
                 </div>
               </div>
@@ -1578,26 +1619,44 @@ function RequestDetailView({ request, onBack, onUpdate, onQuotationResponse, onC
             {/* Quotation approval/rejection form. Mobile only now (md:hidden)
                 — the desktop equivalent is folded into the Quotation
                 collapsible in the main column above. */}
-            {showQuotationResponse && (
-              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-2.5 md:hidden">
-                <h3 className="text-xs font-semibold text-blue-800 md:text-sm">
-                  {quotationAction === 'approve' ? 'Confirm Approval' : 'Request Price Range'}
-                </h3>
-                {quotationAction === 'approve' ? (
-                  <div className="mt-2 space-y-2 md:mt-3 md:space-y-3">
-                    <p className="text-xs text-slate-600 md:text-sm">
-                      Approve <span className="font-bold">₱{Number(quotationAmount).toLocaleString()}</span>? The delivery moves to For Pickup.
-                    </p>
-                    <div className="flex flex-col gap-2 md:flex-row md:gap-3">
-                      <button onClick={handleQuotationSubmit} className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 active:bg-emerald-800 md:px-4 md:py-2.5 md:text-sm">
-                        Confirm
-                      </button>
-                      <button onClick={() => setShowQuotationResponse(false)} className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 active:bg-slate-100 md:px-4 md:py-2.5 md:text-sm">
-                        Cancel
-                      </button>
+              {showQuotationResponse && (
+                <div className="rounded-2xl border border-blue-200 bg-blue-50 p-2.5 md:hidden">
+                  <h3 className="text-xs font-semibold text-blue-800 md:text-sm">
+                    {quotationAction === 'approve'
+                      ? 'Confirm Approval'
+                      : request.previousQuotation
+                        ? 'Decline Revised Quotation'
+                        : 'Request Price Range'}
+                  </h3>
+                  {quotationAction === 'approve' ? (
+                    <div className="mt-2 space-y-2 md:mt-3 md:space-y-3">
+                      <p className="text-xs text-slate-600 md:text-sm">
+                        Approve <span className="font-bold">₱{Number(quotationAmount).toLocaleString()}</span>? The delivery moves to For Pickup.
+                      </p>
+                      <div className="flex flex-col gap-2 md:flex-row md:gap-3">
+                        <button onClick={handleQuotationSubmit} className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 active:bg-emerald-800 md:px-4 md:py-2.5 md:text-sm">
+                          Confirm
+                        </button>
+                        <button onClick={() => setShowQuotationResponse(false)} className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 active:bg-slate-100 md:px-4 md:py-2.5 md:text-sm">
+                          Cancel
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ) : (
+                  ) : request.previousQuotation ? (
+                    <div className="mt-2 space-y-2 md:mt-3 md:space-y-3">
+                      <p className="text-xs text-slate-600 md:text-sm">
+                        Declining this revised quotation is <span className="font-bold">final</span> and cancels the request — negotiation is limited to one round.
+                      </p>
+                      <div className="flex flex-col gap-2 md:flex-row md:gap-3">
+                        <button onClick={handleQuotationSubmit} className="flex-1 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 active:bg-rose-800 md:px-4 md:py-2.5 md:text-sm">
+                          Confirm Rejection
+                        </button>
+                        <button onClick={() => setShowQuotationResponse(false)} className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 active:bg-slate-100 md:px-4 md:py-2.5 md:text-sm">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                   <div className="mt-2 space-y-2 md:mt-3 md:space-y-3">
                     <p className="text-xs text-slate-600 md:text-sm">Enter your preferred price range for the supervisor.</p>
                     <div className="grid grid-cols-2 gap-2 md:gap-3">
@@ -1846,7 +1905,7 @@ function RequestCard({ request, onViewDetails, onConfirmReceived }) {
   const status = statusConfig[request.status] || statusConfig.PENDING_REQUEST
   const itemLabel = request.itemType === 'other'
     ? `Other: ${request.otherItemType}`
-    : itemTypes.find(i => i.value === request.itemType)?.label || request.itemType
+    : getItemTypeLabel(request.itemType)
 
   // Not gated on `quotationRejected` — that flag marks a *previous* round as
   // declined, but a revised quotation sent after that rejection is a fresh

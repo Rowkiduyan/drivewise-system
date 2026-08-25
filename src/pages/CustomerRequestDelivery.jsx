@@ -2,10 +2,10 @@ import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, Link } from 'react-router-dom'
 import {
-  ArrowLeft, Box, Check, CheckCircle2, Clock, MapPin, Package, Ruler, Search, Thermometer, X
+  ArrowLeft, Box, Check, CheckCircle2, Clock, Info, MapPin, Package, Ruler, Search, Thermometer, X
 } from 'lucide-react'
 import CustomerLayout from '../layout/CustomerLayout.jsx'
-import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Polygon, useMapEvents, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import {
@@ -20,6 +20,14 @@ import {
   getBudgetError
 } from '../lib/deliveryOptions.js'
 import { photonGeocode } from '../lib/forwardGeocode.js'
+import {
+  LUZON_SERVICE_AREA,
+  SERVICE_AREA_MAX_BOUNDS,
+  SERVICE_AREA_MESSAGE,
+  isInsideLuzon,
+  snapToLuzon
+} from '../lib/serviceArea.js'
+import { weekdayOfDate } from '../lib/workingDays.js'
 import { supabase } from '../lib/supabaseClient.js'
 
 // Fix default marker icon for Leaflet in React
@@ -79,7 +87,10 @@ async function reverseGeocode(lat, lng, attempt = 0) {
 // Map controller — handles view changes, map clicks, and draggable marker.
 // Clicking/dragging always resolves the point to a real address via reverse
 // geocoding; the coordinates are shown as an instant fallback only.
-function MapController({ center, zoom, selectedLocation, onLocationChange, onResolvingChange }) {
+// Every point is validated against the Luzon service-area polygons first:
+// an invalid placement never sticks — the pin snaps back to the nearest
+// valid spot inside Luzon and the UI flags the attempt.
+function MapController({ center, zoom, selectedLocation, onLocationChange, onResolvingChange, onServiceAreaResult }) {
   const map = useMap()
 
   useEffect(() => {
@@ -89,11 +100,28 @@ function MapController({ center, zoom, selectedLocation, onLocationChange, onRes
   }, [center, zoom, map])
 
   const handlePoint = (lat, lng) => {
-    onLocationChange(`${lat.toFixed(6)}, ${lng.toFixed(6)}`, lat, lng)
+    // Validate against the Luzon polygons; an outside placement never sticks.
+    const inside = isInsideLuzon(lat, lng)
+    let finalLat = lat
+    let finalLng = lng
+
+    if (!inside) {
+      // Redirect the pin to the nearest valid location inside Luzon instead
+      // of accepting the placement. The notice is driven by the raw attempt,
+      // not by re-checking the snapped point (which sits on the boundary and
+      // can flip the ray-cast check at exact coastline vertices).
+      const snapped = snapToLuzon(lat, lng)
+      finalLat = snapped.lat
+      finalLng = snapped.lng
+      map.panTo([finalLat, finalLng], { animate: true })
+    }
+    onServiceAreaResult(inside)
+
+    onLocationChange(`${finalLat.toFixed(6)}, ${finalLng.toFixed(6)}`, finalLat, finalLng)
     onResolvingChange(true)
-    reverseGeocode(lat, lng)
+    reverseGeocode(finalLat, finalLng)
       .then(display => {
-        if (display) onLocationChange(display, lat, lng)
+        if (display) onLocationChange(display, finalLat, finalLng)
       })
       .catch(() => {})
       .finally(() => onResolvingChange(false))
@@ -106,36 +134,76 @@ function MapController({ center, zoom, selectedLocation, onLocationChange, onRes
     }
   })
 
-  if (!selectedLocation) return null
-
   return (
-    <Marker
-      position={[selectedLocation.lat, selectedLocation.lon]}
-      draggable={true}
-      eventHandlers={{
-        dragend(e) {
-          const { lat, lng } = e.target.getLatLng()
-          handlePoint(lat, lng)
-        }
-      }}
-    />
+    <>
+      {/* Service-area boundary so users can see where selection is allowed */}
+      {LUZON_SERVICE_AREA.map((ring, index) => (
+        <Polygon
+          key={index}
+          positions={ring}
+          pathOptions={{ color: '#059669', weight: 2, fillColor: '#10b981', fillOpacity: 0.08 }}
+        />
+      ))}
+      {selectedLocation && (
+        <Marker
+          position={[selectedLocation.lat, selectedLocation.lon]}
+          draggable={true}
+          eventHandlers={{
+            dragend(e) {
+              const { lat, lng } = e.target.getLatLng()
+              handlePoint(lat, lng)
+            }
+          }}
+        />
+      )}
+    </>
   )
 }
 
 // Location Picker Modal Component
-function LocationPickerModal({ isOpen, onClose, onSelect }) {
+function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [suggestions, setSuggestions] = useState([])
   const [selectedLocation, setSelectedLocation] = useState(null)
   const [mapCenter, setMapCenter] = useState([14.5995, 120.9842])
   const [mapZoom, setMapZoom] = useState(13)
   const [resolvingAddress, setResolvingAddress] = useState(false)
+  const [showServiceAreaNotice, setShowServiceAreaNotice] = useState(false)
+
+  // When the modal opens with free-typed text in the field (no pin picked
+  // yet), resolve that text via the same Photon geocoder the search uses
+  // and drop the pin on it right away — same Luzon-only rules apply.
+  useEffect(() => {
+    if (!isOpen) return
+
+    const query = initialValue?.trim()
+    if (!query) return
+
+    let cancelled = false
+    photonGeocode(query)
+      .then(coords => {
+        if (cancelled || !coords) return
+        if (!isInsideLuzon(coords.lat, coords.lng)) {
+          setShowServiceAreaNotice(true)
+          return
+        }
+        setShowServiceAreaNotice(false)
+        setSelectedLocation({ display: query, lat: coords.lat, lon: coords.lng })
+        setMapCenter([coords.lat, coords.lng])
+        setMapZoom(16)
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen, initialValue])
 
   useEffect(() => {
     if (searchQuery.length > 2) {
       const timer = setTimeout(() => {
         photonSearch(searchQuery)
-          .then(data => setSuggestions(data))
+          .then(data => setSuggestions(data.filter(s => isInsideLuzon(s.lat, s.lon))))
           .catch(() => setSuggestions([]))
       }, 300)
       return () => clearTimeout(timer)
@@ -145,6 +213,11 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
   }, [searchQuery])
 
   const handleSuggestionClick = (suggestion) => {
+    if (!isInsideLuzon(suggestion.lat, suggestion.lon)) {
+      setShowServiceAreaNotice(true)
+      return
+    }
+    setShowServiceAreaNotice(false)
     setSelectedLocation({ display: suggestion.display, lat: suggestion.lat, lon: suggestion.lon })
     setMapCenter([suggestion.lat, suggestion.lon])
     setMapZoom(16)
@@ -201,7 +274,7 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search for a location in Philippines..."
+              placeholder="Search for a location within Luzon..."
               className="w-full rounded-xl border border-emerald-200 bg-white pl-10 pr-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
             {suggestions.length > 0 && (
@@ -219,6 +292,13 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
             )}
           </div>
 
+          {showServiceAreaNotice && (
+            <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3">
+              <MapPin className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-red-700 leading-relaxed">{SERVICE_AREA_MESSAGE}</p>
+            </div>
+          )}
+
           {/* Map */}
           <div className="h-72 rounded-xl overflow-hidden border border-emerald-200">
             <MapContainer
@@ -226,6 +306,8 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
               zoom={mapZoom}
               style={{ height: '100%', width: '100%' }}
               zoomControl={true}
+              maxBounds={SERVICE_AREA_MAX_BOUNDS}
+              maxBoundsViscosity={0.7}
             >
               <TileLayer
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -237,6 +319,7 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
                 selectedLocation={selectedLocation}
                 onLocationChange={handleLocationChange}
                 onResolvingChange={setResolvingAddress}
+                onServiceAreaResult={(inside) => setShowServiceAreaNotice(!inside)}
               />
             </MapContainer>
           </div>
@@ -259,7 +342,7 @@ function LocationPickerModal({ isOpen, onClose, onSelect }) {
           )}
 
           <p className="text-xs text-slate-500 text-center">
-            Click on the map, drag the marker, or search above to pin a location
+            Click on the map, drag the marker, or search above to pin a location within Luzon
           </p>
         </div>
 
@@ -312,7 +395,7 @@ function LocationInput({ id, label, value, onChange, required }) {
         photonSearch(query)
           .then(data => {
             if (seq !== searchSeq.current) return
-            setSuggestions(data)
+            setSuggestions(data.filter(s => isInsideLuzon(s.lat, s.lon)))
             setShowSuggestions(true)
           })
           .catch(() => {
@@ -329,6 +412,9 @@ function LocationInput({ id, label, value, onChange, required }) {
   }
 
   const handleSuggestionClick = (suggestion) => {
+    // Belt-and-suspenders: suggestions are already filtered to Luzon, but a
+    // stale list rendered before this guard existed can't slip through.
+    if (!isInsideLuzon(suggestion.lat, suggestion.lon)) return
     onChange({ target: { name: id, value: suggestion.display, lat: suggestion.lat, lng: suggestion.lon } })
     setShowSuggestions(false)
     setSuggestions([])
@@ -396,6 +482,7 @@ function LocationInput({ id, label, value, onChange, required }) {
         isOpen={showMapPicker}
         onClose={() => setShowMapPicker(false)}
         onSelect={handleLocationSelect}
+        initialValue={value}
       />
     </div>
   )
@@ -411,7 +498,31 @@ function CustomerRequestDelivery() {
   const [truckSelectionError, setTruckSelectionError] = useState('')
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // Weekdays covered by at least one of this customer's specialized crew
+  // members (crew_client_specialties -> crew_availability, via the
+  // specialized_crew_available_days() RPC). null = still loading; empty =
+  // no specialized crew coverage, so booking stays unrestricted.
+  const [specializedAvailableDays, setSpecializedAvailableDays] = useState(null)
   const minDeliveryDate = getMinDeliveryDate()
+
+  useEffect(() => {
+    let isCurrent = true
+
+    supabase.rpc('specialized_crew_available_days')
+      .then(({ data, error }) => {
+        if (!isCurrent) return
+        if (error) {
+          // Fail open -- a broken lookup shouldn't block booking entirely.
+          setSpecializedAvailableDays(null)
+          return
+        }
+        setSpecializedAvailableDays(data || [])
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
   const [formData, setFormData] = useState({
     pickupDate: '',
     pickupTime: '',
@@ -427,7 +538,6 @@ function CustomerRequestDelivery() {
     stops: [],
     truckType: '',
     itemType: '',
-    otherItemType: '',
     cargoWeight: '',
     budgetMin: '',
     budgetMax: '',
@@ -450,6 +560,34 @@ function CustomerRequestDelivery() {
 
   const goBackToDeliveries = () => navigate('/customer/deliveries')
 
+  // Returns an error string when the chosen Pick Up Date falls on a weekday
+  // none of the customer's specialized crew members work — suggesting the
+  // next few bookable dates their crew IS available. No-op while the lookup
+  // is loading or when there's no specialized crew coverage.
+  const pickupDateAvailabilityError = (dateStr) => {
+    if (!dateStr || !specializedAvailableDays || specializedAvailableDays.length === 0) return ''
+    if (specializedAvailableDays.includes(weekdayOfDate(dateStr))) return ''
+
+    const covered = new Set(specializedAvailableDays)
+    const chosenDate = new Date(`${dateStr}T00:00:00`)
+
+    // Suggest up to 3 upcoming dates (starting from the earliest bookable
+    // date) that fall on a day the specialized crew works. Hard cap on scan
+    // length so a sparse schedule can never loop forever.
+    const suggestions = []
+    const cursor = new Date(`${minDeliveryDate}T00:00:00`)
+    for (let scanned = 0; scanned < 90 && suggestions.length < 3; scanned++) {
+      if (covered.has(cursor.getDay()) && cursor.getTime() !== chosenDate.getTime()) {
+        suggestions.push(cursor.toLocaleDateString('en-US', { month: 'short', day: 'numeric', weekday: 'short' }))
+      }
+      cursor.setDate(cursor.getDate() + 1)
+    }
+
+    const chosenLabel = chosenDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', weekday: 'long' })
+    const suggestionText = suggestions.length > 0 ? ` Available dates: ${suggestions.join(', ')}.` : ''
+    return `Your assigned delivery crew is not available on ${chosenLabel}. Please consider changing your pick up date.${suggestionText}`
+  }
+
   const handleChange = (e) => {
     const { name, value, lat, lng } = e.target
     const next = { ...formData, [name]: value }
@@ -465,7 +603,8 @@ function CustomerRequestDelivery() {
     }
 
     if (name === 'pickupDate') {
-      setDateError(value && value < minDeliveryDate ? `Delivery date must be on or after ${minDeliveryDate}.` : '')
+      const minDateError = value && value < minDeliveryDate ? `Delivery date must be on or after ${minDeliveryDate}.` : ''
+      setDateError(minDateError || pickupDateAvailabilityError(value))
       if (!dropoffDateTouched.current) {
         next.dropoffDate = value
       }
@@ -531,6 +670,12 @@ function CustomerRequestDelivery() {
       return
     }
 
+    const availabilityErrorMessage = pickupDateAvailabilityError(formData.pickupDate)
+    if (availabilityErrorMessage) {
+      setDateError(availabilityErrorMessage)
+      return
+    }
+
     const pickupWindowErrorMessage = getPickupWindowError(formData)
     if (pickupWindowErrorMessage) {
       setPickupWindowError(pickupWindowErrorMessage)
@@ -589,6 +734,18 @@ function CustomerRequestDelivery() {
       }
     }
 
+    // Last line of defense: even if a coordinate slipped past the picker,
+    // autocomplete, or a geocoder resolved typed text outside Luzon, never
+    // save an out-of-service-area location.
+    if (
+      (pickupLat != null && !isInsideLuzon(pickupLat, pickupLng)) ||
+      (dropoffLat != null && !isInsideLuzon(dropoffLat, dropoffLng))
+    ) {
+      setSubmitting(false)
+      setSubmitError(SERVICE_AREA_MESSAGE)
+      return
+    }
+
     const newRequest = {
       customer_auth_id: user.id,
       pickup_date: formData.pickupDate,
@@ -607,7 +764,6 @@ function CustomerRequestDelivery() {
         .map((location) => ({ location })),
       truck_type: formData.truckType,
       item_type: formData.itemType,
-      other_item_type: formData.itemType === 'other' ? formData.otherItemType : null,
       cargo_weight: formData.cargoWeight,
       budget_min: formData.budgetMin || null,
       budget_max: formData.budgetMax || null,
@@ -677,7 +833,7 @@ function CustomerRequestDelivery() {
                     }`}
                   />
                   {dateError && (
-                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">{dateError}</p>
+                    <p className="text-xs text-red-600">{dateError}</p>
                   )}
                 </div>
                 <div className="relative space-y-2">
@@ -847,25 +1003,6 @@ function CustomerRequestDelivery() {
                   />
                 </div>
               </div>
-
-              {/* Other Item Type Input */}
-              {formData.itemType === 'other' && (
-                <div className="space-y-2">
-                  <label htmlFor="otherItemType" className="text-sm font-medium text-slate-700">
-                    Specify Item Type <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    id="otherItemType"
-                    name="otherItemType"
-                    value={formData.otherItemType}
-                    onChange={handleChange}
-                    placeholder="Please specify the type of item..."
-                    required
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                  />
-                </div>
-              )}
             </div>
 
             {/* Truck Selection Section */}
@@ -1010,6 +1147,15 @@ function CustomerRequestDelivery() {
                     <p className="absolute left-0 top-full mt-1 text-xs text-red-600">{budgetError}</p>
                   )}
                 </div>
+              </div>
+
+              <div className="flex items-start gap-2.5 rounded-xl border border-blue-200 bg-blue-50 p-3">
+                <Info className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                <p className="text-xs text-blue-700 leading-relaxed">
+                  The budget you entered is only an estimate to give the Supervisor an idea of your expected budget. The final quotation may be higher than your indicated budget.
+                  <br />
+                  You may negotiate the quotation with the Supervisor after submitting your request.
+                </p>
               </div>
             </div>
 

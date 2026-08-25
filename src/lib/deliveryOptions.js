@@ -15,32 +15,43 @@ export const truckTypes = [
 
 // Item categories (dry or refrigerated only)
 export const itemTypes = [
-  { value: 'dry_food', label: 'Dry Food (Canned, Packaged, etc.)' },
-  { value: 'fresh_food', label: 'Fresh Food (Fruits, Vegetables)' },
-  { value: 'frozen', label: 'Frozen Goods' },
-  { value: 'dairy', label: 'Dairy Products' },
-  { value: 'beverages', label: 'Beverages' },
+  { value: 'fresh_produce', label: 'Fresh Produce (Fruits & Vegetables)' },
+  { value: 'meat_seafood', label: 'Meat, Poultry & Seafood' },
+  { value: 'pantry_staples', label: 'Pantry Staples (Rice, Noodles, Canned, and other Dry Goods)' },
+  { value: 'beverages_snacks', label: 'Beverages & Snacks' },
+  { value: 'frozen_dairy', label: 'Frozen Food & Dairy' },
   { value: 'appliances', label: 'Appliances & Electronics' },
   { value: 'furniture', label: 'Furniture' },
-  { value: 'clothing', label: 'Clothing & Textiles' },
-  { value: 'construction', label: 'Construction Materials' },
-  { value: 'pharmaceuticals', label: 'Pharmaceuticals' },
-  { value: 'other', label: 'Other Dry Goods' }
+  { value: 'clothing', label: 'Clothing & Textiles' }
 ]
+
+// Labels for categories that existed before the list was trimmed down --
+// older delivery_requests rows still store these codes and must render
+// readably instead of showing the raw DB value.
+const LEGACY_ITEM_TYPE_LABELS = {
+  dry_food: 'Dry Food (Canned, Packaged, etc.)',
+  fresh_food: 'Fresh Food (Fruits, Vegetables)',
+  frozen: 'Frozen Goods',
+  dairy: 'Dairy Products',
+  beverages: 'Beverages',
+  pharmaceuticals: 'Pharmaceuticals',
+  construction: 'Construction Materials'
+}
+
+export function getItemTypeLabel(value) {
+  return itemTypes.find(item => item.value === value)?.label || LEGACY_ITEM_TYPE_LABELS[value] || value
+}
 
 // Which trucks can carry each item type, regardless of weight
 export const ITEM_TRUCK_COMPATIBILITY = {
-  dry_food: ['AUV', 'L300', '1T_DRY', '2T_DRY', '4T_DRY'],
-  fresh_food: ['L300', '1T_REF', '2T_REF', '4T_REF'],
-  frozen: ['1T_REF', '2T_REF', '4T_REF'],
-  dairy: ['1T_REF', '2T_REF', '4T_REF'],
-  beverages: ['L300', '1T_DRY', '2T_DRY', '4T_DRY'],
+  fresh_produce: ['1T_REF', '2T_REF', '4T_REF'],
+  meat_seafood: ['1T_REF', '2T_REF', '4T_REF'],
+  pantry_staples: ['AUV', 'L300', '1T_DRY', '2T_DRY', '4T_DRY'],
+  beverages_snacks: ['L300', '1T_DRY', '2T_DRY', '4T_DRY'],
+  frozen_dairy: ['1T_REF', '2T_REF', '4T_REF'],
   appliances: ['L300', '1T_DRY', '2T_DRY', '4T_DRY'],
   furniture: ['2T_DRY', '4T_DRY'],
-  clothing: ['AUV', 'L300', '1T_DRY', '2T_DRY', '4T_DRY'],
-  construction: ['2T_DRY', '4T_DRY'],
-  pharmaceuticals: ['1T_REF', '2T_REF', '4T_REF'],
-  other: ['AUV', 'L300', '1T_DRY', '2T_DRY', '4T_DRY']
+  clothing: ['AUV', 'L300', '1T_DRY', '2T_DRY', '4T_DRY']
 }
 
 // A truck is available only if it fits both the item type's compatibility list and the entered weight

@@ -3,6 +3,8 @@ import { Link, useLocation } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { formatManilaTimestamp, getManilaHour, MANILA_TIMEZONE } from "../lib/manilaTime.js";
+import { formatWorkingDays } from "../lib/workingDays.js";
+import { CREW_ACTIVE_STATUSES } from "../lib/crewStatus.js";
 import {
   ArrowLeft,
   Route,
@@ -20,6 +22,7 @@ import {
   Truck,
   Users,
   Building2,
+  CalendarDays,
   CameraOff,
 } from "lucide-react";
 
@@ -506,6 +509,57 @@ function SupCrewProfile() {
     }
 
     loadCrewClients();
+    return () => {
+      isMounted = false;
+    };
+  }, [crew]);
+
+  // Helpers: which Driver are they currently assigned with? Derived live
+  // from active trips (delivery_requests in an ACTIVE status containing this
+  // helper's record id), so the card always reflects the current team.
+  const [teamAssignment, setTeamAssignment] = useState(null);
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadTeamAssignment() {
+      if (!crew || crew.position !== "Helper" || !crew.employeeId) {
+        return;
+      }
+
+      const { data: trips, error } = await supabase
+        .from("delivery_requests")
+        .select("id, assigned_driver_id")
+        .contains("assigned_helper_ids", [crew.employeeId])
+        .in("status", CREW_ACTIVE_STATUSES)
+        .limit(1);
+
+      if (!isMounted || error) {
+        return;
+      }
+
+      const trip = (trips || [])[0];
+      if (!trip?.assigned_driver_id) {
+        setTeamAssignment(null);
+        return;
+      }
+
+      // Resolve the driver's name via the same list-crew action the roster uses.
+      const { data: crewData } = await supabase.functions.invoke("admin-users", {
+        body: { action: "list-crew" },
+      });
+      if (!isMounted) return;
+
+      const driver = (crewData?.crew || []).find(
+        (row) => row.record_id === trip.assigned_driver_id,
+      );
+      const driverName = driver
+        ? [driver.first_name, driver.middle_name, driver.last_name].filter(Boolean).join(" ").trim()
+        : trip.assigned_driver_id;
+
+      setTeamAssignment({ driverName, requestId: trip.id });
+    }
+
+    loadTeamAssignment();
     return () => {
       isMounted = false;
     };
@@ -1063,6 +1117,56 @@ function SupCrewProfile() {
             </SectionCard>
 
             <div className="flex flex-col gap-3">
+              {/* Helpers only — current team assignment: which Driver this
+                  helper rides with on an active trip, derived live from
+                  delivery_requests so it always shows the present team. */}
+              {!isDriver && (
+                <section className="flex flex-none flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                  <div className="flex items-center gap-2">
+                    <Truck className="h-4 w-4 text-indigo-600" />
+                    <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      Current Team
+                    </h2>
+                  </div>
+                  {teamAssignment ? (
+                    <>
+                      <p className="mt-2 text-sm font-semibold text-slate-900">
+                        Assigned to {teamAssignment.driverName}
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        On active trip {teamAssignment.requestId}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mt-2 text-sm font-normal text-slate-400">
+                      No active team assignment.
+                    </p>
+                  )}
+                </section>
+              )}
+
+              {/* Working Days — self-set weekly availability from the crew
+                  member's own profile page (crew_availability via list-crew's
+                  working_days). Read-only here; customers booking this
+                  client can only pick pickup dates whose weekday is covered
+                  by at least one specialized crew member. */}
+              <section className="flex flex-none flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <div className="flex items-center gap-2">
+                  <CalendarDays className="h-4 w-4 text-emerald-600" />
+                  <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Working Days
+                  </h2>
+                </div>
+                <p className="mt-2 text-sm font-normal text-slate-700">
+                  {formatWorkingDays(crew?.workingDays) || "No working days set yet."}
+                </p>
+                {crew?.workingDays?.length > 0 && (
+                  <p className="mt-1 text-xs font-normal text-slate-400">
+                    Set by the crew member on their own profile.
+                  </p>
+                )}
+              </section>
+
               {/* Client Specialties — capped at 2-3 per driver in practice,
                   so it stays flex-none/compact rather than growing to fill
                   the column. A single Edit/Add button in the header (no

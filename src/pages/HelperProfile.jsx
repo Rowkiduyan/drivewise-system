@@ -3,6 +3,7 @@ import ConfirmationModal from "../components/common/ConfirmationModal.jsx";
 import HelperLayout from "../layout/HelperLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { cropImageToSquareBase64 } from "../lib/profilePicture.js";
+import WorkingDaysEditor from "../components/WorkingDaysEditor.jsx";
 
 function getInitials(fullName) {
   const parts = fullName.trim().split(" ");
@@ -442,6 +443,8 @@ function HelperProfile() {
                 <InfoField label="Address" value={helper.address} wide />
               </dl>
             </SectionCard>
+
+            <WorkingDaysEditor />
           </>
         ) : null}
 
