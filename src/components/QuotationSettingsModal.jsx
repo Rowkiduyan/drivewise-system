@@ -159,28 +159,42 @@ export default function QuotationSettingsModal({ rules, onClose, onSave }) {
                   <th className="py-1">Truck</th>
                   <th className="py-1 text-right">Size factor</th>
                   <th className="py-1 text-right">km/L</th>
+                  <th className="py-1 text-right">Diesel rate (₱/km)</th>
                 </tr>
               </thead>
               <tbody>
-                {Object.entries(draft.truckProfiles || {}).map(([key, profile]) => (
-                  <tr key={key} className="border-t border-slate-100">
-                    <td className="py-1.5 font-medium text-slate-700">{profile.label}</td>
-                    {TRUCK_PROFILE_FIELDS.map((f) => (
-                      <td key={f.key} className="py-1.5 text-right">
-                        <input
-                          type="number"
-                          min="0"
-                          step={f.step}
-                          value={profile[f.key] ?? ""}
-                          onChange={(e) => setTruckProfile(key, f.key, e.target.value)}
-                          className="w-20 rounded-lg border border-slate-200 px-2 py-1 text-right font-mono outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
-                        />
+                {Object.entries(draft.truckProfiles || {}).map(([key, profile]) => {
+                  const literPrice = Number(draft.dieselPesoPerLiter)
+                  const kmPerL = Number(profile.kmPerLiter)
+                  const dieselPerKm = literPrice > 0 && kmPerL > 0 ? literPrice / kmPerL : null
+                  return (
+                    <tr key={key} className="border-t border-slate-100">
+                      <td className="py-1.5 font-medium text-slate-700">{profile.label}</td>
+                      {TRUCK_PROFILE_FIELDS.map((f) => (
+                        <td key={f.key} className="py-1.5 text-right">
+                          <input
+                            type="number"
+                            min="0"
+                            step={f.step}
+                            value={profile[f.key] ?? ""}
+                            onChange={(e) => setTruckProfile(key, f.key, e.target.value)}
+                            className="w-20 rounded-lg border border-slate-200 px-2 py-1 text-right font-mono outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
+                          />
+                        </td>
+                      ))}
+                      <td className="py-1.5 text-right font-mono text-slate-500">
+                        {dieselPerKm != null
+                          ? `₱${(literPrice / kmPerL).toFixed(2)}`
+                          : "—"}
                       </td>
-                    ))}
-                  </tr>
-                ))}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
+            <p className="mt-2 text-[11px] text-slate-500">
+              Diesel rate = Diesel Price (₱{Number(draft.dieselPesoPerLiter || 0).toFixed(2)}) ÷ Fuel efficiency (km/L), computed live per truck above.
+            </p>
           </section>
 
           {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}

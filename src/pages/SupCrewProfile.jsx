@@ -99,30 +99,13 @@ function buildHelperName(row) {
 }
 
 // ---------------------------------------------------------------------------
-// Truck & Crew Assignment — default truck/helpers for a driver, frontend-only
-// (no backing table/API yet, same as the Client Specialties mock elsewhere
-// on this page). MAX_DEFAULT_HELPERS caps default helpers at two per driver.
+// Truck & Crew Assignment — default truck/helpers for a driver. Trucks come
+// from the real `trucks` table (same source as SupDeliveries' assignment
+// picker); helper/helper-truck links are still frontend-only (no backing
+// table yet). MAX_DEFAULT_HELPERS caps default helpers at two per driver.
 // ---------------------------------------------------------------------------
 
 const MAX_DEFAULT_HELPERS = 2;
-
-const ASSIGNABLE_TRUCKS = [
-  { id: "TRK-001", plateNumber: "NGP 1042", truckType: "L300" },
-  { id: "TRK-002", plateNumber: "NDW 2183", truckType: "AUV" },
-  { id: "TRK-003", plateNumber: "NBW 3067", truckType: "1T DRY" },
-  { id: "TRK-004", plateNumber: "NGK 4290", truckType: "2T DRY" },
-  { id: "TRK-005", plateNumber: "NAP 5134", truckType: "1T REF" },
-  { id: "TRK-006", plateNumber: "NDT 6078", truckType: "2T REF" },
-  { id: "TRK-007", plateNumber: "NEQ 7215", truckType: "4T DRY" },
-  { id: "TRK-008", plateNumber: "NFY 8349", truckType: "4T REF" },
-  { id: "TRK-009", plateNumber: "NHC 9021", truckType: "L300" },
-  { id: "TRK-010", plateNumber: "NJB 1567", truckType: "AUV" },
-];
-
-function getTruckLabel(truckId) {
-  const truck = ASSIGNABLE_TRUCKS.find((entry) => entry.id === truckId);
-  return truck ? `${truck.plateNumber} · ${truck.truckType}` : "";
-}
 
 const STATUS_BADGE_CLASSES = {
   Available: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
@@ -458,13 +441,18 @@ function SupCrewProfile() {
   const [performanceError, setPerformanceError] = useState("");
 
   // Truck & Crew Assignment — this driver's default truck/helpers.
-  // Frontend-only state, same mock approach as ASSIGNABLE_TRUCKS above.
+  // Trucks load from the real `trucks` table; the driver→truck/helpers link
+  // itself is still frontend-only state (no backing table yet).
   const [helperOptions, setHelperOptions] = useState([]);
+  const [assignableTrucks, setAssignableTrucks] = useState([]);
+  const [isLoadingTrucks, setIsLoadingTrucks] = useState(true);
   const [assignedTruckId, setAssignedTruckId] = useState(null);
   const [assignedHelperIds, setAssignedHelperIds] = useState([]);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [draftTruckId, setDraftTruckId] = useState("");
   const [draftHelperIds, setDraftHelperIds] = useState([]);
+  const [isAssignBusy, setIsAssignBusy] = useState(false);
+  const [assignError, setAssignError] = useState("");
 
   // clients + crew_client_specialties (see DATABASE.md) — fetched via the
   // admin-users Edge Function since the client can't read those tables
@@ -579,7 +567,10 @@ function SupCrewProfile() {
         setHelperOptions(
           (data.crew || [])
             .filter((row) => row.role === "Helper")
-            .map((row) => ({ id: row.id, fullName: buildHelperName(row) })),
+            // Key by the helper's record id (H001…) — the same convention
+            // delivery_requests.assigned_helper_ids and
+            // driver_default_assignments.helper_record_ids persist.
+            .map((row) => ({ id: row.record_id || row.id, fullName: buildHelperName(row) })),
         );
       }
     }
@@ -589,6 +580,63 @@ function SupCrewProfile() {
       isMounted = false;
     };
   }, []);
+
+  // Truck fleet for the default-truck picker — the real `trucks` table
+  // (RLS-open, same direct query SupDeliveries' assignment picker uses).
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadTrucks() {
+      const { data, error } = await supabase
+        .from("trucks")
+        .select("id, plate_number, truck_type")
+        .order("plate_number", { ascending: true });
+
+      if (isMounted && !error) {
+        setAssignableTrucks(
+          (data || []).map((row) => ({
+            id: row.id,
+            plateNumber: row.plate_number,
+            truckType: row.truck_type,
+          })),
+        );
+      }
+      if (isMounted) {
+        setIsLoadingTrucks(false);
+      }
+    }
+
+    loadTrucks();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // This driver's persisted default truck/helpers (driver_default_assignments,
+  // keyed by driver_records.id) — survives refreshes, unlike the old
+  // frontend-only state.
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadAssignment() {
+      if (!crew?.employeeId) return;
+      const { data, error } = await supabase
+        .from("driver_default_assignments")
+        .select("truck_id, helper_record_ids")
+        .eq("driver_record_id", crew.employeeId)
+        .maybeSingle();
+
+      if (isMounted && !error && data) {
+        setAssignedTruckId(data.truck_id || null);
+        setAssignedHelperIds(data.helper_record_ids || []);
+      }
+    }
+
+    loadAssignment();
+    return () => {
+      isMounted = false;
+    };
+  }, [crew]);
 
   const clientFallbackNames = useMemo(
     () => availableClients.map((client) => client.name),
@@ -880,6 +928,7 @@ function SupCrewProfile() {
   const openAssignModal = () => {
     setDraftTruckId(assignedTruckId || "");
     setDraftHelperIds(assignedHelperIds);
+    setAssignError("");
     setIsAssignModalOpen(true);
   };
 
@@ -896,13 +945,39 @@ function SupCrewProfile() {
     setDraftHelperIds((prev) => prev.filter((id) => id !== helperId));
   };
 
-  const saveAssignment = () => {
+  const saveAssignment = async () => {
+    if (!crew?.employeeId || isAssignBusy) return;
+    setIsAssignBusy(true);
+    setAssignError("");
+    const { error } = await supabase.from("driver_default_assignments").upsert({
+      driver_record_id: crew.employeeId,
+      truck_id: draftTruckId || null,
+      helper_record_ids: draftHelperIds,
+      updated_at: new Date().toISOString(),
+    });
+    setIsAssignBusy(false);
+    if (error) {
+      setAssignError("Failed to save the assignment. Please try again.");
+      return;
+    }
     setAssignedTruckId(draftTruckId || null);
     setAssignedHelperIds(draftHelperIds);
     closeAssignModal();
   };
 
-  const removeAssignment = () => {
+  const removeAssignment = async () => {
+    if (!crew?.employeeId || isAssignBusy) return;
+    setIsAssignBusy(true);
+    setAssignError("");
+    const { error } = await supabase
+      .from("driver_default_assignments")
+      .delete()
+      .eq("driver_record_id", crew.employeeId);
+    setIsAssignBusy(false);
+    if (error) {
+      setAssignError("Failed to remove the assignment. Please try again.");
+      return;
+    }
     setAssignedTruckId(null);
     setAssignedHelperIds([]);
     closeAssignModal();
@@ -1232,7 +1307,14 @@ function SupCrewProfile() {
                     <InfoRow
                       icon={Truck}
                       label="Assigned Truck"
-                      value={assignedTruckId ? getTruckLabel(assignedTruckId) : "No truck assigned"}
+                      value={
+                        assignedTruckId
+                          ? (() => {
+                              const truck = assignableTrucks.find((entry) => entry.id === assignedTruckId);
+                              return truck ? `${truck.plateNumber} · ${truck.truckType}` : "Unknown truck";
+                            })()
+                          : "No truck assigned"
+                      }
                       strong
                     />
                     <InfoRow
@@ -1688,11 +1770,13 @@ function SupCrewProfile() {
                   className="mt-1.5 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
                 >
                   <option value="">No truck assigned</option>
-                  {ASSIGNABLE_TRUCKS.map((truck) => (
-                    <option key={truck.id} value={truck.id}>
-                      {truck.plateNumber} · {truck.truckType}
-                    </option>
-                  ))}
+                  {isLoadingTrucks && <option value="">Loading trucks…</option>}
+                  {!isLoadingTrucks &&
+                    assignableTrucks.map((truck) => (
+                      <option key={truck.id} value={truck.id}>
+                        {truck.plateNumber} · {truck.truckType}
+                      </option>
+                    ))}
                 </select>
               </div>
 
@@ -1754,7 +1838,8 @@ function SupCrewProfile() {
                   <button
                     type="button"
                     onClick={removeAssignment}
-                    className="rounded-xl px-3.5 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                    disabled={isAssignBusy}
+                    className="rounded-xl px-3.5 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Remove Assignment
                   </button>
@@ -1765,19 +1850,25 @@ function SupCrewProfile() {
                   <button
                     type="button"
                     onClick={closeAssignModal}
-                    className="rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    disabled={isAssignBusy}
+                    className="rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
                     onClick={saveAssignment}
-                    className="rounded-xl bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+                    disabled={isAssignBusy}
+                    className="rounded-xl bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
                   >
-                    Save
+                    {isAssignBusy ? "Saving..." : "Save"}
                   </button>
                 </div>
               </div>
+
+              {assignError && (
+                <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700">{assignError}</p>
+              )}
             </div>
           </div>
         )}

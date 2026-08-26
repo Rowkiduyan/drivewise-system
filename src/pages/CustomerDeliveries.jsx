@@ -372,10 +372,17 @@ function QuotationCostBreakdown({ quotation }) {
           Direct Expenses
         </p>
         <BreakdownLine label="Depreciation" value={d.depreciation} />
-        <BreakdownLine label="Diesel Rate" value={d.dieselRate} />
-        {c.dieselTotal != null && (
-          <p className="pl-3 text-[10px] text-sky-700 md:text-slate-600">Total diesel: {fmPeso(c.dieselTotal)}</p>
-        )}
+        <BreakdownLine label="Total Diesel Expenses" value={c.dieselTotal} />
+        {(() => {
+          const rate = Number(d.dieselRate || 0)
+          const total = Number(c.dieselTotal || 0)
+          const distKm = rate > 0 ? total / rate : 0
+          return (
+            <p className="pl-3 text-[10px] text-sky-700 md:text-slate-600">
+              Diesel Rate (₱{rate.toFixed(2)}) x Distance ({distKm.toFixed(1)} km)
+            </p>
+          )
+        })()}
         <p className="mt-1.5 text-[10px] font-semibold text-slate-600 md:text-xs">Repairs &amp; Maintenance</p>
         <BreakdownLine indent label="Batteries" value={d.repairsAndMaintenance?.batteries} />
         <BreakdownLine indent label="Tires" value={d.repairsAndMaintenance?.tires} />

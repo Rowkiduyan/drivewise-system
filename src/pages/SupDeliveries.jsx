@@ -170,19 +170,9 @@ function getRequestedTruckType(r) {
 function normalizeTruckType(value) {
   return String(value || '').replace(/[\s_]+/g, '').toUpperCase()
 }
-// Trucks matching the request's truck type first, then the rest -- same
-// "recommended first, nothing fully hidden" pattern CustomerRequestDelivery
-// already uses for its own truck-selection table, so a Supervisor is never
-// blocked from assigning an off-type truck when the fleet has no exact match.
-function sortTrucksByRequestedType(trucks, requestedType) {
-  const wanted = normalizeTruckType(requestedType)
-  return [...trucks].sort((a, b) => {
-    const aMatches = normalizeTruckType(a.truckType) === wanted
-    const bMatches = normalizeTruckType(b.truckType) === wanted
-    if (aMatches === bMatches) return 0
-    return aMatches ? -1 : 1
-  })
-}
+// Trucks are filtered to the request's truck type in the assignment picker
+// (see matchingTrucks in the SupDeliveries component) — only exact-type
+// trucks are offered, most-available first.
 
 // Does this crew member specialize in the requesting client? Specialties are
 // stored/displayed as client names (customer_records.client_name), and the
@@ -192,18 +182,6 @@ function isSpecializedForClient(crewMember, clientName) {
   const wanted = String(clientName).trim().toLowerCase()
   return (crewMember.clientSpecialties || [])
     .some((s) => String(s).trim().toLowerCase() === wanted)
-}
-
-// Drivers/helpers specializing in the requesting client first, then the rest
-// — same "recommended first, nothing fully hidden" pattern as
-// sortTrucksByRequestedType above.
-function sortCrewByClientSpecialty(crew, clientName) {
-  return [...crew].sort((a, b) => {
-    const aMatch = isSpecializedForClient(a, clientName)
-    const bMatch = isSpecializedForClient(b, clientName)
-    if (aMatch === bMatch) return 0
-    return aMatch ? -1 : 1
-  })
 }
 function getTruckCapacity(r) {
   return r.crew?.truck?.capacity || '1.2 tons'
@@ -538,17 +516,16 @@ function QuotationExpenseForm({
         </div>
 
         <div className="flex items-center justify-between gap-3 py-2 border-b border-blue-100">
-          <span className="text-sm font-medium text-slate-700">Diesel Rate</span>
-          <MoneyInput value={directExpenses.dieselRate} onValueChange={(v) => setField('directExpenses.dieselRate', v)} />
+          <span className="text-sm font-medium text-slate-700">Total Diesel Expenses</span>
+          <input
+            type="text"
+            readOnly
+            value={`₱${(parseMoney(directExpenses.dieselRate) * distanceKm).toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+            className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono text-slate-900 bg-white"
+          />
         </div>
         <p className="text-sm text-blue-700 ml-1 mt-1 mb-2">
-          a. Total diesel expenses:{' '}
-          <span className="font-semibold">
-            ₱{(parseMoney(directExpenses.dieselRate) * distanceKm).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-          </span>
-          <span className="text-blue-500 ml-1">
-            ({directExpenses.dieselRate || '0'} × {distanceLabel})
-          </span>
+          a. Diesel Rate ({directExpenses.dieselRate || '0'} × {distanceLabel})
         </p>
 
         <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">Repairs and Maintenance</p>
@@ -1314,14 +1291,6 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
   }
 }
 
-function getDefaultDriverForTruck(truck) {
-  return truck ? mockDrivers.find(d => d.id === truck.defaultDriverId) || null : null
-}
-
-function getDefaultHelpersForDriver(driver) {
-  return driver?.defaultHelperIds ? [...driver.defaultHelperIds] : []
-}
-
 function getInitials(name) {
   return name
     ? name
@@ -1774,10 +1743,16 @@ function QuotationBreakdown({ quotation, title }) {
           <div className="space-y-1.5">
             <BreakdownRow label="Depreciation" value={d.depreciation} />
             <div>
-              <BreakdownRow label="Diesel Rate" value={d.dieselRate} />
-              <p className="ml-1 text-sm text-slate-600">
-                a. Total diesel expenses: <span className="font-semibold">{fm(c.dieselTotal)}</span>
-              </p>
+              <BreakdownRow label="Total Diesel Expenses" value={c.dieselTotal} />
+              {(() => {
+                const rate = Number(d.dieselRate || 0)
+                const distKm = rate > 0 ? Number(c.dieselTotal || 0) / rate : 0
+                return (
+                  <p className="ml-1 text-sm text-slate-600">
+                    a. Diesel Rate (₱{rate.toFixed(2)}) x Distance ({distKm.toFixed(1)} km)
+                  </p>
+                )
+              })()}
             </div>
             <p className="pt-2 text-sm font-semibold text-slate-700">Repairs and Maintenance</p>
             <BreakdownRow indent label="a. Batteries" value={d.repairsAndMaintenance?.batteries} />
@@ -2791,6 +2766,26 @@ function SupDeliveries() {
   // OUT_FOR_DELIVERY) — drives the Available/Assigned badge in the
   // driver/helper assignment pickers.
   const [busyCrewIds, setBusyCrewIds] = useState(() => new Set())
+  // Crew currently riding each truck, rebuilt from active trips — plate →
+  // { driverId, helperIds }. Selecting a plate pre-fills its current crew.
+  const [truckCrewByPlate, setTruckCrewByPlate] = useState({})
+  // Supervisor-saved default crew per truck (driver_default_assignments via
+  // the Delivery Crew profile page) — plate → { driverId, helperIds }. Used
+  // as the pre-fill fallback when a truck has no active-trip crew.
+  const [defaultCrewByPlate, setDefaultCrewByPlate] = useState({})
+  // Helpers usually assigned with each driver (from active trips) — used to
+  // pre-fill the helper pickers when a driver is chosen.
+  const [helperIdsByDriver, setHelperIdsByDriver] = useState({})
+  // Skeleton state for the assignment pickers while trucks/crew load.
+  const [fleetLoading, setFleetLoading] = useState(true)
+  // Transient confirmation toast for assignment updates.
+  const [toast, setToast] = useState(null)
+  const toastTimerRef = useRef(null)
+  const showToast = useCallback((message, tone = 'success') => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    setToast({ id: Date.now(), message, tone })
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000)
+  }, [])
   // Deep-link from SupDashboard's "View Trip" (Driver Safety list) --
   // ?deliveryId=DR-0020 opens straight to the In Transit tab with that
   // delivery already selected in Real-time Monitoring / DriveWise Alerts.
@@ -2922,24 +2917,64 @@ function SupDeliveries() {
           else if (m.role === 'Helper') fleet.helpers.push(mapped)
         }
       }
-      if (mountedRef.current) setFleet(fleet)
+      if (mountedRef.current) {
+        setFleet(fleet)
+        setFleetLoading(false)
+      }
 
       // Live crew status for the assignment pickers: record ids currently
       // committed to an active trip. Refreshed by the same Realtime channel
-      // that keeps the inbox current.
+      // that keeps the inbox current. Also rebuilds which crew currently
+      // rides which truck (plate → crew) and which helpers usually ride with
+      // which driver, so picking a plate/driver pre-fills its current crew.
       const { data: activeTrips, error: activeError } = await supabase
         .from('delivery_requests')
-        .select('assigned_driver_id, assigned_helper_ids')
+        .select('assigned_driver_id, assigned_helper_ids, assigned_truck_plate')
         .in('status', CREW_ACTIVE_STATUSES)
       if (!activeError && mountedRef.current) {
         const busy = new Set()
+        const truckCrew = {}
+        const helpersByDriver = {}
         for (const trip of activeTrips || []) {
-          if (trip.assigned_driver_id) busy.add(trip.assigned_driver_id)
+          if (trip.assigned_driver_id) {
+            busy.add(trip.assigned_driver_id)
+            if (trip.assigned_truck_plate && !truckCrew[trip.assigned_truck_plate]) {
+              truckCrew[trip.assigned_truck_plate] = {
+                driverId: trip.assigned_driver_id,
+                helperIds: trip.assigned_helper_ids || [],
+              }
+            }
+          }
           for (const helperId of trip.assigned_helper_ids || []) {
             if (helperId) busy.add(helperId)
           }
+          if (trip.assigned_driver_id && Array.isArray(trip.assigned_helper_ids) && !helpersByDriver[trip.assigned_driver_id]) {
+            helpersByDriver[trip.assigned_driver_id] = trip.assigned_helper_ids.filter(Boolean)
+          }
         }
         setBusyCrewIds(busy)
+        setTruckCrewByPlate(truckCrew)
+        setHelperIdsByDriver(helpersByDriver)
+      }
+
+      // Supervisor-saved default crew per truck (Delivery Crew profile's
+      // "Truck & Crew Assignment"). Joined through the truck FK for the plate
+      // number the assignment pickers key on.
+      const { data: defaultAssignments } = await supabase
+        .from('driver_default_assignments')
+        .select('driver_record_id, helper_record_ids, trucks ( plate_number )')
+      if (mountedRef.current) {
+        const defaults = {}
+        for (const row of defaultAssignments || []) {
+          const plate = row.trucks?.plate_number
+          if (plate && row.driver_record_id) {
+            defaults[plate] = {
+              driverId: row.driver_record_id,
+              helperIds: row.helper_record_ids || [],
+            }
+          }
+        }
+        setDefaultCrewByPlate(defaults)
       }
 
       const { data, error } = await supabase
@@ -2984,7 +3019,10 @@ function SupDeliveries() {
     } catch {
       if (mountedRef.current) setLoadError('Failed to load delivery requests. Please try again.')
     } finally {
-      if (mountedRef.current) setIsLoading(false)
+      if (mountedRef.current) {
+        setIsLoading(false)
+        setFleetLoading(false)
+      }
     }
   }, [])
 
@@ -3282,6 +3320,112 @@ function SupDeliveries() {
   const canConfirmAssignment = Boolean(selectedDriver && selectedTruck && selectedHelpers.length > 0)
   const isInTransitStatus = ['OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED'].includes(selectedRequest?.status)
 
+  // --- Assignment eligibility (delivery date + client specialty) -----------
+  // Availability is judged against the delivery's scheduled pickup date, not
+  // "today" — a driver working Tue–Sat is unavailable for a Monday pickup
+  // even if today is Tuesday.
+  const deliveryDate = useMemo(
+    () => (selectedRequest?.pickupDate ? new Date(selectedRequest.pickupDate) : new Date()),
+    [selectedRequest],
+  )
+  const deliveryDateLabel = deliveryDate.toLocaleDateString('en-PH', {
+    timeZone: MANILA_TIMEZONE,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  // Clients with crew_client_specialties links may only be served by crew
+  // specializing in them — the pickers hide everyone else entirely.
+  const requiresSpecializedCrew = selectedRequest ? specializedClientIds.has(selectedRequest.customerAuthId) : false
+  const crewMeetsSpecialty = useCallback((member) =>
+    !requiresSpecializedCrew || isSpecializedForClient(member, selectedRequest?.customerName),
+    [requiresSpecializedCrew, selectedRequest?.customerName])
+  const crewAvailabilityOnDate = useCallback((member) =>
+    getCrewAvailability({ recordId: member.id, workingDays: member.workingDays }, busyCrewIds, deliveryDate),
+    [busyCrewIds, deliveryDate])
+  const crewAvailableOnDate = useCallback((member) => crewAvailabilityOnDate(member).key === 'available', [crewAvailabilityOnDate])
+  // Crew a truck should pre-fill: its current active-trip crew, falling back
+  // to the Supervisor's saved default assignment (Delivery Crew profile).
+  const getCrewForPlate = useCallback(
+    (plate) => truckCrewByPlate[plate] || defaultCrewByPlate[plate] || null,
+    [truckCrewByPlate, defaultCrewByPlate],
+  )
+  // Trucks matching the customer's requested type only, most relevant first:
+  // trucks whose current driver is available on the delivery date before
+  // trucks that would need a driver swap.
+  const matchingTrucks = useMemo(() => {
+    const wanted = normalizeTruckType(selectedRequest?.truckType)
+    return fleet.trucks
+      .filter((t) => normalizeTruckType(t.truckType) === wanted)
+      .sort((a, b) => {
+        const aOk = getCrewForPlate(a.plateNumber)?.driverId
+          ? crewAvailableOnDate(fleet.drivers.find((d) => d.id === getCrewForPlate(a.plateNumber).driverId) || {})
+          : true
+        const bOk = getCrewForPlate(b.plateNumber)?.driverId
+          ? crewAvailableOnDate(fleet.drivers.find((d) => d.id === getCrewForPlate(b.plateNumber).driverId) || {})
+          : true
+        if (aOk === bOk) return 0
+        return aOk ? -1 : 1
+      })
+  }, [fleet, selectedRequest?.truckType, getCrewForPlate, crewAvailableOnDate])
+  const eligibleDrivers = useMemo(() => fleet.drivers.filter(crewMeetsSpecialty), [fleet.drivers, crewMeetsSpecialty])
+  const eligibleHelpers = useMemo(() => fleet.helpers.filter(crewMeetsSpecialty), [fleet.helpers, crewMeetsSpecialty])
+  // Warning for a truck whose currently-assigned driver can't make the
+  // delivery date — shown beside the plate number in the truck picker. Helpers
+  // don't get the same warning: an unavailable helper is simply not pre-filled
+  // and the Supervisor picks another one.
+  const truckDriverWarning = useCallback((truck) => {
+    const crew = getCrewForPlate(truck.plateNumber)
+    if (!crew?.driverId) return null
+    const driver = fleet.drivers.find((d) => d.id === crew.driverId)
+    if (!driver || crewAvailableOnDate(driver)) return null
+    return `${driver.name} is unavailable on ${deliveryDateLabel}`
+  }, [getCrewForPlate, fleet.drivers, crewAvailableOnDate, deliveryDateLabel])
+  // Pre-fill the truck's crew — its current active-trip crew, or the saved
+  // default assignment when it has none — skipping anyone who doesn't meet
+  // the client specialty or isn't available on the delivery date. An
+  // unavailable driver is NOT auto-assigned — the Supervisor sees the warning
+  // and picks another truck or another driver instead.
+  const prefillTruckCrew = useCallback((truck) => {
+    const crew = getCrewForPlate(truck.plateNumber)
+    const currentDriver = crew?.driverId ? fleet.drivers.find((d) => d.id === crew.driverId) : null
+    const driverOk = currentDriver && crewMeetsSpecialty(currentDriver) && crewAvailableOnDate(currentDriver)
+    const helperIds = (crew?.helperIds || [])
+      .map((id) => fleet.helpers.find((h) => h.id === id))
+      .filter(Boolean)
+      .filter(crewMeetsSpecialty)
+      .filter(crewAvailableOnDate)
+      .map((h) => h.id)
+    setAssignment((prev) => ({
+      ...prev,
+      plateNumber: truck.plateNumber,
+      driverId: driverOk ? currentDriver.id : '',
+      helperIds,
+      _showTrucks: false,
+    }))
+  }, [getCrewForPlate, fleet, crewMeetsSpecialty, crewAvailableOnDate])
+  // Safety net before persisting: never save a crew member who fails the
+  // client specialty requirement or isn't available on the delivery date.
+  const assignmentValidationError = () => {
+    if (selectedDriver) {
+      if (!crewMeetsSpecialty(selectedDriver)) {
+        return `${selectedDriver.name} does not have the required specialty for ${selectedRequest.customerName}.`
+      }
+      if (!crewAvailableOnDate(selectedDriver)) {
+        return `${selectedDriver.name} is unavailable on ${deliveryDateLabel}. Please assign a different driver or truck.`
+      }
+    }
+    for (const helper of selectedHelpers) {
+      if (!crewMeetsSpecialty(helper)) {
+        return `${helper.name} does not have the required specialty for ${selectedRequest.customerName}.`
+      }
+      if (!crewAvailableOnDate(helper)) {
+        return `${helper.name} is unavailable on ${deliveryDateLabel}. Please assign a different helper.`
+      }
+    }
+    return null
+  }
+
   const moduleTabs = [
     { id: 'inbox', label: 'Delivery Requests Inbox', mobileLabel: 'Inbox', count: inboxRows.length },
     { id: 'assignment', label: 'Assign Vehicle', mobileLabel: 'Assign', count: pendingAssignments.length },
@@ -3549,8 +3693,16 @@ function SupDeliveries() {
     // Off-type trucks are intentionally assignable -- the picker already
     // surfaces the mismatch (amber note + "Assigned Truck Type (mismatch)"
     // row elsewhere on this page), but the Supervisor makes the final call,
-    // not a hard block here.
+    // not a hard block here. Specialty/availability rules, on the other hand,
+    // are hard requirements — the pickers already prevent these, this is the
+    // safety net before anything is persisted.
+    const validationError = assignmentValidationError()
+    if (validationError) {
+      showToast(validationError, 'error')
+      return
+    }
 
+    const previousCrew = selectedRequest.crew
     const assignedAtIso = new Date().toISOString()
     const assignedAt = new Date().toLocaleString('en-PH', {
       timeZone: MANILA_TIMEZONE,
@@ -3572,7 +3724,8 @@ function SupDeliveries() {
       })
       .eq('id', selectedRequest.id)
     if (error) {
-      return alert('Failed to save the vehicle assignment. Please try again.')
+      showToast('Failed to save the vehicle assignment. Please try again.', 'error')
+      return
     }
 
     updateRequest(selectedRequest.id, {
@@ -3580,6 +3733,16 @@ function SupDeliveries() {
       crew: { driver: selectedDriver, helpers: selectedHelpers, truck: selectedTruck },
       assignedAt,
     })
+
+    // Immediate, visible confirmation of what exactly changed.
+    const truckChanged = previousCrew?.truck?.plateNumber !== selectedTruck.plateNumber
+    const crewChanged =
+      previousCrew?.driver?.id !== selectedDriver.id ||
+      selectedHelpers.map((h) => h.id).join(',') !== (previousCrew?.helpers || []).map((h) => h.id).join(',')
+    if (truckChanged && crewChanged) showToast('Crew assignment updated successfully.')
+    else if (truckChanged) showToast('Truck assignment updated successfully.')
+    else if (crewChanged) showToast('Driver and Helper assigned successfully.')
+    else showToast('Crew assignment updated successfully.')
   }
 
   return (
@@ -4026,15 +4189,21 @@ function SupDeliveries() {
                                   <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.depreciation}</span>
                                 </div>
                                 <div className="flex items-center justify-between py-2 border-b border-slate-200">
-                                  <span className="text-sm font-medium text-slate-700">Diesel Rate</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.dieselRate}</span>
-                                </div>
-                                <p className="text-sm text-slate-600 ml-1">
-                                  a. Total diesel expenses:{' '}
-                                  <span className="font-semibold">
+                                  <span className="text-sm font-medium text-slate-700">Total Diesel Expenses</span>
+                                  <span className="text-sm font-mono text-slate-900">
                                     ₱{Number(selectedRequest.quotation.breakdown.calculated?.dieselTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                                   </span>
-                                </p>
+                                </div>
+                                {(() => {
+                                  const rate = Number(selectedRequest.quotation.breakdown.directExpenses.dieselRate || 0)
+                                  const total = Number(selectedRequest.quotation.breakdown.calculated?.dieselTotal || 0)
+                                  const distKm = rate > 0 ? total / rate : 0
+                                  return (
+                                    <p className="text-sm text-slate-600 ml-1">
+                                      a. Diesel Rate (₱{rate.toFixed(2)}) x Distance ({distKm.toFixed(1)} km)
+                                    </p>
+                                  )
+                                })()}
                                 <p className="text-sm font-semibold text-slate-600 ml-0.5 mb-1 mt-3">Repairs and Maintenance</p>
                                 <div className="flex items-center justify-between py-1.5">
                                   <span className="text-sm font-medium text-slate-700 pl-4">a. Batteries</span>
@@ -4226,15 +4395,21 @@ function SupDeliveries() {
                                   <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.depreciation}</span>
                                 </div>
                                 <div className="flex items-center justify-between py-2 border-b border-purple-100">
-                                  <span className="text-sm font-medium text-slate-700">Diesel Rate</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.dieselRate}</span>
-                                </div>
-                                <p className="text-sm text-purple-700 ml-1">
-                                  a. Total diesel expenses:{' '}
-                                  <span className="font-semibold">
+                                  <span className="text-sm font-medium text-slate-700">Total Diesel Expenses</span>
+                                  <span className="text-sm font-mono text-slate-900">
                                     ₱{Number(selectedRequest.updatedQuotation.breakdown.calculated?.dieselTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                                   </span>
-                                </p>
+                                </div>
+                                {(() => {
+                                  const rate = Number(selectedRequest.updatedQuotation.breakdown.directExpenses.dieselRate || 0)
+                                  const total = Number(selectedRequest.updatedQuotation.breakdown.calculated?.dieselTotal || 0)
+                                  const distKm = rate > 0 ? total / rate : 0
+                                  return (
+                                    <p className="text-sm text-purple-700 ml-1">
+                                      a. Diesel Rate (₱{rate.toFixed(2)}) x Distance ({distKm.toFixed(1)} km)
+                                    </p>
+                                  )
+                                })()}
                                 <p className="text-sm font-semibold text-purple-700 ml-0.5 mb-1 mt-3">Repairs and Maintenance</p>
                                 <div className="flex items-center justify-between py-1.5">
                                   <span className="text-sm font-medium text-slate-700 pl-4">a. Batteries</span>
@@ -4441,14 +4616,33 @@ function SupDeliveries() {
                     <div className="relative">
                       <button
                         type="button"
-                        onClick={() => setAssignment(prev => ({ ...prev, _showTrucks: !prev._showTrucks, _showDrivers: false, _showHelpers: false }))}
+                        onClick={() => { if (!fleetLoading) setAssignment(prev => ({ ...prev, _showTrucks: !prev._showTrucks, _showDrivers: false, _showHelpers: false })) }}
                         className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
                       >
-                        {selectedTruck ? (
+                        {fleetLoading ? (
+                          <div className="flex flex-1 items-center gap-3">
+                            <span className="h-10 w-16 shrink-0 animate-pulse rounded-lg bg-slate-200" />
+                            <div className="flex-1 space-y-1.5">
+                              <div className="h-3.5 w-28 animate-pulse rounded bg-slate-200" />
+                              <div className="h-3 w-44 animate-pulse rounded bg-slate-100" />
+                            </div>
+                          </div>
+                        ) : selectedTruck ? (
                           <div className="flex flex-1 items-center gap-3 min-w-0">
                             <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-center text-[10px] font-bold leading-tight text-indigo-700">{selectedTruck.truckType}</span>
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-slate-900">{selectedTruck.plateNumber}</p>
+                              <p className="flex flex-wrap items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
+                                {selectedTruck.plateNumber}
+                                {truckDriverWarning(selectedTruck) && (
+                                  <span
+                                    className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700"
+                                    title={truckDriverWarning(selectedTruck)}
+                                  >
+                                    <AlertTriangle className="h-2.5 w-2.5" />
+                                    Driver unavailable on {deliveryDateLabel}
+                                  </span>
+                                )}
+                              </p>
                               <p className="text-xs text-slate-500">{selectedTruck.truckType} • {selectedTruck.capacity}</p>
                             </div>
                           </div>
@@ -4461,23 +4655,15 @@ function SupDeliveries() {
                       </button>
                       {assignment._showTrucks && (
                         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {sortTrucksByRequestedType(fleet.trucks, selectedRequest.truckType).map(truck => {
-                            const defaultDriver = getDefaultDriverForTruck(truck)
-                            const isRequestedType = normalizeTruckType(truck.truckType) === normalizeTruckType(selectedRequest.truckType)
+                          {matchingTrucks.map(truck => {
+                            const currentCrew = getCrewForPlate(truck.plateNumber)
+                            const currentDriver = currentCrew?.driverId ? fleet.drivers.find((d) => d.id === currentCrew.driverId) : null
+                            const driverWarning = truckDriverWarning(truck)
                             return (
                               <button
                                 key={truck.plateNumber}
                                 type="button"
-                                onClick={() => {
-                                  const defaultDriver = getDefaultDriverForTruck(truck)
-                                  setAssignment(prev => ({
-                                    ...prev,
-                                    plateNumber: truck.plateNumber,
-                                    driverId: defaultDriver ? defaultDriver.id : prev.driverId,
-                                    helperIds: defaultDriver ? getDefaultHelpersForDriver(defaultDriver) : prev.helperIds,
-                                    _showTrucks: false,
-                                  }))
-                                }}
+                                onClick={() => prefillTruckCrew(truck)}
                                 className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
                                   assignment.plateNumber === truck.plateNumber
                                     ? 'bg-indigo-50 ring-1 ring-indigo-300'
@@ -4486,20 +4672,29 @@ function SupDeliveries() {
                               >
                                 <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-center text-[10px] font-bold leading-tight text-slate-600">{truck.truckType}</span>
                                 <div className="min-w-0 flex-1">
-                                  <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
+                                  <p className="flex flex-wrap items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
                                     {truck.plateNumber}
-                                    {isRequestedType && (
-                                      <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700">
-                                        Requested type
+                                    <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700">
+                                      Requested type
+                                    </span>
+                                    {driverWarning && (
+                                      <span
+                                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700"
+                                        title={driverWarning}
+                                      >
+                                        <AlertTriangle className="h-2.5 w-2.5" />
+                                        Driver unavailable on {deliveryDateLabel}
                                       </span>
                                     )}
                                   </p>
                                   <p className="text-xs text-slate-500">{truck.truckType} • {truck.capacity}</p>
-                                  {isRequestedType && defaultDriver && (
-                                    <p className="mt-0.5 text-[10px] text-slate-400">Default driver: {defaultDriver.name}</p>
+                                  {currentDriver && !driverWarning && (
+                                    <p className="mt-0.5 text-[10px] text-slate-400">Current driver: {currentDriver.name}</p>
                                   )}
-                                  {!isRequestedType && (
-                                    <p className="mt-0.5 text-[10px] font-medium text-amber-600">Customer requested {selectedRequest.truckType} — still assignable if you'd rather use this one</p>
+                                  {driverWarning && (
+                                    <p className="mt-0.5 text-[10px] font-medium text-amber-600">
+                                      {driverWarning} — pick another truck or assign a different driver
+                                    </p>
                                   )}
                                 </div>
                                 {assignment.plateNumber === truck.plateNumber && (
@@ -4510,7 +4705,7 @@ function SupDeliveries() {
                               </button>
                             )
                           })}
-                          {!sortTrucksByRequestedType(fleet.trucks, selectedRequest.truckType).some((t) => normalizeTruckType(t.truckType) === normalizeTruckType(selectedRequest.truckType)) && (
+                          {!fleetLoading && matchingTrucks.length === 0 && (
                             <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
                               No truck matches the requested type ({selectedRequest.truckType}).
                             </p>
@@ -4523,15 +4718,23 @@ function SupDeliveries() {
                   <div className="mt-4 space-y-2">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Driver
-                      <span className="ml-1 font-normal normal-case text-slate-400">(default for vehicle — change if needed)</span>
+                      <span className="ml-1 font-normal normal-case text-slate-400">(current driver for vehicle — change if needed)</span>
                     </p>
                     <div className="relative">
                       <button
                         type="button"
-                        onClick={() => setAssignment(prev => ({ ...prev, _showDrivers: !prev._showDrivers, _showTrucks: false, _showHelpers: false }))}
+                        onClick={() => { if (!fleetLoading) setAssignment(prev => ({ ...prev, _showDrivers: !prev._showDrivers, _showTrucks: false, _showHelpers: false })) }}
                         className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
                       >
-                        {selectedDriver ? (
+                        {fleetLoading ? (
+                          <div className="flex flex-1 items-center gap-3">
+                            <span className="h-10 w-10 shrink-0 animate-pulse rounded-lg bg-slate-200" />
+                            <div className="flex-1 space-y-1.5">
+                              <div className="h-3.5 w-32 animate-pulse rounded bg-slate-200" />
+                              <div className="h-3 w-20 animate-pulse rounded bg-slate-100" />
+                            </div>
+                          </div>
+                        ) : selectedDriver ? (
                           <>
                             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">{getInitials(selectedDriver.name)}</span>
                             <div className="min-w-0 flex-1">
@@ -4548,22 +4751,36 @@ function SupDeliveries() {
                       </button>
                       {assignment._showDrivers && (
                         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {sortCrewByClientSpecialty(fleet.drivers, selectedRequest.customerName).map(driver => {
+                          {eligibleDrivers.map(driver => {
                             const isSpecialized = isSpecializedForClient(driver, selectedRequest.customerName)
-                            const availability = getCrewAvailability({ recordId: driver.id, workingDays: driver.workingDays }, busyCrewIds)
+                            const availability = crewAvailabilityOnDate(driver)
+                            const selectable = availability.key === 'available'
                             return (
                             <button
                               key={driver.id}
                               type="button"
+                              disabled={!selectable}
                               onClick={() => {
+                                const usualHelpers = (helperIdsByDriver[driver.id] || [])
+                                  .map((id) => fleet.helpers.find((h) => h.id === id))
+                                  .filter(Boolean)
+                                  .filter(crewMeetsSpecialty)
+                                  .filter(crewAvailableOnDate)
+                                  .map((h) => h.id)
                                 setAssignment(prev => ({
                                   ...prev,
                                   driverId: driver.id,
-                                  helperIds: getDefaultHelpersForDriver(driver),
+                                  // Pre-fill the driver's usual crew, but never
+                                  // wipe helpers the Supervisor already picked
+                                  // by hand (common when the driver has no
+                                  // active-trip crew yet).
+                                  helperIds: usualHelpers.length > 0 ? usualHelpers : prev.helperIds,
                                   _showDrivers: false,
                                 }))
                               }}
-                              className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
+                              className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition ${
+                                !selectable ? 'cursor-not-allowed opacity-50' : 'hover:bg-indigo-50'
+                              } ${
                                 assignment.driverId === driver.id ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
                               }`}
                             >
@@ -4586,6 +4803,11 @@ function SupDeliveries() {
                                     <span className={`h-1.5 w-1.5 rounded-full ${availability.dot}`} />
                                     {availability.label}
                                   </span>
+                                  {!selectable && (
+                                    <span className="text-[9px] font-medium text-amber-600">
+                                      {availability.key === 'assigned' ? 'On another delivery' : `Off on ${deliveryDateLabel}`}
+                                    </span>
+                                  )}
                                 </p>
                               </div>
                               {assignment.driverId === driver.id && (
@@ -4596,6 +4818,11 @@ function SupDeliveries() {
                             </button>
                             )
                           })}
+                          {eligibleDrivers.length === 0 && (
+                            <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
+                              No drivers with the required specialty for {selectedRequest.customerName}.
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>
@@ -4604,15 +4831,21 @@ function SupDeliveries() {
                   <div className="mt-4 space-y-2">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Helpers
-                      <span className="ml-1 font-normal normal-case text-slate-400">(default for driver — change if needed)</span>
+                      <span className="ml-1 font-normal normal-case text-slate-400">(current helpers for vehicle — change if needed)</span>
                     </p>
                     <div className="relative">
                       <button
                         type="button"
-                        onClick={() => setAssignment(prev => ({ ...prev, _showHelpers: !prev._showHelpers, _showTrucks: false, _showDrivers: false }))}
+                        onClick={() => { if (!fleetLoading) setAssignment(prev => ({ ...prev, _showHelpers: !prev._showHelpers, _showTrucks: false, _showDrivers: false }))}
+                        }
                         className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
                       >
-                        {selectedHelpers.length > 0 ? (
+                        {fleetLoading ? (
+                          <div className="flex flex-1 items-center gap-2">
+                            <span className="h-6 w-20 shrink-0 animate-pulse rounded-lg bg-slate-200" />
+                            <span className="h-6 w-20 shrink-0 animate-pulse rounded-lg bg-slate-100" />
+                          </div>
+                        ) : selectedHelpers.length > 0 ? (
                           <div className="flex flex-1 flex-wrap items-center gap-2">
                             {selectedHelpers.map(h => (
                               <span key={h.id} className="inline-flex items-center rounded-lg bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
@@ -4629,11 +4862,12 @@ function SupDeliveries() {
                       </button>
                       {assignment._showHelpers && (
                         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {sortCrewByClientSpecialty(fleet.helpers, selectedRequest.customerName).map(helper => {
+                          {eligibleHelpers.map(helper => {
                             const isSelected = assignment.helperIds.includes(helper.id)
-                            const disabled = !isSelected && assignment.helperIds.length >= 2
+                            const availability = crewAvailabilityOnDate(helper)
+                            const selectable = availability.key === 'available'
+                            const disabled = !selectable || (!isSelected && assignment.helperIds.length >= 2)
                             const isSpecialized = isSpecializedForClient(helper, selectedRequest.customerName)
-                            const availability = getCrewAvailability({ recordId: helper.id, workingDays: helper.workingDays }, busyCrewIds)
                             return (
                               <button
                                 key={helper.id}
@@ -4663,6 +4897,11 @@ function SupDeliveries() {
                                       <span className={`h-1.5 w-1.5 rounded-full ${availability.dot}`} />
                                       {availability.label}
                                     </span>
+                                    {!selectable && (
+                                      <span className="text-[9px] font-medium text-amber-600">
+                                        {availability.key === 'assigned' ? 'On another delivery' : `Off on ${deliveryDateLabel}`}
+                                      </span>
+                                    )}
                                   </p>
                                 </div>
                                 <span className={`flex h-5 w-5 items-center justify-center rounded border-2 ${
@@ -4677,6 +4916,11 @@ function SupDeliveries() {
                               </button>
                             )
                           })}
+                          {eligibleHelpers.length === 0 && (
+                            <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
+                              No helpers with the required specialty for {selectedRequest.customerName}.
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>
@@ -4685,7 +4929,7 @@ function SupDeliveries() {
                   <button
                     onClick={() => setShowConfirmDialog(true)}
                     disabled={!canConfirmAssignment}
-                    title={!canConfirmAssignment ? 'Select a vehicle and at least one helper.' : undefined}
+                    title={!canConfirmAssignment ? 'Select a vehicle and at least one available helper.' : undefined}
                     className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Users className="h-4 w-4" />
@@ -4719,12 +4963,14 @@ function SupDeliveries() {
                           </div>
                         </div>
                         {selectedHelpers.length > 0 && (
-                          <div className="border-t border-slate-200 pt-3 space-y-2">
-                            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Helpers</p>
+                          <div className="border-t border-slate-200 pt-3 space-y-3">
                             {selectedHelpers.map(h => (
                               <div key={h.id} className="flex items-center gap-3">
-                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(h.name)}</span>
-                                <p className="text-sm text-slate-900">{h.name}</p>
+                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">{getInitials(h.name)}</span>
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-900">{h.name}</p>
+                                  <p className="text-xs text-slate-500">Helper</p>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -4946,6 +5192,14 @@ function SupDeliveries() {
                   throw new Error(error.message)
                 }
                 setQuotationRules({ ...DEFAULT_QUOTATION_RULES, ...nextRules })
+                // Re-prefill the open quotation form so a freshly saved rule
+                // set is reflected immediately — no need to close and reopen
+                // the request. Only for a brand-new quotation (no saved
+                // quotation yet); an existing quotation's saved values and the
+                // adjust-quotation edits are never overwritten.
+                if (selectedRequest && !selectedRequest.quotation && !adjustingQuotation) {
+                  setQuotationForm(buildQuotationDefaults(selectedRequest, nextRules))
+                }
                 setShowQuotationSettings(false)
               }}
             />
@@ -5651,7 +5905,25 @@ function SupDeliveries() {
               </>
             )}
           </section>
+         )}
+          </div>
         )}
+        {toast && (
+          <div
+            key={toast.id}
+            role="status"
+            className={`fixed bottom-5 right-5 z-[90] flex max-w-sm items-start gap-2.5 rounded-xl px-4 py-3 text-sm font-medium shadow-lg ${
+              toast.tone === 'error'
+                ? 'border border-red-200 bg-red-50 text-red-800'
+                : 'border border-emerald-200 bg-emerald-50 text-emerald-800'
+            }`}
+          >
+            {toast.tone === 'error' ? (
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+            ) : (
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+            )}
+            <span>{toast.message}</span>
           </div>
         )}
     </SupLayout>
