@@ -4,7 +4,7 @@ import { getPmsStatus } from "./utils/pms.js";
 
 export default function MaintenanceSummaryWidget({ trucks, onSelect }) {
   const counts = useMemo(() => {
-    const c = { overdue: 0, upcoming: 0, healthy: 0 };
+    const c = { overdue: 0, scheduled: 0, completed: 0 };
     trucks.forEach((t) => {
       const status = getPmsStatus(t);
       c[status]++;
@@ -50,23 +50,23 @@ export default function MaintenanceSummaryWidget({ trucks, onSelect }) {
         <Card
           accent="bg-red-500"
           icon={AlertTriangle}
-          title="Overdue / Action Needed"
-          subtext="Exceeded mileage or 6‑mo limit"
+          title="Overdue"
+          subtext="Exceeded mileage or 6‑month threshold"
           status="overdue"
         />
         <Card
           accent="bg-amber-500"
           icon={Clock}
-          title="Due Soon"
-          subtext="Within 1,000 km or 30 days"
-          status="upcoming"
+          title="Scheduled"
+          subtext="Remaining 1,000 km or 30 days"
+          status="scheduled"
         />
         <Card
           accent="bg-emerald-500"
           icon={CheckCircle2}
-          title="Up to Date"
+          title="Completed"
           subtext="Operating within safe limits"
-          status="healthy"
+          status="completed"
         />
       </div>
     </section>

@@ -7,7 +7,7 @@ import {
 
 /**
  * Compute PMS status for a truck.
- * Returns one of "overdue", "upcoming", or "healthy".
+ * Returns one of "overdue", "scheduled", or "completed".
  */
 export function getPmsStatus(truck) {
   const now = new Date();
@@ -28,11 +28,27 @@ export function getPmsStatus(truck) {
   }
 
   // Upcoming if within warning thresholds
-  const upcomingKm = targetKm - WARNING_THRESHOLD_KM;
-  const upcomingDays = targetDays - WARNING_THRESHOLD_DAYS;
-  if (mileageDiff >= upcomingKm || daysDiff >= upcomingDays) {
-    return "upcoming";
+  const scheduledKm = targetKm - WARNING_THRESHOLD_KM;
+  const scheduledDays = targetDays - WARNING_THRESHOLD_DAYS;
+  if (mileageDiff >= scheduledKm || daysDiff >= scheduledDays) {
+    return "scheduled";
   }
 
-  return "healthy";
+  return "completed";
+}
+
+/**
+ * Get the display label for a PMS status.
+ * Maps internal status to standardized labels used across the UI.
+ */
+export function getPmsStatusDisplayLabel(status) {
+  const key = status?.toLowerCase();
+  const labels = {
+    overdue: "Overdue",
+    scheduled: "Scheduled",
+    completed: "Completed",
+  };
+  return (
+    labels[key] || status?.charAt(0).toUpperCase() + status.slice(1) || "-"
+  );
 }

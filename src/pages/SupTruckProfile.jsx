@@ -23,6 +23,10 @@ import {
   Wind,
 } from "lucide-react";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
+import {
+  getPmsStatus,
+  getPmsStatusDisplayLabel,
+} from "../components/trucks/utils/pms.js";
 import { supabase } from "../lib/supabaseClient.js"; // Enabled for supervisor view to fetch real data
 import ViewModal from "../components/ViewModal.jsx";
 
@@ -98,6 +102,8 @@ const MAINTENANCE_TYPE_ICONS = {
   "Battery Check": BatteryCharging,
   "Transmission Service": Cog,
   "Air Filter Replacement": Wind,
+  "Tire Replacement": RotateCw,
+  "Preventive Maintenance": Droplet,
 };
 
 // Fixed "today" so the mock trip/maintenance data (and every countdown
@@ -119,72 +125,6 @@ function createSeededRng(idString) {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-function buildMockMaintenance(truck) {
-  const rng = createSeededRng(`${truck.id}-maintenance`);
-  const pick = (list) => list[Math.floor(rng() * list.length)];
-
-  const recordCount = 6 + Math.floor(rng() * 5); // 6-10
-
-  return Array.from({ length: recordCount }, (_, i) => {
-    const isUpcoming = i < 2 && truck.status !== "Offline";
-    const status = isUpcoming ? pick(["Scheduled", "Overdue"]) : "Completed";
-
-    let actualDate;
-    if (status === "Overdue") {
-      actualDate = new Date(NOW.getTime() - (2 + rng() * 8) * DAY_MS);
-    } else if (status === "Scheduled") {
-      actualDate = new Date(
-        NOW.getTime() + (i + 1) * (5 + rng() * 10) * DAY_MS,
-      );
-    } else {
-      actualDate = new Date(NOW.getTime() - i * (12 + rng() * 18) * DAY_MS);
-    }
-
-    const daysFromNow = Math.round(
-      (actualDate.getTime() - NOW.getTime()) / DAY_MS,
-    );
-    // Odometer data removed to align with backend schema.
-    const odometer = 0; // placeholder value
-
-    return {
-      id: `MTN-${3100 - i}`,
-      date: actualDate,
-      dateLabel: actualDate.toLocaleDateString("en-US", {
-        timeZone: MANILA_TIMEZONE,
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
-      type: pick(MAINTENANCE_TYPES),
-      shop: pick(MAINTENANCE_SHOPS),
-      status,
-      odometer,
-      daysFromNow,
-    };
-  });
-}
-
-function getMaintenanceUrgency(record) {
-  const { status, daysFromNow } = record;
-  if (status === "Overdue") {
-    return {
-      label:
-        daysFromNow === 0 ? "Due today" : `${Math.abs(daysFromNow)}d overdue`,
-      tone: "rose",
-    };
-  }
-  if (status === "Scheduled") {
-    if (daysFromNow <= 7) {
-      return {
-        label: daysFromNow === 0 ? "Due today" : `Due in ${daysFromNow}d`,
-        tone: "amber",
-      };
-    }
-    return { label: `Due in ${daysFromNow}d`, tone: "blue" };
-  }
-  return { label: "Completed", tone: "emerald" };
-}
 
 function TypeTag({ type }) {
   return (
@@ -261,6 +201,7 @@ const MAINTENANCE_STATUS_BADGE_CLASSES = {
     "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
   Scheduled: "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
   Overdue: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
+  "In Progress": "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200",
 };
 
 function MaintenanceStatusBadge({ status }) {
@@ -306,18 +247,18 @@ function SectionCard({ title, icon: Icon, children, className = "" }) {
 
 function StatTile({ label, icon: Icon, tone = "slate", children }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2">
+    <div className="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+      <div className="flex flex-col items-center gap-2">
         <div
           className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${TONE_ICON_CLASSES[tone]}`}
         >
           {Icon && <Icon className="h-3.5 w-3.5" />}
         </div>
-        <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">
+        <span className="text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-slate-500 text-center">
           {label}
         </span>
       </div>
-      <div className="mt-2.5">{children}</div>
+      <div className="mt-1">{children}</div>
     </div>
   );
 }
@@ -355,7 +296,12 @@ const SUPERVISOR_STATUS_MAP = {
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
 };
-const MAINTENANCE_STATUS_FILTERS = ["All", "Completed", "Scheduled", "Overdue"];
+const MAINTENANCE_STATUS_FILTERS = [
+  "All",
+  "Completed",
+  "Scheduled",
+  "In Progress",
+];
 const PAGE_SIZE = 10;
 
 function PaginationBar({ page, setPage, totalPages }) {
@@ -494,7 +440,13 @@ function SupTruckProfile() {
   const location = useLocation();
   const truck = location.state?.truck;
 
-  const [activeTab, setActiveTab] = useState("overview");
+  // Persist the selected tab across page reloads using localStorage.
+  const [activeTab, setActiveTab] = useState(() => {
+    return localStorage.getItem("supTruckActiveTab") || "overview";
+  });
+  useEffect(() => {
+    localStorage.setItem("supTruckActiveTab", activeTab);
+  }, [activeTab]);
   const [tripStatusFilter, setTripStatusFilter] = useState("All");
   const [tripPage, setTripPage] = useState(1);
   const [maintenanceStatusFilter, setMaintenanceStatusFilter] = useState("All");
@@ -503,6 +455,41 @@ function SupTruckProfile() {
   const [toast, setToast] = useState(null);
   const [isViewModalOpen, setViewModalOpen] = useState(false);
   const [selectedTrip, setSelectedTrip] = useState(null);
+  // Log Maintenance Service Modal state (read-only display in supervisor view)
+  const [isLogMaintenanceModalOpen, setIsLogMaintenanceModalOpen] =
+    useState(false);
+  const [logDate, setLogDate] = useState(
+    new Date().toISOString().split("T")[0],
+  );
+  // Optional end date for maintenance period
+  const [logEndDate, setLogEndDate] = useState("");
+  const [logMileage, setLogMileage] = useState("");
+  const [logType, setLogType] = useState("Preventive Maintenance");
+  const [logShop, setLogShop] = useState("");
+  const [logStatus, setLogStatus] = useState("Completed");
+  const [logNotes, setLogNotes] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Modal state for viewing long notes
+  const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
+  const [selectedNote, setSelectedNote] = useState("");
+  // Auto‑set status based on dates:
+  // - If an end date is provided → Completed
+  // - Else if start date is today or earlier → In Progress
+  // - Otherwise → Scheduled
+  useEffect(() => {
+    const today = new Date().toISOString().split("T")[0];
+    // New status rules (same as admin view):
+    // 1. End date before today → Completed.
+    // 2. Start date after today → Scheduled.
+    // 3. Otherwise → In Progress.
+    if (logEndDate && logEndDate < today) {
+      setLogStatus("Completed");
+    } else if (logDate && logDate > today) {
+      setLogStatus("Scheduled");
+    } else {
+      setLogStatus("In Progress");
+    }
+  }, [logDate, logEndDate]);
   // Devices list for mapping assigned device IDs to trucks (similar to AdminTrucks)
   // const [devices, setDevices] = useState([]); // Disabled for supervisor view
   // Fetch the latest truck data after an edit. Uses plate_number as identifier.
@@ -554,6 +541,87 @@ function SupTruckProfile() {
   const closeViewModal = () => {
     setViewModalOpen(false);
     setSelectedTrip(null);
+  };
+
+  // Prevent default form submission to avoid page reload which clears navigation state.
+  const handleLogMaintenanceSubmit = async (e) => {
+    if (e && typeof e.preventDefault === "function") {
+      e.preventDefault();
+    }
+    if (!truck) return;
+    setIsSubmitting(true);
+
+    try {
+      // Step A: Insert new log into public.maintenance_records
+      // Insert new maintenance record and retrieve the inserted row for optimistic UI update
+      const { data: insertedData, error: insertError } = await supabase
+        .from("maintenance_records")
+        .insert({
+          truck_id: truck.id,
+          start_date: logDate,
+          ...(logEndDate ? { end_date: logEndDate } : {}),
+          mileage: Number(logMileage),
+          type: logType,
+          shop: logShop,
+          notes: logNotes,
+          status: logStatus,
+        })
+        .select();
+
+      if (insertError) {
+        setToast({
+          message: "Error inserting maintenance record: " + insertError.message,
+          type: "error",
+        });
+        return;
+      }
+
+      // Step B: Update the parent public.trucks baseline fields
+      const newCurrentMileage = Math.max(
+        truck.current_mileage || 0,
+        Number(logMileage),
+      );
+      const { error: updateError } = await supabase
+        .from("trucks")
+        .update({
+          previous_maintenance_date: logDate,
+          previous_mileage: Number(logMileage),
+          current_mileage: newCurrentMileage,
+        })
+        .eq("id", truck.id);
+
+      if (updateError) {
+        setToast({
+          message: "Error updating truck baseline: " + updateError.message,
+          type: "error",
+        });
+        return;
+      }
+
+      // Step C: Refresh State
+      // Optimistically add the new record to the UI, then re-fetch to ensure consistency
+      if (insertedData && insertedData.length) {
+        setMaintenanceRecords((prev) => [insertedData[0], ...prev]);
+      }
+      // Re-fetch maintenance records to ensure the list is fully up‑to‑date
+      await loadMaintenanceRecords();
+      // Reset fields and close the modal after successful submission
+      setLogDate(new Date().toISOString().split("T")[0]);
+      setLogEndDate("");
+      setLogMileage("");
+      setLogType("Preventive Maintenance");
+      setLogShop("");
+      setLogStatus("Completed");
+      setLogNotes("");
+      setIsLogMaintenanceModalOpen(false);
+      // Show success toast
+      setToast({
+        message: "Maintenance service logged successfully",
+        type: "success",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Real trips fetched from delivery_requests linked to this truck.
@@ -702,10 +770,30 @@ function SupTruckProfile() {
     }
     loadTrips();
   }, [truck]);
-  const maintenanceRecords = useMemo(
-    () => (truck ? buildMockMaintenance(truck) : []),
-    [truck],
-  );
+  // Maintenance records are now empty by default as we've removed the mock generator
+  // and the task focuses on the 5 health cards.
+  const [maintenanceRecords, setMaintenanceRecords] = useState([]);
+  const loadMaintenanceRecords = async () => {
+    if (!truck?.plate_number) {
+      setMaintenanceRecords([]);
+      return;
+    }
+    const { data, error } = await supabase
+      .from("maintenance_records")
+      .select("*")
+      .eq("truck_id", truck.id)
+      .order("start_date", { ascending: false });
+    if (error) {
+      console.error("Failed to fetch maintenance records", error);
+      setToast({ message: error.message, type: "error" });
+      setMaintenanceRecords([]);
+    } else {
+      setMaintenanceRecords(data || []);
+    }
+  };
+  useEffect(() => {
+    loadMaintenanceRecords();
+  }, [truck]);
 
   const upcomingMaintenance = useMemo(
     () =>
@@ -782,8 +870,61 @@ function SupTruckProfile() {
     Scheduled: maintenanceRecords.filter(
       (record) => record.status === "Scheduled",
     ).length,
-    Overdue: maintenanceRecords.filter((record) => record.status === "Overdue")
-      .length,
+    "In Progress": maintenanceRecords.filter(
+      (record) => record.status === "In Progress",
+    ).length,
+  };
+
+  // PMS Health Calculations
+  const pmsStatus = truck ? getPmsStatus(truck) : "N/A";
+  const pmsStatusTone =
+    {
+      overdue: "rose",
+      upcoming: "amber",
+      healthy: "emerald",
+    }[pmsStatus] || "slate";
+
+  const prevMaintDate = truck?.previous_maintenance_date
+    ? new Date(truck.previous_maintenance_date).toLocaleDateString("en-US", {
+        timeZone: MANILA_TIMEZONE,
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      })
+    : "Not set";
+
+  const prevMileage =
+    truck?.previous_mileage !== null && truck?.previous_mileage !== undefined
+      ? `${Number(truck.previous_mileage).toLocaleString()} km`
+      : "0 km";
+
+  const currMileage =
+    truck?.current_mileage !== null && truck?.current_mileage !== undefined
+      ? `${Number(truck.current_mileage).toLocaleString()} km`
+      : "0 km";
+
+  const calculateNextMaintDate = () => {
+    if (
+      !truck?.previous_maintenance_date ||
+      !truck?.maintenance_interval_months
+    )
+      return "N/A";
+    const date = new Date(truck.previous_maintenance_date);
+    date.setUTCMonth(
+      date.getUTCMonth() + Number(truck.maintenance_interval_months),
+    );
+    return date.toLocaleDateString("en-US", {
+      timeZone: MANILA_TIMEZONE,
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  };
+
+  const calculateNextMaintMileage = () => {
+    const prev = Number(truck?.previous_mileage || 0);
+    const interval = Number(truck?.maintenance_interval_km || 0);
+    return `${(prev + interval).toLocaleString()} km`;
   };
 
   if (!truck) {
@@ -1047,219 +1188,372 @@ function SupTruckProfile() {
 
         {/* Maintenance tab */}
         {activeTab === "maintenance" && (
-          <div className="flex flex-col gap-4">
-            {/* Condition overview — the four numbers a supervisor needs to
-                gauge this truck's maintenance health at a glance. */}
-            <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="flex flex-col gap-6">
+            {/* PMS Health Cards */}
+            <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
               <StatTile
-                label="Condition"
-                icon={overallCondition.icon}
-                tone={overallCondition.tone}
+                label="Maintenance Status"
+                icon={Wrench}
+                tone={pmsStatusTone}
               >
-                <p
-                  className={`text-base font-bold ${TONE_TEXT_CLASSES[overallCondition.tone]}`}
-                >
-                  {overallCondition.label}
-                </p>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  {overdueMaintenance.length > 0
-                    ? `${overdueMaintenance.length} task${overdueMaintenance.length === 1 ? "" : "s"} need attention`
-                    : upcomingMaintenance.length > 0
-                      ? `${upcomingMaintenance.length} upcoming`
-                      : "No pending service"}
-                </p>
-              </StatTile>
-
-              <StatTile
-                label="Next Service"
-                icon={Calendar}
-                tone={
-                  nextService
-                    ? getMaintenanceUrgency(nextService).tone
-                    : "slate"
-                }
-              >
-                {nextService ? (
-                  <>
-                    <p className="truncate text-sm font-bold text-slate-900">
-                      {nextService.type}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-slate-500">
-                      {nextService.dateLabel} ·{" "}
-                      {getMaintenanceUrgency(nextService).label}
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-sm font-semibold text-slate-500">
-                    None scheduled
+                <div className="flex flex-col gap-1">
+                  <p
+                    className={`text-lg font-bold leading-tight text-center ${TONE_TEXT_CLASSES[pmsStatusTone]}`}
+                  >
+                    {getPmsStatusDisplayLabel(pmsStatus)}
                   </p>
-                )}
+                </div>
               </StatTile>
 
-              <StatTile label="Last Service" icon={CheckCircle2} tone="emerald">
-                {lastService ? (
-                  <>
-                    <p className="truncate text-sm font-bold text-slate-900">
-                      {lastService.type}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-slate-500">
-                      {lastService.dateLabel} · {lastService ? "0 km" : "0 km"}
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-sm font-semibold text-slate-500">
-                    No history
+              <StatTile label="Last Maintenance" icon={Calendar}>
+                <div className="flex flex-col gap-1">
+                  <p className="text-lg font-bold text-center text-slate-900">
+                    {prevMaintDate}
                   </p>
-                )}
+                </div>
               </StatTile>
 
-              <StatTile label="Since Last Service" icon={Gauge} tone="blue">
-                <p className="text-sm font-bold text-slate-900">
-                  {(lastService
-                    ? Math.max(0, truck.odometer - (lastService?.odometer || 0))
-                    : truck.odometer
-                  ).toLocaleString()}{" "}
-                  km
-                </p>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  Now at{" "}
-                  {truck.odometer ? truck.odometer.toLocaleString() : "0"} km
-                </p>
+              <StatTile label="Previous Mileage" icon={Gauge}>
+                <div className="flex flex-col gap-1">
+                  <p className="text-lg font-bold text-center text-slate-900">
+                    {prevMileage}
+                  </p>
+                </div>
+              </StatTile>
+
+              <StatTile label="Current Mileage" icon={Gauge}>
+                <div className="flex flex-col gap-1">
+                  <p className="text-lg font-bold text-center text-slate-900">
+                    {currMileage}
+                  </p>
+                  <p className="text-xs font-medium text-center text-blue-600">
+                    Every 10,000km
+                  </p>
+                </div>
+              </StatTile>
+
+              <StatTile label="Next Maintenance" icon={Calendar}>
+                <div className="flex flex-col gap-1">
+                  <p className="text-lg font-bold text-center text-slate-900">
+                    {calculateNextMaintDate()}
+                  </p>
+                  <p className="text-xs font-medium text-center text-blue-600">
+                    Every 6 months
+                  </p>
+                </div>
               </StatTile>
             </section>
 
-            {/* Upcoming Maintenance — prioritized, glanceable list rather
-                than a table, since this is the "what do I need to act on"
-                view; the ledger of everything belongs in History below. */}
-            <SectionCard title="Upcoming Maintenance" icon={Calendar}>
-              {upcomingMaintenance.length === 0 ? (
-                <p className="py-6 text-center text-sm text-slate-500">
-                  No upcoming maintenance scheduled for this truck.
-                </p>
-              ) : (
-                <ul className="flex flex-col divide-y divide-slate-100">
-                  {upcomingMaintenance.map((record) => {
-                    const TypeIcon =
-                      MAINTENANCE_TYPE_ICONS[record.type] || Wrench;
-                    return (
-                      <li
-                        key={record.id}
-                        className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
-                      >
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-600">
-                          <TypeIcon className="h-4 w-4" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-slate-900">
-                            {record.type}
-                          </p>
-                          <p className="truncate text-xs text-slate-500">
-                            {record.shop} · {record.dateLabel} · ~ 0 km
-                          </p>
-                        </div>
-                        <UrgencyChip record={record} />
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </SectionCard>
-
-            {/* Maintenance History — the full ledger, filterable by status. */}
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-2 px-1">
-                <Wrench className="h-4 w-4 text-blue-600" />
-                <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Maintenance History
-                </h2>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {MAINTENANCE_STATUS_FILTERS.map((status) => (
-                  <button
-                    key={status}
-                    type="button"
-                    onClick={() => setMaintenanceStatusFilter(status)}
-                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
-                      maintenanceStatusFilter === status
-                        ? "border-blue-600 bg-blue-600 text-white"
-                        : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
-                    }`}
+            {/* Log Maintenance Service Modal */}
+            {isLogMaintenanceModalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                <div className="bg-white rounded-2xl p-4 w-full max-w-sm shadow-xl">
+                  <h3 className="text-xl font-semibold mb-2">
+                    Log Maintenance Service
+                  </h3>
+                  <form
+                    onSubmit={handleLogMaintenanceSubmit}
+                    className="space-y-2"
                   >
-                    <span>{status}</span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs ${
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        Start Date
+                      </label>
+                      <input
+                        type="date"
+                        name="date"
+                        value={logDate}
+                        onChange={(e) => setLogDate(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        End Date (optional)
+                      </label>
+                      <input
+                        type="date"
+                        name="endDate"
+                        value={logEndDate}
+                        onChange={(e) => setLogEndDate(e.target.value)}
+                        min={logDate}
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        Mileage at Service (km)
+                      </label>
+                      <input
+                        type="number"
+                        name="mileage"
+                        value={logMileage}
+                        onChange={(e) => setLogMileage(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        Service Type
+                      </label>
+                      <select
+                        name="type"
+                        value={logType}
+                        onChange={(e) => setLogType(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="Preventive Maintenance">
+                          Preventive Maintenance
+                        </option>
+                        <option value="Oil Change">Oil Change</option>
+                        <option value="Brake Inspection">
+                          Brake Inspection
+                        </option>
+                        <option value="Tire Replacement">
+                          Tire Replacement
+                        </option>
+                        <option value="Engine Diagnostic">
+                          Engine Diagnostic
+                        </option>
+                        <option value="Battery Check">Battery Check</option>
+                        <option value="Transmission Service">
+                          Transmission Service
+                        </option>
+                        <option value="Air Filter Replacement">
+                          Air Filter Replacement
+                        </option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        Shop / Provider
+                      </label>
+                      <input
+                        type="text"
+                        name="shop"
+                        value={logShop}
+                        onChange={(e) => setLogShop(e.target.value)}
+                        placeholder="e.g., In-House Garage, Casa Auto Shop"
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        Status
+                      </label>
+                      <select
+                        name="status"
+                        value={logStatus}
+                        onChange={(e) => setLogStatus(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="Completed">Completed</option>
+                        <option value="Scheduled">Scheduled</option>
+                        <option value="In Progress">In Progress</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        Remarks / Notes
+                      </label>
+                      <textarea
+                        name="notes"
+                        value={logNotes}
+                        onChange={(e) => setLogNotes(e.target.value)}
+                        rows={3}
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      ></textarea>
+                    </div>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Close modal and reset all input fields to their default values
+                          setIsLogMaintenanceModalOpen(false);
+                          setLogDate(new Date().toISOString().split("T")[0]);
+                          setLogEndDate("");
+                          setLogMileage("");
+                          setLogType("Preventive Maintenance");
+                          setLogShop("");
+                          setLogStatus("Completed");
+                          setLogNotes("");
+                        }}
+                        className="flex-1 px-4 py-2 border rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isSubmitting ? "Logging..." : "Log Service"}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* Maintenance History Table */}
+            <SectionCard title="Maintenance History" icon={Wrench}>
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-wrap gap-2">
+                  {MAINTENANCE_STATUS_FILTERS.map((status) => (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => setMaintenanceStatusFilter(status)}
+                      className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
                         maintenanceStatusFilter === status
-                          ? "bg-white/20 text-white"
-                          : "bg-slate-200 text-slate-700"
+                          ? "border-blue-600 bg-blue-600 text-white"
+                          : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
                       }`}
                     >
-                      {maintenanceStatusCounts[status]}
-                    </span>
+                      <span>{status}</span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs ${
+                          maintenanceStatusFilter === status
+                            ? "bg-white/20 text-white"
+                            : "bg-slate-200 text-slate-700"
+                        }`}
+                      >
+                        {maintenanceStatusCounts[status]}
+                      </span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setIsLogMaintenanceModalOpen(true)}
+                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm bg-amber-50 text-amber-700 hover:bg-amber-100 ml-auto`}
+                  >
+                    <Wrench className="h-3.5 w-3.5" />
+                    <span>Log Service</span>
                   </button>
-                ))}
-              </div>
+                </div>
 
-              <section className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <table className="w-full min-w-[720px] text-left text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                      <th className="px-5 py-3 font-semibold">Record ID</th>
-                      <th className="px-5 py-3 font-semibold">Date</th>
-                      <th className="px-5 py-3 font-semibold">Service</th>
-                      <th className="px-5 py-3 font-semibold">Shop</th>
-                      <th className="px-5 py-3 font-semibold">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredMaintenance.map((record) => {
-                      const TypeIcon =
-                        MAINTENANCE_TYPE_ICONS[record.type] || Wrench;
-                      return (
+                <section className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <table className="w-full min-w-[640px] text-left text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        <th className="px-5 py-3 font-semibold">Start Date</th>
+                        <th className="px-5 py-3 font-semibold">End Date</th>
+                        <th className="px-5 py-3 font-semibold">Type</th>
+                        <th className="px-5 py-3 font-semibold">Mileage</th>
+                        <th className="px-5 py-3 font-semibold">Shop</th>
+                        <th className="px-5 py-3 font-semibold">Status</th>
+                        <th className="px-5 py-3 font-semibold">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredMaintenance.map((record) => (
                         <tr
                           key={record.id}
                           className="transition hover:bg-slate-50"
                         >
-                          <td className="px-5 py-4 font-medium text-slate-900">
-                            {record.id}
+                          <td className="px-5 py-4 text-slate-700">
+                            {record.start_date
+                              ? new Date(record.start_date).toLocaleDateString(
+                                  "en-US",
+                                  {
+                                    timeZone: MANILA_TIMEZONE,
+                                    month: "short",
+                                    day: "numeric",
+                                    year: "numeric",
+                                  },
+                                )
+                              : "-"}
                           </td>
                           <td className="px-5 py-4 text-slate-700">
-                            {record.dateLabel}
+                            {record.end_date
+                              ? new Date(record.end_date).toLocaleDateString(
+                                  "en-US",
+                                  {
+                                    timeZone: MANILA_TIMEZONE,
+                                    month: "short",
+                                    day: "numeric",
+                                    year: "numeric",
+                                  },
+                                )
+                              : "-"}
                           </td>
                           <td className="px-5 py-4 text-slate-700">
-                            <span className="inline-flex items-center gap-2">
-                              <TypeIcon className="h-3.5 w-3.5 text-slate-400" />
+                            <div className="flex items-center gap-2">
+                              {(() => {
+                                const Icon =
+                                  MAINTENANCE_TYPE_ICONS[record.type];
+                                return Icon ? (
+                                  <Icon className="h-3.5 w-3.5 text-slate-400" />
+                                ) : null;
+                              })()}
                               {record.type}
-                            </span>
+                            </div>
                           </td>
-                          <td className="px-5 py-4 text-slate-700">0 km</td>
+                          <td className="px-5 py-4 text-slate-700">
+                            {record.mileage}
+                          </td>
                           <td className="px-5 py-4 text-slate-700">
                             {record.shop}
                           </td>
                           <td className="px-5 py-4">
                             <MaintenanceStatusBadge status={record.status} />
                           </td>
+                          <td className="px-5 py-4 text-slate-700">
+                            {record.notes ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedNote(record.notes);
+                                  setIsNoteModalOpen(true);
+                                }}
+                                className="rounded-md bg-blue-600 px-3 py-1 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              >
+                                View
+                              </button>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
                         </tr>
-                      );
-                    })}
-
-                    {filteredMaintenance.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={6}
-                          className="px-5 py-8 text-center text-sm text-slate-500"
-                        >
-                          No maintenance records match this filter.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </section>
-            </div>
+                      ))}
+                      {filteredMaintenance.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={7}
+                            className="px-5 py-8 text-center text-sm text-slate-500"
+                          >
+                            No records match this filter.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </section>
+              </div>
+            </SectionCard>
           </div>
         )}
       </div>
+      {/* Notes view modal */}
+      {isNoteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl p-4 w-full max-w-sm max-h-[80vh] overflow-y-auto overflow-x-hidden shadow-xl">
+            <h3 className="text-lg font-semibold mb-2">Notes</h3>
+            <p className="whitespace-pre-wrap break-words">{selectedNote}</p>
+            <div className="flex justify-end mt-4">
+              <button
+                type="button"
+                onClick={() => setIsNoteModalOpen(false)}
+                className="px-4 py-2 border rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Edit modal disabled for supervisor view */}
       {/*
       {isEditModalOpen && (
