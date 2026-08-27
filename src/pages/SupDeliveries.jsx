@@ -39,7 +39,7 @@ import {
 } from 'lucide-react'
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
 import QuotationSettingsModal from '../components/QuotationSettingsModal.jsx'
-import { CREW_ACTIVE_STATUSES, getCrewAvailability } from '../lib/crewStatus.js'
+import { CREW_ACTIVE_STATUSES, getCrewAvailability, todayDateKey } from '../lib/crewStatus.js'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { useSearchParams } from 'react-router-dom'
@@ -2765,7 +2765,7 @@ function SupDeliveries() {
   // Record ids of crew currently committed to an active trip (ASSIGNED →
   // OUT_FOR_DELIVERY) — drives the Available/Assigned badge in the
   // driver/helper assignment pickers.
-  const [busyCrewIds, setBusyCrewIds] = useState(() => new Set())
+  const [busyCrewIds, setBusyCrewIds] = useState(() => ({}))
   // Crew currently riding each truck, rebuilt from active trips — plate →
   // { driverId, helperIds }. Selecting a plate pre-fills its current crew.
   const [truckCrewByPlate, setTruckCrewByPlate] = useState({})
@@ -2829,6 +2829,15 @@ function SupDeliveries() {
   const [quotationSubmitted, setQuotationSubmitted] = useState(false)
   const [selectedReportId, setSelectedReportId] = useState(null)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
+  // Distinct "Assignment Confirmed!" notification card shown after a
+  // successful crew/vehicle assignment (separate from the small toast).
+  const [assignmentConfirmed, setAssignmentConfirmed] = useState(null)
+  // Auto-dismiss the "Assignment Confirmed!" card after a few seconds.
+  useEffect(() => {
+    if (!assignmentConfirmed) return
+    const t = setTimeout(() => setAssignmentConfirmed(null), 3500)
+    return () => clearTimeout(t)
+  }, [assignmentConfirmed])
   const [showDeclineDialog, setShowDeclineDialog] = useState(false)
   const [showQuotationConfirmDialog, setShowQuotationConfirmDialog] = useState(false)
   const [showProceedQuotationDialog, setShowProceedQuotationDialog] = useState(false)
@@ -2927,54 +2936,74 @@ function SupDeliveries() {
       // that keeps the inbox current. Also rebuilds which crew currently
       // rides which truck (plate → crew) and which helpers usually ride with
       // which driver, so picking a plate/driver pre-fills its current crew.
-      const { data: activeTrips, error: activeError } = await supabase
-        .from('delivery_requests')
-        .select('assigned_driver_id, assigned_helper_ids, assigned_truck_plate')
-        .in('status', CREW_ACTIVE_STATUSES)
-      if (!activeError && mountedRef.current) {
-        const busy = new Set()
-        const truckCrew = {}
-        const helpersByDriver = {}
-        for (const trip of activeTrips || []) {
-          if (trip.assigned_driver_id) {
-            busy.add(trip.assigned_driver_id)
-            if (trip.assigned_truck_plate && !truckCrew[trip.assigned_truck_plate]) {
-              truckCrew[trip.assigned_truck_plate] = {
-                driverId: trip.assigned_driver_id,
-                helperIds: trip.assigned_helper_ids || [],
+      // Isolated in its own try/catch: a failure here must never abort the
+      // whole inbox load (it only feeds the assignment picker availability).
+      try {
+        const { data: activeTrips, error: activeError } = await supabase
+          .from('delivery_requests')
+          .select('assigned_driver_id, assigned_helper_ids, assigned_truck_plate, pickup_date, dropoff_date')
+          .in('status', CREW_ACTIVE_STATUSES)
+        if (!activeError && mountedRef.current) {
+        // Date-aware busy map (plain object — Map is shadowed by a lucide icon
+        // in this file): recordId -> active trip date ranges. Lets a crew
+        // member be assigned to a delivery on a day they're NOT already on a
+        // trip, even if they're on one today.
+        const busy = {}
+        const addBusy = (recordId, start, end) => {
+          if (!recordId || !start || !end) return
+          const list = busy[recordId] || []
+          list.push({ start: String(start).slice(0, 10), end: String(end).slice(0, 10) })
+          busy[recordId] = list
+        }
+          const truckCrew = {}
+          const helpersByDriver = {}
+          for (const trip of activeTrips || []) {
+            if (trip.assigned_driver_id) {
+              addBusy(trip.assigned_driver_id, trip.pickup_date, trip.dropoff_date)
+              if (trip.assigned_truck_plate && !truckCrew[trip.assigned_truck_plate]) {
+                truckCrew[trip.assigned_truck_plate] = {
+                  driverId: trip.assigned_driver_id,
+                  helperIds: trip.assigned_helper_ids || [],
+                }
               }
             }
+            for (const helperId of trip.assigned_helper_ids || []) {
+              if (helperId) addBusy(helperId, trip.pickup_date, trip.dropoff_date)
+            }
+            if (trip.assigned_driver_id && Array.isArray(trip.assigned_helper_ids) && !helpersByDriver[trip.assigned_driver_id]) {
+              helpersByDriver[trip.assigned_driver_id] = trip.assigned_helper_ids.filter(Boolean)
+            }
           }
-          for (const helperId of trip.assigned_helper_ids || []) {
-            if (helperId) busy.add(helperId)
-          }
-          if (trip.assigned_driver_id && Array.isArray(trip.assigned_helper_ids) && !helpersByDriver[trip.assigned_driver_id]) {
-            helpersByDriver[trip.assigned_driver_id] = trip.assigned_helper_ids.filter(Boolean)
-          }
+          setBusyCrewIds(busy)
+          setTruckCrewByPlate(truckCrew)
+          setHelperIdsByDriver(helpersByDriver)
         }
-        setBusyCrewIds(busy)
-        setTruckCrewByPlate(truckCrew)
-        setHelperIdsByDriver(helpersByDriver)
+      } catch {
+        // Availability pre-fill degraded, but the inbox itself still loads.
       }
 
       // Supervisor-saved default crew per truck (Delivery Crew profile's
       // "Truck & Crew Assignment"). Joined through the truck FK for the plate
       // number the assignment pickers key on.
-      const { data: defaultAssignments } = await supabase
-        .from('driver_default_assignments')
-        .select('driver_record_id, helper_record_ids, trucks ( plate_number )')
-      if (mountedRef.current) {
-        const defaults = {}
-        for (const row of defaultAssignments || []) {
-          const plate = row.trucks?.plate_number
-          if (plate && row.driver_record_id) {
-            defaults[plate] = {
-              driverId: row.driver_record_id,
-              helperIds: row.helper_record_ids || [],
+      try {
+        const { data: defaultAssignments } = await supabase
+          .from('driver_default_assignments')
+          .select('driver_record_id, helper_record_ids, trucks ( plate_number )')
+        if (mountedRef.current) {
+          const defaults = {}
+          for (const row of defaultAssignments || []) {
+            const plate = row.trucks?.plate_number
+            if (plate && row.driver_record_id) {
+              defaults[plate] = {
+                driverId: row.driver_record_id,
+                helperIds: row.helper_record_ids || [],
+              }
             }
           }
+          setDefaultCrewByPlate(defaults)
         }
-        setDefaultCrewByPlate(defaults)
+      } catch {
+        // Default crew pre-fill degraded, but the inbox itself still loads.
       }
 
       const { data, error } = await supabase
@@ -2983,7 +3012,7 @@ function SupDeliveries() {
         .order('created_at', { ascending: false })
       if (!mountedRef.current) return
       if (error) {
-        setLoadError('Failed to load delivery requests. Please try again.')
+        setLoadError(`Failed to load delivery requests. Please try again. (${error.message || error.code || 'unknown error'})`)
         setDbRequests([])
         return
       }
@@ -3016,8 +3045,10 @@ function SupDeliveries() {
       }
 
       if (mountedRef.current) setDbRequests(rows)
-    } catch {
-      if (mountedRef.current) setLoadError('Failed to load delivery requests. Please try again.')
+    } catch (e) {
+      if (mountedRef.current) {
+        setLoadError(`Failed to load delivery requests. Please try again. (${e?.message || e?.code || 'unexpected error'})`)
+      }
     } finally {
       if (mountedRef.current) {
         setIsLoading(false)
@@ -3340,9 +3371,13 @@ function SupDeliveries() {
   const crewMeetsSpecialty = useCallback((member) =>
     !requiresSpecializedCrew || isSpecializedForClient(member, selectedRequest?.customerName),
     [requiresSpecializedCrew, selectedRequest?.customerName])
+  // 'YYYY-MM-DD' of the delivery being assigned — what the busy-range check
+  // is judged against (so a crew member on a trip today is still free for a
+  // different-date delivery).
+  const deliveryDateKey = selectedRequest?.pickupDate ? String(selectedRequest.pickupDate).slice(0, 10) : todayDateKey()
   const crewAvailabilityOnDate = useCallback((member) =>
-    getCrewAvailability({ recordId: member.id, workingDays: member.workingDays }, busyCrewIds, deliveryDate),
-    [busyCrewIds, deliveryDate])
+    getCrewAvailability({ recordId: member.id, workingDays: member.workingDays }, busyCrewIds, deliveryDateKey),
+    [busyCrewIds, deliveryDateKey])
   const crewAvailableOnDate = useCallback((member) => crewAvailabilityOnDate(member).key === 'available', [crewAvailabilityOnDate])
   // Crew a truck should pre-fill: its current active-trip crew, falling back
   // to the Supervisor's saved default assignment (Delivery Crew profile).
@@ -3739,10 +3774,11 @@ function SupDeliveries() {
     const crewChanged =
       previousCrew?.driver?.id !== selectedDriver.id ||
       selectedHelpers.map((h) => h.id).join(',') !== (previousCrew?.helpers || []).map((h) => h.id).join(',')
-    if (truckChanged && crewChanged) showToast('Crew assignment updated successfully.')
-    else if (truckChanged) showToast('Truck assignment updated successfully.')
-    else if (crewChanged) showToast('Driver and Helper assigned successfully.')
-    else showToast('Crew assignment updated successfully.')
+    let detail = 'The crew and vehicle have been assigned to this delivery.'
+    if (truckChanged && crewChanged) detail = 'Vehicle and crew assignment updated.'
+    else if (truckChanged) detail = 'Vehicle assignment updated.'
+    else if (crewChanged) detail = 'Driver and helper assigned.'
+    setAssignmentConfirmed(detail)
   }
 
   return (
@@ -4808,6 +4844,11 @@ function SupDeliveries() {
                                       {availability.key === 'assigned' ? 'On another delivery' : `Off on ${deliveryDateLabel}`}
                                     </span>
                                   )}
+                                  {selectable && availability.currentlyBusy && availability.currentTrip && (
+                                    <span className="text-[9px] font-medium text-amber-600">
+                                      On another delivery until {availability.currentTrip.end}
+                                    </span>
+                                  )}
                                 </p>
                               </div>
                               {assignment.driverId === driver.id && (
@@ -4900,6 +4941,11 @@ function SupDeliveries() {
                                     {!selectable && (
                                       <span className="text-[9px] font-medium text-amber-600">
                                         {availability.key === 'assigned' ? 'On another delivery' : `Off on ${deliveryDateLabel}`}
+                                      </span>
+                                    )}
+                                    {selectable && availability.currentlyBusy && availability.currentTrip && (
+                                      <span className="text-[9px] font-medium text-amber-600">
+                                        On another delivery until {availability.currentTrip.end}
                                       </span>
                                     )}
                                   </p>
@@ -5008,6 +5054,26 @@ function SupDeliveries() {
                           Confirm
                         </button>
                       </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {assignmentConfirmed && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
+                  <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl overflow-hidden">
+                    <div className="p-6 text-center space-y-4">
+                      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100">
+                        <CheckCircle2 className="h-7 w-7 text-emerald-600" />
+                      </div>
+                      <h3 className="text-lg font-semibold text-slate-900">Assignment Confirmed!</h3>
+                      <p className="text-sm text-slate-500">{assignmentConfirmed}</p>
+                      <button
+                        onClick={() => setAssignmentConfirmed(null)}
+                        className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
+                      >
+                        OK
+                      </button>
                     </div>
                   </div>
                 </div>

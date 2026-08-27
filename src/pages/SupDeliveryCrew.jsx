@@ -5,7 +5,7 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Search, Truck, Users, CircleCheck, ChevronRight } from "lucide-react";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 import { formatWorkingDays } from "../lib/workingDays.js";
-import { CREW_ACTIVE_STATUSES, CREW_STATUS_META, getCrewAvailability } from "../lib/crewStatus.js";
+import { CREW_ACTIVE_STATUSES, CREW_STATUS_META, getCrewAvailability, todayDateKey, formatDateKey } from "../lib/crewStatus.js";
 
 // ---------------------------------------------------------------------------
 // Crew roster — loaded from the admin-users Edge Function's `list-crew`
@@ -278,10 +278,15 @@ function SupDeliveryCrew() {
   const [clientOptions, setClientOptions] = useState([]);
   // Record ids (D001/H001) of crew currently on an ACTIVE trip — derived
   // from delivery_requests, refreshed live via Realtime below.
-  const [busyRecordIds, setBusyRecordIds] = useState(() => new Set());
+  const [busyRecordIds, setBusyRecordIds] = useState(() => ({}));
   // Helper record id → the driver member they're assigned with on an active
   // trip (powers each helper's "with driver" line).
   const [helperDriverByRecordId, setHelperDriverByRecordId] = useState(() => new Map());
+  // Helper record id → the driver member from their saved Delivery Crew
+  // profile (driver_default_assignments), used as a fallback when not on a trip.
+  const [helperDefaultDriverByRecordId, setHelperDefaultDriverByRecordId] = useState(() => new Map());
+  // Crew list view: "all" | "week" (free this week) | "helper-driver".
+  const [viewMode, setViewMode] = useState("all");
 
   useEffect(() => {
     let isMounted = true;
@@ -344,14 +349,24 @@ function SupDeliveryCrew() {
     async function loadAssignments() {
       const { data, error } = await supabase
         .from("delivery_requests")
-        .select("id, assigned_driver_id, assigned_helper_ids")
+        .select("id, assigned_driver_id, assigned_helper_ids, pickup_date, dropoff_date")
         .in("status", CREW_ACTIVE_STATUSES);
 
       if (!isMounted || error || !data) {
         return;
       }
 
-      const busy = new Set();
+      // Date-aware busy map (plain object — Map is shadowed by a lucide icon
+      // import in SupDeliveries.jsx, kept consistent here): recordId -> active
+      // trip date ranges, so the roster reflects "Assigned" only for trips
+      // covering today.
+      const busy = {};
+      const addBusy = (recordId, start, end) => {
+        if (!recordId || !start || !end) return;
+        const list = busy[recordId] || [];
+        list.push({ start: String(start).slice(0, 10), end: String(end).slice(0, 10) });
+        busy[recordId] = list;
+      };
       const helperDriver = new Map();
       const driverById = new Map(
         roster.map((member) => [member.recordId, member]),
@@ -359,9 +374,9 @@ function SupDeliveryCrew() {
 
       for (const row of data) {
         if (row.assigned_driver_id) {
-          busy.add(row.assigned_driver_id);
+          addBusy(row.assigned_driver_id, row.pickup_date, row.dropoff_date);
           for (const helperId of row.assigned_helper_ids || []) {
-            busy.add(helperId);
+            addBusy(helperId, row.pickup_date, row.dropoff_date);
             // Only remember the FIRST active driver per helper — a helper
             // can't be on two active trips at once in practice.
             if (!helperDriver.has(helperId)) {
@@ -373,6 +388,25 @@ function SupDeliveryCrew() {
 
       setBusyRecordIds(busy);
       setHelperDriverByRecordId(helperDriver);
+
+      // Also load saved default crew assignments (Delivery Crew profile) so a
+      // helper's "assigned driver" is shown even when not currently on a trip.
+      try {
+        const { data: defaults } = await supabase
+          .from("driver_default_assignments")
+          .select("driver_record_id, helper_record_ids");
+        const helperDefault = new Map();
+        for (const row of defaults || []) {
+          for (const hid of row.helper_record_ids || []) {
+            if (hid && !helperDefault.has(hid)) {
+              helperDefault.set(hid, driverById.get(row.driver_record_id) || null);
+            }
+          }
+        }
+        if (isMounted) setHelperDefaultDriverByRecordId(helperDefault);
+      } catch {
+        // Default-assignment lookup is best-effort.
+      }
     }
 
     loadAssignments();
@@ -402,8 +436,8 @@ function SupDeliveryCrew() {
     () =>
       roster.map((member) => ({
         ...member,
-        status: getCrewAvailability(member, busyRecordIds).key,
-        statusLabel: getCrewAvailability(member, busyRecordIds).label,
+        status: getCrewAvailability(member, busyRecordIds, todayDateKey()).key,
+        statusLabel: getCrewAvailability(member, busyRecordIds, todayDateKey()).label,
       })),
     [roster, busyRecordIds],
   );
@@ -435,10 +469,47 @@ function SupDeliveryCrew() {
     return counts;
   }, [rosterWithStatus, clientOptions]);
 
+  // Current week window (Mon–Sun, Manila) for the "Available This Week"
+  // shortcut. A member is free this week when none of their active trips
+  // overlap the window.
+  const { weekStartKey, weekEndKey, weekLabel } = useMemo(() => {
+    const now = new Date();
+    const day = now.getDay();
+    const diffToMonday = day === 0 ? -6 : 1 - day;
+    const start = new Date(now);
+    start.setDate(now.getDate() + diffToMonday);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return {
+      weekStartKey: formatDateKey(start),
+      weekEndKey: formatDateKey(end),
+      weekLabel: `${start.toLocaleDateString("en-PH", { month: "short", day: "numeric", timeZone: MANILA_TIMEZONE })} – ${end.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric", timeZone: MANILA_TIMEZONE })}`,
+    };
+  }, []);
+
+  // Extends rosterWithStatus with free-this-week and a helper's assigned driver
+  // (active trip first, then saved Delivery Crew profile).
+  const rosterWithView = useMemo(
+    () =>
+      rosterWithStatus.map((member) => {
+        const trips = busyRecordIds[member.recordId] || [];
+        const freeThisWeek = !trips.some((t) => t.start <= weekEndKey && weekStartKey <= t.end);
+        let assignedDriver = null;
+        if (member.position === "Helper") {
+          assignedDriver =
+            helperDriverByRecordId.get(member.recordId) || helperDefaultDriverByRecordId.get(member.recordId) || null;
+        }
+        return { ...member, freeThisWeek, assignedDriver };
+      }),
+    [rosterWithStatus, busyRecordIds, helperDriverByRecordId, helperDefaultDriverByRecordId, weekStartKey, weekEndKey],
+  );
+
   const filteredCrew = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
 
-    return rosterWithStatus.filter((crew) => {
+    return rosterWithView.filter((crew) => {
       const matchesSearch = !query
         ? true
         : [crew.fullName, crew.position, crew.statusLabel, ...crew.clientSpecialties, crew.employeeId]
@@ -452,21 +523,30 @@ function SupDeliveryCrew() {
       const matchesPosition = selectedPosition === "All" || crew.position === selectedPosition;
       const matchesClient =
         selectedClient === "All" || crew.clientSpecialties.includes(selectedClient);
+      const matchesView =
+        viewMode === "all"
+          ? true
+          : viewMode === "week"
+            ? crew.freeThisWeek
+            : viewMode === "helper-driver"
+              ? crew.position === "Helper"
+              : true;
 
-      return matchesSearch && matchesStatus && matchesPosition && matchesClient;
+      return matchesSearch && matchesStatus && matchesPosition && matchesClient && matchesView;
     }).sort((leftCrew, rightCrew) => leftCrew.fullName.localeCompare(rightCrew.fullName));
-  }, [rosterWithStatus, searchTerm, selectedStatus, selectedPosition, selectedClient]);
+  }, [rosterWithView, searchTerm, selectedStatus, selectedPosition, selectedClient, viewMode]);
 
-  // Quick-view tiles — today's crew availability at a glance without opening
-  // a single profile. "This week" coverage is the Working Days column.
+  // Quick-view tiles — crew availability at a glance without opening a single
+  // profile. "This week" coverage is the Working Days column.
   const quickView = useMemo(
     () => ({
-      available: rosterWithStatus.filter((crew) => crew.status === "available").length,
-      assigned: rosterWithStatus.filter((crew) => crew.status === "assigned").length,
-      unavailable: rosterWithStatus.filter((crew) => crew.status === "unavailable").length,
-      total: rosterWithStatus.length,
+      available: rosterWithView.filter((crew) => crew.status === "available").length,
+      assigned: rosterWithView.filter((crew) => crew.status === "assigned").length,
+      unavailable: rosterWithView.filter((crew) => crew.status === "unavailable").length,
+      week: rosterWithView.filter((crew) => crew.freeThisWeek).length,
+      total: rosterWithView.length,
     }),
-    [rosterWithStatus],
+    [rosterWithView],
   );
 
   const totalPages = Math.max(1, Math.ceil(filteredCrew.length / PAGE_SIZE));
@@ -518,22 +598,62 @@ function SupDeliveryCrew() {
         {/* Quick view — today's availability at a glance. Counts are live:
             they move a member between tiles automatically as trips start/end
             (Realtime) or as members edit their weekly working days. */}
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {[
-            { label: "Available Today", value: quickView.available, dot: CREW_STATUS_META.available.dot },
-            { label: "Assigned on Trips", value: quickView.assigned, dot: CREW_STATUS_META.assigned.dot },
-            { label: "Unavailable Today", value: quickView.unavailable, dot: CREW_STATUS_META.unavailable.dot },
-            { label: "Total Crew", value: quickView.total, dot: "bg-slate-300" },
-          ].map((tile) => (
-            <div key={tile.label} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${tile.dot}`} />
-              <div>
-                <p className="text-xl font-bold leading-none text-slate-900">{tile.value}</p>
-                <p className="mt-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">{tile.label}</p>
-              </div>
-            </div>
-          ))}
+            { label: "Available Today", value: quickView.available, dot: CREW_STATUS_META.available.dot, mode: null },
+            { label: "Assigned on Trips", value: quickView.assigned, dot: CREW_STATUS_META.assigned.dot, mode: null },
+            { label: "Unavailable Today", value: quickView.unavailable, dot: CREW_STATUS_META.unavailable.dot, mode: null },
+            { label: "Available This Week", value: quickView.week, dot: "bg-emerald-400", mode: "week" },
+            { label: "Total Crew", value: quickView.total, dot: "bg-slate-300", mode: null },
+          ].map((tile) => {
+            const isActive = tile.mode && viewMode === tile.mode;
+            return (
+              <button
+                key={tile.label}
+                type="button"
+                onClick={() => setViewMode(isActive ? "all" : (tile.mode || viewMode))}
+                className={`flex items-center gap-3 rounded-2xl border bg-white p-4 text-left shadow-sm transition ${
+                  isActive ? "border-sky-400 ring-2 ring-sky-200" : "border-slate-200 hover:border-slate-300"
+                } ${tile.mode ? "cursor-pointer" : "cursor-default"}`}
+              >
+                <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${tile.dot}`} />
+                <div>
+                  <p className="text-xl font-bold leading-none text-slate-900">{tile.value}</p>
+                  <p className="mt-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">{tile.label}</p>
+                </div>
+              </button>
+            );
+          })}
         </section>
+
+        {/* View shortcuts: browse everyone, jump to who's free this week, or see
+            helpers alongside the driver they're assigned to. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {[
+            { mode: "all", label: "All Crew" },
+            { mode: "week", label: "Available This Week" },
+            { mode: "helper-driver", label: "Helpers & Drivers" },
+          ].map((tab) => (
+            <button
+              key={tab.mode}
+              type="button"
+              onClick={() => {
+                setViewMode(tab.mode);
+                setCurrentPage(1);
+              }}
+              className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition ${
+                viewMode === tab.mode
+                  ? "bg-sky-600 text-white shadow-sm"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+          {viewMode === "week" && (
+            <span className="ml-1 text-xs text-slate-400">{weekLabel}</span>
+          )}
+        </div>
 
         {/* Search and Filter Toolbar — search and filters share one row, with
             filters right-aligned. This is the common modern dashboard layout
@@ -610,6 +730,65 @@ function SupDeliveryCrew() {
                 <div className="flex h-full items-center justify-center px-4 py-6 text-center text-sm text-slate-500">
                   No crew records match your search. Try adjusting your filters.
                 </div>
+              ) : viewMode === "helper-driver" ? (
+                <table className="w-full min-w-[640px] text-left text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Helper
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Assigned Driver
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Driver Contact
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        Status
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 py-3 pl-2 pr-5 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        &nbsp;
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {pagedCrew.map((crew) => (
+                      <tr
+                        key={crew.id}
+                        onClick={() => openProfile(crew)}
+                        className="cursor-pointer transition hover:bg-slate-50"
+                      >
+                        <td className="px-5 py-2.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 text-[11px] font-semibold text-blue-700">
+                              {getInitials(crew.fullName)}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-slate-900">{crew.fullName}</p>
+                              <p className="truncate text-[11px] text-slate-400">Helper</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-2.5">
+                          {crew.assignedDriver ? (
+                            <p className="text-sm font-medium text-indigo-700">{crew.assignedDriver.fullName}</p>
+                          ) : (
+                            <p className="text-sm text-slate-400">Not assigned to a driver</p>
+                          )}
+                        </td>
+                        <td className="px-5 py-2.5 text-slate-700">
+                          {crew.assignedDriver ? crew.assignedDriver.contactNumber : "—"}
+                        </td>
+                        <td className="px-5 py-2.5">
+                          <StatusBadge status={crew.status} />
+                        </td>
+                        <td className="py-2.5 pl-2 pr-5 text-right">
+                          <ChevronRight className="ml-auto h-4 w-4 text-slate-400" />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               ) : (
                 <table className="w-full min-w-[900px] text-left text-sm">
                   <thead>
