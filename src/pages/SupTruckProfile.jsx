@@ -488,6 +488,12 @@ function SupTruckProfile() {
       setLogStatus("In Progress");
     }
   }, [logDate, logEndDate]);
+  // When the maintenance log modal opens, pre‑fill the shop field for supervisors
+  useEffect(() => {
+    if (isLogMaintenanceModalOpen) {
+      setLogShop("In-House");
+    }
+  }, [isLogMaintenanceModalOpen]);
   // Devices list for mapping assigned device IDs to trucks (similar to AdminTrucks)
   // const [devices, setDevices] = useState([]); // Disabled for supervisor view
   // Fetch the latest truck data after an edit. Uses plate_number as identifier.
@@ -1441,6 +1447,7 @@ function SupTruckProfile() {
                         <th className="px-5 py-3 font-semibold">Type</th>
                         <th className="px-5 py-3 font-semibold">Mileage</th>
                         <th className="px-5 py-3 font-semibold">Shop</th>
+                        <th className="px-5 py-3 font-semibold">Date Added</th>
                         <th className="px-5 py-3 font-semibold">Status</th>
                         <th className="px-5 py-3 font-semibold">Notes</th>
                       </tr>
@@ -1493,7 +1500,22 @@ function SupTruckProfile() {
                             {record.mileage}
                           </td>
                           <td className="px-5 py-4 text-slate-700">
-                            {record.shop}
+                            {record.shop === "In-house Maintenance"
+                              ? "In-House"
+                              : record.shop}
+                          </td>
+                          <td className="px-5 py-4 text-slate-700">
+                            {record.created_at
+                              ? new Date(record.created_at).toLocaleDateString(
+                                  "en-US",
+                                  {
+                                    timeZone: MANILA_TIMEZONE,
+                                    month: "short",
+                                    day: "numeric",
+                                    year: "numeric",
+                                  },
+                                )
+                              : "-"}
                           </td>
                           <td className="px-5 py-4">
                             <MaintenanceStatusBadge status={record.status} />
@@ -1519,7 +1541,7 @@ function SupTruckProfile() {
                       {filteredMaintenance.length === 0 && (
                         <tr>
                           <td
-                            colSpan={7}
+                            colSpan={8}
                             className="px-5 py-8 text-center text-sm text-slate-500"
                           >
                             No records match this filter.

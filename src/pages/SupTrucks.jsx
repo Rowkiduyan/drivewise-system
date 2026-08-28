@@ -272,6 +272,8 @@ function SupTrucks() {
   const userRole = useUserRole();
   const isSupervisor = userRole?.toLowerCase() === "supervisor";
   // console.log("DEBUG: userRole =", userRole, "isSupervisor =", isSupervisor);
+  // Utility: today’s date in YYYY‑MM‑DD format (no time component)
+  const todayISO = () => new Date().toISOString().split("T")[0];
 
   // Devices list for mapping assigned device IDs to trucks
   const [devices, setDevices] = useState([]);
@@ -434,6 +436,52 @@ function SupTrucks() {
         type: "error",
       });
       return;
+    }
+    // ---------------------------------------------------------------
+    // Auto‑create a maintenance record when status changes to “Maintenance”
+    // ---------------------------------------------------------------
+    const statusJustChangedToMaintenance =
+      payload.status?.toLowerCase() === "maintenance" &&
+      (truckToEdit.status?.toLowerCase() ?? "") !== "maintenance";
+
+    if (statusJustChangedToMaintenance) {
+      // Check for existing record to avoid duplicates
+      const { data: existing, error: fetchErr } = await supabase
+        .from("maintenance_records")
+        .select("id")
+        .eq("truck_id", truckToEdit.id)
+        .eq("start_date", todayISO())
+        .eq("type", "Preventive Maintenance")
+        .maybeSingle();
+      if (fetchErr) {
+        setToast({
+          message:
+            "Failed to verify existing maintenance record: " + fetchErr.message,
+          type: "error",
+        });
+      }
+      if (!existing) {
+        const { error: maintError } = await supabase
+          .from("maintenance_records")
+          .insert({
+            truck_id: truckToEdit.id,
+            start_date: todayISO(),
+            end_date: todayISO(),
+            mileage: Number(payload.current_mileage) || 0,
+            type: "Preventive Maintenance",
+            shop: "In-House",
+            notes: "",
+            // When the start date is today, the maintenance is ongoing
+            status: "In Progress",
+          });
+        if (maintError) {
+          setToast({
+            message:
+              "Failed to create maintenance record: " + maintError.message,
+            type: "error",
+          });
+        }
+      }
     }
 
     setToast({

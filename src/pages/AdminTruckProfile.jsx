@@ -492,6 +492,12 @@ function AdminTruckProfile() {
       setLogStatus("In Progress");
     }
   }, [logDate, logEndDate]);
+  // When the “Add a Maintenance Log” modal opens, pre‑fill the shop field
+  useEffect(() => {
+    if (isLogMaintenanceModalOpen) {
+      setLogShop("In-House");
+    }
+  }, [isLogMaintenanceModalOpen]);
   // Fetch the latest truck data after an edit. Uses plate_number as identifier.
   const fetchTruck = async () => {
     if (!truck?.plate_number) return;
@@ -1433,6 +1439,7 @@ function AdminTruckProfile() {
                         <th className="px-5 py-3 font-semibold">Type</th>
                         <th className="px-5 py-3 font-semibold">Mileage</th>
                         <th className="px-5 py-3 font-semibold">Shop</th>
+                        <th className="px-5 py-3 font-semibold">Date Added</th>
                         <th className="px-5 py-3 font-semibold">Status</th>
                         <th className="px-5 py-3 font-semibold">Notes</th>
                       </tr>
@@ -1485,7 +1492,22 @@ function AdminTruckProfile() {
                             {record.mileage} km
                           </td>
                           <td className="px-5 py-4 text-slate-700">
-                            {record.shop}
+                            {record.shop === "In-house Maintenance"
+                              ? "In-House"
+                              : record.shop}
+                          </td>
+                          <td className="px-5 py-4 text-slate-700">
+                            {record.created_at
+                              ? new Date(record.created_at).toLocaleDateString(
+                                  "en-US",
+                                  {
+                                    timeZone: MANILA_TIMEZONE,
+                                    month: "short",
+                                    day: "numeric",
+                                    year: "numeric",
+                                  },
+                                )
+                              : "-"}
                           </td>
                           <td className="px-5 py-4">
                             <MaintenanceStatusBadge status={record.status} />
@@ -1511,7 +1533,7 @@ function AdminTruckProfile() {
                       {filteredMaintenance.length === 0 && (
                         <tr>
                           <td
-                            colSpan={7}
+                            colSpan={8}
                             className="px-5 py-8 text-center text-sm text-slate-500"
                           >
                             No records match this filter.

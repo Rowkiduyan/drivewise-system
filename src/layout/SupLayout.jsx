@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { NavLink } from "react-router-dom";
 import LogoutButton from "./LogoutButton.jsx";
 import { useUserProfile } from "../lib/useUserInitials.js";
@@ -140,13 +141,21 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
   const { initials: userInitials, profilePicture, role } = useUserProfile();
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
   const deactivationWarning = useDeactivationGuard();
+  const location = useLocation();
 
   useEffect(() => {
     window.localStorage.setItem(
       supervisorSidebarStorageKey,
-      String(isExpanded)
+      String(isExpanded),
     );
   }, [isExpanded]);
+
+  // Collapse sidebar when navigating to a truck profile page
+  useEffect(() => {
+    if (location.pathname.startsWith("/supervisor/trucks/profile")) {
+      setIsExpanded(false);
+    }
+  }, [location.pathname]);
 
   return (
     <main
@@ -179,9 +188,13 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
               }}
             >
               {profilePicture ? (
-                <img src={profilePicture} alt="" className="h-full w-full object-cover" />
+                <img
+                  src={profilePicture}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
               ) : (
-                userInitials || '...'
+                userInitials || "..."
               )}
             </div>
             {isExpanded && role ? (
@@ -236,8 +249,9 @@ function SupLayout({ title, background, children, bg = "bg-white" }) {
             <div className="flex-1 px-4 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8 lg:px-12 lg:py-10">
               {deactivationWarning ? (
                 <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  Your account has been deactivated. You will lose access on{' '}
-                  {formatCutoff(deactivationWarning.cutoffAt)} unless this is reversed.
+                  Your account has been deactivated. You will lose access on{" "}
+                  {formatCutoff(deactivationWarning.cutoffAt)} unless this is
+                  reversed.
                 </div>
               ) : null}
               {children}

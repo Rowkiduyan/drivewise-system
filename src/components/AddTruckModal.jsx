@@ -8,6 +8,9 @@ import {
 } from "../constants/pms.js";
 
 // Duplicate options to avoid circular imports
+// Utility: today’s date in YYYY‑MM‑DD format (no time component)
+const todayISO = () => new Date().toISOString().split("T")[0];
+
 const TRUCK_TYPES = [
   "L300",
   "AUV",
@@ -395,6 +398,56 @@ export default function AddTruckModal({
             .eq("device_id", newDeviceId);
         }
       }
+
+      // ---------------------------------------------------------------
+      // Auto‑create a maintenance record when status changes to “Maintenance”
+      // ---------------------------------------------------------------
+      const statusJustChangedToMaintenance =
+        formData.status?.toLowerCase() === "maintenance" &&
+        (initialData?.status?.toLowerCase() ?? "") !== "maintenance";
+
+      if (statusJustChangedToMaintenance) {
+        // Prevent duplicate entries: check if a record for today already exists
+        const { data: existing, error: fetchErr } = await supabase
+          .from("maintenance_records")
+          .select("id")
+          .eq("truck_id", initialData?.id)
+          .eq("start_date", todayISO())
+          .eq("type", "Preventive Maintenance")
+          .maybeSingle();
+        if (fetchErr) {
+          // Unexpected fetch error (e.g., network issue)
+          setToast({
+            message:
+              "Failed to verify existing maintenance record: " +
+              fetchErr.message,
+            type: "error",
+          });
+        }
+        if (!existing) {
+          const { error: maintError } = await supabase
+            .from("maintenance_records")
+            .insert({
+              truck_id: initialData?.id,
+              start_date: todayISO(),
+              end_date: todayISO(),
+              mileage: Number(formData.current_mileage) || 0,
+              type: "Preventive Maintenance",
+              shop: "In-House",
+              notes: "",
+              // When the start date is today, the maintenance is ongoing
+              status: "In Progress",
+            });
+          if (maintError) {
+            setToast({
+              message:
+                "Failed to create maintenance record: " + maintError.message,
+              type: "error",
+            });
+          }
+        }
+      }
+
       setShowConfirmModal(false);
       // Close modal and notify parent of successful update
       onClose();

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { ShieldCheck } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import LogoutButton from "./LogoutButton.jsx";
@@ -143,10 +144,18 @@ function AdminLayout({ title, background, children, bg = "bg-white" }) {
   const { initials: userInitials, profilePicture, role } = useUserProfile();
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
   const deactivationWarning = useDeactivationGuard();
+  const location = useLocation();
 
   useEffect(() => {
     window.localStorage.setItem(adminSidebarStorageKey, String(isExpanded));
   }, [isExpanded]);
+
+  // Collapse sidebar when navigating to a truck profile page
+  useEffect(() => {
+    if (location.pathname.startsWith("/admin/trucks/profile")) {
+      setIsExpanded(false);
+    }
+  }, [location.pathname]);
 
   return (
     <main
