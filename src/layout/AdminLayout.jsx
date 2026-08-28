@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { ShieldCheck } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import LogoutButton from "./LogoutButton.jsx";
 import { useUserProfile } from "../lib/useUserInitials.js";
@@ -12,8 +11,7 @@ import { formatCutoff } from "../lib/deactivation.js";
 // 2. Admin Analysis
 // 3. Device Management
 // 4. Trucks
-// 5. System Logs
-// 6. Profile
+// 5. Profile
 const adminModules = [
   {
     label: "User Management",
@@ -35,11 +33,6 @@ const adminModules = [
     label: "Trucks",
     path: "/admin/trucks",
     description: "Fleet availability",
-  },
-  {
-    label: "System Logs",
-    path: "/admin/system-logs",
-    description: "Audit trail of system actions",
   },
   { label: "Profile", path: "/admin/profile", description: "Admin account" },
 ];
@@ -116,9 +109,6 @@ const adminIcons = {
       <circle cx="12" cy="8" r="3.5" />
       <path d="M5 20c1.8-3 4.5-4.5 7-4.5s5.2 1.5 7 4.5" />
     </svg>
-  ),
-  "System Logs": (
-    <ShieldCheck className={adminIconClassName} aria-hidden="true" />
   ),
 };
 

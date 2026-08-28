@@ -22,10 +22,15 @@ import {
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient.js";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
+// getPmsStatus is used internally by maintenance utilities as a fallback.
+// Direct import not needed here.
 import {
-  getPmsStatus,
-  getPmsStatusDisplayLabel,
-} from "../components/trucks/utils/pms.js";
+  getMaintenanceCardStatus,
+  getMaintenanceStatusTone,
+  getLastMaintenanceDate,
+  getLatestMaintenance,
+  getPreviousMileageFromRecords,
+} from "../components/trucks/utils/maintenance.js";
 import ViewModal from "../components/ViewModal.jsx";
 
 // Utility to format a stored date string (yyyy-MM or yyyy-MM-dd) as "MM/YYYY".
@@ -244,13 +249,13 @@ function SectionCard({ title, icon: Icon, children, className = "" }) {
 function StatTile({ label, icon: Icon, tone = "slate", children }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
-      <div className="flex flex-col items-center gap-2">
+      <div className="flex flex-row items-center justify-center gap-2">
         <div
           className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${TONE_ICON_CLASSES[tone]}`}
         >
           {Icon && <Icon className="h-3.5 w-3.5 text-violet-600" />}
         </div>
-        <span className="text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-slate-500 text-center">
+        <span className="text-[0.8rem] font-semibold uppercase tracking-[0.1em] text-slate-500 text-center">
           {label}
         </span>
       </div>
@@ -682,6 +687,7 @@ function AdminTruckProfile() {
   // Maintenance records are now empty by default as we've removed the mock generator
   // and the task focuses on the 5 health cards.
   const [maintenanceRecords, setMaintenanceRecords] = useState([]);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(true);
   const loadMaintenanceRecords = async () => {
     if (!truck?.plate_number) {
       setMaintenanceRecords([]);
@@ -699,10 +705,98 @@ function AdminTruckProfile() {
     } else {
       setMaintenanceRecords(data || []);
     }
+    setMaintenanceLoading(false);
   };
   useEffect(() => {
     loadMaintenanceRecords();
   }, [truck]);
+
+  // Reset mileage to 0 after a maintenance record is marked Completed
+  useEffect(() => {
+    if (!truck) return;
+    const latest = getLatestMaintenance(maintenanceRecords);
+    if (
+      latest?.status === "Completed" &&
+      truck.current_mileage &&
+      truck.current_mileage !== 0
+    ) {
+      supabase
+        .from("trucks")
+        .update({ current_mileage: 0 })
+        .eq("id", truck.id)
+        .then(({ error }) => {
+          if (error) {
+            setToast({
+              message: "Error resetting mileage: " + error.message,
+              type: "error",
+            });
+          } else {
+            // Refresh truck data
+            supabase
+              .from("trucks")
+              .select("*")
+              .eq("id", truck.id)
+              .single()
+              .then(({ data, error: fetchError }) => {
+                if (!fetchError && data) setTruck(data);
+              });
+          }
+        });
+    }
+  }, [maintenanceRecords]);
+
+  // Auto‑complete any "In Progress" maintenance record when the truck's overall status changes
+  // from "Maintenance" to "Available". This ensures the Maintenance tab reflects a Completed status
+  // and triggers the mileage‑reset effect.
+  useEffect(() => {
+    if (!truck) return;
+    // Only act when the truck is now Available.
+    if (truck.status !== "Available") return;
+    // Find an in‑progress maintenance record, if any.
+    const inProgress = maintenanceRecords.find(
+      (r) => r.status === "In Progress",
+    );
+    if (!inProgress) return;
+    // Update the record to Completed and set the end date to today.
+    supabase
+      .from("maintenance_records")
+      .update({
+        status: "Completed",
+        end_date: new Date().toISOString().split("T")[0],
+      })
+      .eq("id", inProgress.id)
+      .then(async ({ error }) => {
+        if (error) {
+          setToast({
+            message: "Error completing maintenance: " + error.message,
+            type: "error",
+          });
+        } else {
+          // Refresh maintenance records first.
+          await loadMaintenanceRecords();
+          // Update truck's previous mileage and maintenance date based on the completed record.
+          const today = new Date().toISOString().split("T")[0];
+          supabase
+            .from("trucks")
+            .update({
+              previous_mileage: inProgress.mileage_at_service,
+              previous_maintenance_date: today,
+            })
+            .eq("id", truck.id)
+            .then(() => {
+              // Re-fetch the truck to get updated fields for PMS calculation.
+              supabase
+                .from("trucks")
+                .select("*")
+                .eq("id", truck.id)
+                .single()
+                .then(({ data, error: fetchError }) => {
+                  if (!fetchError && data) setTruck(data);
+                });
+            });
+        }
+      });
+  }, [truck?.status, maintenanceRecords]);
 
   const upcomingMaintenance = useMemo(
     () =>
@@ -787,7 +881,8 @@ function AdminTruckProfile() {
           start_date: logDate,
           // Include end_date only if provided to avoid inserting nulls
           ...(logEndDate ? { end_date: logEndDate } : {}),
-          mileage: Number(logMileage),
+          current_mileage: Number(logMileage),
+          mileage_at_service: Number(logMileage),
           type: logType,
           shop: logShop,
           notes: logNotes,
@@ -868,51 +963,34 @@ function AdminTruckProfile() {
     ).length,
   };
 
-  // PMS Health Calculations
-  const pmsStatus = truck ? getPmsStatus(truck) : "N/A";
-  const pmsStatusTone =
-    {
-      overdue: "rose",
-      scheduled: "amber",
-      completed: "emerald",
-    }[pmsStatus] || "slate";
+  // Maintenance tab status calculations (distinct from PMS)
+  const maintenanceCardStatus = maintenanceLoading
+    ? ""
+    : getMaintenanceCardStatus(truck, maintenanceRecords);
+  const pmsStatusTone = getMaintenanceStatusTone(maintenanceCardStatus);
 
-  const prevMaintDate = truck?.previous_maintenance_date
-    ? new Date(truck.previous_maintenance_date).toLocaleDateString("en-US", {
+  // Compute latest record once for reuse
+  const latestRecord = getLatestMaintenance(maintenanceRecords);
+  const lastMaintRaw = getLastMaintenanceDate(latestRecord);
+  const lastMaintDate = lastMaintRaw
+    ? new Date(lastMaintRaw).toLocaleDateString("en-US", {
         timeZone: MANILA_TIMEZONE,
         month: "short",
         day: "numeric",
         year: "numeric",
       })
-    : "Not set";
-
+    : "N/A";
+  // Use the new helper to get the most recent mileage_at_service from any record
+  const prevMileageRaw = getPreviousMileageFromRecords(maintenanceRecords);
   const prevMileage =
-    truck?.previous_mileage !== null && truck?.previous_mileage !== undefined
-      ? `${Number(truck.previous_mileage).toLocaleString()} km`
+    prevMileageRaw !== null && prevMileageRaw !== undefined
+      ? `${Number(prevMileageRaw).toLocaleString()} km`
       : "0 km";
 
   const currMileage =
     truck?.current_mileage !== null && truck?.current_mileage !== undefined
       ? `${Number(truck.current_mileage).toLocaleString()} km`
       : "0 km";
-
-  const calculateNextMaintDate = () => {
-    if (
-      !truck?.previous_maintenance_date ||
-      !truck?.maintenance_interval_months
-    )
-      return "N/A";
-    const date = new Date(truck.previous_maintenance_date);
-    date.setUTCMonth(
-      date.getUTCMonth() + Number(truck.maintenance_interval_months),
-    );
-    return date.toLocaleDateString("en-US", {
-      timeZone: MANILA_TIMEZONE,
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  };
 
   const calculateNextMaintMileage = () => {
     const prev = Number(truck?.previous_mileage || 0);
@@ -1184,9 +1262,9 @@ function AdminTruckProfile() {
 
         {/* Maintenance tab */}
         {activeTab === "maintenance" && (
-          <div className="flex flex-col gap-6">
-            {/* PMS Health Cards */}
-            <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="flex flex-col gap-4">
+            {/* Maintenance Health Cards */}
+            <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <StatTile
                 label="Maintenance Status"
                 icon={Wrench}
@@ -1196,7 +1274,7 @@ function AdminTruckProfile() {
                   <p
                     className={`text-lg font-bold leading-tight text-center ${TONE_TEXT_CLASSES[pmsStatusTone]}`}
                   >
-                    {getPmsStatusDisplayLabel(pmsStatus)}
+                    {maintenanceCardStatus}
                   </p>
                 </div>
               </StatTile>
@@ -1204,7 +1282,7 @@ function AdminTruckProfile() {
               <StatTile label="Last Maintenance" icon={Calendar}>
                 <div className="flex flex-col gap-1">
                   <p className="text-lg font-bold text-center text-slate-900">
-                    {prevMaintDate}
+                    {lastMaintDate}
                   </p>
                 </div>
               </StatTile>
@@ -1227,26 +1305,13 @@ function AdminTruckProfile() {
                   </p>
                 </div>
               </StatTile>
-
-              <StatTile label="Next Maintenance" icon={Calendar}>
-                <div className="flex flex-col gap-1">
-                  <p className="text-lg font-bold text-center text-slate-900">
-                    {calculateNextMaintDate()}
-                  </p>
-                  <p className="text-xs font-medium text-center text-violet-600">
-                    Every 6 months
-                  </p>
-                </div>
-              </StatTile>
             </section>
 
             {/* Log Maintenance Service Modal */}
             {isLogMaintenanceModalOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
                 <div className="bg-white rounded-2xl p-4 w-full max-w-sm shadow-xl">
-                  <h3 className="text-xl font-semibold mb-2">
-                    Add a Maintenance Log
-                  </h3>
+                  <h3 className="text-xl font-semibold mb-2">Add Record</h3>
                   <form
                     onSubmit={handleLogMaintenanceSubmit}
                     className="space-y-2"
@@ -1394,8 +1459,12 @@ function AdminTruckProfile() {
             )}
 
             {/* Maintenance History Table */}
-            <SectionCard title="Maintenance History" icon={Wrench}>
-              <div className="flex flex-col gap-4">
+            <SectionCard
+              title="Maintenance History"
+              icon={Wrench}
+              className="p-3"
+            >
+              <div className="flex flex-col gap-3">
                 <div className="flex flex-wrap gap-2">
                   {MAINTENANCE_STATUS_FILTERS.map((status) => (
                     <button
@@ -1426,7 +1495,7 @@ function AdminTruckProfile() {
                     className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm bg-violet-50 text-violet-700 hover:bg-violet-100 ml-auto`}
                   >
                     <Wrench className="h-3.5 w-3.5" />
-                    <span>Add a Maintenance Log</span>
+                    <span>Add Record</span>
                   </button>
                 </div>
 
@@ -1434,14 +1503,30 @@ function AdminTruckProfile() {
                   <table className="w-full min-w-[640px] text-left text-sm">
                     <thead>
                       <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                        <th className="px-5 py-3 font-semibold">Start Date</th>
-                        <th className="px-5 py-3 font-semibold">End Date</th>
-                        <th className="px-5 py-3 font-semibold">Type</th>
-                        <th className="px-5 py-3 font-semibold">Mileage</th>
-                        <th className="px-5 py-3 font-semibold">Shop</th>
-                        <th className="px-5 py-3 font-semibold">Date Added</th>
-                        <th className="px-5 py-3 font-semibold">Status</th>
-                        <th className="px-5 py-3 font-semibold">Notes</th>
+                        <th className="px-3 py-2 font-semibold text-center">
+                          Start Date
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-center">
+                          End Date
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-center">
+                          Type
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-center">
+                          Mileage
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-center">
+                          Shop
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-center">
+                          Date Added
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-center">
+                          Status
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-center">
+                          Notes
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -1450,7 +1535,7 @@ function AdminTruckProfile() {
                           key={record.id}
                           className="transition hover:bg-slate-50"
                         >
-                          <td className="px-5 py-4 text-slate-700">
+                          <td className="px-3 py-2 text-slate-700 text-center">
                             {record.start_date
                               ? new Date(record.start_date).toLocaleDateString(
                                   "en-US",
@@ -1463,7 +1548,7 @@ function AdminTruckProfile() {
                                 )
                               : "-"}
                           </td>
-                          <td className="px-5 py-4 text-slate-700">
+                          <td className="px-3 py-2 text-slate-700 text-center">
                             {record.end_date
                               ? new Date(record.end_date).toLocaleDateString(
                                   "en-US",
@@ -1476,7 +1561,7 @@ function AdminTruckProfile() {
                                 )
                               : "-"}
                           </td>
-                          <td className="px-5 py-4 text-slate-700">
+                          <td className="px-3 py-2 text-slate-700 text-center">
                             <div className="flex items-center gap-2">
                               {(() => {
                                 const Icon =
@@ -1488,15 +1573,18 @@ function AdminTruckProfile() {
                               {record.type}
                             </div>
                           </td>
-                          <td className="px-5 py-4 text-slate-700">
-                            {record.mileage} km
+                          <td className="px-3 py-2 text-slate-700 text-center">
+                            {record.mileage_at_service !== null &&
+                            record.mileage_at_service !== undefined
+                              ? `${Number(record.mileage_at_service).toLocaleString()} km`
+                              : "-"}
                           </td>
-                          <td className="px-5 py-4 text-slate-700">
+                          <td className="px-3 py-2 text-slate-700 text-center">
                             {record.shop === "In-house Maintenance"
                               ? "In-House"
                               : record.shop}
                           </td>
-                          <td className="px-5 py-4 text-slate-700">
+                          <td className="px-3 py-2 text-slate-700 text-center">
                             {record.created_at
                               ? new Date(record.created_at).toLocaleDateString(
                                   "en-US",
@@ -1509,7 +1597,7 @@ function AdminTruckProfile() {
                                 )
                               : "-"}
                           </td>
-                          <td className="px-5 py-4">
+                          <td className="px-3 py-2 text-center">
                             <MaintenanceStatusBadge status={record.status} />
                           </td>
                           <td className="px-5 py-4 text-slate-700">

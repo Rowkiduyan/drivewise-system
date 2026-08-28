@@ -4,10 +4,13 @@ import AdminLayout from "../layout/AdminLayout.jsx";
 import AddTruckModal from "../components/AddTruckModal.jsx";
 import { Search, ChevronRight, Trash2, Edit, RefreshCw } from "lucide-react";
 import MaintenanceSummaryWidget from "../components/trucks/MaintenanceSummaryWidget.jsx";
-import { getPmsStatus } from "../components/trucks/utils/pms.js";
+import {
+  addMaintenanceBaselines,
+  getPmsStatus,
+} from "../components/trucks/utils/pms.js";
 // Truck type options are defined directly here as mockTrucks.js has been removed.
 const TRUCK_TYPES = [
-  "L300",
+  "LUV",
   "AUV",
   "1T DRY",
   "2T DRY",
@@ -22,7 +25,7 @@ import useUserRole from "../hooks/useUserRole.js";
 // STATUS_BADGE_CLASSES removed as status field is no longer used.
 
 const TRUCK_TYPE_TAG_CLASSES = {
-  L300: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
+  LUV: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
   AUV: "bg-cyan-50 text-cyan-700 ring-1 ring-inset ring-cyan-200",
   "1T DRY": "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
   "2T DRY": "bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-200",
@@ -35,14 +38,16 @@ const TRUCK_TYPE_TAG_CLASSES = {
 // StatusBadge component removed as status field is no longer used.
 
 function TypeTag({ type }) {
+  // Map legacy "L300" to the new "LUV" identifier for backward compatibility.
+  const normalized = type === "L300" ? "LUV" : type;
   return (
     <span
       className={`inline-flex min-w-[78px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.01em] ${
-        TRUCK_TYPE_TAG_CLASSES[type] ||
+        TRUCK_TYPE_TAG_CLASSES[normalized] ||
         "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200"
       }`}
     >
-      {type}
+      {normalized}
     </span>
   );
 }
@@ -287,7 +292,7 @@ function AdminTrucks() {
         if (Array.isArray(parsed)) {
           // eslint-disable-next-line react-hooks/set-state-in-effect
           setTrucks(parsed);
-          // eslint-disable-next-line react-hooks/set-state-in-effect
+
           setLoading(false);
         }
       } catch (e) {
@@ -299,14 +304,25 @@ function AdminTrucks() {
   // Fetch initial truck data from Supabase
   useEffect(() => {
     async function loadTrucks() {
-      const { data, error } = await supabase.from("trucks").select("*");
+      const [
+        { data, error },
+        { data: maintenanceRecords, error: maintenanceError },
+      ] = await Promise.all([
+        supabase.from("trucks").select("*"),
+        supabase
+          .from("maintenance_records")
+          .select("truck_id, status, mileage_at_service, start_date, end_date"),
+      ]);
       if (error) {
         console.error("Failed to fetch trucks from Supabase:", error);
         // No fallback – keep current state (empty) if fetch fails.
         setLoading(false);
         return;
       }
-      setTrucks(data);
+      if (maintenanceError) {
+        console.error("Failed to fetch maintenance records:", maintenanceError);
+      }
+      setTrucks(addMaintenanceBaselines(data || [], maintenanceRecords || []));
       setLoading(false);
     }
     loadTrucks();
@@ -326,6 +342,44 @@ function AdminTrucks() {
       setDevices(data || []);
     }
     loadDevices();
+  }, []);
+
+  // Subscribe to real‑time updates on the trucks table so PMS status stays current
+  useEffect(() => {
+    const refreshPmsData = () => {
+      Promise.all([
+        supabase.from("trucks").select("*"),
+        supabase
+          .from("maintenance_records")
+          .select("truck_id, status, mileage_at_service, start_date, end_date"),
+      ]).then(([truckResult, maintenanceResult]) => {
+        if (!truckResult.error && truckResult.data) {
+          setTrucks(
+            addMaintenanceBaselines(
+              truckResult.data,
+              maintenanceResult.data || [],
+            ),
+          );
+        }
+      });
+    };
+
+    const channel = supabase
+      .channel("public:admin-pms")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "trucks" },
+        refreshPmsData,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "maintenance_records" },
+        refreshPmsData,
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const typeCounts = useMemo(() => {
@@ -657,29 +711,29 @@ function AdminTrucks() {
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 text-center font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Truck
                       </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 text-center font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Brand
                       </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 text-center font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Model
                       </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 text-center font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Truck Type
                       </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 text-center font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Commodity Type
                       </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 text-center font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Status
                       </th>
-                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 text-center font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Assigned Device
                       </th>
                       {userRole !== "supervisor" && (
-                        <th className="sticky top-0 z-10 bg-slate-50 py-3 pl-2 pr-5 font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        <th className="sticky top-0 z-10 bg-slate-50 py-3 pl-2 pr-5 text-center font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                           ACTIONS
                         </th>
                       )}
@@ -692,7 +746,7 @@ function AdminTrucks() {
                         onClick={() => openProfile(truck)}
                         className="cursor-pointer transition hover:bg-slate-50"
                       >
-                        <td className="px-5 py-2.5">
+                        <td className="px-5 py-2.5 text-center">
                           <div className="min-w-0">
                             <p className="truncate text-sm font-semibold text-slate-900">
                               {truck.plate_number}
@@ -702,13 +756,13 @@ function AdminTrucks() {
                             </p>
                           </div>
                         </td>
-                        <td className="px-5 py-2.5">
+                        <td className="px-5 py-2.5 text-center">
                           <span className="text-slate-700">{truck.brand}</span>
                         </td>
-                        <td className="px-5 py-2.5 text-slate-700">
+                        <td className="px-5 py-2.5 text-center text-slate-700">
                           {truck.model}
                         </td>
-                        <td className="px-5 py-2.5">
+                        <td className="px-5 py-2.5 text-center">
                           <TypeTag type={truck.truck_type} />
                         </td>
                         {/* Commodity Type column */}
@@ -717,7 +771,7 @@ function AdminTrucks() {
                         </td>
                         {/* Device Status column removed */}
                         {/* Status column */}
-                        <td className="px-5 py-2.5">
+                        <td className="px-5 py-2.5 text-center">
                           <StatusText status={truck.status} />
                         </td>
                         <td className="px-5 py-2.5 text-center text-slate-700">

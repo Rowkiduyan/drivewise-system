@@ -10,11 +10,16 @@ import {
  * Returns one of "overdue", "scheduled", or "completed".
  */
 export function getPmsStatus(truck) {
+  const previousMaintenanceDate = truck.previous_maintenance_date;
+  if (!previousMaintenanceDate) return "completed";
+
   const now = new Date();
   const mileageDiff =
     (truck.current_mileage ?? 0) - (truck.previous_mileage ?? 0);
   const daysDiff =
-    (now - new Date(truck.previous_maintenance_date)) / (1000 * 60 * 60 * 24);
+    (now - new Date(previousMaintenanceDate)) / (1000 * 60 * 60 * 24);
+
+  if (!Number.isFinite(daysDiff)) return "completed";
 
   const targetKm =
     truck.maintenance_interval_km ?? DEFAULT_MAINTENANCE_INTERVAL_KM;
@@ -35,6 +40,42 @@ export function getPmsStatus(truck) {
   }
 
   return "completed";
+}
+
+/**
+ * Use the newest completed maintenance record as the PMS baseline.
+ * This keeps list views correct when older truck baseline fields are stale.
+ */
+export function addMaintenanceBaselines(trucks, maintenanceRecords) {
+  const latestByTruck = new Map();
+
+  for (const record of maintenanceRecords || []) {
+    if (record.status !== "Completed" || !record.truck_id) continue;
+
+    const recordDate = record.end_date || record.start_date;
+    if (!recordDate) continue;
+
+    const current = latestByTruck.get(record.truck_id);
+    if (
+      !current ||
+      new Date(recordDate) > new Date(current.end_date || current.start_date)
+    ) {
+      latestByTruck.set(record.truck_id, record);
+    }
+  }
+
+  return trucks.map((truck) => {
+    const latest = latestByTruck.get(truck.id);
+    if (!latest) return truck;
+
+    return {
+      ...truck,
+      previous_mileage:
+        latest.mileage_at_service ?? truck.previous_mileage ?? 0,
+      previous_maintenance_date:
+        latest.end_date || latest.start_date || truck.previous_maintenance_date,
+    };
+  });
 }
 
 /**

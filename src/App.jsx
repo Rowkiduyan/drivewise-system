@@ -24,7 +24,6 @@ import SupAnalysisIndiv from "./pages/SupAnalysisIndiv.jsx";
 import SupProfile from "./pages/SupProfile.jsx";
 import SupTrucks from "./pages/SupTrucks.jsx";
 import SupTruckProfile from "./pages/SupTruckProfile.jsx";
-import SystemLogs from "./pages/SystemLogs.jsx";
 
 function App() {
   return (
@@ -49,10 +48,7 @@ function App() {
       <Route path="/driver/performance" element={<DriverPerformance />} />
       <Route path="/driver/trips" element={<DriverDeliveries />} />
       <Route path="/driver/profile" element={<DriverProfile />} />
-      <Route
-        path="/helper"
-        element={<Navigate to="/helper/trips" replace />}
-      />
+      <Route path="/helper" element={<Navigate to="/helper/trips" replace />} />
       <Route path="/helper/trips" element={<HelperDeliveries />} />
       <Route path="/helper/profile" element={<HelperProfile />} />
       <Route
@@ -79,13 +75,9 @@ function App() {
         element={<Navigate to="/admin/user-management" replace />}
       />
       <Route path="/admin/user-management" element={<AdminHome />} />
-      <Route
-        path="/admin/device-management"
-        element={<AdminDevices />}
-      />
+      <Route path="/admin/device-management" element={<AdminDevices />} />
       <Route path="/admin/analysis" element={<AdminAnalysis />} />
       <Route path="/admin/profile" element={<AdminProfile />} />
-      <Route path="/admin/system-logs" element={<SystemLogs />} />
       <Route path="/admin/trucks" element={<AdminTrucks />} />
       <Route path="/admin/trucks/profile" element={<AdminTruckProfile />} />
       <Route path="*" element={<Navigate to="/" replace />} />

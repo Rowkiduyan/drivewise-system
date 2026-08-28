@@ -1485,7 +1485,7 @@ function HelperDeliveries() {
   useEffect(() => {
     // Initial fetch on mount, same shape as every other data-load effect in
     // this file (see loadOwnProfile above) -- not a derived-state anti-pattern.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+     
     loadDeliveries();
   }, [loadDeliveries]);
 

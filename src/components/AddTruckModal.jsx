@@ -12,7 +12,7 @@ import {
 const todayISO = () => new Date().toISOString().split("T")[0];
 
 const TRUCK_TYPES = [
-  "L300",
+  "LUV",
   "AUV",
   "1T DRY",
   "2T DRY",
@@ -70,9 +70,9 @@ export default function AddTruckModal({
     max_capacity: "",
     // max_capacity remains (kg)
     current_mileage: "",
-    // New PMS baseline fields
-    previous_maintenance_date: "",
-    previous_mileage: "",
+    // New PMS baseline fields (previous maintenance fields hidden for now)
+    /*previous_maintenance_date: "",
+    previous_mileage: "",*/
     maintenance_interval_km: DEFAULT_MAINTENANCE_INTERVAL_KM,
     maintenance_interval_months: DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
     // New status field for edit mode – safely handle null initialData
@@ -133,8 +133,8 @@ export default function AddTruckModal({
         max_capacity: initialData.max_capacity || "",
         // container dimensions removed (no longer in DB schema)
         current_mileage: initialData.current_mileage || "",
-        previous_maintenance_date: initialData.previous_maintenance_date || "",
-        previous_mileage: initialData.previous_mileage || "",
+        /*previous_maintenance_date: initialData.previous_maintenance_date || "",
+        previous_mileage: initialData.previous_mileage || "",*/
         maintenance_interval_km:
           initialData.maintenance_interval_km ||
           DEFAULT_MAINTENANCE_INTERVAL_KM,
@@ -177,8 +177,8 @@ export default function AddTruckModal({
         // container dimensions removed (no longer in DB schema)
         current_mileage: "",
         // New PMS baseline fields
-        previous_maintenance_date: "",
-        previous_mileage: "",
+        /*previous_maintenance_date: "",
+        previous_mileage: "",*/
         maintenance_interval_km: DEFAULT_MAINTENANCE_INTERVAL_KM,
         maintenance_interval_months: DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
         // Default status to avoid null values
@@ -432,6 +432,8 @@ export default function AddTruckModal({
               start_date: todayISO(),
               end_date: todayISO(),
               mileage: Number(formData.current_mileage) || 0,
+              // Store the mileage at the time of service for later calculations
+              mileage_at_service: Number(formData.current_mileage) || 0,
               type: "Preventive Maintenance",
               shop: "In-House",
               notes: "",
@@ -781,7 +783,8 @@ export default function AddTruckModal({
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
             />
           </div>
-          {/* Previous Maintenance Date */}
+          {/* Previous Maintenance Date (hidden) */
+          /*
           <div>
             <label className="block text-sm font-medium text-slate-700">
               Previous Maintenance Date
@@ -794,7 +797,9 @@ export default function AddTruckModal({
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm bg-white`}
             />
           </div>
-          {/* Previous Mileage */}
+          */}
+          {/* Previous Mileage (hidden) */
+          /*
           <div>
             <label className="block text-sm font-medium text-slate-700">
               Previous Mileage (km)
@@ -810,6 +815,7 @@ export default function AddTruckModal({
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm bg-white`}
             />
           </div>
+          */}
           {/* Maintenance Mileage Interval */}
           <div>
             <label className="block text-sm font-medium text-slate-700">

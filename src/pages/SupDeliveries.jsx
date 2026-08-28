@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Check,
@@ -36,114 +36,163 @@ import {
   AlertCircle,
   Lock,
   CameraOff,
-} from 'lucide-react'
-import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
-import QuotationSettingsModal from '../components/QuotationSettingsModal.jsx'
-import { CREW_ACTIVE_STATUSES, getCrewAvailability, todayDateKey } from '../lib/crewStatus.js'
-import 'leaflet/dist/leaflet.css'
-import L from 'leaflet'
-import { useSearchParams } from 'react-router-dom'
-import SupLayout from '../layout/SupLayout.jsx'
-import { supabase } from '../lib/supabaseClient.js'
-import { useResolvedAddress } from '../lib/reverseGeocode.js'
-import { formatManilaTimestamp, formatManilaDateTime, MANILA_TIMEZONE } from '../lib/manilaTime.js'
-import { customer_deliveries, delivery_drivers, delivery_helpers, delivery_trucks, delivery_quotations, delivery_cancellations, delivery_monitoring, delivery_alert_monitoring, delivery_supervisor_data, completed_delivery_reports } from '../lib/mockDeliveriesData.js'
+} from "lucide-react";
+import {
+  MapContainer,
+  TileLayer,
+  Polyline,
+  Marker,
+  Popup,
+} from "react-leaflet";
+import QuotationSettingsModal from "../components/QuotationSettingsModal.jsx";
+import {
+  CREW_ACTIVE_STATUSES,
+  getCrewAvailability,
+  todayDateKey,
+} from "../lib/crewStatus.js";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
+import { useSearchParams } from "react-router-dom";
+import SupLayout from "../layout/SupLayout.jsx";
+import { supabase } from "../lib/supabaseClient.js";
+import { useResolvedAddress } from "../lib/reverseGeocode.js";
+import {
+  formatManilaTimestamp,
+  formatManilaDateTime,
+  MANILA_TIMEZONE,
+} from "../lib/manilaTime.js";
+import {
+  customer_deliveries,
+  delivery_drivers,
+  delivery_helpers,
+  delivery_trucks,
+  delivery_quotations,
+  delivery_cancellations,
+  delivery_monitoring,
+  delivery_alert_monitoring,
+  delivery_supervisor_data,
+  completed_delivery_reports,
+} from "../lib/mockDeliveriesData.js";
 
-delete L.Icon.Default.prototype._getIconUrl
+delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-})
+  iconRetinaUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
+  iconUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
+  shadowUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
+});
 
 // Explicit Inter typeface for this page's content, matching SupLayout's
 // own font stack instead of relying solely on inherited font-family.
-const interFontStyle = { fontFamily: 'Inter, system-ui, sans-serif' }
+const interFontStyle = { fontFamily: "Inter, system-ui, sans-serif" };
 
 const startIcon = L.divIcon({
-  className: '',
+  className: "",
   html: '<div style="background:#2563eb;color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.3)">S</div>',
   iconSize: [24, 24],
   iconAnchor: [12, 12],
-})
+});
 
 const endIcon = L.divIcon({
-  className: '',
+  className: "",
   html: '<div style="background:#059669;color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.3)">E</div>',
   iconSize: [24, 24],
   iconAnchor: [12, 12],
-})
+});
 
 // Column/badge labels show only the numbered statuses. The a/b/c sub-statuses
 // (e.g. QUOTATION_SUBMITTED, OUT_FOR_PICKUP) are stored on the request and only
 // reflected on the progress timeline via `buildProgressData`.
 const statusLabel = {
-  PENDING_REQUEST: 'Pending Request',
-  QUOTATION_SUBMITTED: 'Processing',
-  COUNTER_OFFER_SUBMITTED: 'Processing',
-  FINAL_QUOTATION_SUBMITTED: 'Processing',
-  APPROVED: 'Approved',
-  ASSIGNED: 'Assigned',
-  OUT_FOR_PICKUP: 'Pickup',
-  ARRIVED_PICKUP: 'Pickup',
-  OUT_FOR_DROPOFF: 'Dropoff',
-  ARRIVED_DROPOFF: 'Dropoff',
-  DELIVERED: 'Delivered',
-  COMPLETED: 'Completed',
-  CANCELLED: 'Cancelled',
-}
+  PENDING_REQUEST: "Pending Request",
+  QUOTATION_SUBMITTED: "Processing",
+  COUNTER_OFFER_SUBMITTED: "Processing",
+  FINAL_QUOTATION_SUBMITTED: "Processing",
+  APPROVED: "Approved",
+  ASSIGNED: "Assigned",
+  OUT_FOR_PICKUP: "Pickup",
+  ARRIVED_PICKUP: "Pickup",
+  OUT_FOR_DROPOFF: "Dropoff",
+  ARRIVED_DROPOFF: "Dropoff",
+  DELIVERED: "Delivered",
+  COMPLETED: "Completed",
+  CANCELLED: "Cancelled",
+};
 
 // Numbered status → the sub-statuses that fall under it (used by the
 // toolbar status filter so "Processing" matches all quotation rounds, etc.).
 const statusFilterGroups = {
-  PROCESSING: ['QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED'],
-  PICKUP: ['OUT_FOR_PICKUP', 'ARRIVED_PICKUP'],
-  DROPOFF: ['OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF'],
-}
+  PROCESSING: [
+    "QUOTATION_SUBMITTED",
+    "COUNTER_OFFER_SUBMITTED",
+    "FINAL_QUOTATION_SUBMITTED",
+  ],
+  PICKUP: ["OUT_FOR_PICKUP", "ARRIVED_PICKUP"],
+  DROPOFF: ["OUT_FOR_DROPOFF", "ARRIVED_DROPOFF"],
+};
 
 function matchesStatusFilter(status, filter) {
-  const group = statusFilterGroups[filter]
-  return group ? group.includes(status) : status === filter
+  const group = statusFilterGroups[filter];
+  return group ? group.includes(status) : status === filter;
 }
 
 const statusBadge = {
-  PENDING_REQUEST: 'bg-amber-100 text-amber-700',
-  QUOTATION_SUBMITTED: 'bg-sky-100 text-sky-700',
-  COUNTER_OFFER_SUBMITTED: 'bg-sky-100 text-sky-700',
-  FINAL_QUOTATION_SUBMITTED: 'bg-sky-100 text-sky-700',
-  APPROVED: 'bg-teal-100 text-teal-700',
-  ASSIGNED: 'bg-indigo-100 text-indigo-700',
-  OUT_FOR_PICKUP: 'bg-cyan-100 text-cyan-700',
-  ARRIVED_PICKUP: 'bg-cyan-100 text-cyan-700',
-  OUT_FOR_DROPOFF: 'bg-blue-100 text-blue-700',
-  ARRIVED_DROPOFF: 'bg-blue-100 text-blue-700',
-  DELIVERED: 'bg-emerald-100 text-emerald-700',
-  COMPLETED: 'bg-green-100 text-green-700',
-  CANCELLED: 'bg-rose-100 text-rose-700',
-}
+  PENDING_REQUEST: "bg-amber-100 text-amber-700",
+  QUOTATION_SUBMITTED: "bg-sky-100 text-sky-700",
+  COUNTER_OFFER_SUBMITTED: "bg-sky-100 text-sky-700",
+  FINAL_QUOTATION_SUBMITTED: "bg-sky-100 text-sky-700",
+  APPROVED: "bg-teal-100 text-teal-700",
+  ASSIGNED: "bg-indigo-100 text-indigo-700",
+  OUT_FOR_PICKUP: "bg-cyan-100 text-cyan-700",
+  ARRIVED_PICKUP: "bg-cyan-100 text-cyan-700",
+  OUT_FOR_DROPOFF: "bg-blue-100 text-blue-700",
+  ARRIVED_DROPOFF: "bg-blue-100 text-blue-700",
+  DELIVERED: "bg-emerald-100 text-emerald-700",
+  COMPLETED: "bg-green-100 text-green-700",
+  CANCELLED: "bg-rose-100 text-rose-700",
+};
 
 function format12Hour(timeStr) {
-  const [h, min] = timeStr.split(':').map(Number)
-  const suffix = h >= 12 ? 'PM' : 'AM'
-  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
-  return `${hour12}:${String(min).padStart(2, '0')} ${suffix}`
+  const [h, min] = timeStr.split(":").map(Number);
+  const suffix = h >= 12 ? "PM" : "AM";
+  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${hour12}:${String(min).padStart(2, "0")} ${suffix}`;
 }
 
 // timeEndStr, when given, renders a Pickup window ("7:00 AM - 7:15 AM")
 // instead of a single instant -- Drop Off (and legacy rows with no window
 // end) still pass only timeStr and get the old single-time format.
 function formatDateTime(dateStr, timeStr, timeEndStr) {
-  if (!dateStr) return 'TBD'
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  const parts = dateStr.split('-')
-  if (parts.length !== 3) return dateStr
-  const [y, m, d] = parts.map(Number)
-  const monthLabel = months[m - 1] || ''
-  let formattedTime = timeStr || ''
+  if (!dateStr) return "TBD";
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return dateStr;
+  const [y, m, d] = parts.map(Number);
+  const monthLabel = months[m - 1] || "";
+  let formattedTime = timeStr || "";
   if (timeStr) {
-    formattedTime = timeEndStr ? `${format12Hour(timeStr)} - ${format12Hour(timeEndStr)}` : format12Hour(timeStr)
+    formattedTime = timeEndStr
+      ? `${format12Hour(timeStr)} - ${format12Hour(timeEndStr)}`
+      : format12Hour(timeStr);
   }
-  return formattedTime ? `${monthLabel} ${d}, ${y}, ${formattedTime}` : `${monthLabel} ${d}, ${y}`
+  return formattedTime
+    ? `${monthLabel} ${d}, ${y}, ${formattedTime}`
+    : `${monthLabel} ${d}, ${y}`;
 }
 
 // Formats a full ISO timestamp (delivery_requests.created_at) into the same
@@ -152,7 +201,7 @@ function formatDateTime(dateStr, timeStr, timeEndStr) {
 // local timezone via Date's local getters, correct only by coincidence on
 // dev machines already set to Manila time.
 function formatIsoDateTime(iso) {
-  return formatManilaDateTime(iso, { includeYear: true })
+  return formatManilaDateTime(iso, { includeYear: true });
 }
 
 // What the customer actually asked for -- unlike getTruckType below, this
@@ -160,7 +209,7 @@ function formatIsoDateTime(iso) {
 // assignment (e.g. requested L300, assigned a 1T Dry Van truck) stays
 // visible instead of being silently overwritten by whatever got assigned.
 function getRequestedTruckType(r) {
-  return r.truckType || 'AUV'
+  return r.truckType || "AUV";
 }
 // Fleet trucks (AddTruckModal/trucks.truck_type) and customer requests
 // (CustomerRequestDelivery/delivery_requests.truck_type) use two different
@@ -168,7 +217,9 @@ function getRequestedTruckType(r) {
 // (underscore) -- so a direct string match against the requested type would
 // never hit. Strip spaces/underscores and case before comparing.
 function normalizeTruckType(value) {
-  return String(value || '').replace(/[\s_]+/g, '').toUpperCase()
+  return String(value || "")
+    .replace(/[\s_]+/g, "")
+    .toUpperCase();
 }
 // Trucks are filtered to the request's truck type in the assignment picker
 // (see matchingTrucks in the SupDeliveries component) — only exact-type
@@ -178,13 +229,14 @@ function normalizeTruckType(value) {
 // stored/displayed as client names (customer_records.client_name), and the
 // request's customerName IS that client name — compare case/whitespace-safe.
 function isSpecializedForClient(crewMember, clientName) {
-  if (!crewMember || !clientName) return false
-  const wanted = String(clientName).trim().toLowerCase()
-  return (crewMember.clientSpecialties || [])
-    .some((s) => String(s).trim().toLowerCase() === wanted)
+  if (!crewMember || !clientName) return false;
+  const wanted = String(clientName).trim().toLowerCase();
+  return (crewMember.clientSpecialties || []).some(
+    (s) => String(s).trim().toLowerCase() === wanted,
+  );
 }
 function getTruckCapacity(r) {
-  return r.crew?.truck?.capacity || '1.2 tons'
+  return r.crew?.truck?.capacity || "1.2 tons";
 }
 // Commodity classification for a delivery, derived from its item type.
 // Real items are stored as deliveryOptions.js itemTypes codes — fresh_produce,
@@ -194,45 +246,69 @@ function getTruckCapacity(r) {
 // mapDbRequest capitalizes the code. Human-readable mock labels (e.g.
 // "Frozen Goods") are also accepted. Anything else is Ordinary.
 function getCommodityType(itemType) {
-  const t = String(itemType || '').replace(/[\s_]+/g, '').toLowerCase()
-  return ['freshfood', 'freshproduce', 'meat', 'seafood', 'frozen', 'dairy', 'pharmaceuticals'].some((key) => t.includes(key))
-    ? 'Chilled'
-    : 'Ordinary'
+  const t = String(itemType || "")
+    .replace(/[\s_]+/g, "")
+    .toLowerCase();
+  return [
+    "freshfood",
+    "freshproduce",
+    "meat",
+    "seafood",
+    "frozen",
+    "dairy",
+    "pharmaceuticals",
+  ].some((key) => t.includes(key))
+    ? "Chilled"
+    : "Ordinary";
 }
 function isLargeTruck(r) {
-  const cap = parseFloat(getTruckCapacity(r))
-  return cap >= 4
+  const cap = parseFloat(getTruckCapacity(r));
+  return cap >= 4;
 }
 function getEstimatedWeight(itemType) {
-  const w = { 'Dry Food': '850 kg', 'Frozen Goods': '1.2 tons', 'Fast Food': '450 kg', 'Beverages': '1.5 tons', 'Pharmaceuticals': '300 kg' }
-  return w[itemType] || '500 kg'
+  const w = {
+    "Dry Food": "850 kg",
+    "Frozen Goods": "1.2 tons",
+    "Fast Food": "450 kg",
+    Beverages: "1.5 tons",
+    Pharmaceuticals: "300 kg",
+  };
+  return w[itemType] || "500 kg";
 }
 // Real cargo weight lives on the request (delivery_requests.cargo_weight);
 // only fall back to the type-based estimate when it isn't set.
 function getTotalWeight(r) {
-  if (r.cargoWeight != null && r.cargoWeight !== '') return `${r.cargoWeight} kg`
-  return getEstimatedWeight(r.itemType)
+  if (r.cargoWeight != null && r.cargoWeight !== "")
+    return `${r.cargoWeight} kg`;
+  return getEstimatedWeight(r.itemType);
 }
 function getPriceRangeBid(r) {
   if (r.budgetMin != null && r.budgetMax != null) {
-    return `₱${Number(r.budgetMin).toLocaleString()} – ₱${Number(r.budgetMax).toLocaleString()}`
+    return `₱${Number(r.budgetMin).toLocaleString()} – ₱${Number(r.budgetMax).toLocaleString()}`;
   }
-  return 'less than PHP 10,000.00'
+  return "less than PHP 10,000.00";
 }
 function getTotalDistance(r) {
-  if (!r.currentLocation || !r.destinationCoords) return '24.5 km'
-  const R = 6371
-  const dLat = (r.destinationCoords.lat - r.currentLocation.lat) * Math.PI / 180
-  const dLng = (r.destinationCoords.lng - r.currentLocation.lng) * Math.PI / 180
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(r.currentLocation.lat * Math.PI / 180) * Math.cos(r.destinationCoords.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2
-  const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-  return `${(dist * 2).toFixed(1)} km`
+  if (!r.currentLocation || !r.destinationCoords) return "24.5 km";
+  const R = 6371;
+  const dLat =
+    ((r.destinationCoords.lat - r.currentLocation.lat) * Math.PI) / 180;
+  const dLng =
+    ((r.destinationCoords.lng - r.currentLocation.lng) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((r.currentLocation.lat * Math.PI) / 180) *
+      Math.cos((r.destinationCoords.lat * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return `${(dist * 2).toFixed(1)} km`;
 }
 function getTotalDays(r) {
-  if (!r.pickupDate || !r.dropoffDate) return 1
-  const d1 = new Date(r.pickupDate), d2 = new Date(r.dropoffDate)
-  const diff = Math.ceil((d2 - d1) / (1000 * 60 * 60 * 24))
-  return Math.max(1, diff)
+  if (!r.pickupDate || !r.dropoffDate) return 1;
+  const d1 = new Date(r.pickupDate),
+    d2 = new Date(r.dropoffDate);
+  const diff = Math.ceil((d2 - d1) / (1000 * 60 * 60 * 24));
+  return Math.max(1, diff);
 }
 
 // ---------------------------------------------------------------------------
@@ -269,86 +345,119 @@ const DEFAULT_QUOTATION_RULES = {
   secondHelperMinWeightKg: 2000,
   secondHelperMinStops: 2,
   truckProfiles: {
-    auv: { label: 'AUV', sizeFactor: 0.6, kmPerLiter: 8.5 },
-    l300: { label: 'L300', sizeFactor: 0.8, kmPerLiter: 6.5 },
-    '1t': { label: '1T Van', sizeFactor: 1, kmPerLiter: 4.5 },
-    '2t': { label: '2T Van', sizeFactor: 1.4, kmPerLiter: 3.5 },
-    '4t': { label: '4T Van', sizeFactor: 1.8, kmPerLiter: 2.5 },
+    auv: { label: "AUV", sizeFactor: 0.6, kmPerLiter: 8.5 },
+    luv: { label: "LUV", sizeFactor: 0.8, kmPerLiter: 6.5 },
+    "1t": { label: "1T Van", sizeFactor: 1, kmPerLiter: 4.5 },
+    "2t": { label: "2T Van", sizeFactor: 1.4, kmPerLiter: 3.5 },
+    "4t": { label: "4T Van", sizeFactor: 1.8, kmPerLiter: 2.5 },
   },
-}
+};
 
 // Match a requested truck type ("1T_DRY", "1T REF", "L300"…) to its profile
 // by normalized prefix — dry/reefer variants share one fuel/size profile.
 function lookupTruckProfile(truckType, rules) {
-  const t = normalizeTruckType(truckType)
-  const profiles = rules.truckProfiles || DEFAULT_QUOTATION_RULES.truckProfiles
-  const entry = Object.entries(profiles).find(([key]) => t.startsWith(normalizeTruckType(key)))
-  if (!entry) return Object.values(profiles)[0] || DEFAULT_QUOTATION_RULES.truckProfiles['1t']
-  return entry[1]
+  const t = normalizeTruckType(truckType);
+  const profiles = rules.truckProfiles || DEFAULT_QUOTATION_RULES.truckProfiles;
+  const entry = Object.entries(profiles).find(([key]) =>
+    t.startsWith(normalizeTruckType(key)),
+  );
+  if (!entry)
+    return (
+      Object.values(profiles)[0] || DEFAULT_QUOTATION_RULES.truckProfiles["1t"]
+    );
+  return entry[1];
 }
 
 // Haversine pickup↔dropoff distance (×2 for the round trip), falling back to
 // getTotalDistance's placeholder when coordinates aren't parseable. Uses the
 // request's own captured lat/lng columns first.
 function estimateRequestDistanceKm(r) {
-  if (r?.pickupLat != null && r?.pickupLng != null && r?.dropoffLat != null && r?.dropoffLng != null) {
-    const R = 6371
-    const dLat = (r.dropoffLat - r.pickupLat) * Math.PI / 180
-    const dLng = (r.dropoffLng - r.pickupLng) * Math.PI / 180
-    const a = Math.sin(dLat / 2) ** 2 +
-      Math.cos(r.pickupLat * Math.PI / 180) * Math.cos(r.dropoffLat * Math.PI / 180) *
-      Math.sin(dLng / 2) ** 2
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 2
+  if (
+    r?.pickupLat != null &&
+    r?.pickupLng != null &&
+    r?.dropoffLat != null &&
+    r?.dropoffLng != null
+  ) {
+    const R = 6371;
+    const dLat = ((r.dropoffLat - r.pickupLat) * Math.PI) / 180;
+    const dLng = ((r.dropoffLng - r.pickupLng) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos((r.pickupLat * Math.PI) / 180) *
+        Math.cos((r.dropoffLat * Math.PI) / 180) *
+        Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 2;
   }
-  return parseFloat(getTotalDistance(r)) || 0
+  return parseFloat(getTotalDistance(r)) || 0;
 }
 
 function buildQuotationDefaults(request, rules = DEFAULT_QUOTATION_RULES) {
   // Merge so a partially-saved rule set never yields undefined math inputs.
-  const r = { ...DEFAULT_QUOTATION_RULES, ...rules }
-  const fmt = (v) => Number(v).toLocaleString('en-US', { minimumFractionDigits: 2 })
+  const r = { ...DEFAULT_QUOTATION_RULES, ...rules };
+  const fmt = (v) =>
+    Number(v).toLocaleString("en-US", { minimumFractionDigits: 2 });
   // Round money up to tidy steps so defaults look hand-entered, not computed.
-  const round = (v, step = 50) => Math.max(step, Math.round(v / step) * step)
+  const round = (v, step = 50) => Math.max(step, Math.round(v / step) * step);
 
-  const distKm = estimateRequestDistanceKm(request)
-  const days = Math.min(14, Math.max(1, parseInt(getTotalDays(request)) || 1))
-  const profile = lookupTruckProfile(request.truckType, r)
-  const size = Number(profile.sizeFactor) || 1
-  const weight = Number(request.cargoWeight) || 0
-  const stopCount = Array.isArray(request.stops) ? request.stops.length : 0
+  const distKm = estimateRequestDistanceKm(request);
+  const days = Math.min(14, Math.max(1, parseInt(getTotalDays(request)) || 1));
+  const profile = lookupTruckProfile(request.truckType, r);
+  const size = Number(profile.sizeFactor) || 1;
+  const weight = Number(request.cargoWeight) || 0;
+  const stopCount = Array.isArray(request.stops) ? request.stops.length : 0;
   // Heavy loads or multi-stop trips get a second helper by default.
   const needsSecondHelper =
     weight > Number(r.secondHelperMinWeightKg) ||
-    stopCount >= Number(r.secondHelperMinStops)
-  const helperCount = needsSecondHelper ? 2 : 1
+    stopCount >= Number(r.secondHelperMinStops);
+  const helperCount = needsSecondHelper ? 2 : 1;
   // Diesel ₱/km straight from the Supervisor's current pump price ÷ that
   // truck's fuel efficiency — updating the liter price updates every quote.
-  const dieselPerKm = Number(r.dieselPesoPerLiter) / Math.max(0.5, Number(profile.kmPerLiter))
+  const dieselPerKm =
+    Number(r.dieselPesoPerLiter) / Math.max(0.5, Number(profile.kmPerLiter));
 
-  const depreciation = round(Number(r.depreciationPerDay) * days * size)
-  const batteries = round(Number(r.batteriesPerDay) * days * size)
-  const tires = round((distKm / 10) * Number(r.tiresPer10KmPeso) * size)
+  const depreciation = round(Number(r.depreciationPerDay) * days * size);
+  const batteries = round(Number(r.batteriesPerDay) * days * size);
+  const tires = round((distKm / 10) * Number(r.tiresPer10KmPeso) * size);
   // Larger trucks pay their driver a bit more per day.
   const driverWage =
-    Number(r.driverWagePerDay) * days + (size >= 1.4 ? Number(r.driverLargeTruckPremium) : 0)
-  const helperWage = Number(r.helperWagePerDay) * days
-  const tripAllowance = round(Number(r.tripAllowancePerHeadPerDay) * days * helperCount, 25)
+    Number(r.driverWagePerDay) * days +
+    (size >= 1.4 ? Number(r.driverLargeTruckPremium) : 0);
+  const helperWage = Number(r.helperWagePerDay) * days;
+  const tripAllowance = round(
+    Number(r.tripAllowancePerHeadPerDay) * days * helperCount,
+    25,
+  );
   // Lodging only makes sense when the job spans multiple days.
   const lodgingAllowance =
-    days > 1 ? round(Number(r.lodgingAllowancePerNightPerHead) * (days - 1) * helperCount) : 0
+    days > 1
+      ? round(
+          Number(r.lodgingAllowancePerNightPerHead) * (days - 1) * helperCount,
+        )
+      : 0;
   // Toll/parking grows with distance but is capped — long hauls hit expressway ceilings.
-  const tollParking = distKm > 0
-    ? Math.min(
-        Number(r.tollMaxPeso),
-        Math.max(Number(r.tollMinPeso), Math.round((distKm / 10) * Number(r.tollPer10KmPeso))),
-      )
-    : 0
+  const tollParking =
+    distKm > 0
+      ? Math.min(
+          Number(r.tollMaxPeso),
+          Math.max(
+            Number(r.tollMinPeso),
+            Math.round((distKm / 10) * Number(r.tollPer10KmPeso)),
+          ),
+        )
+      : 0;
 
   // Admin fees are estimated as a cut of the projected direct subtotal so
   // indirects track the direct side instead of being one flat number.
   const directEstimate =
-    depreciation + batteries + tires + driverWage + helperWage * helperCount +
-    tripAllowance + lodgingAllowance + tollParking + dieselPerKm * distKm
+    depreciation +
+    batteries +
+    tires +
+    driverWage +
+    helperWage * helperCount +
+    tripAllowance +
+    lodgingAllowance +
+    tollParking +
+    dieselPerKm * distKm;
 
   return {
     directExpenses: {
@@ -361,36 +470,44 @@ function buildQuotationDefaults(request, rules = DEFAULT_QUOTATION_RULES) {
       salariesAndWages: {
         driver: fmt(driverWage),
         helper1: fmt(helperWage),
-        helper2: needsSecondHelper ? fmt(helperWage) : '',
+        helper2: needsSecondHelper ? fmt(helperWage) : "",
       },
       tripAllowance: fmt(tripAllowance),
-      lodgingAllowance: days > 1 ? fmt(lodgingAllowance) : '',
-      tollParking: distKm > 0 ? fmt(tollParking) : '',
+      lodgingAllowance: days > 1 ? fmt(lodgingAllowance) : "",
+      tollParking: distKm > 0 ? fmt(tollParking) : "",
     },
     indirectExpenses: {
-      adminFees: fmt(round(directEstimate * (Number(r.adminFeeRatePercent) / 100))),
+      adminFees: fmt(
+        round(directEstimate * (Number(r.adminFeeRatePercent) / 100)),
+      ),
       insurance: fmt(round(Number(r.insurancePerDay) * days * size)),
       motorVehicleReg: fmt(round(Number(r.motorVehicleRegFlat), 10)),
       garageRental: fmt(round(Number(r.garageRentalPerDay) * days)),
     },
-  }
+  };
 }
 
 function getPickupCoords(r) {
-  if (r.currentLocation) return r.currentLocation
-  if (r.pickupLat != null && r.pickupLng != null) return { lat: r.pickupLat, lng: r.pickupLng }
+  if (r.currentLocation) return r.currentLocation;
+  if (r.pickupLat != null && r.pickupLng != null)
+    return { lat: r.pickupLat, lng: r.pickupLng };
   if (r.pickupAddress) {
-    const parsed = parseCoords(r.pickupAddress)
-    if (parsed) return parsed
+    const parsed = parseCoords(r.pickupAddress);
+    if (parsed) return parsed;
   }
-  if (r.destinationCoords) return { lat: r.destinationCoords.lat + 0.01, lng: r.destinationCoords.lng - 0.01 }
-  return null
+  if (r.destinationCoords)
+    return {
+      lat: r.destinationCoords.lat + 0.01,
+      lng: r.destinationCoords.lng - 0.01,
+    };
+  return null;
 }
 function getDropoffCoords(r) {
-  if (r.dropoffLat != null && r.dropoffLng != null) return { lat: r.dropoffLat, lng: r.dropoffLng }
-  if (r.destinationCoords) return r.destinationCoords
-  if (r.deliveryAddress) return parseCoords(r.deliveryAddress)
-  return null
+  if (r.dropoffLat != null && r.dropoffLng != null)
+    return { lat: r.dropoffLat, lng: r.dropoffLng };
+  if (r.destinationCoords) return r.destinationCoords;
+  if (r.deliveryAddress) return parseCoords(r.deliveryAddress);
+  return null;
 }
 // Some pickup/dropoff locations are stored as a "lat, lng" coordinate pair
 // rather than a street address (e.g. a manually created test delivery like
@@ -398,54 +515,66 @@ function getDropoffCoords(r) {
 // DriverDeliveries.jsx's identical helper (not shared, per this codebase's
 // existing per-portal convention).
 function parseCoords(value) {
-  if (!value) return null
-  const m = String(value).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/)
-  if (!m) return null
-  const lat = parseFloat(m[1])
-  const lng = parseFloat(m[2])
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
-  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null
-  return { lat, lng }
+  if (!value) return null;
+  const m = String(value)
+    .trim()
+    .match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const lat = parseFloat(m[1]);
+  const lng = parseFloat(m[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
 }
 function Row({ label, value }) {
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-sm text-slate-500 shrink-0">{label}</span>
-      <span className="text-sm font-medium text-slate-900 text-right truncate">{value}</span>
+      <span className="text-sm font-medium text-slate-900 text-right truncate">
+        {value}
+      </span>
     </div>
-  )
+  );
 }
 function parseMoney(str) {
-  if (!str) return 0
-  const num = parseFloat(String(str).replace(/[^0-9.-]/g, ''))
-  return isNaN(num) ? 0 : num
+  if (!str) return 0;
+  const num = parseFloat(String(str).replace(/[^0-9.-]/g, ""));
+  return isNaN(num) ? 0 : num;
 }
 
 function isDetailedBreakdown(quotation) {
-  return Boolean(quotation?.breakdown && !Array.isArray(quotation.breakdown) && quotation.breakdown.directExpenses)
+  return Boolean(
+    quotation?.breakdown &&
+    !Array.isArray(quotation.breakdown) &&
+    quotation.breakdown.directExpenses,
+  );
 }
 
-function MoneyInput({ value, onValueChange, accent = 'blue' }) {
+function MoneyInput({ value, onValueChange, accent = "blue" }) {
   const accentClasses = {
-    blue: 'border-blue-200 focus:border-blue-500 focus:ring-blue-300',
-    amber: 'border-amber-200 focus:border-amber-500 focus:ring-amber-300',
-  }
-  const strip = (raw) => String(raw).replace(/[^0-9.]/g, '')
+    blue: "border-blue-200 focus:border-blue-500 focus:ring-blue-300",
+    amber: "border-amber-200 focus:border-amber-500 focus:ring-amber-300",
+  };
+  const strip = (raw) => String(raw).replace(/[^0-9.]/g, "");
   return (
     <input
       type="text"
       value={value}
       onChange={(e) => onValueChange(strip(e.target.value))}
       onBlur={(e) => {
-        const clean = strip(e.target.value)
+        const clean = strip(e.target.value);
         if (clean && !isNaN(parseFloat(clean))) {
-          onValueChange(parseFloat(clean).toLocaleString('en-US', { minimumFractionDigits: 2 }))
+          onValueChange(
+            parseFloat(clean).toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+            }),
+          );
         }
       }}
       className={`w-40 rounded-lg border px-3 py-2 text-sm text-right font-mono outline-none focus:ring-1 bg-white ${accentClasses[accent]}`}
       placeholder="0.00"
     />
-  )
+  );
 }
 
 function QuotationExpenseForm({
@@ -467,31 +596,37 @@ function QuotationExpenseForm({
   onSubmit,
   submitLabel,
 }) {
-  const fm = (v) => parseMoney(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-  const directExpenses = form.directExpenses
-  const indirectExpenses = form.indirectExpenses
-  const hasCustomerBidRange = customerBidMin != null && customerBidMax != null
-  const overCustomerBid = hasCustomerBidRange && proposedRate > customerBidMax
-  const hasCustomerCounterOffer = customerCounterMin != null && customerCounterMax != null
+  const fm = (v) =>
+    parseMoney(v).toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  const directExpenses = form.directExpenses;
+  const indirectExpenses = form.indirectExpenses;
+  const hasCustomerBidRange = customerBidMin != null && customerBidMax != null;
+  const overCustomerBid = hasCustomerBidRange && proposedRate > customerBidMax;
+  const hasCustomerCounterOffer =
+    customerCounterMin != null && customerCounterMax != null;
   const setField = (fieldPath, value) => {
     onFormChange((p) => {
-      const next = { ...p }
-      const keys = fieldPath.split('.')
-      let cursor = next
+      const next = { ...p };
+      const keys = fieldPath.split(".");
+      let cursor = next;
       for (let i = 0; i < keys.length - 1; i++) {
-        cursor[keys[i]] = { ...cursor[keys[i]] }
-        cursor = cursor[keys[i]]
+        cursor[keys[i]] = { ...cursor[keys[i]] };
+        cursor = cursor[keys[i]];
       }
-      cursor[keys[keys.length - 1]] = value
-      return next
-    })
-  }
+      cursor[keys[keys.length - 1]] = value;
+      return next;
+    });
+  };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-slate-500">
-          Amounts are pre-filled from your configured pricing rules — edit any line before submitting.
+          Amounts are pre-filled from your configured pricing rules — edit any
+          line before submitting.
         </p>
         {onOpenPricingSettings && (
           <button
@@ -511,65 +646,132 @@ function QuotationExpenseForm({
         </h4>
 
         <div className="flex items-center justify-between gap-3 py-2 border-b border-blue-100">
-          <span className="text-sm font-medium text-slate-700">Depreciation Expenses</span>
-          <MoneyInput value={directExpenses.depreciation} onValueChange={(v) => setField('directExpenses.depreciation', v)} />
+          <span className="text-sm font-medium text-slate-700">
+            Depreciation Expenses
+          </span>
+          <MoneyInput
+            value={directExpenses.depreciation}
+            onValueChange={(v) => setField("directExpenses.depreciation", v)}
+          />
         </div>
 
         <div className="flex items-center justify-between gap-3 py-2 border-b border-blue-100">
-          <span className="text-sm font-medium text-slate-700">Total Diesel Expenses</span>
+          <span className="text-sm font-medium text-slate-700">
+            Total Diesel Expenses
+          </span>
           <input
             type="text"
             readOnly
-            value={`₱${(parseMoney(directExpenses.dieselRate) * distanceKm).toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+            value={`₱${(parseMoney(directExpenses.dieselRate) * distanceKm).toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
             className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono text-slate-900 bg-white"
           />
         </div>
         <p className="text-sm text-blue-700 ml-1 mt-1 mb-2">
-          a. Diesel Rate ({directExpenses.dieselRate || '0'} × {distanceLabel})
+          a. Diesel Rate ({directExpenses.dieselRate || "0"} × {distanceLabel})
         </p>
 
-        <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">Repairs and Maintenance</p>
+        <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">
+          Repairs and Maintenance
+        </p>
         <div className="flex items-center justify-between gap-3 py-1.5">
-          <span className="text-sm font-medium text-slate-700 pl-4">a. Batteries</span>
-          <MoneyInput value={directExpenses.repairsAndMaintenance.batteries} onValueChange={(v) => setField('directExpenses.repairsAndMaintenance.batteries', v)} />
+          <span className="text-sm font-medium text-slate-700 pl-4">
+            a. Batteries
+          </span>
+          <MoneyInput
+            value={directExpenses.repairsAndMaintenance.batteries}
+            onValueChange={(v) =>
+              setField("directExpenses.repairsAndMaintenance.batteries", v)
+            }
+          />
         </div>
         <div className="flex items-center justify-between gap-3 py-1.5">
-          <span className="text-sm font-medium text-slate-700 pl-4">b. Tires</span>
-          <MoneyInput value={directExpenses.repairsAndMaintenance.tires} onValueChange={(v) => setField('directExpenses.repairsAndMaintenance.tires', v)} />
+          <span className="text-sm font-medium text-slate-700 pl-4">
+            b. Tires
+          </span>
+          <MoneyInput
+            value={directExpenses.repairsAndMaintenance.tires}
+            onValueChange={(v) =>
+              setField("directExpenses.repairsAndMaintenance.tires", v)
+            }
+          />
         </div>
 
-        <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">Salaries and Wages</p>
+        <p className="text-sm font-semibold text-blue-700 ml-0.5 mb-2 mt-3">
+          Salaries and Wages
+        </p>
         <div className="flex items-center justify-between gap-3 py-1.5">
-          <span className="text-sm font-medium text-slate-700 pl-4">a. Driver</span>
-          <MoneyInput value={directExpenses.salariesAndWages.driver} onValueChange={(v) => setField('directExpenses.salariesAndWages.driver', v)} />
+          <span className="text-sm font-medium text-slate-700 pl-4">
+            a. Driver
+          </span>
+          <MoneyInput
+            value={directExpenses.salariesAndWages.driver}
+            onValueChange={(v) =>
+              setField("directExpenses.salariesAndWages.driver", v)
+            }
+          />
         </div>
         <div className="flex items-center justify-between gap-3 py-1.5">
-          <span className="text-sm font-medium text-slate-700 pl-4">b. Helper (1)</span>
-          <MoneyInput value={directExpenses.salariesAndWages.helper1} onValueChange={(v) => setField('directExpenses.salariesAndWages.helper1', v)} />
+          <span className="text-sm font-medium text-slate-700 pl-4">
+            b. Helper (1)
+          </span>
+          <MoneyInput
+            value={directExpenses.salariesAndWages.helper1}
+            onValueChange={(v) =>
+              setField("directExpenses.salariesAndWages.helper1", v)
+            }
+          />
         </div>
         {isLargeTruckFlag && (
           <div className="flex items-center justify-between gap-3 py-1.5">
-            <span className="text-sm font-medium text-slate-700 pl-4">c. Helper (2)</span>
-            <MoneyInput value={directExpenses.salariesAndWages.helper2} onValueChange={(v) => setField('directExpenses.salariesAndWages.helper2', v)} />
+            <span className="text-sm font-medium text-slate-700 pl-4">
+              c. Helper (2)
+            </span>
+            <MoneyInput
+              value={directExpenses.salariesAndWages.helper2}
+              onValueChange={(v) =>
+                setField("directExpenses.salariesAndWages.helper2", v)
+              }
+            />
           </div>
         )}
 
         <div className="flex items-center justify-between gap-3 py-1.5 mt-1">
-          <span className="text-sm font-medium text-slate-700">Trip Allowance</span>
-          <MoneyInput value={directExpenses.tripAllowance} onValueChange={(v) => setField('directExpenses.tripAllowance', v)} />
+          <span className="text-sm font-medium text-slate-700">
+            Trip Allowance
+          </span>
+          <MoneyInput
+            value={directExpenses.tripAllowance}
+            onValueChange={(v) => setField("directExpenses.tripAllowance", v)}
+          />
         </div>
         <div className="flex items-center justify-between gap-3 py-1.5">
-          <span className="text-sm font-medium text-slate-700">Lodging Allowance</span>
-          <MoneyInput value={directExpenses.lodgingAllowance} onValueChange={(v) => setField('directExpenses.lodgingAllowance', v)} />
+          <span className="text-sm font-medium text-slate-700">
+            Lodging Allowance
+          </span>
+          <MoneyInput
+            value={directExpenses.lodgingAllowance}
+            onValueChange={(v) =>
+              setField("directExpenses.lodgingAllowance", v)
+            }
+          />
         </div>
         <div className="flex items-center justify-between gap-3 py-1.5">
-          <span className="text-sm font-medium text-slate-700">Toll/Parking (Delivery Truck)</span>
-          <MoneyInput value={directExpenses.tollParking} onValueChange={(v) => setField('directExpenses.tollParking', v)} />
+          <span className="text-sm font-medium text-slate-700">
+            Toll/Parking (Delivery Truck)
+          </span>
+          <MoneyInput
+            value={directExpenses.tollParking}
+            onValueChange={(v) => setField("directExpenses.tollParking", v)}
+          />
         </div>
 
         <div className="mt-3 flex items-center justify-between rounded-lg bg-blue-200/60 px-4 py-3">
-          <span className="text-sm font-bold text-blue-900">Total Direct Expenses</span>
-          <span className="text-base font-bold text-blue-900">₱{fm(directTotal)}</span>
+          <span className="text-sm font-bold text-blue-900">
+            Total Direct Expenses
+          </span>
+          <span className="text-base font-bold text-blue-900">
+            ₱{fm(directTotal)}
+          </span>
         </div>
       </div>
 
@@ -580,57 +782,107 @@ function QuotationExpenseForm({
         </h4>
 
         <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
-          <span className="text-sm font-medium text-slate-700">Administration Fees</span>
-          <MoneyInput accent="amber" value={indirectExpenses.adminFees} onValueChange={(v) => setField('indirectExpenses.adminFees', v)} />
+          <span className="text-sm font-medium text-slate-700">
+            Administration Fees
+          </span>
+          <MoneyInput
+            accent="amber"
+            value={indirectExpenses.adminFees}
+            onValueChange={(v) => setField("indirectExpenses.adminFees", v)}
+          />
         </div>
         <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
-          <span className="text-sm font-medium text-slate-700">Insurance (Vehicle)</span>
-          <MoneyInput accent="amber" value={indirectExpenses.insurance} onValueChange={(v) => setField('indirectExpenses.insurance', v)} />
+          <span className="text-sm font-medium text-slate-700">
+            Insurance (Vehicle)
+          </span>
+          <MoneyInput
+            accent="amber"
+            value={indirectExpenses.insurance}
+            onValueChange={(v) => setField("indirectExpenses.insurance", v)}
+          />
         </div>
         <div className="flex items-center justify-between gap-3 py-2 border-b border-amber-100">
-          <span className="text-sm font-medium text-slate-700">Motor Vehicle Registration</span>
-          <MoneyInput accent="amber" value={indirectExpenses.motorVehicleReg} onValueChange={(v) => setField('indirectExpenses.motorVehicleReg', v)} />
+          <span className="text-sm font-medium text-slate-700">
+            Motor Vehicle Registration
+          </span>
+          <MoneyInput
+            accent="amber"
+            value={indirectExpenses.motorVehicleReg}
+            onValueChange={(v) =>
+              setField("indirectExpenses.motorVehicleReg", v)
+            }
+          />
         </div>
         <div className="flex items-center justify-between gap-3 py-2">
-          <span className="text-sm font-medium text-slate-700">Rental (Garage)</span>
-          <MoneyInput accent="amber" value={indirectExpenses.garageRental} onValueChange={(v) => setField('indirectExpenses.garageRental', v)} />
+          <span className="text-sm font-medium text-slate-700">
+            Rental (Garage)
+          </span>
+          <MoneyInput
+            accent="amber"
+            value={indirectExpenses.garageRental}
+            onValueChange={(v) => setField("indirectExpenses.garageRental", v)}
+          />
         </div>
 
         <div className="mt-3 flex items-center justify-between rounded-lg bg-amber-200/60 px-4 py-3">
-          <span className="text-sm font-bold text-amber-900">Total Indirect Expenses</span>
-          <span className="text-base font-bold text-amber-900">₱{fm(indirectTotal)}</span>
+          <span className="text-sm font-bold text-amber-900">
+            Total Indirect Expenses
+          </span>
+          <span className="text-base font-bold text-amber-900">
+            ₱{fm(indirectTotal)}
+          </span>
         </div>
       </div>
 
       <div className="rounded-xl border-2 border-slate-300 bg-slate-100/70 p-4 space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold text-slate-700">Total Operating Expenses</span>
-          <span className="text-base font-bold text-slate-900">₱{fm(operatingTotal)}</span>
+          <span className="text-sm font-semibold text-slate-700">
+            Total Operating Expenses
+          </span>
+          <span className="text-base font-bold text-slate-900">
+            ₱{fm(operatingTotal)}
+          </span>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold text-slate-700">Income (15%)</span>
-          <span className="text-base font-bold text-emerald-700">₱{fm(income)}</span>
+          <span className="text-sm font-semibold text-slate-700">
+            Income (15%)
+          </span>
+          <span className="text-base font-bold text-emerald-700">
+            ₱{fm(income)}
+          </span>
         </div>
         <div className="flex items-center justify-between border-t-2 border-slate-300 pt-2">
-          <span className="text-sm font-bold text-slate-900 uppercase">Proposed Rate</span>
-          <span className="text-lg font-bold text-sky-700">₱{fm(proposedRate)}</span>
+          <span className="text-sm font-bold text-slate-900 uppercase">
+            Proposed Rate
+          </span>
+          <span className="text-lg font-bold text-sky-700">
+            ₱{fm(proposedRate)}
+          </span>
         </div>
         {hasCustomerBidRange && (
           <p className="text-xs text-slate-500">
-            Customer's price range bid:{' '}
-            <span className="font-semibold">₱{Number(customerBidMin).toLocaleString()} – ₱{Number(customerBidMax).toLocaleString()}</span>
+            Customer's price range bid:{" "}
+            <span className="font-semibold">
+              ₱{Number(customerBidMin).toLocaleString()} – ₱
+              {Number(customerBidMax).toLocaleString()}
+            </span>
           </p>
         )}
         {overCustomerBid && (
           <p className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-600">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            The proposed rate is past the customer's price range bid (₱{Number(customerBidMax).toLocaleString()}). Adjust the quotation or expect a counter-offer.
+            The proposed rate is past the customer's price range bid (₱
+            {Number(customerBidMax).toLocaleString()}). Adjust the quotation or
+            expect a counter-offer.
           </p>
         )}
         {hasCustomerCounterOffer && (
           <p className="flex items-center gap-1.5 rounded-lg bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700">
             <Handshake className="h-3.5 w-3.5 shrink-0" />
-            Customer requested a counter-offer range of ₱{Number(customerCounterMin).toLocaleString()} – ₱{Number(customerCounterMax).toLocaleString()}. Consider this when setting the proposed rate.
+            Customer requested a counter-offer range of ₱
+            {Number(customerCounterMin).toLocaleString()} – ₱
+            {Number(customerCounterMax).toLocaleString()}. Consider this when
+            setting the proposed rate.
           </p>
         )}
       </div>
@@ -643,7 +895,7 @@ function QuotationExpenseForm({
         {submitLabel}
       </button>
     </div>
-  )
+  );
 }
 
 const stageStatus = {
@@ -660,7 +912,7 @@ const stageStatus = {
   DELIVERED: 6,
   COMPLETED: 7,
   CANCELLED: -1,
-}
+};
 
 /**
  * ===== PROGRESS DETAILS — BACKEND GUIDE =====
@@ -762,152 +1014,258 @@ const stageStatus = {
  *   `autoCompleteDelivered`).
  */
 function buildProgressData(request) {
-  const idx = stageStatus[request.status] ?? 0
-  const registeredAt = formatIsoDateTime(request.createdAt)
-  const now = new Date().toLocaleString('en-PH', { timeZone: MANILA_TIMEZONE, year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  const idx = stageStatus[request.status] ?? 0;
+  const registeredAt = formatIsoDateTime(request.createdAt);
+  const now = new Date().toLocaleString("en-PH", {
+    timeZone: MANILA_TIMEZONE,
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
-  const isCancelled = request.status === 'CANCELLED'
-  const isApprovedOrLater = idx >= 2
+  const isCancelled = request.status === "CANCELLED";
+  const isApprovedOrLater = idx >= 2;
 
-  const pickupOutDone = idx >= 4
-  const pickupArrivedDone = ['ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(request.status)
-  const dropoffOutDone = ['OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(request.status)
-  const dropoffArrivedDone = ['ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(request.status)
-  const deliveredDone = ['DELIVERED', 'COMPLETED'].includes(request.status)
+  const pickupOutDone = idx >= 4;
+  const pickupArrivedDone = [
+    "ARRIVED_PICKUP",
+    "OUT_FOR_DROPOFF",
+    "ARRIVED_DROPOFF",
+    "DELIVERED",
+    "COMPLETED",
+  ].includes(request.status);
+  const dropoffOutDone = [
+    "OUT_FOR_DROPOFF",
+    "ARRIVED_DROPOFF",
+    "DELIVERED",
+    "COMPLETED",
+  ].includes(request.status);
+  const dropoffArrivedDone = [
+    "ARRIVED_DROPOFF",
+    "DELIVERED",
+    "COMPLETED",
+  ].includes(request.status);
+  const deliveredDone = ["DELIVERED", "COMPLETED"].includes(request.status);
 
   const processingSubsteps = [
-    { label: 'Quotation Submitted', detail: request.quotation ? `by Supervisor · ${registeredAt}` : null },
-    { label: 'Counter Offer Submitted', detail: (request.customerWants != null || request.customerCounterMin != null) ? `by Customer · ${registeredAt}` : null },
-    { label: 'Final Quotation Submitted', detail: request.updatedQuotation ? `by Supervisor · ${registeredAt}` : null },
-  ]
+    {
+      label: "Quotation Submitted",
+      detail: request.quotation ? `by Supervisor · ${registeredAt}` : null,
+    },
+    {
+      label: "Counter Offer Submitted",
+      detail:
+        request.customerWants != null || request.customerCounterMin != null
+          ? `by Customer · ${registeredAt}`
+          : null,
+    },
+    {
+      label: "Final Quotation Submitted",
+      detail: request.updatedQuotation
+        ? `by Supervisor · ${registeredAt}`
+        : null,
+    },
+  ];
   if (isApprovedOrLater) {
-    processingSubsteps.push({ label: 'Quotation Approved', detail: `by Customer · ${registeredAt}` })
+    processingSubsteps.push({
+      label: "Quotation Approved",
+      detail: `by Customer · ${registeredAt}`,
+    });
   }
 
   const deliveredSubsteps = [
     {
-      label: 'Delivery crew confirmed delivery',
-      detail: deliveredDone ? `by Crew · ${request.deliveredAt || request.dropoffDate || registeredAt}` : null,
+      label: "Delivery crew confirmed delivery",
+      detail: deliveredDone
+        ? `by Crew · ${request.deliveredAt || request.dropoffDate || registeredAt}`
+        : null,
     },
-  ]
+  ];
 
   const stages = [
     {
-      key: 'pending',
-      label: 'Pending Request',
-      completedLabel: 'Request Received',
+      key: "pending",
+      label: "Pending Request",
+      completedLabel: "Request Received",
       substeps: [
-        { label: 'Request Received', detail: registeredAt },
-        ...(isCancelled ? [{ label: 'Request Cancelled', detail: `· ${registeredAt}`, cancelPoint: true, cancelReason: 'Request cancelled', warning: true }] : []),
+        { label: "Request Received", detail: registeredAt },
+        ...(isCancelled
+          ? [
+              {
+                label: "Request Cancelled",
+                detail: `· ${registeredAt}`,
+                cancelPoint: true,
+                cancelReason: "Request cancelled",
+                warning: true,
+              },
+            ]
+          : []),
       ],
     },
     {
-      key: 'processing',
-      label: 'Processing Request',
-      completedLabel: 'Quotation Submitted',
+      key: "processing",
+      label: "Processing Request",
+      completedLabel: "Quotation Submitted",
       substeps: processingSubsteps,
     },
     {
-      key: 'approved',
-      label: 'Quotation Approved',
-      completedLabel: 'Quotation Approved',
+      key: "approved",
+      label: "Quotation Approved",
+      completedLabel: "Quotation Approved",
       substeps: [
-        { label: 'Quotation approved — final delivery rate confirmed', detail: isApprovedOrLater ? `by Customer · ${registeredAt}` : null },
+        {
+          label: "Quotation approved — final delivery rate confirmed",
+          detail: isApprovedOrLater ? `by Customer · ${registeredAt}` : null,
+        },
       ],
     },
     {
-      key: 'assigned',
-      label: 'Assigning Delivery Crew',
-      completedLabel: 'Delivery Crew Assigned',
+      key: "assigned",
+      label: "Assigning Delivery Crew",
+      completedLabel: "Delivery Crew Assigned",
       substeps: [
-        { label: 'Delivery crew and truck assigned', detail: request.crew?.driver ? `by Supervisor · ${request.assignedAt || now}` : null },
+        {
+          label: "Delivery crew and truck assigned",
+          detail: request.crew?.driver
+            ? `by Supervisor · ${request.assignedAt || now}`
+            : null,
+        },
       ],
     },
     {
-      key: 'pickup',
-      label: 'Pickup',
-      completedLabel: 'Pickup Completed',
+      key: "pickup",
+      label: "Pickup",
+      completedLabel: "Pickup Completed",
       substeps: [
-        { label: 'Delivery crew is out to pick up the items', detail: pickupOutDone ? `· ${request.pickupDate ? formatDateTime(request.pickupDate) : registeredAt}` : null },
-        { label: 'Delivery crew arrived at the pickup location', detail: pickupArrivedDone ? `· ${request.pickupDate ? formatDateTime(request.pickupDate) : registeredAt}` : null },
+        {
+          label: "Delivery crew is out to pick up the items",
+          detail: pickupOutDone
+            ? `· ${request.pickupDate ? formatDateTime(request.pickupDate) : registeredAt}`
+            : null,
+        },
+        {
+          label: "Delivery crew arrived at the pickup location",
+          detail: pickupArrivedDone
+            ? `· ${request.pickupDate ? formatDateTime(request.pickupDate) : registeredAt}`
+            : null,
+        },
       ],
     },
     {
-      key: 'dropoff',
-      label: 'Dropoff',
-      completedLabel: 'Dropoff Completed',
+      key: "dropoff",
+      label: "Dropoff",
+      completedLabel: "Dropoff Completed",
       substeps: [
-        { label: 'Delivery crew is out to deliver the items', detail: dropoffOutDone ? `· ${request.dropoffDate ? formatDateTime(request.dropoffDate) : registeredAt}` : null },
-        { label: 'Delivery crew arrived at the dropoff location', detail: dropoffArrivedDone ? `· ${request.dropoffDate ? formatDateTime(request.dropoffDate) : registeredAt}` : null },
+        {
+          label: "Delivery crew is out to deliver the items",
+          detail: dropoffOutDone
+            ? `· ${request.dropoffDate ? formatDateTime(request.dropoffDate) : registeredAt}`
+            : null,
+        },
+        {
+          label: "Delivery crew arrived at the dropoff location",
+          detail: dropoffArrivedDone
+            ? `· ${request.dropoffDate ? formatDateTime(request.dropoffDate) : registeredAt}`
+            : null,
+        },
       ],
     },
     {
-      key: 'delivered',
-      label: 'Delivered',
-      completedLabel: 'Delivery Completed',
+      key: "delivered",
+      label: "Delivered",
+      completedLabel: "Delivery Completed",
       substeps: deliveredSubsteps,
     },
     {
-      key: 'completed',
-      label: 'Completed',
-      completedLabel: 'Delivery Completed',
+      key: "completed",
+      label: "Completed",
+      completedLabel: "Delivery Completed",
       substeps: [
-        { label: 'Delivery confirmed completed', detail: request.completedAt ? `· ${request.completedAt}` : null },
+        {
+          label: "Delivery confirmed completed",
+          detail: request.completedAt ? `· ${request.completedAt}` : null,
+        },
       ],
     },
-  ]
+  ];
 
-  const isCompleted = request.status === 'COMPLETED'
+  const isCompleted = request.status === "COMPLETED";
   return stages.map((stage, i) => ({
     ...stage,
-    status: i < idx || (isCompleted && i === idx) ? 'completed' : i === idx ? 'current' : 'pending',
-  }))
+    status:
+      i < idx || (isCompleted && i === idx)
+        ? "completed"
+        : i === idx
+          ? "current"
+          : "pending",
+  }));
 }
 
-const quotationsByDelivery = {}
+const quotationsByDelivery = {};
 for (const q of delivery_quotations) {
-  if (!quotationsByDelivery[q.delivery_id]) quotationsByDelivery[q.delivery_id] = {}
-  quotationsByDelivery[q.delivery_id][q.quotation_type] = q
+  if (!quotationsByDelivery[q.delivery_id])
+    quotationsByDelivery[q.delivery_id] = {};
+  quotationsByDelivery[q.delivery_id][q.quotation_type] = q;
 }
 
-const cancellationsByDelivery = {}
+const cancellationsByDelivery = {};
 for (const c of delivery_cancellations) {
   cancellationsByDelivery[c.delivery_id] = {
     cancelledAt: c.cancelled_at,
     cancelledBy: c.cancelled_by,
     cancelledFromStatus: c.cancelled_from_status,
     cancellationReason: c.cancellation_reason,
-  }
+  };
 }
 
-const mockRequests = [...customer_deliveries.map((row) => {
-  const qtns = quotationsByDelivery[row.id] || {}
-  return {
-    id: row.id,
-    customerName: row.customer_name,
-    companyName: row.company_name,
-    itemType: row.item_type,
-    otherItemType: row.other_item_type,
-    truckType: row.truck_type,
-    cargoWeight: row.cargo_weight,
-    pickupDate: row.pickup_date,
-    pickupTime: row.pickup_time,
-    dropoffDate: row.dropoff_date,
-    dropoffTime: row.dropoff_time,
-    pickupAddress: row.pickup_location,
-    deliveryAddress: row.dropoff_location,
-    budgetMin: row.budget_min,
-    budgetMax: row.budget_max,
-    notes: row.notes,
-    status: row.status,
-    createdAt: row.created_at,
-    quotation: qtns.initial ? { ...qtns.initial, breakdown: qtns.initial.breakdown, amount: qtns.initial.amount, notes: qtns.initial.notes, validUntil: qtns.initial.valid_until } : null,
-    updatedQuotation: qtns.updated ? { ...qtns.updated, breakdown: qtns.updated.breakdown, amount: qtns.updated.amount, notes: qtns.updated.notes, validUntil: qtns.updated.valid_until } : null,
-    approvedAmount: row.approved_amount,
-    cancellation: cancellationsByDelivery[row.id] || null,
-    ...delivery_supervisor_data[row.id],
-  }
-})]
+const mockRequests = [
+  ...customer_deliveries.map((row) => {
+    const qtns = quotationsByDelivery[row.id] || {};
+    return {
+      id: row.id,
+      customerName: row.customer_name,
+      companyName: row.company_name,
+      itemType: row.item_type,
+      otherItemType: row.other_item_type,
+      truckType: row.truck_type,
+      cargoWeight: row.cargo_weight,
+      pickupDate: row.pickup_date,
+      pickupTime: row.pickup_time,
+      dropoffDate: row.dropoff_date,
+      dropoffTime: row.dropoff_time,
+      pickupAddress: row.pickup_location,
+      deliveryAddress: row.dropoff_location,
+      budgetMin: row.budget_min,
+      budgetMax: row.budget_max,
+      notes: row.notes,
+      status: row.status,
+      createdAt: row.created_at,
+      quotation: qtns.initial
+        ? {
+            ...qtns.initial,
+            breakdown: qtns.initial.breakdown,
+            amount: qtns.initial.amount,
+            notes: qtns.initial.notes,
+            validUntil: qtns.initial.valid_until,
+          }
+        : null,
+      updatedQuotation: qtns.updated
+        ? {
+            ...qtns.updated,
+            breakdown: qtns.updated.breakdown,
+            amount: qtns.updated.amount,
+            notes: qtns.updated.notes,
+            validUntil: qtns.updated.valid_until,
+          }
+        : null,
+      approvedAmount: row.approved_amount,
+      cancellation: cancellationsByDelivery[row.id] || null,
+      ...delivery_supervisor_data[row.id],
+    };
+  }),
+];
 const mockDrivers = delivery_drivers.map((d) => ({
   id: d.id,
   name: d.name,
@@ -916,13 +1274,13 @@ const mockDrivers = delivery_drivers.map((d) => ({
   rating: d.rating,
   trips: d.trips,
   defaultHelperIds: d.default_helper_ids,
-}))
+}));
 
 const mockHelpers = delivery_helpers.map((h) => ({
   id: h.id,
   name: h.name,
   status: h.status,
-}))
+}));
 
 const mockTrucks = delivery_trucks.map((t) => ({
   plateNumber: t.plate_number,
@@ -931,26 +1289,29 @@ const mockTrucks = delivery_trucks.map((t) => ({
   capacity: t.capacity,
   commodityType: t.commodity_type,
   defaultDriverId: t.default_driver_id,
-}))
+}));
 
 const monitoringByDelivery = delivery_monitoring.reduce((map, row) => {
   map[row.delivery_id] = {
     deliveryId: row.delivery_id,
     driver: mockDrivers.find((d) => d.id === row.driver_id) || null,
-    helpers: (row.helper_ids || []).map((id) => mockHelpers.find((h) => h.id === id)).filter(Boolean),
-    truck: mockTrucks.find((t) => t.plateNumber === row.truck_plate_number) || null,
+    helpers: (row.helper_ids || [])
+      .map((id) => mockHelpers.find((h) => h.id === id))
+      .filter(Boolean),
+    truck:
+      mockTrucks.find((t) => t.plateNumber === row.truck_plate_number) || null,
     currentLocation: { lat: row.current_lat, lng: row.current_lng },
     speedKmh: row.speed_kmh,
     lastUpdate: row.last_update,
     status: row.status,
-  }
-  return map
-}, {})
+  };
+  return map;
+}, {});
 
 const alertsByDelivery = delivery_alert_monitoring.reduce((map, row) => {
   map[row.delivery_id] = {
     deliveryId: row.delivery_id,
-    deviceOnline: row.camera_status === 'ACTIVE',
+    deviceOnline: row.camera_status === "ACTIVE",
     drowsinessLevel: row.drowsiness_level,
     prolongedEyeClosure: row.prolonged_eye_closure,
     repeatedEyeClosure: row.repeated_eye_closure,
@@ -964,21 +1325,33 @@ const alertsByDelivery = delivery_alert_monitoring.reduce((map, row) => {
     recommendedRestStop: row.recommended_rest_stop,
     restStopDistanceKm: row.rest_stop_distance_km,
     alertHistory: row.alert_history || [],
-  }
-  return map
-}, {})
+  };
+  return map;
+}, {});
 
 const DROWSINESS_TONES = {
-  LOW: { box: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200', badge: 'bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500' },
-  MODERATE: { box: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200', badge: 'bg-amber-100 text-amber-700', dot: 'bg-amber-500' },
-  HIGH: { box: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200', badge: 'bg-red-100 text-red-700', dot: 'bg-red-500' },
-}
+  LOW: {
+    box: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+    badge: "bg-emerald-100 text-emerald-700",
+    dot: "bg-emerald-500",
+  },
+  MODERATE: {
+    box: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
+    badge: "bg-amber-100 text-amber-700",
+    dot: "bg-amber-500",
+  },
+  HIGH: {
+    box: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200",
+    badge: "bg-red-100 text-red-700",
+    dot: "bg-red-500",
+  },
+};
 
 const ALERT_SEVERITY_DOTS = {
-  INFO: 'bg-sky-400',
-  WARNING: 'bg-amber-400',
-  CRITICAL: 'bg-rose-500',
-}
+  INFO: "bg-sky-400",
+  WARNING: "bg-amber-400",
+  CRITICAL: "bg-rose-500",
+};
 
 // Real DB `alerts` rows (event_type/duration/session_id/created_at) only
 // carry a fraction of the mock's fields -- no camera/vibration/audio device
@@ -991,58 +1364,83 @@ const ALERT_SEVERITY_DOTS = {
 // DATABASE.md's alerts note that vibration/audio fire immediately on trigger)
 // rather than fabricating numbers with no backing data.
 const DB_ALERT_TYPE_LABELS = {
-  prolonged_eye_closure: 'Prolonged Eye Closure',
-  pattern_eye_closure_yawn: 'Eye Closure + Yawn',
-  pattern_repeated_eye_closure: 'Repeated Eye Closure',
-  face_not_detected: 'Eyes Not Detected',
-}
+  prolonged_eye_closure: "Prolonged Eye Closure",
+  pattern_eye_closure_yawn: "Eye Closure + Yawn",
+  pattern_repeated_eye_closure: "Repeated Eye Closure",
+  face_not_detected: "Eyes Not Detected",
+};
 const DB_ALERT_TYPE_SEVERITY = {
-  prolonged_eye_closure: 'CRITICAL',
-  pattern_repeated_eye_closure: 'CRITICAL',
-  pattern_eye_closure_yawn: 'WARNING',
-  face_not_detected: 'INFO',
-}
+  prolonged_eye_closure: "CRITICAL",
+  pattern_repeated_eye_closure: "CRITICAL",
+  pattern_eye_closure_yawn: "WARNING",
+  face_not_detected: "INFO",
+};
 
 function buildRealAlertSummary(deliveryId, rows, sessionStartTime) {
-  if (!rows.length) return null
-  const counts = { prolongedEyeClosure: 0, repeatedEyeClosure: 0, yawnCount: 0, eyeDetectionFailures: 0 }
-  let closureDurationTotal = 0
-  let closureDurationCount = 0
-  let worst = 'LOW'
-  const formatTime = (iso) => new Date(iso).toLocaleString('en-US', { timeZone: MANILA_TIMEZONE, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  if (!rows.length) return null;
+  const counts = {
+    prolongedEyeClosure: 0,
+    repeatedEyeClosure: 0,
+    yawnCount: 0,
+    eyeDetectionFailures: 0,
+  };
+  let closureDurationTotal = 0;
+  let closureDurationCount = 0;
+  let worst = "LOW";
+  const formatTime = (iso) =>
+    new Date(iso).toLocaleString("en-US", {
+      timeZone: MANILA_TIMEZONE,
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   const alertHistory = rows.map((row) => {
-    const severity = DB_ALERT_TYPE_SEVERITY[row.event_type] || 'INFO'
-    if (row.event_type === 'prolonged_eye_closure' || row.event_type === 'pattern_repeated_eye_closure') {
-      closureDurationTotal += row.duration || 0
-      closureDurationCount += 1
+    const severity = DB_ALERT_TYPE_SEVERITY[row.event_type] || "INFO";
+    if (
+      row.event_type === "prolonged_eye_closure" ||
+      row.event_type === "pattern_repeated_eye_closure"
+    ) {
+      closureDurationTotal += row.duration || 0;
+      closureDurationCount += 1;
     }
-    if (row.event_type === 'prolonged_eye_closure') counts.prolongedEyeClosure += 1
-    else if (row.event_type === 'pattern_repeated_eye_closure') counts.repeatedEyeClosure += 1
-    else if (row.event_type === 'pattern_eye_closure_yawn') counts.yawnCount += 1
-    else if (row.event_type === 'face_not_detected') counts.eyeDetectionFailures += 1
-    if (severity === 'CRITICAL') worst = 'HIGH'
-    else if (severity === 'WARNING' && worst !== 'HIGH') worst = 'MODERATE'
-    return { type: DB_ALERT_TYPE_LABELS[row.event_type] || row.event_type, time: formatTime(row.created_at), severity }
-  })
-  const latest = rows[0]
+    if (row.event_type === "prolonged_eye_closure")
+      counts.prolongedEyeClosure += 1;
+    else if (row.event_type === "pattern_repeated_eye_closure")
+      counts.repeatedEyeClosure += 1;
+    else if (row.event_type === "pattern_eye_closure_yawn")
+      counts.yawnCount += 1;
+    else if (row.event_type === "face_not_detected")
+      counts.eyeDetectionFailures += 1;
+    if (severity === "CRITICAL") worst = "HIGH";
+    else if (severity === "WARNING" && worst !== "HIGH") worst = "MODERATE";
+    return {
+      type: DB_ALERT_TYPE_LABELS[row.event_type] || row.event_type,
+      time: formatTime(row.created_at),
+      severity,
+    };
+  });
+  const latest = rows[0];
   // Real hours-driven: elapsed time since the Session started (matches
   // useFleetOps' own no-separate-column approach in SupDashboard.jsx) --
   // there's no `driving_distance_km` equivalent to derive without adding a
   // GPS-route-distance computation, so distance stays mock-only.
   const drivingHoursLabel = sessionStartTime
     ? `${((Date.now() - new Date(sessionStartTime).getTime()) / 3_600_000).toFixed(1)} hrs`
-    : '—'
+    : "—";
   return {
     deliveryId,
     deviceOnline: true,
     drowsinessLevel: worst,
     ...counts,
     drivingHoursLabel,
-    avgClosureDurationLabel: closureDurationCount ? `${(closureDurationTotal / closureDurationCount).toFixed(1)}s` : '—',
+    avgClosureDurationLabel: closureDurationCount
+      ? `${(closureDurationTotal / closureDurationCount).toFixed(1)}s`
+      : "—",
     lastAlert: DB_ALERT_TYPE_LABELS[latest.event_type] || latest.event_type,
     lastAlertAt: formatTime(latest.created_at),
     alertHistory,
-  }
+  };
 }
 
 // Plain-JS haversine, no google.maps dependency -- mirrors DriverDeliveries.jsx's
@@ -1057,16 +1455,25 @@ function buildRealAlertSummary(deliveryId, rows, sessionStartTime) {
 // parseCoords above). Used by RouteDeviationMap's planned-route legs so a
 // Supervisor sees the same leg->color language the Driver's own nav view
 // already uses.
-const NAV_LEG_COLORS = ['#DC2626', '#2563EB', '#059669', '#7C3AED', '#EA580C', '#DB2777']
+const NAV_LEG_COLORS = [
+  "#DC2626",
+  "#2563EB",
+  "#059669",
+  "#7C3AED",
+  "#EA580C",
+  "#DB2777",
+];
 
 function distanceMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000
-  const dLat = ((lat2 - lat1) * Math.PI) / 180
-  const dLon = ((lon2 - lon1) * Math.PI) / 180
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 // Real Trip Details / DriveWise Report data for CompletedDeliveryReport
@@ -1086,26 +1493,36 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
 // still a real paragraph, just computed/templated from the actual numbers
 // here rather than an invented narrative.
 function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
-  if (!sessions.length) return null
+  if (!sessions.length) return null;
 
-  const sorted = [...sessions].sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
-  const firstSession = sorted[0]
-  const lastSession = sorted[sorted.length - 1]
-  const totalDurationSec = sorted.reduce((sum, s) => sum + (s.session_duration || 0), 0)
+  const sorted = [...sessions].sort(
+    (a, b) => new Date(a.start_time) - new Date(b.start_time),
+  );
+  const firstSession = sorted[0];
+  const lastSession = sorted[sorted.length - 1];
+  const totalDurationSec = sorted.reduce(
+    (sum, s) => sum + (s.session_duration || 0),
+    0,
+  );
 
   // Plain object, not `new Map()` -- `Map` is shadowed in this file's module
   // scope by the lucide-react icon import used for REPORT_TABS' route tab
   // (`icon: Map`), so `new Map()` here actually invokes that React
   // component as a constructor and throws "Map is not a constructor".
-  const bySessionId = {}
+  const bySessionId = {};
   for (const row of gpsLogs) {
-    if (!bySessionId[row.session_id]) bySessionId[row.session_id] = []
-    bySessionId[row.session_id].push(row)
+    if (!bySessionId[row.session_id]) bySessionId[row.session_id] = [];
+    bySessionId[row.session_id].push(row);
   }
-  let totalMeters = 0
+  let totalMeters = 0;
   for (const points of Object.values(bySessionId)) {
     for (let i = 1; i < points.length; i += 1) {
-      totalMeters += distanceMeters(points[i - 1].latitude, points[i - 1].longitude, points[i].latitude, points[i].longitude)
+      totalMeters += distanceMeters(
+        points[i - 1].latitude,
+        points[i - 1].longitude,
+        points[i].latitude,
+        points[i].longitude,
+      );
     }
   }
 
@@ -1113,62 +1530,105 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
   // last in the chain (02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-
   // Dropoff Ordering"), so this sorts by each item's actual completedAt
   // rather than assuming dropoff always precedes the stops.
-  const dropoffEvents = []
+  const dropoffEvents = [];
   if (delivery.dropoffCompletedAt) {
-    dropoffEvents.push({ label: 'Dropoff Completed', location: delivery.deliveryAddress, at: delivery.dropoffCompletedAt })
+    dropoffEvents.push({
+      label: "Dropoff Completed",
+      location: delivery.deliveryAddress,
+      at: delivery.dropoffCompletedAt,
+    });
   }
-  ;(delivery.stops || []).forEach((s, i) => {
+  (delivery.stops || []).forEach((s, i) => {
     if (s.completed && s.completedAt) {
-      dropoffEvents.push({ label: `Dropoff ${i + 2} Completed`, location: s.location, at: s.completedAt })
+      dropoffEvents.push({
+        label: `Dropoff ${i + 2} Completed`,
+        location: s.location,
+        at: s.completedAt,
+      });
     }
-  })
-  dropoffEvents.sort((a, b) => new Date(a.at) - new Date(b.at))
+  });
+  dropoffEvents.sort((a, b) => new Date(a.at) - new Date(b.at));
 
   // Pickup's own confirmation has no stored timestamp anywhere (only
   // pickup_photo_url, essentially a boolean flag) -- shown as done without
   // a time rather than an invented one.
   const timeline = [
-    delivery.assignedAt && { label: 'Assigned to Crew', time: formatAlertTimestamp(delivery.assignedAt), completed: true },
-    { label: 'Pickup Trip Started', time: formatAlertTimestamp(firstSession.start_time), completed: true },
-    delivery.pickupPhotoUrl && { label: 'Pickup Confirmed', time: '—', completed: true },
-    ...dropoffEvents.map((e) => ({ label: e.label, time: formatAlertTimestamp(e.at), completed: true })),
-    { label: 'Delivery Completed', time: formatAlertTimestamp(delivery.completedAt || lastSession.end_time), completed: true },
-  ].filter(Boolean)
+    delivery.assignedAt && {
+      label: "Assigned to Crew",
+      time: formatAlertTimestamp(delivery.assignedAt),
+      completed: true,
+    },
+    {
+      label: "Pickup Trip Started",
+      time: formatAlertTimestamp(firstSession.start_time),
+      completed: true,
+    },
+    delivery.pickupPhotoUrl && {
+      label: "Pickup Confirmed",
+      time: "—",
+      completed: true,
+    },
+    ...dropoffEvents.map((e) => ({
+      label: e.label,
+      time: formatAlertTimestamp(e.at),
+      completed: true,
+    })),
+    {
+      label: "Delivery Completed",
+      time: formatAlertTimestamp(delivery.completedAt || lastSession.end_time),
+      completed: true,
+    },
+  ].filter(Boolean);
 
   const stops = [
-    { location: delivery.pickupAddress, time: formatAlertTimestamp(firstSession.start_time), action: 'Pickup / Departure' },
-    ...dropoffEvents.map((e) => ({ location: e.location, time: formatAlertTimestamp(e.at), action: e.label })),
-  ]
+    {
+      location: delivery.pickupAddress,
+      time: formatAlertTimestamp(firstSession.start_time),
+      action: "Pickup / Departure",
+    },
+    ...dropoffEvents.map((e) => ({
+      location: e.location,
+      time: formatAlertTimestamp(e.at),
+      action: e.label,
+    })),
+  ];
 
   const closureAlerts = alerts.filter(
-    (a) => a.event_type === 'prolonged_eye_closure' || a.event_type === 'pattern_repeated_eye_closure',
-  )
+    (a) =>
+      a.event_type === "prolonged_eye_closure" ||
+      a.event_type === "pattern_repeated_eye_closure",
+  );
   const avgClosureSec = closureAlerts.length
-    ? closureAlerts.reduce((sum, a) => sum + (a.duration || 0), 0) / closureAlerts.length
-    : null
+    ? closureAlerts.reduce((sum, a) => sum + (a.duration || 0), 0) /
+      closureAlerts.length
+    : null;
 
-  const typeCounts = {}
+  const typeCounts = {};
   alerts.forEach((a) => {
-    typeCounts[a.event_type] = (typeCounts[a.event_type] || 0) + 1
-  })
+    typeCounts[a.event_type] = (typeCounts[a.event_type] || 0) + 1;
+  });
   const alertsByType = Object.keys(DB_ALERT_TYPE_LABELS)
-    .map((type) => ({ type, count: typeCounts[type] || 0, label: DB_ALERT_TYPE_LABELS[type] }))
-    .filter((row) => row.count > 0)
+    .map((type) => ({
+      type,
+      count: typeCounts[type] || 0,
+      label: DB_ALERT_TYPE_LABELS[type],
+    }))
+    .filter((row) => row.count > 0);
 
-  let worst = 'LOW'
+  let worst = "LOW";
   alerts.forEach((a) => {
-    const sev = DB_ALERT_TYPE_SEVERITY[a.event_type] || 'INFO'
-    if (sev === 'CRITICAL') worst = 'HIGH'
-    else if (sev === 'WARNING' && worst !== 'HIGH') worst = 'MODERATE'
-  })
+    const sev = DB_ALERT_TYPE_SEVERITY[a.event_type] || "INFO";
+    if (sev === "CRITICAL") worst = "HIGH";
+    else if (sev === "WARNING" && worst !== "HIGH") worst = "MODERATE";
+  });
 
   const alertHistory = alerts.map((a) => ({
     type: DB_ALERT_TYPE_LABELS[a.event_type] || a.event_type,
     time: formatAlertTimestamp(a.created_at),
-    severity: DB_ALERT_TYPE_SEVERITY[a.event_type] || 'INFO',
-  }))
+    severity: DB_ALERT_TYPE_SEVERITY[a.event_type] || "INFO",
+  }));
 
-  const totalAlerts = alerts.length
+  const totalAlerts = alerts.length;
   // face_not_detected deliberately excluded from the risk tier -- it's not
   // a drowsiness signal itself (fires easily on ordinary driving behavior
   // like checking mirrors, see 06_DROWSINESS_ALERT_PIPELINE.md's reasoning
@@ -1176,25 +1636,27 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
   // three types do) and shouldn't be able to push a trip into "High Risk"
   // on its own. `totalAlerts` above still counts it for the raw Total
   // Alerts metric -- only the risk classification excludes it.
-  const drowsinessAlerts = alerts.filter((a) => a.event_type !== 'face_not_detected')
-  const drowsinessAlertCount = drowsinessAlerts.length
+  const drowsinessAlerts = alerts.filter(
+    (a) => a.event_type !== "face_not_detected",
+  );
+  const drowsinessAlertCount = drowsinessAlerts.length;
   // Same count-based tiers DriverPerformance.jsx's own getRiskLevel uses,
   // for consistency across the app.
   const riskLevel =
     drowsinessAlertCount >= 4
-      ? { tone: 'red', label: 'High Risk' }
+      ? { tone: "red", label: "High Risk" }
       : drowsinessAlertCount >= 2
-        ? { tone: 'amber', label: 'Moderate' }
-        : { tone: 'emerald', label: 'Safe' }
+        ? { tone: "amber", label: "Moderate" }
+        : { tone: "emerald", label: "Safe" };
 
-  const sessionWord = sorted.length === 1 ? 'session' : 'sessions'
+  const sessionWord = sorted.length === 1 ? "session" : "sessions";
   const topDrowsinessType = [...alertsByType]
-    .filter((row) => row.type !== 'face_not_detected')
-    .sort((a, b) => b.count - a.count)[0]
+    .filter((row) => row.type !== "face_not_detected")
+    .sort((a, b) => b.count - a.count)[0];
   const analysis =
     drowsinessAlertCount === 0
-      ? `The DriveWise system monitored this trip across ${sorted.length} ${sessionWord} totaling ${formatAlertDuration(totalDurationSec)} with no drowsiness alerts recorded${totalAlerts > drowsinessAlertCount ? ` (${totalAlerts - drowsinessAlertCount} eyes-not-detected event${totalAlerts - drowsinessAlertCount === 1 ? '' : 's'} logged separately, not counted toward risk)` : ''}. Overall risk for this trip was Safe.`
-      : `The DriveWise system monitored this trip across ${sorted.length} ${sessionWord} totaling ${formatAlertDuration(totalDurationSec)}. ${drowsinessAlertCount} drowsiness alert${drowsinessAlertCount === 1 ? ' was' : 's were'} recorded, most frequently ${topDrowsinessType?.label || 'an unspecified type'}${topDrowsinessType ? ` (${topDrowsinessType.count} occurrence${topDrowsinessType.count === 1 ? '' : 's'})` : ''}. Overall risk for this trip was ${riskLevel.label}.`
+      ? `The DriveWise system monitored this trip across ${sorted.length} ${sessionWord} totaling ${formatAlertDuration(totalDurationSec)} with no drowsiness alerts recorded${totalAlerts > drowsinessAlertCount ? ` (${totalAlerts - drowsinessAlertCount} eyes-not-detected event${totalAlerts - drowsinessAlertCount === 1 ? "" : "s"} logged separately, not counted toward risk)` : ""}. Overall risk for this trip was Safe.`
+      : `The DriveWise system monitored this trip across ${sorted.length} ${sessionWord} totaling ${formatAlertDuration(totalDurationSec)}. ${drowsinessAlertCount} drowsiness alert${drowsinessAlertCount === 1 ? " was" : "s were"} recorded, most frequently ${topDrowsinessType?.label || "an unspecified type"}${topDrowsinessType ? ` (${topDrowsinessType.count} occurrence${topDrowsinessType.count === 1 ? "" : "s"})` : ""}. Overall risk for this trip was ${riskLevel.label}.`;
 
   // Route Deviation Report (11_ROUTE_COMPARISON.md) -- only when the Driver
   // app actually saved a planned route (PlannedRouteMap's one-time write,
@@ -1203,8 +1665,10 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
   // same "don't fabricate" rule as the rest of this function -- no AI
   // narrative/deviation-segments/schedule/fuel-impact fields are invented
   // for it, since no real analysis pipeline produces those.
-  const suggestedRoute = Array.isArray(delivery.suggestedRoute) ? delivery.suggestedRoute : null
-  let routeDeviation = null
+  const suggestedRoute = Array.isArray(delivery.suggestedRoute)
+    ? delivery.suggestedRoute
+    : null;
+  let routeDeviation = null;
   if (suggestedRoute && suggestedRoute.length > 0) {
     // Leg 0 is Warehouse -> Pickup, matching NAV_LEG_COLORS' own documented
     // convention (index 0 reserved for the to-pickup leg) -- no `+1` offset
@@ -1212,7 +1676,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
     const plannedLegs = suggestedRoute.map((leg, i) => ({
       path: leg.path,
       color: NAV_LEG_COLORS[i % NAV_LEG_COLORS.length],
-    }))
+    }));
     // suggestedRoute now covers Warehouse -> Pickup -> Dropoff -> Stops (the
     // Warehouse leg added per explicit user instruction), matching
     // `totalMeters` above (the *whole* trip's gps_logs) far more closely
@@ -1222,13 +1686,18 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
     // (e.g. first fix acquired a block away), so a small deviation on this
     // leg is still expected, just no longer a large, structural one.
     const plannedMeters = suggestedRoute.reduce((sum, leg) => {
-      let legMeters = 0
+      let legMeters = 0;
       for (let i = 1; i < leg.path.length; i += 1) {
-        legMeters += distanceMeters(leg.path[i - 1][0], leg.path[i - 1][1], leg.path[i][0], leg.path[i][1])
+        legMeters += distanceMeters(
+          leg.path[i - 1][0],
+          leg.path[i - 1][1],
+          leg.path[i][0],
+          leg.path[i][1],
+        );
       }
-      return sum + legMeters
-    }, 0)
-    const deviationMeters = Math.abs(totalMeters - plannedMeters)
+      return sum + legMeters;
+    }, 0);
+    const deviationMeters = Math.abs(totalMeters - plannedMeters);
     // Derived from the legs' own real (geocoded) path points, not
     // getPickupCoords/getDropoffCoords -- those only resolve a "lat, lng"-
     // shaped fixture value via parseCoords and return null for a real,
@@ -1239,32 +1708,53 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
     // leg[0] is now Warehouse -> Pickup (PlannedRouteMap's fixed
     // WAREHOUSE_ADDRESS origin), not Pickup -> Dropoff -- so pickupPoint is
     // that leg's END, not its start.
-    const pickupLeg = suggestedRoute.find((leg) => leg.to === 'pickup')
-    const pickupPoint = pickupLeg ? pickupLeg.path[pickupLeg.path.length - 1] : null
-    const dropoffLeg = suggestedRoute.find((leg) => leg.to === 'dropoff')
-    const dropoffPoint = dropoffLeg ? dropoffLeg.path[dropoffLeg.path.length - 1] : null
+    const pickupLeg = suggestedRoute.find((leg) => leg.to === "pickup");
+    const pickupPoint = pickupLeg
+      ? pickupLeg.path[pickupLeg.path.length - 1]
+      : null;
+    const dropoffLeg = suggestedRoute.find((leg) => leg.to === "dropoff");
+    const dropoffPoint = dropoffLeg
+      ? dropoffLeg.path[dropoffLeg.path.length - 1]
+      : null;
     routeDeviation = {
       plannedLegs,
-      actualRoute: sorted.flatMap((s) => (bySessionId[s.session_id] || []).map((p) => [p.latitude, p.longitude])),
-      pickupCoords: pickupPoint ? { lat: pickupPoint[0], lng: pickupPoint[1] } : null,
-      dropoffCoords: dropoffPoint ? { lat: dropoffPoint[0], lng: dropoffPoint[1] } : null,
-      plannedDistance: plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : '—',
-      actualDistance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : '—',
+      actualRoute: sorted.flatMap((s) =>
+        (bySessionId[s.session_id] || []).map((p) => [p.latitude, p.longitude]),
+      ),
+      pickupCoords: pickupPoint
+        ? { lat: pickupPoint[0], lng: pickupPoint[1] }
+        : null,
+      dropoffCoords: dropoffPoint
+        ? { lat: dropoffPoint[0], lng: dropoffPoint[1] }
+        : null,
+      plannedDistance:
+        plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : "—",
+      actualDistance:
+        totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "—",
       deviationDistance: `${(deviationMeters / 1000).toFixed(1)} km`,
-      deviationPercent: plannedMeters > 0 ? Math.round((deviationMeters / plannedMeters) * 100) : 0,
-    }
+      deviationPercent:
+        plannedMeters > 0
+          ? Math.round((deviationMeters / plannedMeters) * 100)
+          : 0,
+    };
   }
 
   return {
     trip: {
       pickupLocation: delivery.pickupAddress,
       dropoffLocation: delivery.deliveryAddress,
-      distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : '—',
+      distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "—",
       duration: formatAlertDuration(totalDurationSec),
       startTime: firstSession.start_time,
       endTime: delivery.completedAt || lastSession.end_time,
-      scheduledStart: delivery.pickupDate && delivery.pickupTime ? `${delivery.pickupDate} ${delivery.pickupTime}` : null,
-      scheduledEnd: delivery.dropoffDate && delivery.dropoffTime ? `${delivery.dropoffDate} ${delivery.dropoffTime}` : null,
+      scheduledStart:
+        delivery.pickupDate && delivery.pickupTime
+          ? `${delivery.pickupDate} ${delivery.pickupTime}`
+          : null,
+      scheduledEnd:
+        delivery.dropoffDate && delivery.dropoffTime
+          ? `${delivery.dropoffDate} ${delivery.dropoffTime}`
+          : null,
       stops,
       timeline,
     },
@@ -1273,7 +1763,8 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
       drowsinessAlertCount,
       riskLevel,
       drowsinessLevel: worst,
-      avgClosureDuration: avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : '—',
+      avgClosureDuration:
+        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "—",
       yawnCount: typeCounts.pattern_eye_closure_yawn || 0,
       eyeDetectionFailures: typeCounts.face_not_detected || 0,
       alertsByType,
@@ -1281,51 +1772,59 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
       sessions: sorted.map((s) => ({
         start: s.start_time,
         end: s.end_time,
-        alerts: s.total_alerts ?? alerts.filter((a) => a.session_id === s.session_id).length,
+        alerts:
+          s.total_alerts ??
+          alerts.filter((a) => a.session_id === s.session_id).length,
         duration: s.session_duration,
       })),
       analysis,
     },
     delivery: { totalAlerts },
     routeDeviation,
-  }
+  };
 }
 
 function getInitials(name) {
   return name
     ? name
-        .split(' ')
+        .split(" ")
         .map((n) => n[0])
-        .join('')
+        .join("")
         .slice(0, 2)
         .toUpperCase()
-    : '?'
+    : "?";
 }
 
 const REPORT_TABS = [
-  { id: 'details', label: 'Delivery Request Details', icon: ClipboardList },
-  { id: 'quotation', label: 'Quotation', icon: FileText },
-  { id: 'trip', label: 'Trip Details', icon: Route },
-  { id: 'behavior', label: 'DriveWise Report', icon: Activity },
-  { id: 'route', label: 'Route Deviation Report', icon: Map },
-]
+  { id: "details", label: "Delivery Request Details", icon: ClipboardList },
+  { id: "quotation", label: "Quotation", icon: FileText },
+  { id: "trip", label: "Trip Details", icon: Route },
+  { id: "behavior", label: "DriveWise Report", icon: Activity },
+  { id: "route", label: "Route Deviation Report", icon: Map },
+];
 
 const RISK_BADGE_CLASSES = {
-  red: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200',
-  amber: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
-  emerald: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200',
-}
+  red: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200",
+  amber: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
+  emerald: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+};
 
-const RISK_ICONS = { red: ShieldAlert, amber: AlertTriangle, emerald: ShieldCheck }
+const RISK_ICONS = {
+  red: ShieldAlert,
+  amber: AlertTriangle,
+  emerald: ShieldCheck,
+};
 
 function RiskBadge({ tone, label }) {
-  const Icon = RISK_ICONS[tone] || ShieldCheck
+  const Icon = RISK_ICONS[tone] || ShieldCheck;
   return (
-    <span className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold ${RISK_BADGE_CLASSES[tone] || RISK_BADGE_CLASSES.emerald}`}>
+    <span
+      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold ${RISK_BADGE_CLASSES[tone] || RISK_BADGE_CLASSES.emerald}`}
+    >
       <Icon className="h-3.5 w-3.5" />
       {label}
     </span>
-  )
+  );
 }
 
 const ALERT_TYPE_ICONS = {
@@ -1333,15 +1832,15 @@ const ALERT_TYPE_ICONS = {
   pattern_eye_closure_yawn: AlertTriangle,
   pattern_repeated_eye_closure: Repeat,
   face_not_detected: CameraOff,
-}
+};
 
 function formatAlertDuration(seconds) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return '--'
-  const totalMinutes = Math.round(seconds / 60)
-  const hours = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-  if (hours === 0) return `${minutes}m`
-  return `${hours}h ${minutes}m`
+  if (!Number.isFinite(seconds) || seconds <= 0) return "--";
+  const totalMinutes = Math.round(seconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  return `${hours}h ${minutes}m`;
 }
 
 // Pinned to Asia/Manila (see lib/manilaTime.js) -- previously regex-
@@ -1349,7 +1848,7 @@ function formatAlertDuration(seconds) {
 // string with no timezone conversion at all, displaying the UTC clock
 // reading mislabeled as local time (8 hours behind real Manila time).
 function formatAlertTimestamp(value) {
-  return formatManilaTimestamp(value)
+  return formatManilaTimestamp(value);
 }
 
 // `plannedLegs` is an array of `{path: [[lat,lng],...], color}` -- one entry
@@ -1366,19 +1865,27 @@ function formatAlertTimestamp(value) {
 // blue as a planned leg, distinguished only by dashed-vs-solid) read as too
 // similar at a glance. A dark, solid, haloed line reads unambiguously as
 // "the real path," distinct from every colorful dashed "option."
-const ACTUAL_ROUTE_COLOR = '#0F172A'
-function RouteDeviationMap({ plannedLegs, actualRoute, pickupCoords, dropoffCoords }) {
-  const allPoints = [...plannedLegs.flatMap((leg) => leg.path), ...actualRoute]
-  const lats = allPoints.map((p) => p[0])
-  const lngs = allPoints.map((p) => p[1])
-  const minLat = Math.min(...lats)
-  const maxLat = Math.max(...lats)
-  const minLng = Math.min(...lngs)
-  const maxLng = Math.max(...lngs)
-  const center = [(minLat + maxLat) / 2, (minLng + maxLng) / 2]
+const ACTUAL_ROUTE_COLOR = "#0F172A";
+function RouteDeviationMap({
+  plannedLegs,
+  actualRoute,
+  pickupCoords,
+  dropoffCoords,
+}) {
+  const allPoints = [...plannedLegs.flatMap((leg) => leg.path), ...actualRoute];
+  const lats = allPoints.map((p) => p[0]);
+  const lngs = allPoints.map((p) => p[1]);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const center = [(minLat + maxLat) / 2, (minLng + maxLng) / 2];
 
   return (
-    <div className="rounded-lg border border-slate-200 overflow-hidden" style={{ height: 480 }}>
+    <div
+      className="rounded-lg border border-slate-200 overflow-hidden"
+      style={{ height: 480 }}
+    >
       <MapContainer
         center={center}
         zoom={13}
@@ -1394,14 +1901,20 @@ function RouteDeviationMap({ plannedLegs, actualRoute, pickupCoords, dropoffCoor
           <Polyline
             key={i}
             positions={leg.path}
-            pathOptions={{ color: leg.color, weight: 4, dashArray: '8 6' }}
+            pathOptions={{ color: leg.color, weight: 4, dashArray: "8 6" }}
           />
         ))}
         {/* White halo underneath the actual-route line for contrast against
             busy tiles and the colorful planned legs, same technique real
             mapping products use to make one line pop over everything else. */}
-        <Polyline positions={actualRoute} pathOptions={{ color: '#ffffff', weight: 8, opacity: 0.9 }} />
-        <Polyline positions={actualRoute} pathOptions={{ color: ACTUAL_ROUTE_COLOR, weight: 4 }} />
+        <Polyline
+          positions={actualRoute}
+          pathOptions={{ color: "#ffffff", weight: 8, opacity: 0.9 }}
+        />
+        <Polyline
+          positions={actualRoute}
+          pathOptions={{ color: ACTUAL_ROUTE_COLOR, weight: 4 }}
+        />
         {pickupCoords && (
           <Marker position={pickupCoords} icon={startIcon}>
             <Popup>Pickup Location</Popup>
@@ -1414,7 +1927,7 @@ function RouteDeviationMap({ plannedLegs, actualRoute, pickupCoords, dropoffCoor
         )}
       </MapContainer>
     </div>
-  )
+  );
 }
 
 // Resolves a single "lat, lng"-shaped value (e.g. DR-0020-style fixture
@@ -1423,7 +1936,7 @@ function RouteDeviationMap({ plannedLegs, actualRoute, pickupCoords, dropoffCoor
 // once per list row (Trip Stops, etc.) without violating the rules of hooks
 // by calling useResolvedAddress inside a .map() directly.
 function ResolvedText({ value }) {
-  return useResolvedAddress(value || '')
+  return useResolvedAddress(value || "");
 }
 
 // One switchable map for the full Pickup -> Dropoff -> Stops chain, instead
@@ -1436,38 +1949,38 @@ function ResolvedText({ value }) {
 function LocationSwitcher({ request }) {
   const points = [
     {
-      key: 'pickup',
-      badge: 'P',
-      badgeBg: 'bg-blue-100',
-      badgeText: 'text-blue-600',
-      label: 'Pick-up Location',
+      key: "pickup",
+      badge: "P",
+      badgeBg: "bg-blue-100",
+      badgeText: "text-blue-600",
+      label: "Pick-up Location",
       address: request.pickupAddress,
       coords: getPickupCoords(request),
     },
     {
-      key: 'dropoff',
-      badge: 'D',
-      badgeBg: 'bg-rose-100',
-      badgeText: 'text-rose-600',
-      label: 'Drop-off Location',
+      key: "dropoff",
+      badge: "D",
+      badgeBg: "bg-rose-100",
+      badgeText: "text-rose-600",
+      label: "Drop-off Location",
       address: request.deliveryAddress,
       coords: getDropoffCoords(request),
     },
     ...(request.stops || []).map((stop, index) => ({
       key: `stop-${index}`,
       badge: String(index + 2),
-      badgeBg: 'bg-amber-100',
-      badgeText: 'text-amber-700',
+      badgeBg: "bg-amber-100",
+      badgeText: "text-amber-700",
       label: `Dropoff ${index + 2}`,
       address: stop.location,
       coords: parseCoords(stop.location),
     })),
-  ]
+  ];
 
-  const [index, setIndex] = useState(0)
-  const safeIndex = Math.min(index, points.length - 1)
-  const point = points[safeIndex]
-  const resolvedAddress = useResolvedAddress(point.address || '')
+  const [index, setIndex] = useState(0);
+  const safeIndex = Math.min(index, points.length - 1);
+  const point = points[safeIndex];
+  const resolvedAddress = useResolvedAddress(point.address || "");
 
   return (
     <div className="space-y-2">
@@ -1477,8 +1990,8 @@ function LocationSwitcher({ request }) {
         // Ordering", 2026-08-14) -- the driver is routed to whichever
         // remaining dropoff is nearest at each point, not this list's order.
         <p className="text-[11px] text-slate-500">
-          Additional dropoffs, not necessarily visited in this order — the driver is routed to whichever is nearest
-          at each point.
+          Additional dropoffs, not necessarily visited in this order — the
+          driver is routed to whichever is nearest at each point.
         </p>
       )}
       <div className="flex flex-wrap items-center gap-1.5">
@@ -1488,30 +2001,46 @@ function LocationSwitcher({ request }) {
             type="button"
             onClick={() => setIndex(i)}
             className={`flex h-6 items-center gap-1 rounded-full pl-1 pr-2 text-[11px] font-semibold transition ${
-              i === safeIndex ? 'bg-slate-900 text-white' : 'bg-white text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-50'
+              i === safeIndex
+                ? "bg-slate-900 text-white"
+                : "bg-white text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-50"
             }`}
           >
-            <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${p.badgeBg} ${p.badgeText}`}>
+            <span
+              className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${p.badgeBg} ${p.badgeText}`}
+            >
               {p.badge}
             </span>
-            {p.label.replace('Pick-up Location', 'Pickup').replace('Drop-off Location', 'Dropoff')}
+            {p.label
+              .replace("Pick-up Location", "Pickup")
+              .replace("Drop-off Location", "Dropoff")}
           </button>
         ))}
       </div>
 
       <div className="flex items-start gap-2">
-        <div className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center mt-0.5 ${point.badgeBg}`}>
-          <span className={`text-[10px] font-bold ${point.badgeText}`}>{point.badge}</span>
+        <div
+          className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center mt-0.5 ${point.badgeBg}`}
+        >
+          <span className={`text-[10px] font-bold ${point.badgeText}`}>
+            {point.badge}
+          </span>
         </div>
         <div className="min-w-0 flex-1">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">{point.label}</span>
-          <span className="text-sm font-medium text-slate-900 block truncate">{resolvedAddress}</span>
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">
+            {point.label}
+          </span>
+          <span className="text-sm font-medium text-slate-900 block truncate">
+            {resolvedAddress}
+          </span>
         </div>
         {points.length > 1 && (
           <div className="flex shrink-0 items-center gap-1">
             <button
               type="button"
-              onClick={() => setIndex((safeIndex - 1 + points.length) % points.length)}
+              onClick={() =>
+                setIndex((safeIndex - 1 + points.length) % points.length)
+              }
               className="rounded-md border border-slate-200 p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
@@ -1542,7 +2071,7 @@ function LocationSwitcher({ request }) {
         </div>
       )}
     </div>
-  )
+  );
 }
 
 // Proof-of-delivery photos for a completed chain (Pickup -> Dropoff ->
@@ -1553,11 +2082,26 @@ function LocationSwitcher({ request }) {
 // still in progress has photos for the items completed so far only.
 function ProofOfDeliverySection({ request }) {
   const items = [
-    request.pickupPhotoUrl && { label: 'Pickup', photoUrl: request.pickupPhotoUrl, completedAt: null },
-    request.dropoffPhotoUrl && { label: 'Drop-off', photoUrl: request.dropoffPhotoUrl, completedAt: request.dropoffCompletedAt },
-    ...(request.stops || [])
-      .map((stop, i) => stop.completed && stop.photoUrl && { label: `Dropoff ${i + 2}`, photoUrl: stop.photoUrl, completedAt: stop.completedAt }),
-  ].filter(Boolean)
+    request.pickupPhotoUrl && {
+      label: "Pickup",
+      photoUrl: request.pickupPhotoUrl,
+      completedAt: null,
+    },
+    request.dropoffPhotoUrl && {
+      label: "Drop-off",
+      photoUrl: request.dropoffPhotoUrl,
+      completedAt: request.dropoffCompletedAt,
+    },
+    ...(request.stops || []).map(
+      (stop, i) =>
+        stop.completed &&
+        stop.photoUrl && {
+          label: `Dropoff ${i + 2}`,
+          photoUrl: stop.photoUrl,
+          completedAt: stop.completedAt,
+        },
+    ),
+  ].filter(Boolean);
 
   return (
     <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
@@ -1568,28 +2112,36 @@ function ProofOfDeliverySection({ request }) {
       {items.length === 0 ? (
         <p className="text-xs text-slate-500">No Proof of Delivery</p>
       ) : (
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-        {items.map((item, i) => (
-          <a
-            key={i}
-            href={item.photoUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="group overflow-hidden rounded-lg border border-slate-200 bg-white"
-          >
-            <img src={item.photoUrl} alt={`${item.label} proof of delivery`} className="h-20 w-full object-cover transition group-hover:opacity-90" />
-            <div className="px-1.5 py-1">
-              <p className="truncate text-[10px] font-semibold text-slate-900">{item.label}</p>
-              {item.completedAt && (
-                <p className="truncate text-[9px] text-slate-500">{formatIsoDateTime(item.completedAt)}</p>
-              )}
-            </div>
-          </a>
-        ))}
-      </div>
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+          {items.map((item, i) => (
+            <a
+              key={i}
+              href={item.photoUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="group overflow-hidden rounded-lg border border-slate-200 bg-white"
+            >
+              <img
+                src={item.photoUrl}
+                alt={`${item.label} proof of delivery`}
+                className="h-20 w-full object-cover transition group-hover:opacity-90"
+              />
+              <div className="px-1.5 py-1">
+                <p className="truncate text-[10px] font-semibold text-slate-900">
+                  {item.label}
+                </p>
+                {item.completedAt && (
+                  <p className="truncate text-[9px] text-slate-500">
+                    {formatIsoDateTime(item.completedAt)}
+                  </p>
+                )}
+              </div>
+            </a>
+          ))}
+        </div>
       )}
     </div>
-  )
+  );
 }
 
 function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
@@ -1612,8 +2164,18 @@ function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
             Schedule
           </h4>
           <div className="space-y-1.5">
-            <Row label="Pickup" value={formatDateTime(request.pickupDate, request.pickupTime, request.pickupTimeEnd)} />
-            <Row label="Drop-off" value={formatDateTime(request.dropoffDate, request.dropoffTime)} />
+            <Row
+              label="Pickup"
+              value={formatDateTime(
+                request.pickupDate,
+                request.pickupTime,
+                request.pickupTimeEnd,
+              )}
+            />
+            <Row
+              label="Drop-off"
+              value={formatDateTime(request.dropoffDate, request.dropoffTime)}
+            />
           </div>
         </div>
 
@@ -1624,17 +2186,38 @@ function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
           </h4>
           <div className="space-y-1.5">
             <Row label="Truck Type" value={getRequestedTruckType(request)} />
-            {request.crew?.truck && normalizeTruckType(request.crew.truck.truckType) !== normalizeTruckType(getRequestedTruckType(request)) && (
-              <Row
-                label="Assigned Truck Type"
-                value={<span className="text-amber-600">{request.crew.truck.truckType} (mismatch)</span>}
-              />
-            )}
+            {request.crew?.truck &&
+              normalizeTruckType(request.crew.truck.truckType) !==
+                normalizeTruckType(getRequestedTruckType(request)) && (
+                <Row
+                  label="Assigned Truck Type"
+                  value={
+                    <span className="text-amber-600">
+                      {request.crew.truck.truckType} (mismatch)
+                    </span>
+                  }
+                />
+              )}
             <Row label="Capacity" value={getTruckCapacity(request)} />
-            <Row label="Commodity Type" value={getCommodityType(request.itemType)} />
-            <Row label="Plate Number" value={request.crew?.truck?.plateNumber || 'Not yet assigned'} />
-            <Row label="Driver" value={request.crew?.driver?.name || 'Not yet assigned'} />
-            <Row label="Helpers" value={(request.crew?.helpers || []).map((h) => h.name).join(', ') || 'Not yet assigned'} />
+            <Row
+              label="Commodity Type"
+              value={getCommodityType(request.itemType)}
+            />
+            <Row
+              label="Plate Number"
+              value={request.crew?.truck?.plateNumber || "Not yet assigned"}
+            />
+            <Row
+              label="Driver"
+              value={request.crew?.driver?.name || "Not yet assigned"}
+            />
+            <Row
+              label="Helpers"
+              value={
+                (request.crew?.helpers || []).map((h) => h.name).join(", ") ||
+                "Not yet assigned"
+              }
+            />
           </div>
         </div>
 
@@ -1651,15 +2234,22 @@ function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
 
         <div className="col-span-2">
           <div className="flex items-center justify-between rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50/50 border border-blue-100 px-4 py-3">
-            <span className="text-sm font-semibold text-slate-600">Price Range Bid</span>
-            <span className="text-sm font-bold text-blue-700">{getPriceRangeBid(request)}</span>
+            <span className="text-sm font-semibold text-slate-600">
+              Price Range Bid
+            </span>
+            <span className="text-sm font-bold text-blue-700">
+              {getPriceRangeBid(request)}
+            </span>
           </div>
-          {request.customerCounterMin != null && request.customerCounterMax != null && (
-            <div className="mt-1.5 flex items-center gap-1.5 rounded-xl bg-orange-50 border border-orange-100 px-4 py-2 text-xs font-semibold text-orange-700">
-              <Handshake className="h-3.5 w-3.5 shrink-0" />
-              Customer requested a counter-offer: ₱{Number(request.customerCounterMin).toLocaleString()} – ₱{Number(request.customerCounterMax).toLocaleString()}
-            </div>
-          )}
+          {request.customerCounterMin != null &&
+            request.customerCounterMax != null && (
+              <div className="mt-1.5 flex items-center gap-1.5 rounded-xl bg-orange-50 border border-orange-100 px-4 py-2 text-xs font-semibold text-orange-700">
+                <Handshake className="h-3.5 w-3.5 shrink-0" />
+                Customer requested a counter-offer: ₱
+                {Number(request.customerCounterMin).toLocaleString()} – ₱
+                {Number(request.customerCounterMax).toLocaleString()}
+              </div>
+            )}
         </div>
 
         {request.notes && (
@@ -1668,7 +2258,9 @@ function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
               <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
               Delivery Notes
             </h4>
-            <p className="text-sm text-slate-700 leading-relaxed">{request.notes}</p>
+            <p className="text-sm text-slate-700 leading-relaxed">
+              {request.notes}
+            </p>
           </div>
         )}
       </div>
@@ -1680,13 +2272,17 @@ function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
         </h4>
         <div className="mb-3">
           {(() => {
-            const hasReal = realDistanceKm && realDistanceKm !== '—'
+            const hasReal = realDistanceKm && realDistanceKm !== "—";
             return (
               <Row
-                label={hasReal ? 'Total Distance (Actual)' : 'Total Distance (2-way, Est.)'}
+                label={
+                  hasReal
+                    ? "Total Distance (Actual)"
+                    : "Total Distance (2-way, Est.)"
+                }
                 value={hasReal ? realDistanceKm : getTotalDistance(request)}
               />
-            )
+            );
           })()}
         </div>
         <LocationSwitcher request={request} />
@@ -1700,37 +2296,48 @@ function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
 
       <ProofOfDeliverySection request={request} />
     </div>
-  )
+  );
 }
 
 function BreakdownRow({ label, value, indent = false }) {
-  const num = typeof value === 'number' ? value : Number(value || 0)
+  const num = typeof value === "number" ? value : Number(value || 0);
   return (
-    <div className={`flex items-center justify-between py-1.5 ${indent ? 'pl-4' : ''}`}>
+    <div
+      className={`flex items-center justify-between py-1.5 ${indent ? "pl-4" : ""}`}
+    >
       <span className="text-sm font-medium text-slate-700">{label}</span>
-      <span className="text-sm font-mono text-slate-900">₱{num.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+      <span className="text-sm font-mono text-slate-900">
+        ₱{num.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+      </span>
     </div>
-  )
+  );
 }
 
 function QuotationBreakdown({ quotation, title }) {
-  const b = quotation?.breakdown || {}
-  const d = b.directExpenses || {}
-  const i = b.indirectExpenses || {}
-  const c = b.calculated || {}
-  const fm = (v) => `₱${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+  const b = quotation?.breakdown || {};
+  const d = b.directExpenses || {};
+  const i = b.indirectExpenses || {};
+  const c = b.calculated || {};
+  const fm = (v) =>
+    `₱${Number(v || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full bg-sky-500" />
-          <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">{title}</h4>
+          <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">
+            {title}
+          </h4>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {quotation.validUntil && (
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">Valid until {quotation.validUntil}</span>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">
+              Valid until {quotation.validUntil}
+            </span>
           )}
-          <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold text-sky-700">{fm(quotation.amount)}</span>
+          <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold text-sky-700">
+            {fm(quotation.amount)}
+          </span>
         </div>
       </div>
 
@@ -1743,30 +2350,70 @@ function QuotationBreakdown({ quotation, title }) {
           <div className="space-y-1.5">
             <BreakdownRow label="Depreciation" value={d.depreciation} />
             <div>
-              <BreakdownRow label="Total Diesel Expenses" value={c.dieselTotal} />
+              <BreakdownRow
+                label="Total Diesel Expenses"
+                value={c.dieselTotal}
+              />
               {(() => {
-                const rate = Number(d.dieselRate || 0)
-                const distKm = rate > 0 ? Number(c.dieselTotal || 0) / rate : 0
+                const rate = Number(d.dieselRate || 0);
+                const distKm = rate > 0 ? Number(c.dieselTotal || 0) / rate : 0;
                 return (
                   <p className="ml-1 text-sm text-slate-600">
-                    a. Diesel Rate (₱{rate.toFixed(2)}) x Distance ({distKm.toFixed(1)} km)
+                    a. Diesel Rate (₱{rate.toFixed(2)}) x Distance (
+                    {distKm.toFixed(1)} km)
                   </p>
-                )
+                );
               })()}
             </div>
-            <p className="pt-2 text-sm font-semibold text-slate-700">Repairs and Maintenance</p>
-            <BreakdownRow indent label="a. Batteries" value={d.repairsAndMaintenance?.batteries} />
-            <BreakdownRow indent label="b. Tires" value={d.repairsAndMaintenance?.tires} />
-            <p className="pt-2 text-sm font-semibold text-slate-700">Salaries and Wages</p>
-            <BreakdownRow indent label="a. Driver" value={d.salariesAndWages?.driver} />
-            <BreakdownRow indent label="b. Helper (1)" value={d.salariesAndWages?.helper1} />
-            {d.salariesAndWages?.helper2 && <BreakdownRow indent label="c. Helper (2)" value={d.salariesAndWages?.helper2} />}
+            <p className="pt-2 text-sm font-semibold text-slate-700">
+              Repairs and Maintenance
+            </p>
+            <BreakdownRow
+              indent
+              label="a. Batteries"
+              value={d.repairsAndMaintenance?.batteries}
+            />
+            <BreakdownRow
+              indent
+              label="b. Tires"
+              value={d.repairsAndMaintenance?.tires}
+            />
+            <p className="pt-2 text-sm font-semibold text-slate-700">
+              Salaries and Wages
+            </p>
+            <BreakdownRow
+              indent
+              label="a. Driver"
+              value={d.salariesAndWages?.driver}
+            />
+            <BreakdownRow
+              indent
+              label="b. Helper (1)"
+              value={d.salariesAndWages?.helper1}
+            />
+            {d.salariesAndWages?.helper2 && (
+              <BreakdownRow
+                indent
+                label="c. Helper (2)"
+                value={d.salariesAndWages?.helper2}
+              />
+            )}
             <BreakdownRow label="Trip Allowance" value={d.tripAllowance} />
-            <BreakdownRow label="Lodging Allowance" value={d.lodgingAllowance} />
-            <BreakdownRow label="Toll/Parking (Delivery Truck)" value={d.tollParking} />
+            <BreakdownRow
+              label="Lodging Allowance"
+              value={d.lodgingAllowance}
+            />
+            <BreakdownRow
+              label="Toll/Parking (Delivery Truck)"
+              value={d.tollParking}
+            />
             <div className="mt-3 flex items-center justify-between rounded-lg bg-sky-100/70 px-4 py-3">
-              <span className="text-sm font-bold text-slate-800">Total Direct Expenses</span>
-              <span className="text-base font-bold text-slate-800">{fm(c.directTotal)}</span>
+              <span className="text-sm font-bold text-slate-800">
+                Total Direct Expenses
+              </span>
+              <span className="text-base font-bold text-slate-800">
+                {fm(c.directTotal)}
+              </span>
             </div>
           </div>
         </div>
@@ -1779,11 +2426,18 @@ function QuotationBreakdown({ quotation, title }) {
           <div className="space-y-1.5">
             <BreakdownRow label="Administration Fees" value={i.adminFees} />
             <BreakdownRow label="Insurance (Vehicle)" value={i.insurance} />
-            <BreakdownRow label="Motor Vehicle Registration" value={i.motorVehicleReg} />
+            <BreakdownRow
+              label="Motor Vehicle Registration"
+              value={i.motorVehicleReg}
+            />
             <BreakdownRow label="Rental (Garage)" value={i.garageRental} />
             <div className="mt-3 flex items-center justify-between rounded-lg bg-amber-100/70 px-4 py-3">
-              <span className="text-sm font-bold text-slate-800">Total Indirect Expenses</span>
-              <span className="text-base font-bold text-slate-800">{fm(c.indirectTotal)}</span>
+              <span className="text-sm font-bold text-slate-800">
+                Total Indirect Expenses
+              </span>
+              <span className="text-base font-bold text-slate-800">
+                {fm(c.indirectTotal)}
+              </span>
             </div>
           </div>
         </div>
@@ -1791,36 +2445,64 @@ function QuotationBreakdown({ quotation, title }) {
 
       <div className="space-y-2 rounded-xl border-2 border-slate-300 bg-slate-100/70 p-4">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold text-slate-700">Total Operating Expenses</span>
-          <span className="text-base font-bold text-slate-900">{fm(c.operatingTotal)}</span>
+          <span className="text-sm font-semibold text-slate-700">
+            Total Operating Expenses
+          </span>
+          <span className="text-base font-bold text-slate-900">
+            {fm(c.operatingTotal)}
+          </span>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold text-slate-700">Income (15%)</span>
-          <span className="text-base font-bold text-emerald-700">{fm(c.income)}</span>
+          <span className="text-sm font-semibold text-slate-700">
+            Income (15%)
+          </span>
+          <span className="text-base font-bold text-emerald-700">
+            {fm(c.income)}
+          </span>
         </div>
         <div className="flex items-center justify-between border-t-2 border-slate-300 pt-2">
-          <span className="text-sm font-bold uppercase text-slate-900">Proposed Rate</span>
-          <span className="text-lg font-bold text-sky-700">{fm(quotation.amount)}</span>
+          <span className="text-sm font-bold uppercase text-slate-900">
+            Proposed Rate
+          </span>
+          <span className="text-lg font-bold text-sky-700">
+            {fm(quotation.amount)}
+          </span>
         </div>
       </div>
 
       {quotation.notes && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Quotation Note</p>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Quotation Note
+          </p>
           <p className="text-sm text-slate-700">{quotation.notes}</p>
         </div>
       )}
     </div>
-  )
+  );
 }
 
 function QuotationTab({ delivery }) {
-  const steps = []
-  if (delivery.quotation) steps.push({ key: 'initial', title: 'Initial Quotation', quotation: delivery.quotation })
-  if (delivery.updatedQuotation) steps.push({ key: 'updated', title: 'Updated Quotation', quotation: delivery.updatedQuotation })
+  const steps = [];
+  if (delivery.quotation)
+    steps.push({
+      key: "initial",
+      title: "Initial Quotation",
+      quotation: delivery.quotation,
+    });
+  if (delivery.updatedQuotation)
+    steps.push({
+      key: "updated",
+      title: "Updated Quotation",
+      quotation: delivery.updatedQuotation,
+    });
 
   if (steps.length === 0 && !delivery.approvedAmount) {
-    return <p className="py-8 text-center text-sm text-slate-500">No quotation was submitted for this delivery.</p>
+    return (
+      <p className="py-8 text-center text-sm text-slate-500">
+        No quotation was submitted for this delivery.
+      </p>
+    );
   }
 
   return (
@@ -1829,29 +2511,47 @@ function QuotationTab({ delivery }) {
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border-2 border-emerald-200 bg-emerald-50/60 px-4 py-3">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-            <span className="text-sm font-semibold text-slate-700">Final Approved Amount</span>
+            <span className="text-sm font-semibold text-slate-700">
+              Final Approved Amount
+            </span>
           </div>
-          <span className="text-lg font-bold text-emerald-700">₱{Number(delivery.approvedAmount).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+          <span className="text-lg font-bold text-emerald-700">
+            ₱
+            {Number(delivery.approvedAmount).toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+            })}
+          </span>
         </div>
       )}
 
       {steps.map((step, idx) => (
-        <div key={step.key} className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div
+          key={step.key}
+          className="rounded-2xl border border-slate-200 bg-white p-4"
+        >
           <div className="mb-4 flex items-center gap-2">
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-bold text-white">{idx + 1}</span>
-            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">{step.title}</h4>
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-bold text-white">
+              {idx + 1}
+            </span>
+            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">
+              {step.title}
+            </h4>
             {steps.length === 1 && (
-              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Approved</span>
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                Approved
+              </span>
             )}
             {steps.length > 1 && idx === steps.length - 1 && (
-              <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700">Final</span>
+              <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700">
+                Final
+              </span>
             )}
           </div>
           <QuotationBreakdown quotation={step.quotation} title={step.title} />
         </div>
       ))}
     </div>
-  )
+  );
 }
 
 function StatusChip({ icon: Icon, label, ok, value }) {
@@ -1861,12 +2561,16 @@ function StatusChip({ icon: Icon, label, ok, value }) {
         <Icon className="h-3.5 w-3.5" />
         {label}
       </p>
-      <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${ok ? 'text-emerald-600' : 'text-rose-600'}`}>
-        <span className={`h-2 w-2 rounded-full ${ok ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+      <p
+        className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${ok ? "text-emerald-600" : "text-rose-600"}`}
+      >
+        <span
+          className={`h-2 w-2 rounded-full ${ok ? "bg-emerald-500" : "bg-rose-500"}`}
+        />
         {value}
       </p>
     </div>
-  )
+  );
 }
 
 function Metric({ label, value }) {
@@ -1875,12 +2579,12 @@ function Metric({ label, value }) {
       <p className="text-xs text-slate-500">{label}</p>
       <p className="mt-0.5 text-lg font-bold text-slate-900">{value}</p>
     </div>
-  )
+  );
 }
 
 function TripDetailsTab({ delivery, report }) {
-  const t = report.trip
-  const crew = delivery.crew
+  const t = report.trip;
+  const crew = delivery.crew;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -1897,55 +2601,91 @@ function TripDetailsTab({ delivery, report }) {
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
           <Navigation className="mx-auto h-4 w-4 text-slate-400" />
           <p className="mt-1 text-xs text-slate-500">Departed</p>
-          <p className="text-sm font-bold text-slate-900">{formatAlertTimestamp(t.startTime)}</p>
+          <p className="text-sm font-bold text-slate-900">
+            {formatAlertTimestamp(t.startTime)}
+          </p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
           <MapPin className="mx-auto h-4 w-4 text-slate-400" />
           <p className="mt-1 text-xs text-slate-500">Arrived</p>
-          <p className="text-sm font-bold text-slate-900">{formatAlertTimestamp(t.endTime)}</p>
+          <p className="text-sm font-bold text-slate-900">
+            {formatAlertTimestamp(t.endTime)}
+          </p>
         </div>
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
         <div className="mb-1 flex items-center justify-between gap-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Route</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+            Route
+          </p>
           {/* No real "scheduled vs actual, late by N minutes" comparison is
               computed (see buildRealTripAndBehaviorReport's comment) --
               t.arrivedOnTime is left undefined for real reports, so this
               badge only ever shows for the legacy mock ones that set it. */}
           {t.arrivedOnTime !== undefined && (
-            <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold ${
-              t.arrivedOnTime ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
-            }`}>
-              {t.arrivedOnTime ? <Check className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
-              {t.arrivedOnTime ? 'On time' : `Late by ${t.lateMinutes} min`}
+            <span
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold ${
+                t.arrivedOnTime
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-rose-100 text-rose-700"
+              }`}
+            >
+              {t.arrivedOnTime ? (
+                <Check className="h-3 w-3" />
+              ) : (
+                <AlertCircle className="h-3 w-3" />
+              )}
+              {t.arrivedOnTime ? "On time" : `Late by ${t.lateMinutes} min`}
             </span>
           )}
         </div>
         <p className="text-sm font-semibold text-slate-900">
-          {t.route ? t.route : <><ResolvedText value={t.pickupLocation} /> → <ResolvedText value={t.dropoffLocation} /></>}
+          {t.route ? (
+            t.route
+          ) : (
+            <>
+              <ResolvedText value={t.pickupLocation} /> →{" "}
+              <ResolvedText value={t.dropoffLocation} />
+            </>
+          )}
         </p>
         <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-          <Row label="Scheduled Pickup" value={formatAlertTimestamp(t.scheduledStart)} />
-          <Row label="Actual Departure" value={formatAlertTimestamp(t.startTime)} />
-          <Row label="Scheduled Drop-off" value={formatAlertTimestamp(t.scheduledEnd)} />
+          <Row
+            label="Scheduled Pickup"
+            value={formatAlertTimestamp(t.scheduledStart)}
+          />
+          <Row
+            label="Actual Departure"
+            value={formatAlertTimestamp(t.startTime)}
+          />
+          <Row
+            label="Scheduled Drop-off"
+            value={formatAlertTimestamp(t.scheduledEnd)}
+          />
           <Row label="Actual Arrival" value={formatAlertTimestamp(t.endTime)} />
           {/* No real per-leg waiting/idle tracking exists -- omitted for
               real reports rather than shown as an unavailable placeholder. */}
-          {t.waitingTime && <Row label="Waiting at Pickup" value={t.waitingTime} />}
+          {t.waitingTime && (
+            <Row label="Waiting at Pickup" value={t.waitingTime} />
+          )}
           {t.idleTime && <Row label="Idle at Drop-off" value={t.idleTime} />}
         </div>
       </div>
 
       {crew?.driver && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Delivery Crew</p>
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+            Delivery Crew
+          </p>
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-sm font-bold text-white">
               {getInitials(crew.driver.name)}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-slate-900">{crew.driver.name}</p>
+              <p className="truncate text-sm font-semibold text-slate-900">
+                {crew.driver.name}
+              </p>
               <p className="flex items-center gap-2 text-xs text-slate-500">
                 <Truck className="h-3.5 w-3.5" />
                 {crew.truck?.plateNumber} • {crew.truck?.truckType}
@@ -1954,14 +2694,19 @@ function TripDetailsTab({ delivery, report }) {
             {crew.driver.rating && (
               <div className="shrink-0 text-right">
                 <p className="text-xs text-slate-500">Rating</p>
-                <p className="text-sm font-bold text-amber-600">★ {crew.driver.rating}</p>
+                <p className="text-sm font-bold text-amber-600">
+                  ★ {crew.driver.rating}
+                </p>
               </div>
             )}
           </div>
           {crew.helpers?.length > 0 && (
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
               {crew.helpers.map((h) => (
-                <span key={h.id} className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+                <span
+                  key={h.id}
+                  className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200"
+                >
                   <Users className="h-3 w-3 text-slate-400" />
                   {h.name}
                 </span>
@@ -1986,7 +2731,10 @@ function TripDetailsTab({ delivery, report }) {
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold text-slate-900">{rs.location}</p>
                   <p className="text-xs text-slate-500">{rs.purpose}</p>
-                  <p className="text-xs text-slate-400">{rs.duration} • {rs.distanceFromStart} from start • {rs.drivingTime} driving</p>
+                  <p className="text-xs text-slate-400">
+                    {rs.duration} • {rs.distanceFromStart} from start •{" "}
+                    {rs.drivingTime} driving
+                  </p>
                 </div>
               </div>
             ))}
@@ -1995,21 +2743,35 @@ function TripDetailsTab({ delivery, report }) {
       )}
 
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Trip Stops</p>
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+          Trip Stops
+        </p>
         <div className="space-y-1.5">
           {t.stops.map((stop, i) => (
             <div key={i} className="flex items-start gap-2 text-sm">
               <div className="flex flex-col items-center">
-                <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
-                  i === 0 ? 'bg-sky-100 text-sky-700' : i === t.stops.length - 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'
-                }`}>
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
+                    i === 0
+                      ? "bg-sky-100 text-sky-700"
+                      : i === t.stops.length - 1
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-slate-100 text-slate-400"
+                  }`}
+                >
                   <MapPin className="h-2.5 w-2.5" />
                 </span>
-                {i < t.stops.length - 1 && <div className="mt-0.5 h-3 w-px bg-slate-200" />}
+                {i < t.stops.length - 1 && (
+                  <div className="mt-0.5 h-3 w-px bg-slate-200" />
+                )}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="font-medium text-slate-700"><ResolvedText value={stop.location} /></p>
-                <p className="text-xs text-slate-400">{stop.time} — {stop.action}</p>
+                <p className="font-medium text-slate-700">
+                  <ResolvedText value={stop.location} />
+                </p>
+                <p className="text-xs text-slate-400">
+                  {stop.time} — {stop.action}
+                </p>
               </div>
             </div>
           ))}
@@ -2018,7 +2780,7 @@ function TripDetailsTab({ delivery, report }) {
 
       <TripTimelineList timeline={t.timeline} />
     </div>
-  )
+  );
 }
 
 // Shared by TripDetailsTab and DeliveryRequestDetails (2026-08-14) -- a
@@ -2029,14 +2791,18 @@ function TripDetailsTab({ delivery, report }) {
 // buildRealTripAndBehaviorReport's timeline construction) -- just rendered
 // in two places now instead of one.
 function TripTimelineList({ timeline }) {
-  if (!timeline?.length) return null
+  if (!timeline?.length) return null;
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Trip Timeline</p>
+      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+        Trip Timeline
+      </p>
       <div className="space-y-2">
         {timeline.map((step, i) => (
           <div key={i} className="flex items-center gap-2 text-sm">
-            <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${step.completed ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
+            <span
+              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${step.completed ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400"}`}
+            >
               <Check className="h-3 w-3" />
             </span>
             <span className="font-medium text-slate-700">{step.label}</span>
@@ -2045,15 +2811,23 @@ function TripTimelineList({ timeline }) {
         ))}
       </div>
     </div>
-  )
+  );
 }
 
 function DriveWiseAnalysisTab({ report }) {
-  const b = report.behavior
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const tone = DROWSINESS_TONES[b.drowsinessLevel] || DROWSINESS_TONES.LOW
-  const barColor = tone.badge === 'bg-red-100 text-red-700' ? 'bg-red-500' : tone.badge === 'bg-amber-100 text-amber-700' ? 'bg-amber-500' : 'bg-emerald-500'
-  const lastAlert = b.alertHistory && b.alertHistory.length > 0 ? b.alertHistory[b.alertHistory.length - 1] : null
+  const b = report.behavior;
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const tone = DROWSINESS_TONES[b.drowsinessLevel] || DROWSINESS_TONES.LOW;
+  const barColor =
+    tone.badge === "bg-red-100 text-red-700"
+      ? "bg-red-500"
+      : tone.badge === "bg-amber-100 text-amber-700"
+        ? "bg-amber-500"
+        : "bg-emerald-500";
+  const lastAlert =
+    b.alertHistory && b.alertHistory.length > 0
+      ? b.alertHistory[b.alertHistory.length - 1]
+      : null;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -2061,17 +2835,25 @@ function DriveWiseAnalysisTab({ report }) {
           <div>
             <p className="text-xs text-slate-500">Driver Risk Level</p>
             <p className="text-sm font-semibold text-slate-900">
-              {b.drowsinessAlertCount ?? b.totalAlerts} drowsiness alert{(b.drowsinessAlertCount ?? b.totalAlerts) === 1 ? '' : 's'} this trip
+              {b.drowsinessAlertCount ?? b.totalAlerts} drowsiness alert
+              {(b.drowsinessAlertCount ?? b.totalAlerts) === 1 ? "" : "s"} this
+              trip
             </p>
           </div>
           <RiskBadge tone={b.riskLevel.tone} label={b.riskLevel.label} />
         </div>
-        <div className={`flex items-center justify-between rounded-xl p-3 ${tone.box}`}>
+        <div
+          className={`flex items-center justify-between rounded-xl p-3 ${tone.box}`}
+        >
           <div>
             <p className="text-xs opacity-70">Drowsiness Level</p>
             <p className="text-sm font-semibold">AI camera-based detection</p>
           </div>
-          <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${tone.badge}`}>{b.drowsinessLevel}</span>
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-bold ${tone.badge}`}
+          >
+            {b.drowsinessLevel}
+          </span>
         </div>
       </div>
 
@@ -2080,10 +2862,30 @@ function DriveWiseAnalysisTab({ report }) {
           only renders for the legacy mock reports that set cameraStatus. */}
       {b.cameraStatus && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatusChip icon={Camera} label="Camera Feed" ok={b.cameraStatus === 'ACTIVE'} value={b.cameraStatus} />
-          <StatusChip icon={EyeOff} label="Eye Detection" ok={b.eyeDetection === 'DETECTED'} value={b.eyeDetection} />
-          <StatusChip icon={Vibrate} label="Seat Vibration" ok={b.alertMechanism?.seatVibration === 'ACTIVE'} value={b.alertMechanism?.seatVibration} />
-          <StatusChip icon={Volume2} label="Audio Alert" ok={b.alertMechanism?.audioAlert === 'ACTIVE'} value={b.alertMechanism?.audioAlert} />
+          <StatusChip
+            icon={Camera}
+            label="Camera Feed"
+            ok={b.cameraStatus === "ACTIVE"}
+            value={b.cameraStatus}
+          />
+          <StatusChip
+            icon={EyeOff}
+            label="Eye Detection"
+            ok={b.eyeDetection === "DETECTED"}
+            value={b.eyeDetection}
+          />
+          <StatusChip
+            icon={Vibrate}
+            label="Seat Vibration"
+            ok={b.alertMechanism?.seatVibration === "ACTIVE"}
+            value={b.alertMechanism?.seatVibration}
+          />
+          <StatusChip
+            icon={Volume2}
+            label="Audio Alert"
+            ok={b.alertMechanism?.audioAlert === "ACTIVE"}
+            value={b.alertMechanism?.audioAlert}
+          />
         </div>
       )}
 
@@ -2095,36 +2897,55 @@ function DriveWiseAnalysisTab({ report }) {
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Alert Type Breakdown</p>
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+          Alert Type Breakdown
+        </p>
         <div className="space-y-2">
           {b.alertsByType.map((item) => {
-            const Icon = ALERT_TYPE_ICONS[item.type] || AlertTriangle
-            const pct = b.totalAlerts > 0 ? Math.round((item.count / b.totalAlerts) * 100) : 0
+            const Icon = ALERT_TYPE_ICONS[item.type] || AlertTriangle;
+            const pct =
+              b.totalAlerts > 0
+                ? Math.round((item.count / b.totalAlerts) * 100)
+                : 0;
             return (
               <div key={item.type}>
                 <div className="mb-1 flex items-center gap-2 text-sm">
                   <Icon className="h-3.5 w-3.5 text-slate-500" />
                   <span className="flex-1 text-slate-700">{item.label}</span>
-                  <span className="font-semibold text-slate-900">{item.count}</span>
+                  <span className="font-semibold text-slate-900">
+                    {item.count}
+                  </span>
                   <span className="text-xs text-slate-400">({pct}%)</span>
                 </div>
                 <div className="h-1.5 rounded-full bg-slate-100">
-                  <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+                  <div
+                    className={`h-full rounded-full transition-all ${barColor}`}
+                    style={{ width: `${pct}%` }}
+                  />
                 </div>
               </div>
-            )
+            );
           })}
         </div>
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Session Log</p>
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+          Session Log
+        </p>
         <div className="space-y-1.5">
           {b.sessions.map((session, i) => (
             <div key={i} className="flex items-center justify-between text-sm">
-              <span className="text-slate-600">{formatAlertTimestamp(session.start)} — {formatAlertTimestamp(session.end)}</span>
-              <span className="font-semibold text-slate-900">{session.alerts} alerts</span>
-              <span className="text-slate-400">{formatAlertDuration(session.duration)}</span>
+              <span className="text-slate-600">
+                {formatAlertTimestamp(session.start)} —{" "}
+                {formatAlertTimestamp(session.end)}
+              </span>
+              <span className="font-semibold text-slate-900">
+                {session.alerts} alerts
+              </span>
+              <span className="text-slate-400">
+                {formatAlertDuration(session.duration)}
+              </span>
             </div>
           ))}
         </div>
@@ -2136,8 +2957,12 @@ function DriveWiseAnalysisTab({ report }) {
             <Coffee className="h-4 w-4" />
           </span>
           <div className="flex-1">
-            <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Recommended Rest Stop</p>
-            <p className="text-sm font-semibold text-slate-900">{b.recommendedRestStop}</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+              Recommended Rest Stop
+            </p>
+            <p className="text-sm font-semibold text-slate-900">
+              {b.recommendedRestStop}
+            </p>
           </div>
         </div>
       )}
@@ -2150,24 +2975,39 @@ function DriveWiseAnalysisTab({ report }) {
             className="flex w-full items-center justify-between gap-2 p-3 text-left"
           >
             <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Last Alert</p>
-              <p className="mt-0.5 text-sm font-bold text-slate-900">{lastAlert.type}</p>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                Last Alert
+              </p>
+              <p className="mt-0.5 text-sm font-bold text-slate-900">
+                {lastAlert.type}
+              </p>
               <p className="text-xs text-slate-500">{lastAlert.time}</p>
             </div>
             <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-400">
               History ({b.alertHistory.length})
-              {historyOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              {historyOpen ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
             </span>
           </button>
           {historyOpen && (
             <div className="max-h-56 space-y-1 overflow-y-auto border-t border-slate-200 px-3 py-2">
               {b.alertHistory.map((h, i) => (
-                <div key={i} className="flex items-center justify-between gap-2 py-1">
+                <div
+                  key={i}
+                  className="flex items-center justify-between gap-2 py-1"
+                >
                   <span className="flex min-w-0 items-center gap-2 text-xs text-slate-700">
-                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${ALERT_SEVERITY_DOTS[h.severity] || ALERT_SEVERITY_DOTS.INFO}`} />
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${ALERT_SEVERITY_DOTS[h.severity] || ALERT_SEVERITY_DOTS.INFO}`}
+                    />
                     <span className="truncate">{h.type}</span>
                   </span>
-                  <span className="shrink-0 text-xs text-slate-500">{h.time}</span>
+                  <span className="shrink-0 text-xs text-slate-500">
+                    {h.time}
+                  </span>
                 </div>
               ))}
             </div>
@@ -2185,25 +3025,25 @@ function DriveWiseAnalysisTab({ report }) {
         </div>
       )}
     </div>
-  )
+  );
 }
 
 function RouteDeviationTab({ report }) {
-  const r = report.routeDeviation
+  const r = report.routeDeviation;
   // Two shapes feed this tab: the legacy mock fixtures (`planned`/`actual`,
   // flat single-leg arrays), and the real one built by
   // buildRealTripAndBehaviorReport (`plannedLegs`/`actualRoute`/
   // `pickupCoords`/`dropoffCoords` already in RouteDeviationMap's shape).
   // Normalized here so RouteDeviationMap only ever deals with one shape.
-  const plannedLegs = r.plannedLegs || [{ path: r.planned, color: '#059669' }]
-  const actualRoute = r.actualRoute || r.actual || []
-  const pickupCoords = r.pickupCoords || r.planned?.[0]
-  const dropoffCoords = r.dropoffCoords || r.planned?.[r.planned.length - 1]
+  const plannedLegs = r.plannedLegs || [{ path: r.planned, color: "#059669" }];
+  const actualRoute = r.actualRoute || r.actual || [];
+  const pickupCoords = r.pickupCoords || r.planned?.[0];
+  const dropoffCoords = r.dropoffCoords || r.planned?.[r.planned.length - 1];
   // Only the legacy mock fixtures carry an AI narrative -- no real analysis
   // pipeline produces one, so this stays unguarded-absent rather than
   // showing a fabricated "AI Route Analysis: undefined" for real deliveries.
-  const hasAiAnalysis = Boolean(r.aiVerdict)
-  const red = r.aiVerdictTone === 'red'
+  const hasAiAnalysis = Boolean(r.aiVerdict);
+  const red = r.aiVerdictTone === "red";
   return (
     <div className="space-y-4">
       <RouteDeviationMap
@@ -2221,31 +3061,58 @@ function RouteDeviationTab({ report }) {
       </div>
 
       {hasAiAnalysis && (
-        <div className={`flex items-start gap-3 rounded-xl border p-4 ${red ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'}`}>
-          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white ${red ? 'bg-red-500' : 'bg-amber-500'}`}>
-            {red ? <ShieldAlert className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+        <div
+          className={`flex items-start gap-3 rounded-xl border p-4 ${red ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}
+        >
+          <div
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white ${red ? "bg-red-500" : "bg-amber-500"}`}
+          >
+            {red ? (
+              <ShieldAlert className="h-4 w-4" />
+            ) : (
+              <AlertTriangle className="h-4 w-4" />
+            )}
           </div>
           <div className="min-w-0 flex-1">
-            <p className={`font-semibold ${red ? 'text-red-800' : 'text-amber-800'}`}>AI Route Analysis: {r.aiVerdict}</p>
-            <p className={`mt-1 text-sm leading-relaxed ${red ? 'text-red-700' : 'text-amber-700'}`}>{r.aiSummary}</p>
+            <p
+              className={`font-semibold ${red ? "text-red-800" : "text-amber-800"}`}
+            >
+              AI Route Analysis: {r.aiVerdict}
+            </p>
+            <p
+              className={`mt-1 text-sm leading-relaxed ${red ? "text-red-700" : "text-amber-700"}`}
+            >
+              {r.aiSummary}
+            </p>
           </div>
         </div>
       )}
 
       {r.deviationSegments?.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Deviation Segments</p>
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+            Deviation Segments
+          </p>
           <div className="space-y-2">
             {r.deviationSegments.map((seg, i) => (
-              <div key={i} className="rounded-lg border border-slate-200 bg-white p-3">
+              <div
+                key={i}
+                className="rounded-lg border border-slate-200 bg-white p-3"
+              >
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-slate-900">{seg.location}</p>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${seg.severity === 'Significant' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                  <p className="text-sm font-semibold text-slate-900">
+                    {seg.location}
+                  </p>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${seg.severity === "Significant" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}
+                  >
                     {seg.severity}
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-slate-500">{seg.reason}</p>
-                <p className="mt-1 text-xs font-semibold text-slate-700">+{seg.extraDistance} extra</p>
+                <p className="mt-1 text-xs font-semibold text-slate-700">
+                  +{seg.extraDistance} extra
+                </p>
               </div>
             ))}
           </div>
@@ -2259,8 +3126,10 @@ function RouteDeviationTab({ report }) {
               <Timer className="h-3.5 w-3.5" />
               Schedule Impact
             </p>
-            <p className={`mt-1 text-sm font-bold ${r.scheduleImpact && r.scheduleImpact.toLowerCase().includes('delay') ? 'text-rose-600' : 'text-emerald-600'}`}>
-              {r.scheduleImpact || '—'}
+            <p
+              className={`mt-1 text-sm font-bold ${r.scheduleImpact && r.scheduleImpact.toLowerCase().includes("delay") ? "text-rose-600" : "text-emerald-600"}`}
+            >
+              {r.scheduleImpact || "—"}
             </p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -2268,14 +3137,18 @@ function RouteDeviationTab({ report }) {
               <Fuel className="h-3.5 w-3.5" />
               Fuel Impact
             </p>
-            <p className="mt-1 text-sm font-bold text-slate-900">{r.fuelImpact || '—'}</p>
+            <p className="mt-1 text-sm font-bold text-slate-900">
+              {r.fuelImpact || "—"}
+            </p>
           </div>
         </div>
       )}
 
       {r.recommendations?.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">Recommendations</p>
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+            Recommendations
+          </p>
           <ul className="space-y-1.5">
             {r.recommendations.map((rec, i) => (
               <li key={i} className="flex items-start gap-2 text-sm">
@@ -2294,31 +3167,39 @@ function RouteDeviationTab({ report }) {
         {plannedLegs.length > 1 ? (
           plannedLegs.map((leg, i) => (
             <div key={i} className="flex items-center gap-2 text-xs">
-              <span className="inline-block h-3 w-6 rounded-sm" style={{ background: leg.color }} />
+              <span
+                className="inline-block h-3 w-6 rounded-sm"
+                style={{ background: leg.color }}
+              />
               <span className="text-slate-600">Planned — Leg {i + 1}</span>
             </div>
           ))
         ) : (
           <div className="flex items-center gap-2 text-xs">
-            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: plannedLegs[0]?.color || '#059669' }} />
+            <span
+              className="inline-block h-3 w-6 rounded-sm"
+              style={{ background: plannedLegs[0]?.color || "#059669" }}
+            />
             <span className="text-slate-600">Planned Route</span>
           </div>
         )}
         <div className="flex items-center gap-2 text-xs">
-          <span className="inline-block h-3 w-6 rounded-sm" style={{ background: ACTUAL_ROUTE_COLOR }} />
+          <span
+            className="inline-block h-3 w-6 rounded-sm"
+            style={{ background: ACTUAL_ROUTE_COLOR }}
+          />
           <span className="text-slate-600">Actual Route</span>
         </div>
         <span className="ml-auto flex items-center gap-1 text-[10px] text-slate-400">
-          <MapPin className="h-3 w-3" />
-          S = Start, E = End
+          <MapPin className="h-3 w-3" />S = Start, E = End
         </span>
       </div>
     </div>
-  )
+  );
 }
 
 function CompletedDeliveryReport({ delivery }) {
-  const [reportTab, setReportTab] = useState('details')
+  const [reportTab, setReportTab] = useState("details");
   // Real Trip Details / DriveWise Report data (2026-08-14), fetched per
   // delivery from sessions/alerts/gps_logs -- see buildRealTripAndBehaviorReport.
   // Falls back to the legacy completed_delivery_reports mock only for the
@@ -2326,41 +3207,50 @@ function CompletedDeliveryReport({ delivery }) {
   // a real delivery with genuinely no sessions (e.g. completed with no Trip
   // ever started) gets neither, same "Details + Quotation only" fallback as
   // before.
-  const [realReport, setRealReport] = useState(null)
+  const [realReport, setRealReport] = useState(null);
   useEffect(() => {
-    let isMounted = true
+    let isMounted = true;
     async function load() {
       const { data: sessionRows } = await supabase
-        .from('sessions')
-        .select('session_id, start_time, end_time, total_alerts, session_duration')
-        .eq('delivery_request_id', delivery.id)
-        .order('start_time', { ascending: true })
-      if (!isMounted) return
-      const sessions = sessionRows || []
+        .from("sessions")
+        .select(
+          "session_id, start_time, end_time, total_alerts, session_duration",
+        )
+        .eq("delivery_request_id", delivery.id)
+        .order("start_time", { ascending: true });
+      if (!isMounted) return;
+      const sessions = sessionRows || [];
       if (sessions.length === 0) {
-        setRealReport(null)
-        return
+        setRealReport(null);
+        return;
       }
-      const sessionIds = sessions.map((s) => s.session_id)
+      const sessionIds = sessions.map((s) => s.session_id);
       const [{ data: alertRows }, { data: gpsRows }] = await Promise.all([
         supabase
-          .from('alerts')
-          .select('id, created_at, event_type, duration, session_id')
-          .in('session_id', sessionIds)
-          .order('created_at', { ascending: true }),
+          .from("alerts")
+          .select("id, created_at, event_type, duration, session_id")
+          .in("session_id", sessionIds)
+          .order("created_at", { ascending: true }),
         supabase
-          .from('gps_logs')
-          .select('session_id, latitude, longitude, timestamp')
-          .in('session_id', sessionIds)
-          .order('timestamp', { ascending: true }),
-      ])
-      if (!isMounted) return
-      setRealReport(buildRealTripAndBehaviorReport(delivery, sessions, alertRows || [], gpsRows || []))
+          .from("gps_logs")
+          .select("session_id, latitude, longitude, timestamp")
+          .in("session_id", sessionIds)
+          .order("timestamp", { ascending: true }),
+      ]);
+      if (!isMounted) return;
+      setRealReport(
+        buildRealTripAndBehaviorReport(
+          delivery,
+          sessions,
+          alertRows || [],
+          gpsRows || [],
+        ),
+      );
     }
-    load()
+    load();
     return () => {
-      isMounted = false
-    }
+      isMounted = false;
+    };
     // Keyed on delivery.id specifically, not the whole delivery object --
     // same "reacting to an external system's id, not a derived-state anti-
     // pattern" reasoning already established throughout this codebase (e.g.
@@ -2368,9 +3258,9 @@ function CompletedDeliveryReport({ delivery }) {
     // on every parent re-render (a new delivery object reference, same id)
     // would be wasteful.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [delivery.id])
-  const mockReport = completed_delivery_reports[delivery.id]
-  const report = realReport || mockReport
+  }, [delivery.id]);
+  const mockReport = completed_delivery_reports[delivery.id];
+  const report = realReport || mockReport;
   // Telemetry tabs (trip/behavior) apply whenever a report (real or mock)
   // exists. Route Deviation Report needs a persisted planned route
   // (11_ROUTE_COMPARISON.md, built 2026-08-14) -- shows for a real delivery
@@ -2379,19 +3269,27 @@ function CompletedDeliveryReport({ delivery }) {
   // the legacy mock reports that carry their own routeDeviation field.
   // Either way, gated on the same `Boolean(report.routeDeviation)` check.
   const tabs = report
-    ? REPORT_TABS.filter((t) => t.id !== 'route' || Boolean(report.routeDeviation))
-    : REPORT_TABS.filter((t) => t.id === 'details' || t.id === 'quotation')
+    ? REPORT_TABS.filter(
+        (t) => t.id !== "route" || Boolean(report.routeDeviation),
+      )
+    : REPORT_TABS.filter((t) => t.id === "details" || t.id === "quotation");
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 md:px-5">
         <div className="flex flex-wrap items-center gap-2">
-          <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${
-            delivery.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
-          }`}>
+          <span
+            className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${
+              delivery.status === "COMPLETED"
+                ? "bg-emerald-100 text-emerald-700"
+                : "bg-rose-100 text-rose-700"
+            }`}
+          >
             {delivery.status}
           </span>
-          <h3 className="text-sm font-semibold text-slate-900">Delivery Report — {delivery.id}</h3>
+          <h3 className="text-sm font-semibold text-slate-900">
+            Delivery Report — {delivery.id}
+          </h3>
         </div>
         <div className="flex items-center gap-2 text-xs text-slate-500">
           <Package className="h-3.5 w-3.5" />
@@ -2401,32 +3299,46 @@ function CompletedDeliveryReport({ delivery }) {
 
       <div className="flex gap-2 overflow-x-auto border-b border-slate-200 bg-slate-50 px-4 py-2.5 md:px-5">
         {tabs.map((tab) => {
-          const Icon = tab.icon
-          const isActive = reportTab === tab.id
+          const Icon = tab.icon;
+          const isActive = reportTab === tab.id;
           return (
             <button
               key={tab.id}
               onClick={() => setReportTab(tab.id)}
               className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                isActive ? 'bg-slate-900 text-white shadow-sm' : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-100'
+                isActive
+                  ? "bg-slate-900 text-white shadow-sm"
+                  : "bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-100"
               }`}
             >
               <Icon className="h-3.5 w-3.5" />
               {tab.label}
             </button>
-          )
+          );
         })}
       </div>
 
       <div className="p-4 md:p-5">
-        {reportTab === 'details' && <DeliveryRequestDetails request={delivery} timeline={report?.trip?.timeline} realDistanceKm={report?.trip?.distance} />}
-        {reportTab === 'quotation' && <QuotationTab delivery={delivery} />}
-        {report && reportTab === 'trip' && <TripDetailsTab delivery={delivery} report={report} />}
-        {report && reportTab === 'behavior' && <DriveWiseAnalysisTab report={report} />}
-        {report?.routeDeviation && reportTab === 'route' && <RouteDeviationTab report={report} />}
+        {reportTab === "details" && (
+          <DeliveryRequestDetails
+            request={delivery}
+            timeline={report?.trip?.timeline}
+            realDistanceKm={report?.trip?.distance}
+          />
+        )}
+        {reportTab === "quotation" && <QuotationTab delivery={delivery} />}
+        {report && reportTab === "trip" && (
+          <TripDetailsTab delivery={delivery} report={report} />
+        )}
+        {report && reportTab === "behavior" && (
+          <DriveWiseAnalysisTab report={report} />
+        )}
+        {report?.routeDeviation && reportTab === "route" && (
+          <RouteDeviationTab report={report} />
+        )}
       </div>
     </div>
-  )
+  );
 }
 
 function CancelledDeliveryDetails({ delivery }) {
@@ -2438,7 +3350,7 @@ function CancelledDeliveryDetails({ delivery }) {
     cancelledBy: delivery.cancelledBy,
     cancelledAt: delivery.cancelledAt,
     cancelledFromStatus: delivery.cancelledFromStatus,
-  }
+  };
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
@@ -2447,26 +3359,51 @@ function CancelledDeliveryDetails({ delivery }) {
           Cancellation Details
         </p>
         <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-          <Row label="Reason" value={cancellation.cancellationReason || '—'} />
-          <Row label="Cancelled by" value={cancellation.cancelledBy === 'customer' ? 'Customer' : 'Supervisor'} />
-          <Row label="Cancelled at" value={cancellation.cancelledAt || '—'} />
-          <Row label="Status before cancellation" value={statusLabel[cancellation.cancelledFromStatus] ?? (cancellation.cancelledFromStatus || '—').replaceAll('_', ' ')} />
+          <Row label="Reason" value={cancellation.cancellationReason || "—"} />
+          <Row
+            label="Cancelled by"
+            value={
+              cancellation.cancelledBy === "customer"
+                ? "Customer"
+                : "Supervisor"
+            }
+          />
+          <Row label="Cancelled at" value={cancellation.cancelledAt || "—"} />
+          <Row
+            label="Status before cancellation"
+            value={
+              statusLabel[cancellation.cancelledFromStatus] ??
+              (cancellation.cancelledFromStatus || "—").replaceAll("_", " ")
+            }
+          />
         </div>
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Request Details (before cancellation)</p>
+        <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Request Details (before cancellation)
+        </p>
         <DeliveryRequestDetails request={delivery} />
       </div>
 
       {(delivery.quotation || delivery.approvedAmount) && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Quotation Before Cancellation</p>
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Quotation Before Cancellation
+          </p>
           {delivery.quotation ? (
-            <QuotationBreakdown quotation={delivery.quotation} title="Quotation" />
+            <QuotationBreakdown
+              quotation={delivery.quotation}
+              title="Quotation"
+            />
           ) : (
             <div className="space-y-1.5">
-              {delivery.approvedAmount && <Row label="Approved Amount" value={`₱${Number(delivery.approvedAmount).toLocaleString()}`} />}
+              {delivery.approvedAmount && (
+                <Row
+                  label="Approved Amount"
+                  value={`₱${Number(delivery.approvedAmount).toLocaleString()}`}
+                />
+              )}
             </div>
           )}
         </div>
@@ -2474,26 +3411,35 @@ function CancelledDeliveryDetails({ delivery }) {
 
       {delivery.crew?.driver && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Assigned Crew Before Cancellation</p>
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Assigned Crew Before Cancellation
+          </p>
           <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
             <Row label="Driver" value={delivery.crew.driver.name} />
-            <Row label="Truck" value={`${delivery.crew.truck.plateNumber} • ${delivery.crew.truck.truckType}`} />
-            <Row label="Helpers" value={delivery.crew.helpers.map((h) => h.name).join(', ') || '—'} />
+            <Row
+              label="Truck"
+              value={`${delivery.crew.truck.plateNumber} • ${delivery.crew.truck.truckType}`}
+            />
+            <Row
+              label="Helpers"
+              value={delivery.crew.helpers.map((h) => h.name).join(", ") || "—"}
+            />
           </div>
         </div>
       )}
     </div>
-  )
+  );
 }
 
 function toGoogleMapEmbed(coords, zoom = 14) {
-  if (!coords) return 'https://maps.google.com/maps?q=14.5995,120.9842&z=12&output=embed'
-  return `https://maps.google.com/maps?q=${coords.lat},${coords.lng}&z=${zoom}&output=embed`
+  if (!coords)
+    return "https://maps.google.com/maps?q=14.5995,120.9842&z=12&output=embed";
+  return `https://maps.google.com/maps?q=${coords.lat},${coords.lng}&z=${zoom}&output=embed`;
 }
 
 function filterDeliveryList(list, q) {
-  const query = q.trim().toLowerCase()
-  if (!query) return list
+  const query = q.trim().toLowerCase();
+  if (!query) return list;
   return list.filter(
     (r) =>
       r.id.toLowerCase().includes(query) ||
@@ -2501,38 +3447,38 @@ function filterDeliveryList(list, q) {
       r.companyName.toLowerCase().includes(query) ||
       r.pickupAddress.toLowerCase().includes(query) ||
       r.deliveryAddress.toLowerCase().includes(query),
-  )
+  );
 }
 
 function sortNewestFirst(list) {
-  return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 function autoCompleteDelivered(list) {
-  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000
-  let changed = false
+  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+  let changed = false;
   const next = list.map((r) => {
-    if (r.status !== 'DELIVERED') return r
+    if (r.status !== "DELIVERED") return r;
     const deliveredRef = r.deliveredAt
       ? new Date(r.deliveredAt)
       : r.dropoffDate
-        ? new Date(`${r.dropoffDate}T${r.dropoffTime || '12:00:00'}`)
-        : null
-    if (!deliveredRef || isNaN(deliveredRef.getTime())) return r
+        ? new Date(`${r.dropoffDate}T${r.dropoffTime || "12:00:00"}`)
+        : null;
+    if (!deliveredRef || isNaN(deliveredRef.getTime())) return r;
     if (Date.now() - deliveredRef.getTime() >= SEVEN_DAYS) {
-      changed = true
+      changed = true;
       return {
         ...r,
-        status: 'COMPLETED',
+        status: "COMPLETED",
         // Real ISO, not a pre-formatted locale string -- this field gets
         // read back through formatAlertTimestamp/formatIsoDateTime
         // elsewhere, which expect a parseable timestamp, not display text.
         completedAt: new Date().toISOString(),
-      }
+      };
     }
-    return r
-  })
-  return changed ? next : list
+    return r;
+  });
+  return changed ? next : list;
 }
 
 function PaginationBar({ page, setPage, totalPages }) {
@@ -2548,44 +3494,78 @@ function PaginationBar({ page, setPage, totalPages }) {
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
           title="First page"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
+            />
+          </svg>
         </button>
         <button
           onClick={() => setPage((p) => Math.max(1, p - 1))}
           disabled={page === 1}
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M15 19l-7-7 7-7"
+            />
+          </svg>
         </button>
         <div className="flex items-center gap-1 px-1">
           {(() => {
-            const pages = []
+            const pages = [];
             if (totalPages <= 7) {
-              for (let i = 1; i <= totalPages; i++) pages.push(i)
+              for (let i = 1; i <= totalPages; i++) pages.push(i);
             } else {
-              pages.push(1)
-              if (page > 3) pages.push('...')
-              for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i)
-              if (page < totalPages - 2) pages.push('...')
-              pages.push(totalPages)
+              pages.push(1);
+              if (page > 3) pages.push("...");
+              for (
+                let i = Math.max(2, page - 1);
+                i <= Math.min(totalPages - 1, page + 1);
+                i++
+              )
+                pages.push(i);
+              if (page < totalPages - 2) pages.push("...");
+              pages.push(totalPages);
             }
             return pages.map((num, idx) =>
-              num === '...' ? (
-                <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
+              num === "..." ? (
+                <span
+                  key={`ellipsis-${idx}`}
+                  className="flex h-8 w-8 items-center justify-center text-sm text-slate-400"
+                >
+                  ...
+                </span>
               ) : (
                 <button
                   key={num}
                   onClick={() => setPage(num)}
                   className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
                     num === page
-                      ? 'bg-slate-900 text-white shadow-sm'
-                      : 'text-slate-600 hover:bg-slate-100'
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-600 hover:bg-slate-100"
                   }`}
                 >
                   {num}
                 </button>
-              )
-            )
+              ),
+            );
           })()}
         </div>
         <button
@@ -2593,7 +3573,19 @@ function PaginationBar({ page, setPage, totalPages }) {
           disabled={page === totalPages}
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 5l7 7-7 7"
+            />
+          </svg>
         </button>
         <button
           onClick={() => setPage(totalPages)}
@@ -2601,11 +3593,23 @@ function PaginationBar({ page, setPage, totalPages }) {
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
           title="Last page"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M13 5l7 7-7 7M5 5l7 7-7 7"
+            />
+          </svg>
         </button>
       </div>
     </div>
-  )
+  );
 }
 
 // DB rows are snake_case; the inbox (and the detail view it feeds) expects the
@@ -2626,9 +3630,12 @@ function mapFleetTruck(t) {
     truckType: t.truck_type,
     brand: t.brand,
     model: t.model,
-    capacity: t.max_capacity != null ? `${Number(t.max_capacity).toLocaleString()} kg` : null,
+    capacity:
+      t.max_capacity != null
+        ? `${Number(t.max_capacity).toLocaleString()} kg`
+        : null,
     capacityKg: t.max_capacity,
-  }
+  };
 }
 
 // Map one `list-crew` member (Driver/Helper user merged with their *_records
@@ -2636,9 +3643,12 @@ function mapFleetTruck(t) {
 // — what assignCrew persists as assigned_driver_id / assigned_helper_ids.
 function mapFleetCrewMember(m) {
   return {
-    id: (m.record_id || '').trim(),
+    id: (m.record_id || "").trim(),
     authId: m.id,
-    name: [m.first_name, m.middle_name, m.last_name].filter(Boolean).join(' ').trim(),
+    name: [m.first_name, m.middle_name, m.last_name]
+      .filter(Boolean)
+      .join(" ")
+      .trim(),
     role: m.role,
     // Client names (customer_records.client_name) this crew member
     // specializes in, attached by list-crew via crew_client_specialties.
@@ -2646,28 +3656,35 @@ function mapFleetCrewMember(m) {
     // Self-set weekly working days (crew_availability) — feeds the
     // Available/Unavailable badge in the assignment pickers.
     workingDays: m.working_days || [],
-  }
+  };
 }
 
 // Rebuild the assigned crew (driver/helpers/truck) from the persisted
 // assignment columns using the real fleet loaded for the pickers.
 function buildAssignedCrew(row, fleet) {
-  if (!row.assigned_driver_id) return null
+  if (!row.assigned_driver_id) return null;
   return {
     driver: fleet.drivers.find((d) => d.id === row.assigned_driver_id) || null,
-    helpers: (row.assigned_helper_ids || []).map((id) => fleet.helpers.find((h) => h.id === id)).filter(Boolean),
-    truck: row.assigned_truck_plate ? fleet.trucks.find((t) => t.plateNumber === row.assigned_truck_plate) || null : null,
-  }
+    helpers: (row.assigned_helper_ids || [])
+      .map((id) => fleet.helpers.find((h) => h.id === id))
+      .filter(Boolean),
+    truck: row.assigned_truck_plate
+      ? fleet.trucks.find((t) => t.plateNumber === row.assigned_truck_plate) ||
+        null
+      : null,
+  };
 }
 
 function mapDbRequest(row, clientName, fleet) {
-  const name = clientName || 'Client'
+  const name = clientName || "Client";
   return {
     id: row.id,
     customerAuthId: row.customer_auth_id,
     customerName: name,
     companyName: name,
-    itemType: row.item_type ? row.item_type.charAt(0).toUpperCase() + row.item_type.slice(1) : row.item_type,
+    itemType: row.item_type
+      ? row.item_type.charAt(0).toUpperCase() + row.item_type.slice(1)
+      : row.item_type,
     otherItemType: row.other_item_type,
     truckType: row.truck_type,
     cargoWeight: row.cargo_weight,
@@ -2694,7 +3711,9 @@ function mapDbRequest(row, clientName, fleet) {
     // Frozen planned route (Pickup -> Dropoff -> Stops), if the Driver
     // app's pre-trip screen already saved one — feeds the real Route
     // Deviation Report (buildRealTripAndBehaviorReport, 11_ROUTE_COMPARISON.md).
-    suggestedRoute: Array.isArray(row.suggested_route) ? row.suggested_route : null,
+    suggestedRoute: Array.isArray(row.suggested_route)
+      ? row.suggested_route
+      : null,
     budgetMin: row.budget_min,
     budgetMax: row.budget_max,
     notes: row.notes,
@@ -2711,184 +3730,217 @@ function mapDbRequest(row, clientName, fleet) {
     // Customer confirmation state (written by the customer via
     // CustomerDeliveries.jsx; the Completed module reads these).
     receivedConfirmed: row.received_confirmed,
-    receivedConfirmedAt: row.received_confirmed_at ? formatIsoDateTime(row.received_confirmed_at) : null,
+    receivedConfirmedAt: row.received_confirmed_at
+      ? formatIsoDateTime(row.received_confirmed_at)
+      : null,
     completedAt: row.completed_at ? formatIsoDateTime(row.completed_at) : null,
     // Rebuild the assigned crew (same shape the assignment pickers produce)
     // from the persisted columns so an assigned request still shows its
     // driver/helpers/truck after a reload.
-    crew: row.assigned_driver_id ? buildAssignedCrew(row, fleet || { drivers: [], helpers: [], trucks: [] }) : null,
+    crew: row.assigned_driver_id
+      ? buildAssignedCrew(
+          row,
+          fleet || { drivers: [], helpers: [], trucks: [] },
+        )
+      : null,
     assignedAt: row.assigned_at ? formatIsoDateTime(row.assigned_at) : null,
-  }
+  };
 }
 
 // The customer's counter-offer range, read from the delivery_requests counter
 // columns (real data) with a fallback to the legacy single-amount mock shape.
 function getCounterOfferRange(r) {
   if (r.customerCounterMin != null && r.customerCounterMax != null) {
-    return `₱${Number(r.customerCounterMin).toLocaleString()} – ₱${Number(r.customerCounterMax).toLocaleString()}`
+    return `₱${Number(r.customerCounterMin).toLocaleString()} – ₱${Number(r.customerCounterMax).toLocaleString()}`;
   }
-  if (r.customerWants != null) return `Less than PHP ${Number(r.customerWants).toLocaleString()}`
-  return null
+  if (r.customerWants != null)
+    return `Less than PHP ${Number(r.customerWants).toLocaleString()}`;
+  return null;
 }
 
 function SupDeliveries() {
   // Mock inbox state kept for the legacy mock modules (writes only — the UI
   // reads the real dbRequests inbox now).
-  const [, setRequests] = useState(() => autoCompleteDelivered(mockRequests))
-  const [dbRequests, setDbRequests] = useState([])
+  const [, setRequests] = useState(() => autoCompleteDelivered(mockRequests));
+  const [dbRequests, setDbRequests] = useState([]);
   // Real fleet for the Assign Vehicle pickers — trucks (from the RLS-open
   // `trucks` table) and crew (drivers/helpers via admin-users list-crew).
-  const [fleet, setFleet] = useState({ drivers: [], helpers: [], trucks: [] })
-  const [loadError, setLoadError] = useState('')
-  const [isLoading, setIsLoading] = useState(true)
-  const [activeModule, setActiveModule] = useState('inbox')
-  const [monitoredDeliveryId, setMonitoredDeliveryId] = useState(null)
+  const [fleet, setFleet] = useState({ drivers: [], helpers: [], trucks: [] });
+  const [loadError, setLoadError] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [activeModule, setActiveModule] = useState("inbox");
+  const [monitoredDeliveryId, setMonitoredDeliveryId] = useState(null);
   // Real DriveWise telemetry per delivery, fetched from the `alerts` table
   // (via its session) on demand -- keyed by delivery id, `null` if that
   // delivery genuinely has no DB alerts yet (falls back to mock below).
-  const [realAlertsByDelivery, setRealAlertsByDelivery] = useState({})
+  const [realAlertsByDelivery, setRealAlertsByDelivery] = useState({});
   // Real live position per delivery, from gps_logs -- see the polling effect
   // below. Keyed by delivery id; `null` once fetched if that delivery has no
   // GPS reading yet (falls back to the mock/default map below).
-  const [realLocationByDelivery, setRealLocationByDelivery] = useState({})
+  const [realLocationByDelivery, setRealLocationByDelivery] = useState({});
   // Real driven distance for the delivery currently open in "View Details"
   // (Inbox/Assign Vehicle/In Transit tabs), summed from gps_logs across
   // every Session of the Trip -- see the effect below. `undefined` = not
   // fetched yet for this id, `null` = fetched, genuinely no GPS data (falls
   // back to the pricing-estimate figure the "Total Distance" Row used
   // before).
-  const [realDistanceKmBySelected, setRealDistanceKmBySelected] = useState({})
+  const [realDistanceKmBySelected, setRealDistanceKmBySelected] = useState({});
   // Auth ids of customers that have at least one crew_client_specialties row
   // (loaded via the admin-users list-specialized-clients action) — requests
   // from these clients show the "Requires Specialized Crew" flag.
-  const [specializedClientIds, setSpecializedClientIds] = useState(() => new Set())
+  const [specializedClientIds, setSpecializedClientIds] = useState(
+    () => new Set(),
+  );
   // Record ids of crew currently committed to an active trip (ASSIGNED →
   // OUT_FOR_DELIVERY) — drives the Available/Assigned badge in the
   // driver/helper assignment pickers.
-  const [busyCrewIds, setBusyCrewIds] = useState(() => ({}))
+  const [busyCrewIds, setBusyCrewIds] = useState(() => ({}));
   // Crew currently riding each truck, rebuilt from active trips — plate →
   // { driverId, helperIds }. Selecting a plate pre-fills its current crew.
-  const [truckCrewByPlate, setTruckCrewByPlate] = useState({})
+  const [truckCrewByPlate, setTruckCrewByPlate] = useState({});
   // Supervisor-saved default crew per truck (driver_default_assignments via
   // the Delivery Crew profile page) — plate → { driverId, helperIds }. Used
   // as the pre-fill fallback when a truck has no active-trip crew.
-  const [defaultCrewByPlate, setDefaultCrewByPlate] = useState({})
+  const [defaultCrewByPlate, setDefaultCrewByPlate] = useState({});
   // Helpers usually assigned with each driver (from active trips) — used to
   // pre-fill the helper pickers when a driver is chosen.
-  const [helperIdsByDriver, setHelperIdsByDriver] = useState({})
+  const [helperIdsByDriver, setHelperIdsByDriver] = useState({});
   // Skeleton state for the assignment pickers while trucks/crew load.
-  const [fleetLoading, setFleetLoading] = useState(true)
+  const [fleetLoading, setFleetLoading] = useState(true);
   // Transient confirmation toast for assignment updates.
-  const [toast, setToast] = useState(null)
-  const toastTimerRef = useRef(null)
-  const showToast = useCallback((message, tone = 'success') => {
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
-    setToast({ id: Date.now(), message, tone })
-    toastTimerRef.current = setTimeout(() => setToast(null), 4000)
-  }, [])
+  const [toast, setToast] = useState(null);
+  const toastTimerRef = useRef(null);
+  const showToast = useCallback((message, tone = "success") => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ id: Date.now(), message, tone });
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  }, []);
   // Deep-link from SupDashboard's "View Trip" (Driver Safety list) --
   // ?deliveryId=DR-0020 opens straight to the In Transit tab with that
   // delivery already selected in Real-time Monitoring / DriveWise Alerts.
-  const [searchParams] = useSearchParams()
+  const [searchParams] = useSearchParams();
   useEffect(() => {
-    const deliveryId = searchParams.get('deliveryId')
-    if (!deliveryId) return
+    const deliveryId = searchParams.get("deliveryId");
+    if (!deliveryId) return;
     // Reacting to an external source (the URL), same as this file's own
     // loadInbox effect below.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setActiveModule('transit')
-    setMonitoredDeliveryId(deliveryId)
-  }, [searchParams])
-  const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('ALL')
-  const [selectedRequest, setSelectedRequest] = useState(null)
+    setActiveModule("transit");
+    setMonitoredDeliveryId(deliveryId);
+  }, [searchParams]);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [selectedRequest, setSelectedRequest] = useState(null);
   const defaultQuotationForm = {
     directExpenses: {
-      depreciation: '',
-      dieselRate: '',
-      repairsAndMaintenance: { batteries: '', tires: '' },
-      salariesAndWages: { driver: '', helper1: '', helper2: '' },
-      tripAllowance: '',
-      lodgingAllowance: '',
-      tollParking: '',
+      depreciation: "",
+      dieselRate: "",
+      repairsAndMaintenance: { batteries: "", tires: "" },
+      salariesAndWages: { driver: "", helper1: "", helper2: "" },
+      tripAllowance: "",
+      lodgingAllowance: "",
+      tollParking: "",
     },
     indirectExpenses: {
-      adminFees: '',
-      insurance: '',
-      motorVehicleReg: '',
-      garageRental: '',
+      adminFees: "",
+      insurance: "",
+      motorVehicleReg: "",
+      garageRental: "",
     },
-  }
-  const [quotationForm, setQuotationForm] = useState({ ...defaultQuotationForm })
+  };
+  const [quotationForm, setQuotationForm] = useState({
+    ...defaultQuotationForm,
+  });
   // Supervisor-configured pricing rules for buildQuotationDefaults — loaded
   // once with the inbox, edited via the Pricing Rules modal.
-  const [quotationRules, setQuotationRules] = useState(DEFAULT_QUOTATION_RULES)
-  const [showQuotationSettings, setShowQuotationSettings] = useState(false)
-  const [assignment, setAssignment] = useState({ driverId: '', helperIds: [], plateNumber: '', _showDrivers: false, _showHelpers: false, _showTrucks: false })
-  const [hasApproved, setHasApproved] = useState(false)
-  const [quotationSubmitted, setQuotationSubmitted] = useState(false)
-  const [selectedReportId, setSelectedReportId] = useState(null)
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false)
+  const [quotationRules, setQuotationRules] = useState(DEFAULT_QUOTATION_RULES);
+  const [showQuotationSettings, setShowQuotationSettings] = useState(false);
+  const [assignment, setAssignment] = useState({
+    driverId: "",
+    helperIds: [],
+    plateNumber: "",
+    _showDrivers: false,
+    _showHelpers: false,
+    _showTrucks: false,
+  });
+  const [hasApproved, setHasApproved] = useState(false);
+  const [quotationSubmitted, setQuotationSubmitted] = useState(false);
+  const [selectedReportId, setSelectedReportId] = useState(null);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   // Distinct "Assignment Confirmed!" notification card shown after a
   // successful crew/vehicle assignment (separate from the small toast).
-  const [assignmentConfirmed, setAssignmentConfirmed] = useState(null)
+  const [assignmentConfirmed, setAssignmentConfirmed] = useState(null);
   // Auto-dismiss the "Assignment Confirmed!" card after a few seconds.
   useEffect(() => {
-    if (!assignmentConfirmed) return
-    const t = setTimeout(() => setAssignmentConfirmed(null), 3500)
-    return () => clearTimeout(t)
-  }, [assignmentConfirmed])
-  const [showDeclineDialog, setShowDeclineDialog] = useState(false)
-  const [showQuotationConfirmDialog, setShowQuotationConfirmDialog] = useState(false)
-  const [showProceedQuotationDialog, setShowProceedQuotationDialog] = useState(false)
-  const [adjustingQuotation, setAdjustingQuotation] = useState(false)
-  const [bidDeclined, setBidDeclined] = useState(false)
-  const [showInitialQuotation, setShowInitialQuotation] = useState(false)
-  const [showDeclineCounterOfferDialog, setShowDeclineCounterOfferDialog] = useState(false)
-  const [showUpdateQuotationDialog, setShowUpdateQuotationDialog] = useState(false)
-  const [showDetails, setShowDetails] = useState(true)
-  const [showQuotation, setShowQuotation] = useState(true)
-  const [showProgressDetails, setShowProgressDetails] = useState(false)
-  const [alertHistoryOpenId, setAlertHistoryOpenId] = useState(null)
-  const [page, setPage] = useState(1)
-  const [itemsPerPage, setItemsPerPage] = useState(() => Math.max(4, Math.floor((window.innerHeight - 280) / 68)))
-  const [completedPage, setCompletedPage] = useState(1)
-  const [cancelledPage, setCancelledPage] = useState(1)
-  const [transitPage, setTransitPage] = useState(1)
-  const quotationSectionRef = useRef(null)
+    if (!assignmentConfirmed) return;
+    const t = setTimeout(() => setAssignmentConfirmed(null), 3500);
+    return () => clearTimeout(t);
+  }, [assignmentConfirmed]);
+  const [showDeclineDialog, setShowDeclineDialog] = useState(false);
+  const [showQuotationConfirmDialog, setShowQuotationConfirmDialog] =
+    useState(false);
+  const [showProceedQuotationDialog, setShowProceedQuotationDialog] =
+    useState(false);
+  const [adjustingQuotation, setAdjustingQuotation] = useState(false);
+  const [bidDeclined, setBidDeclined] = useState(false);
+  const [showInitialQuotation, setShowInitialQuotation] = useState(false);
+  const [showDeclineCounterOfferDialog, setShowDeclineCounterOfferDialog] =
+    useState(false);
+  const [showUpdateQuotationDialog, setShowUpdateQuotationDialog] =
+    useState(false);
+  const [showDetails, setShowDetails] = useState(true);
+  const [showQuotation, setShowQuotation] = useState(true);
+  const [showProgressDetails, setShowProgressDetails] = useState(false);
+  const [alertHistoryOpenId, setAlertHistoryOpenId] = useState(null);
+  const [page, setPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(() =>
+    Math.max(4, Math.floor((window.innerHeight - 280) / 68)),
+  );
+  const [completedPage, setCompletedPage] = useState(1);
+  const [cancelledPage, setCancelledPage] = useState(1);
+  const [transitPage, setTransitPage] = useState(1);
+  const quotationSectionRef = useRef(null);
 
   useEffect(() => {
-    const handleResize = () => setItemsPerPage(Math.max(4, Math.floor((window.innerHeight - 280) / 68)))
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
+    const handleResize = () =>
+      setItemsPerPage(Math.max(4, Math.floor((window.innerHeight - 280) / 68)));
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
   // Load the real inbox: all delivery_requests (Supervisor read policy) plus
   // the customer display names via the admin-users Edge Function (the client
   // can't read customer_records directly), then attach any existing quotations.
   // Only the inbox is DB-backed for now; the other modules still use mock data.
-  const mountedRef = useRef(true)
+  const mountedRef = useRef(true);
   const loadInbox = useCallback(async () => {
-    setIsLoading(true)
-    setLoadError('')
+    setIsLoading(true);
+    setLoadError("");
     try {
-      const clientNameById = {}
-      const { data: clientsData, error: clientsError } = await supabase.functions.invoke('admin-users', {
-        body: { action: 'list-clients' },
-      })
+      const clientNameById = {};
+      const { data: clientsData, error: clientsError } =
+        await supabase.functions.invoke("admin-users", {
+          body: { action: "list-clients" },
+        });
       if (!clientsError && Array.isArray(clientsData?.clients)) {
         for (const client of clientsData.clients) {
-          clientNameById[client.id] = client.name
+          clientNameById[client.id] = client.name;
         }
       }
 
       // Customers with at least one crew_client_specialties row — requests
       // from these clients get the "Requires Specialized Crew" flag so the
       // Supervisor assigns a crew that actually specializes in them.
-      const { data: specializedData } = await supabase.functions.invoke('admin-users', {
-        body: { action: 'list-specialized-clients' },
-      })
-      if (mountedRef.current && Array.isArray(specializedData?.specializedClientIds)) {
-        setSpecializedClientIds(new Set(specializedData.specializedClientIds))
+      const { data: specializedData } = await supabase.functions.invoke(
+        "admin-users",
+        {
+          body: { action: "list-specialized-clients" },
+        },
+      );
+      if (
+        mountedRef.current &&
+        Array.isArray(specializedData?.specializedClientIds)
+      ) {
+        setSpecializedClientIds(new Set(specializedData.specializedClientIds));
       }
 
       // Supervisor's saved pricing rules for the quotation default generator.
@@ -2896,12 +3948,19 @@ function SupDeliveries() {
       // read errors — a broken settings table must never block quotations.
       try {
         const { data: settingsRow } = await supabase
-          .from('quotation_settings')
-          .select('rules')
-          .eq('id', 1)
-          .maybeSingle()
-        if (mountedRef.current && settingsRow?.rules && typeof settingsRow.rules === 'object') {
-          setQuotationRules({ ...DEFAULT_QUOTATION_RULES, ...settingsRow.rules })
+          .from("quotation_settings")
+          .select("rules")
+          .eq("id", 1)
+          .maybeSingle();
+        if (
+          mountedRef.current &&
+          settingsRow?.rules &&
+          typeof settingsRow.rules === "object"
+        ) {
+          setQuotationRules({
+            ...DEFAULT_QUOTATION_RULES,
+            ...settingsRow.rules,
+          });
         }
       } catch {
         // Keep built-in defaults.
@@ -2910,25 +3969,28 @@ function SupDeliveries() {
       // Real fleet for the Assign Vehicle pickers: trucks from the `trucks`
       // table (RLS-open, so the supervisor can query directly) and crew from
       // the admin-users list-crew action (drivers/helpers + *_records rows).
-      const fleet = { drivers: [], helpers: [], trucks: [] }
-      const { data: trucksData, error: trucksError } = await supabase.from('trucks').select('*')
+      const fleet = { drivers: [], helpers: [], trucks: [] };
+      const { data: trucksData, error: trucksError } = await supabase
+        .from("trucks")
+        .select("*");
       if (!trucksError) {
-        fleet.trucks = (trucksData || []).map(mapFleetTruck)
+        fleet.trucks = (trucksData || []).map(mapFleetTruck);
       }
-      const { data: crewData, error: crewError } = await supabase.functions.invoke('admin-users', {
-        body: { action: 'list-crew' },
-      })
+      const { data: crewData, error: crewError } =
+        await supabase.functions.invoke("admin-users", {
+          body: { action: "list-crew" },
+        });
       if (!crewError && Array.isArray(crewData?.crew)) {
         for (const m of crewData.crew) {
-          if (m.deactivated_at || !m.record_id) continue
-          const mapped = mapFleetCrewMember(m)
-          if (m.role === 'Driver') fleet.drivers.push(mapped)
-          else if (m.role === 'Helper') fleet.helpers.push(mapped)
+          if (m.deactivated_at || !m.record_id) continue;
+          const mapped = mapFleetCrewMember(m);
+          if (m.role === "Driver") fleet.drivers.push(mapped);
+          else if (m.role === "Helper") fleet.helpers.push(mapped);
         }
       }
       if (mountedRef.current) {
-        setFleet(fleet)
-        setFleetLoading(false)
+        setFleet(fleet);
+        setFleetLoading(false);
       }
 
       // Live crew status for the assignment pickers: record ids currently
@@ -2940,43 +4002,61 @@ function SupDeliveries() {
       // whole inbox load (it only feeds the assignment picker availability).
       try {
         const { data: activeTrips, error: activeError } = await supabase
-          .from('delivery_requests')
-          .select('assigned_driver_id, assigned_helper_ids, assigned_truck_plate, pickup_date, dropoff_date')
-          .in('status', CREW_ACTIVE_STATUSES)
+          .from("delivery_requests")
+          .select(
+            "assigned_driver_id, assigned_helper_ids, assigned_truck_plate, pickup_date, dropoff_date",
+          )
+          .in("status", CREW_ACTIVE_STATUSES);
         if (!activeError && mountedRef.current) {
-        // Date-aware busy map (plain object — Map is shadowed by a lucide icon
-        // in this file): recordId -> active trip date ranges. Lets a crew
-        // member be assigned to a delivery on a day they're NOT already on a
-        // trip, even if they're on one today.
-        const busy = {}
-        const addBusy = (recordId, start, end) => {
-          if (!recordId || !start || !end) return
-          const list = busy[recordId] || []
-          list.push({ start: String(start).slice(0, 10), end: String(end).slice(0, 10) })
-          busy[recordId] = list
-        }
-          const truckCrew = {}
-          const helpersByDriver = {}
+          // Date-aware busy map (plain object — Map is shadowed by a lucide icon
+          // in this file): recordId -> active trip date ranges. Lets a crew
+          // member be assigned to a delivery on a day they're NOT already on a
+          // trip, even if they're on one today.
+          const busy = {};
+          const addBusy = (recordId, start, end) => {
+            if (!recordId || !start || !end) return;
+            const list = busy[recordId] || [];
+            list.push({
+              start: String(start).slice(0, 10),
+              end: String(end).slice(0, 10),
+            });
+            busy[recordId] = list;
+          };
+          const truckCrew = {};
+          const helpersByDriver = {};
           for (const trip of activeTrips || []) {
             if (trip.assigned_driver_id) {
-              addBusy(trip.assigned_driver_id, trip.pickup_date, trip.dropoff_date)
-              if (trip.assigned_truck_plate && !truckCrew[trip.assigned_truck_plate]) {
+              addBusy(
+                trip.assigned_driver_id,
+                trip.pickup_date,
+                trip.dropoff_date,
+              );
+              if (
+                trip.assigned_truck_plate &&
+                !truckCrew[trip.assigned_truck_plate]
+              ) {
                 truckCrew[trip.assigned_truck_plate] = {
                   driverId: trip.assigned_driver_id,
                   helperIds: trip.assigned_helper_ids || [],
-                }
+                };
               }
             }
             for (const helperId of trip.assigned_helper_ids || []) {
-              if (helperId) addBusy(helperId, trip.pickup_date, trip.dropoff_date)
+              if (helperId)
+                addBusy(helperId, trip.pickup_date, trip.dropoff_date);
             }
-            if (trip.assigned_driver_id && Array.isArray(trip.assigned_helper_ids) && !helpersByDriver[trip.assigned_driver_id]) {
-              helpersByDriver[trip.assigned_driver_id] = trip.assigned_helper_ids.filter(Boolean)
+            if (
+              trip.assigned_driver_id &&
+              Array.isArray(trip.assigned_helper_ids) &&
+              !helpersByDriver[trip.assigned_driver_id]
+            ) {
+              helpersByDriver[trip.assigned_driver_id] =
+                trip.assigned_helper_ids.filter(Boolean);
             }
           }
-          setBusyCrewIds(busy)
-          setTruckCrewByPlate(truckCrew)
-          setHelperIdsByDriver(helpersByDriver)
+          setBusyCrewIds(busy);
+          setTruckCrewByPlate(truckCrew);
+          setHelperIdsByDriver(helpersByDriver);
         }
       } catch {
         // Availability pre-fill degraded, but the inbox itself still loads.
@@ -2987,118 +4067,158 @@ function SupDeliveries() {
       // number the assignment pickers key on.
       try {
         const { data: defaultAssignments } = await supabase
-          .from('driver_default_assignments')
-          .select('driver_record_id, helper_record_ids, trucks ( plate_number )')
+          .from("driver_default_assignments")
+          .select(
+            "driver_record_id, helper_record_ids, trucks ( plate_number )",
+          );
         if (mountedRef.current) {
-          const defaults = {}
+          const defaults = {};
           for (const row of defaultAssignments || []) {
-            const plate = row.trucks?.plate_number
+            const plate = row.trucks?.plate_number;
             if (plate && row.driver_record_id) {
               defaults[plate] = {
                 driverId: row.driver_record_id,
                 helperIds: row.helper_record_ids || [],
-              }
+              };
             }
           }
-          setDefaultCrewByPlate(defaults)
+          setDefaultCrewByPlate(defaults);
         }
       } catch {
         // Default crew pre-fill degraded, but the inbox itself still loads.
       }
 
       const { data, error } = await supabase
-        .from('delivery_requests')
-        .select('*')
-        .order('created_at', { ascending: false })
-      if (!mountedRef.current) return
+        .from("delivery_requests")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (!mountedRef.current) return;
       if (error) {
-        setLoadError(`Failed to load delivery requests. Please try again. (${error.message || error.code || 'unknown error'})`)
-        setDbRequests([])
-        return
+        setLoadError(
+          `Failed to load delivery requests. Please try again. (${error.message || error.code || "unknown error"})`,
+        );
+        setDbRequests([]);
+        return;
       }
 
-      let rows = (data || []).map((row) => mapDbRequest(row, clientNameById[row.customer_auth_id], fleet))
+      let rows = (data || []).map((row) =>
+        mapDbRequest(row, clientNameById[row.customer_auth_id], fleet),
+      );
 
-      const ids = rows.map((r) => r.id)
+      const ids = rows.map((r) => r.id);
 
       if (ids.length > 0) {
         const { data: qtns, error: qError } = await supabase
-          .from('delivery_quotations')
-          .select('*')
-          .in('delivery_id', ids)
-        if (!mountedRef.current) return
+          .from("delivery_quotations")
+          .select("*")
+          .in("delivery_id", ids);
+        if (!mountedRef.current) return;
         if (!qError) {
-          const qtnsByDelivery = {}
+          const qtnsByDelivery = {};
           for (const q of qtns || []) {
-            if (!qtnsByDelivery[q.delivery_id]) qtnsByDelivery[q.delivery_id] = {}
-            qtnsByDelivery[q.delivery_id][q.quotation_type] = q
+            if (!qtnsByDelivery[q.delivery_id])
+              qtnsByDelivery[q.delivery_id] = {};
+            qtnsByDelivery[q.delivery_id][q.quotation_type] = q;
           }
           rows = rows.map((row) => {
-            const qmap = qtnsByDelivery[row.id] || {}
+            const qmap = qtnsByDelivery[row.id] || {};
             return {
               ...row,
-              quotation: qmap.initial ? { amount: qmap.initial.amount, breakdown: qmap.initial.breakdown, notes: qmap.initial.notes, validUntil: qmap.initial.valid_until } : null,
-              updatedQuotation: qmap.updated ? { amount: qmap.updated.amount, breakdown: qmap.updated.breakdown, notes: qmap.updated.notes, validUntil: qmap.updated.valid_until } : null,
-            }
-          })
+              quotation: qmap.initial
+                ? {
+                    amount: qmap.initial.amount,
+                    breakdown: qmap.initial.breakdown,
+                    notes: qmap.initial.notes,
+                    validUntil: qmap.initial.valid_until,
+                  }
+                : null,
+              updatedQuotation: qmap.updated
+                ? {
+                    amount: qmap.updated.amount,
+                    breakdown: qmap.updated.breakdown,
+                    notes: qmap.updated.notes,
+                    validUntil: qmap.updated.valid_until,
+                  }
+                : null,
+            };
+          });
         }
       }
 
-      if (mountedRef.current) setDbRequests(rows)
+      if (mountedRef.current) setDbRequests(rows);
     } catch (e) {
       if (mountedRef.current) {
-        setLoadError(`Failed to load delivery requests. Please try again. (${e?.message || e?.code || 'unexpected error'})`)
+        setLoadError(
+          `Failed to load delivery requests. Please try again. (${e?.message || e?.code || "unexpected error"})`,
+        );
       }
     } finally {
       if (mountedRef.current) {
-        setIsLoading(false)
-        setFleetLoading(false)
+        setIsLoading(false);
+        setFleetLoading(false);
       }
     }
-  }, [])
+  }, []);
 
   useEffect(() => {
-    mountedRef.current = true
-    loadInbox()
+    mountedRef.current = true;
+    loadInbox();
     return () => {
-      mountedRef.current = false
-    }
-  }, [loadInbox])
+      mountedRef.current = false;
+    };
+  }, [loadInbox]);
 
   // Keep the supervisor's lists live: any change to delivery_requests (customer
   // confirms receipt, etc.) refreshes the inbox/completed lists.
   useEffect(() => {
     const channel = supabase
-      .channel('sup-delivery-requests-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'delivery_requests' }, () => {
-        loadInbox()
-      })
-      .subscribe()
+      .channel("sup-delivery-requests-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "delivery_requests" },
+        () => {
+          loadInbox();
+        },
+      )
+      .subscribe();
     return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [loadInbox])
+      supabase.removeChannel(channel);
+    };
+  }, [loadInbox]);
 
   const inboxRows = useMemo(
-    () => dbRequests.filter((r) => ['PENDING_REQUEST', 'QUOTATION_SUBMITTED', 'COUNTER_OFFER_SUBMITTED', 'FINAL_QUOTATION_SUBMITTED'].includes(r.status)),
+    () =>
+      dbRequests.filter((r) =>
+        [
+          "PENDING_REQUEST",
+          "QUOTATION_SUBMITTED",
+          "COUNTER_OFFER_SUBMITTED",
+          "FINAL_QUOTATION_SUBMITTED",
+        ].includes(r.status),
+      ),
     [dbRequests],
-  )
+  );
 
   // Real approved/assigned requests awaiting (or carrying) a vehicle+crew
   // assignment — read from dbRequests (not the mock array). These live
   // exclusively in the Assign Vehicle tab's workflow, not the inbox.
   const pendingAssignments = useMemo(
-    () => dbRequests.filter((r) => r.status === 'APPROVED' || r.status === 'ASSIGNED'),
+    () =>
+      dbRequests.filter(
+        (r) => r.status === "APPROVED" || r.status === "ASSIGNED",
+      ),
     [dbRequests],
-  )
+  );
 
-  const [assignPage, setAssignPage] = useState(1)
+  const [assignPage, setAssignPage] = useState(1);
 
   const filteredAssign = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    let result = pendingAssignments
-    if (statusFilter !== 'ALL') {
-      result = result.filter((r) => matchesStatusFilter(r.status, statusFilter))
+    const q = search.trim().toLowerCase();
+    let result = pendingAssignments;
+    if (statusFilter !== "ALL") {
+      result = result.filter((r) =>
+        matchesStatusFilter(r.status, statusFilter),
+      );
     }
     if (q) {
       result = result.filter(
@@ -3108,20 +4228,28 @@ function SupDeliveries() {
           r.companyName.toLowerCase().includes(q) ||
           r.pickupAddress.toLowerCase().includes(q) ||
           r.deliveryAddress.toLowerCase().includes(q),
-      )
+      );
     }
-    return sortNewestFirst(result)
-  }, [pendingAssignments, search, statusFilter])
+    return sortNewestFirst(result);
+  }, [pendingAssignments, search, statusFilter]);
 
-  const assignTotalPages = Math.max(1, Math.ceil(filteredAssign.length / itemsPerPage))
-  const assignSafePage = Math.min(assignPage, assignTotalPages)
-  const paginatedAssign = filteredAssign.slice((assignSafePage - 1) * itemsPerPage, assignSafePage * itemsPerPage)
+  const assignTotalPages = Math.max(
+    1,
+    Math.ceil(filteredAssign.length / itemsPerPage),
+  );
+  const assignSafePage = Math.min(assignPage, assignTotalPages);
+  const paginatedAssign = filteredAssign.slice(
+    (assignSafePage - 1) * itemsPerPage,
+    assignSafePage * itemsPerPage,
+  );
 
   const filteredInbox = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    let result = inboxRows
-    if (statusFilter !== 'ALL') {
-      result = result.filter((r) => matchesStatusFilter(r.status, statusFilter))
+    const q = search.trim().toLowerCase();
+    let result = inboxRows;
+    if (statusFilter !== "ALL") {
+      result = result.filter((r) =>
+        matchesStatusFilter(r.status, statusFilter),
+      );
     }
     if (q) {
       result = result.filter(
@@ -3131,25 +4259,42 @@ function SupDeliveries() {
           r.companyName.toLowerCase().includes(q) ||
           r.pickupAddress.toLowerCase().includes(q) ||
           r.deliveryAddress.toLowerCase().includes(q),
-      )
+      );
     }
-    return sortNewestFirst(result)
-  }, [inboxRows, search, statusFilter])
+    return sortNewestFirst(result);
+  }, [inboxRows, search, statusFilter]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredInbox.length / itemsPerPage))
-  const safePage = Math.min(page, totalPages)
-  const paginatedInbox = filteredInbox.slice((safePage - 1) * itemsPerPage, safePage * itemsPerPage)
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredInbox.length / itemsPerPage),
+  );
+  const safePage = Math.min(page, totalPages);
+  const paginatedInbox = filteredInbox.slice(
+    (safePage - 1) * itemsPerPage,
+    safePage * itemsPerPage,
+  );
 
   const ongoingDeliveries = useMemo(
-    () => dbRequests.filter((r) => ['OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED'].includes(r.status)),
+    () =>
+      dbRequests.filter((r) =>
+        [
+          "OUT_FOR_PICKUP",
+          "ARRIVED_PICKUP",
+          "OUT_FOR_DROPOFF",
+          "ARRIVED_DROPOFF",
+          "DELIVERED",
+        ].includes(r.status),
+      ),
     [dbRequests],
-  )
+  );
 
   const filteredTransit = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    let result = ongoingDeliveries
-    if (statusFilter !== 'ALL') {
-      result = result.filter((r) => matchesStatusFilter(r.status, statusFilter))
+    const q = search.trim().toLowerCase();
+    let result = ongoingDeliveries;
+    if (statusFilter !== "ALL") {
+      result = result.filter((r) =>
+        matchesStatusFilter(r.status, statusFilter),
+      );
     }
     if (q) {
       result = result.filter(
@@ -3159,19 +4304,25 @@ function SupDeliveries() {
           r.companyName.toLowerCase().includes(q) ||
           r.pickupAddress.toLowerCase().includes(q) ||
           r.deliveryAddress.toLowerCase().includes(q),
-      )
+      );
     }
-    return sortNewestFirst(result)
-  }, [ongoingDeliveries, search, statusFilter])
+    return sortNewestFirst(result);
+  }, [ongoingDeliveries, search, statusFilter]);
 
-  const transitTotalPages = Math.max(1, Math.ceil(filteredTransit.length / itemsPerPage))
-  const transitSafePage = Math.min(transitPage, transitTotalPages)
-  const paginatedTransit = filteredTransit.slice((transitSafePage - 1) * itemsPerPage, transitSafePage * itemsPerPage)
+  const transitTotalPages = Math.max(
+    1,
+    Math.ceil(filteredTransit.length / itemsPerPage),
+  );
+  const transitSafePage = Math.min(transitPage, transitTotalPages);
+  const paginatedTransit = filteredTransit.slice(
+    (transitSafePage - 1) * itemsPerPage,
+    transitSafePage * itemsPerPage,
+  );
 
   const monitoredDelivery = useMemo(() => {
-    const preferred = filteredTransit.find((r) => r.id === monitoredDeliveryId)
-    return preferred || filteredTransit[0] || ongoingDeliveries[0] || null
-  }, [filteredTransit, monitoredDeliveryId, ongoingDeliveries])
+    const preferred = filteredTransit.find((r) => r.id === monitoredDeliveryId);
+    return preferred || filteredTransit[0] || ongoingDeliveries[0] || null;
+  }, [filteredTransit, monitoredDeliveryId, ongoingDeliveries]);
 
   // Real telemetry for the monitored delivery: its session (for alerts) and
   // its latest gps_logs fix (for the map pin). Re-fetched on a short poll
@@ -3194,9 +4345,9 @@ function SupDeliveries() {
   // delivery's actual gps_logs instead, the same source the Driver/Helper's
   // own maps and the Helper's proximity gate already use.
   useEffect(() => {
-    const id = monitoredDelivery?.id
-    if (!id) return undefined
-    let cancelled = false
+    const id = monitoredDelivery?.id;
+    if (!id) return undefined;
+    let cancelled = false;
     const load = async () => {
       // All of the Trip's Sessions, not just the latest -- a Pause/Resume
       // closes one Session and opens a new one (same delivery_request_id,
@@ -3207,48 +4358,54 @@ function SupDeliveries() {
       // has this leg been going" stat, not a history list, so it's kept as
       // one Session's elapsed time on purpose.
       const { data: sessionRows } = await supabase
-        .from('sessions')
-        .select('session_id, start_time')
-        .eq('delivery_request_id', id)
-        .order('created_at', { ascending: false })
-      if (cancelled) return
-      const latestSession = sessionRows?.[0]
+        .from("sessions")
+        .select("session_id, start_time")
+        .eq("delivery_request_id", id)
+        .order("created_at", { ascending: false });
+      if (cancelled) return;
+      const latestSession = sessionRows?.[0];
       if (!latestSession?.session_id) {
-        setRealAlertsByDelivery((prev) => ({ ...prev, [id]: null }))
+        setRealAlertsByDelivery((prev) => ({ ...prev, [id]: null }));
       } else {
-        const sessionIds = sessionRows.map((s) => s.session_id)
+        const sessionIds = sessionRows.map((s) => s.session_id);
         const { data: alertRows } = await supabase
-          .from('alerts')
-          .select('*')
-          .in('session_id', sessionIds)
-          .order('created_at', { ascending: false })
-        if (cancelled) return
+          .from("alerts")
+          .select("*")
+          .in("session_id", sessionIds)
+          .order("created_at", { ascending: false });
+        if (cancelled) return;
         setRealAlertsByDelivery((prev) => ({
           ...prev,
-          [id]: buildRealAlertSummary(id, alertRows || [], latestSession.start_time),
-        }))
+          [id]: buildRealAlertSummary(
+            id,
+            alertRows || [],
+            latestSession.start_time,
+          ),
+        }));
       }
 
       const { data: gpsRows } = await supabase
-        .from('gps_logs')
-        .select('latitude, longitude, timestamp')
-        .eq('delivery_request_id', id)
-        .order('timestamp', { ascending: false })
-        .limit(1)
-      if (cancelled) return
-      const fix = gpsRows?.[0]
+        .from("gps_logs")
+        .select("latitude, longitude, timestamp")
+        .eq("delivery_request_id", id)
+        .order("timestamp", { ascending: false })
+        .limit(1);
+      if (cancelled) return;
+      const fix = gpsRows?.[0];
       setRealLocationByDelivery((prev) => ({
         ...prev,
-        [id]: fix ? { lat: fix.latitude, lng: fix.longitude, updatedAt: fix.timestamp } : null,
-      }))
-    }
-    load()
-    const intervalId = setInterval(load, 10000)
+        [id]: fix
+          ? { lat: fix.latitude, lng: fix.longitude, updatedAt: fix.timestamp }
+          : null,
+      }));
+    };
+    load();
+    const intervalId = setInterval(load, 10000);
     return () => {
-      cancelled = true
-      clearInterval(intervalId)
-    }
-  }, [monitoredDelivery?.id])
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [monitoredDelivery?.id]);
 
   // Real driven distance for whichever delivery is open in "View Details"
   // (Inbox/Assign Vehicle/In Transit -- selectedRequest, not monitoredDelivery
@@ -3262,267 +4419,387 @@ function SupDeliveries() {
   // buildRealTripAndBehaviorReport's identical per-session summation used
   // for Completed/Cancelled reports elsewhere in this file.
   useEffect(() => {
-    const id = selectedRequest?.id
-    if (!id || realDistanceKmBySelected[id] !== undefined) return undefined
-    let cancelled = false
-    ;(async () => {
+    const id = selectedRequest?.id;
+    if (!id || realDistanceKmBySelected[id] !== undefined) return undefined;
+    let cancelled = false;
+    (async () => {
       const { data: sessionRows } = await supabase
-        .from('sessions')
-        .select('session_id')
-        .eq('delivery_request_id', id)
-      if (cancelled) return
+        .from("sessions")
+        .select("session_id")
+        .eq("delivery_request_id", id);
+      if (cancelled) return;
       if (!sessionRows?.length) {
-        setRealDistanceKmBySelected((prev) => ({ ...prev, [id]: null }))
-        return
+        setRealDistanceKmBySelected((prev) => ({ ...prev, [id]: null }));
+        return;
       }
-      const sessionIds = sessionRows.map((s) => s.session_id)
+      const sessionIds = sessionRows.map((s) => s.session_id);
       const { data: gpsRows } = await supabase
-        .from('gps_logs')
-        .select('session_id, latitude, longitude, timestamp')
-        .in('session_id', sessionIds)
-        .order('session_id', { ascending: true })
-        .order('timestamp', { ascending: true })
-      if (cancelled) return
-      let totalMeters = 0
-      let prevSessionId = null
-      let prev = null
+        .from("gps_logs")
+        .select("session_id, latitude, longitude, timestamp")
+        .in("session_id", sessionIds)
+        .order("session_id", { ascending: true })
+        .order("timestamp", { ascending: true });
+      if (cancelled) return;
+      let totalMeters = 0;
+      let prevSessionId = null;
+      let prev = null;
       for (const row of gpsRows || []) {
         if (row.session_id !== prevSessionId) {
-          prevSessionId = row.session_id
-          prev = row
-          continue
+          prevSessionId = row.session_id;
+          prev = row;
+          continue;
         }
-        totalMeters += distanceMeters(prev.latitude, prev.longitude, row.latitude, row.longitude)
-        prev = row
+        totalMeters += distanceMeters(
+          prev.latitude,
+          prev.longitude,
+          row.latitude,
+          row.longitude,
+        );
+        prev = row;
       }
       setRealDistanceKmBySelected((prev) => ({
         ...prev,
         [id]: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : null,
-      }))
-    })()
+      }));
+    })();
     return () => {
-      cancelled = true
-    }
-  }, [selectedRequest?.id, realDistanceKmBySelected])
+      cancelled = true;
+    };
+  }, [selectedRequest?.id, realDistanceKmBySelected]);
 
   const monitoredAlert = useMemo(() => {
-    if (!monitoredDelivery) return null
-    return realAlertsByDelivery[monitoredDelivery.id] || alertsByDelivery[monitoredDelivery.id] || null
-  }, [monitoredDelivery, realAlertsByDelivery])
+    if (!monitoredDelivery) return null;
+    return (
+      realAlertsByDelivery[monitoredDelivery.id] ||
+      alertsByDelivery[monitoredDelivery.id] ||
+      null
+    );
+  }, [monitoredDelivery, realAlertsByDelivery]);
 
   const completedDeliveries = useMemo(
-    () => dbRequests.filter((r) => r.status === 'COMPLETED'),
+    () => dbRequests.filter((r) => r.status === "COMPLETED"),
     [dbRequests],
-  )
+  );
 
   // Declined/cancelled requests from the real data — read from dbRequests so
   // a supervisor decline (status CANCELLED) shows up here instead of vanishing.
   const cancelledDeliveries = useMemo(
-    () => dbRequests.filter((r) => r.status === 'CANCELLED'),
+    () => dbRequests.filter((r) => r.status === "CANCELLED"),
     [dbRequests],
-  )
+  );
 
-  const selectedCompletedReport = selectedReportId && !selectedReportId.startsWith('cancel-')
-    ? completedDeliveries.find((d) => d.id === selectedReportId) || null
-    : null
-  const selectedCancelledReport = selectedReportId && selectedReportId.startsWith('cancel-')
-    ? cancelledDeliveries.find((d) => d.id === selectedReportId.slice(7)) || null
-    : null
+  const selectedCompletedReport =
+    selectedReportId && !selectedReportId.startsWith("cancel-")
+      ? completedDeliveries.find((d) => d.id === selectedReportId) || null
+      : null;
+  const selectedCancelledReport =
+    selectedReportId && selectedReportId.startsWith("cancel-")
+      ? cancelledDeliveries.find((d) => d.id === selectedReportId.slice(7)) ||
+        null
+      : null;
 
   const filteredCompleted = useMemo(
     () => sortNewestFirst(filterDeliveryList(completedDeliveries, search)),
     [completedDeliveries, search],
-  )
-  const completedTotalPages = Math.max(1, Math.ceil(filteredCompleted.length / itemsPerPage))
-  const completedSafePage = Math.min(completedPage, completedTotalPages)
-  const paginatedCompleted = filteredCompleted.slice((completedSafePage - 1) * itemsPerPage, completedSafePage * itemsPerPage)
+  );
+  const completedTotalPages = Math.max(
+    1,
+    Math.ceil(filteredCompleted.length / itemsPerPage),
+  );
+  const completedSafePage = Math.min(completedPage, completedTotalPages);
+  const paginatedCompleted = filteredCompleted.slice(
+    (completedSafePage - 1) * itemsPerPage,
+    completedSafePage * itemsPerPage,
+  );
 
   const filteredCancelled = useMemo(
     () => sortNewestFirst(filterDeliveryList(cancelledDeliveries, search)),
     [cancelledDeliveries, search],
-  )
-  const cancelledTotalPages = Math.max(1, Math.ceil(filteredCancelled.length / itemsPerPage))
-  const cancelledSafePage = Math.min(cancelledPage, cancelledTotalPages)
-  const paginatedCancelled = filteredCancelled.slice((cancelledSafePage - 1) * itemsPerPage, cancelledSafePage * itemsPerPage)
+  );
+  const cancelledTotalPages = Math.max(
+    1,
+    Math.ceil(filteredCancelled.length / itemsPerPage),
+  );
+  const cancelledSafePage = Math.min(cancelledPage, cancelledTotalPages);
+  const paginatedCancelled = filteredCancelled.slice(
+    (cancelledSafePage - 1) * itemsPerPage,
+    cancelledSafePage * itemsPerPage,
+  );
 
-  const selectedDriver = fleet.drivers.find((d) => d.id === assignment.driverId)
-  const selectedTruck = fleet.trucks.find((t) => t.plateNumber === assignment.plateNumber)
-  const selectedHelpers = fleet.helpers.filter((h) => assignment.helperIds.includes(h.id))
-  const canConfirmAssignment = Boolean(selectedDriver && selectedTruck && selectedHelpers.length > 0)
-  const isInTransitStatus = ['OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED'].includes(selectedRequest?.status)
+  const selectedDriver = fleet.drivers.find(
+    (d) => d.id === assignment.driverId,
+  );
+  const selectedTruck = fleet.trucks.find(
+    (t) => t.plateNumber === assignment.plateNumber,
+  );
+  const selectedHelpers = fleet.helpers.filter((h) =>
+    assignment.helperIds.includes(h.id),
+  );
+  const canConfirmAssignment = Boolean(
+    selectedDriver && selectedTruck && selectedHelpers.length > 0,
+  );
+  const isInTransitStatus = [
+    "OUT_FOR_PICKUP",
+    "ARRIVED_PICKUP",
+    "OUT_FOR_DROPOFF",
+    "ARRIVED_DROPOFF",
+    "DELIVERED",
+  ].includes(selectedRequest?.status);
 
   // --- Assignment eligibility (delivery date + client specialty) -----------
   // Availability is judged against the delivery's scheduled pickup date, not
   // "today" — a driver working Tue–Sat is unavailable for a Monday pickup
   // even if today is Tuesday.
   const deliveryDate = useMemo(
-    () => (selectedRequest?.pickupDate ? new Date(selectedRequest.pickupDate) : new Date()),
+    () =>
+      selectedRequest?.pickupDate
+        ? new Date(selectedRequest.pickupDate)
+        : new Date(),
     [selectedRequest],
-  )
-  const deliveryDateLabel = deliveryDate.toLocaleDateString('en-PH', {
+  );
+  const deliveryDateLabel = deliveryDate.toLocaleDateString("en-PH", {
     timeZone: MANILA_TIMEZONE,
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
   // Clients with crew_client_specialties links may only be served by crew
   // specializing in them — the pickers hide everyone else entirely.
-  const requiresSpecializedCrew = selectedRequest ? specializedClientIds.has(selectedRequest.customerAuthId) : false
-  const crewMeetsSpecialty = useCallback((member) =>
-    !requiresSpecializedCrew || isSpecializedForClient(member, selectedRequest?.customerName),
-    [requiresSpecializedCrew, selectedRequest?.customerName])
+  const requiresSpecializedCrew = selectedRequest
+    ? specializedClientIds.has(selectedRequest.customerAuthId)
+    : false;
+  const crewMeetsSpecialty = useCallback(
+    (member) =>
+      !requiresSpecializedCrew ||
+      isSpecializedForClient(member, selectedRequest?.customerName),
+    [requiresSpecializedCrew, selectedRequest?.customerName],
+  );
   // 'YYYY-MM-DD' of the delivery being assigned — what the busy-range check
   // is judged against (so a crew member on a trip today is still free for a
   // different-date delivery).
-  const deliveryDateKey = selectedRequest?.pickupDate ? String(selectedRequest.pickupDate).slice(0, 10) : todayDateKey()
-  const crewAvailabilityOnDate = useCallback((member) =>
-    getCrewAvailability({ recordId: member.id, workingDays: member.workingDays }, busyCrewIds, deliveryDateKey),
-    [busyCrewIds, deliveryDateKey])
-  const crewAvailableOnDate = useCallback((member) => crewAvailabilityOnDate(member).key === 'available', [crewAvailabilityOnDate])
+  const deliveryDateKey = selectedRequest?.pickupDate
+    ? String(selectedRequest.pickupDate).slice(0, 10)
+    : todayDateKey();
+  const crewAvailabilityOnDate = useCallback(
+    (member) =>
+      getCrewAvailability(
+        { recordId: member.id, workingDays: member.workingDays },
+        busyCrewIds,
+        deliveryDateKey,
+      ),
+    [busyCrewIds, deliveryDateKey],
+  );
+  const crewAvailableOnDate = useCallback(
+    (member) => crewAvailabilityOnDate(member).key === "available",
+    [crewAvailabilityOnDate],
+  );
   // Crew a truck should pre-fill: its current active-trip crew, falling back
   // to the Supervisor's saved default assignment (Delivery Crew profile).
   const getCrewForPlate = useCallback(
     (plate) => truckCrewByPlate[plate] || defaultCrewByPlate[plate] || null,
     [truckCrewByPlate, defaultCrewByPlate],
-  )
+  );
   // Trucks matching the customer's requested type only, most relevant first:
   // trucks whose current driver is available on the delivery date before
   // trucks that would need a driver swap.
   const matchingTrucks = useMemo(() => {
-    const wanted = normalizeTruckType(selectedRequest?.truckType)
+    const wanted = normalizeTruckType(selectedRequest?.truckType);
     return fleet.trucks
       .filter((t) => normalizeTruckType(t.truckType) === wanted)
       .sort((a, b) => {
         const aOk = getCrewForPlate(a.plateNumber)?.driverId
-          ? crewAvailableOnDate(fleet.drivers.find((d) => d.id === getCrewForPlate(a.plateNumber).driverId) || {})
-          : true
+          ? crewAvailableOnDate(
+              fleet.drivers.find(
+                (d) => d.id === getCrewForPlate(a.plateNumber).driverId,
+              ) || {},
+            )
+          : true;
         const bOk = getCrewForPlate(b.plateNumber)?.driverId
-          ? crewAvailableOnDate(fleet.drivers.find((d) => d.id === getCrewForPlate(b.plateNumber).driverId) || {})
-          : true
-        if (aOk === bOk) return 0
-        return aOk ? -1 : 1
-      })
-  }, [fleet, selectedRequest?.truckType, getCrewForPlate, crewAvailableOnDate])
-  const eligibleDrivers = useMemo(() => fleet.drivers.filter(crewMeetsSpecialty), [fleet.drivers, crewMeetsSpecialty])
-  const eligibleHelpers = useMemo(() => fleet.helpers.filter(crewMeetsSpecialty), [fleet.helpers, crewMeetsSpecialty])
+          ? crewAvailableOnDate(
+              fleet.drivers.find(
+                (d) => d.id === getCrewForPlate(b.plateNumber).driverId,
+              ) || {},
+            )
+          : true;
+        if (aOk === bOk) return 0;
+        return aOk ? -1 : 1;
+      });
+  }, [fleet, selectedRequest?.truckType, getCrewForPlate, crewAvailableOnDate]);
+  const eligibleDrivers = useMemo(
+    () => fleet.drivers.filter(crewMeetsSpecialty),
+    [fleet.drivers, crewMeetsSpecialty],
+  );
+  const eligibleHelpers = useMemo(
+    () => fleet.helpers.filter(crewMeetsSpecialty),
+    [fleet.helpers, crewMeetsSpecialty],
+  );
   // Warning for a truck whose currently-assigned driver can't make the
   // delivery date — shown beside the plate number in the truck picker. Helpers
   // don't get the same warning: an unavailable helper is simply not pre-filled
   // and the Supervisor picks another one.
-  const truckDriverWarning = useCallback((truck) => {
-    const crew = getCrewForPlate(truck.plateNumber)
-    if (!crew?.driverId) return null
-    const driver = fleet.drivers.find((d) => d.id === crew.driverId)
-    if (!driver || crewAvailableOnDate(driver)) return null
-    return `${driver.name} is unavailable on ${deliveryDateLabel}`
-  }, [getCrewForPlate, fleet.drivers, crewAvailableOnDate, deliveryDateLabel])
+  const truckDriverWarning = useCallback(
+    (truck) => {
+      const crew = getCrewForPlate(truck.plateNumber);
+      if (!crew?.driverId) return null;
+      const driver = fleet.drivers.find((d) => d.id === crew.driverId);
+      if (!driver || crewAvailableOnDate(driver)) return null;
+      return `${driver.name} is unavailable on ${deliveryDateLabel}`;
+    },
+    [getCrewForPlate, fleet.drivers, crewAvailableOnDate, deliveryDateLabel],
+  );
   // Pre-fill the truck's crew — its current active-trip crew, or the saved
   // default assignment when it has none — skipping anyone who doesn't meet
   // the client specialty or isn't available on the delivery date. An
   // unavailable driver is NOT auto-assigned — the Supervisor sees the warning
   // and picks another truck or another driver instead.
-  const prefillTruckCrew = useCallback((truck) => {
-    const crew = getCrewForPlate(truck.plateNumber)
-    const currentDriver = crew?.driverId ? fleet.drivers.find((d) => d.id === crew.driverId) : null
-    const driverOk = currentDriver && crewMeetsSpecialty(currentDriver) && crewAvailableOnDate(currentDriver)
-    const helperIds = (crew?.helperIds || [])
-      .map((id) => fleet.helpers.find((h) => h.id === id))
-      .filter(Boolean)
-      .filter(crewMeetsSpecialty)
-      .filter(crewAvailableOnDate)
-      .map((h) => h.id)
-    setAssignment((prev) => ({
-      ...prev,
-      plateNumber: truck.plateNumber,
-      driverId: driverOk ? currentDriver.id : '',
-      helperIds,
-      _showTrucks: false,
-    }))
-  }, [getCrewForPlate, fleet, crewMeetsSpecialty, crewAvailableOnDate])
+  const prefillTruckCrew = useCallback(
+    (truck) => {
+      const crew = getCrewForPlate(truck.plateNumber);
+      const currentDriver = crew?.driverId
+        ? fleet.drivers.find((d) => d.id === crew.driverId)
+        : null;
+      const driverOk =
+        currentDriver &&
+        crewMeetsSpecialty(currentDriver) &&
+        crewAvailableOnDate(currentDriver);
+      const helperIds = (crew?.helperIds || [])
+        .map((id) => fleet.helpers.find((h) => h.id === id))
+        .filter(Boolean)
+        .filter(crewMeetsSpecialty)
+        .filter(crewAvailableOnDate)
+        .map((h) => h.id);
+      setAssignment((prev) => ({
+        ...prev,
+        plateNumber: truck.plateNumber,
+        driverId: driverOk ? currentDriver.id : "",
+        helperIds,
+        _showTrucks: false,
+      }));
+    },
+    [getCrewForPlate, fleet, crewMeetsSpecialty, crewAvailableOnDate],
+  );
   // Safety net before persisting: never save a crew member who fails the
   // client specialty requirement or isn't available on the delivery date.
   const assignmentValidationError = () => {
     if (selectedDriver) {
       if (!crewMeetsSpecialty(selectedDriver)) {
-        return `${selectedDriver.name} does not have the required specialty for ${selectedRequest.customerName}.`
+        return `${selectedDriver.name} does not have the required specialty for ${selectedRequest.customerName}.`;
       }
       if (!crewAvailableOnDate(selectedDriver)) {
-        return `${selectedDriver.name} is unavailable on ${deliveryDateLabel}. Please assign a different driver or truck.`
+        return `${selectedDriver.name} is unavailable on ${deliveryDateLabel}. Please assign a different driver or truck.`;
       }
     }
     for (const helper of selectedHelpers) {
       if (!crewMeetsSpecialty(helper)) {
-        return `${helper.name} does not have the required specialty for ${selectedRequest.customerName}.`
+        return `${helper.name} does not have the required specialty for ${selectedRequest.customerName}.`;
       }
       if (!crewAvailableOnDate(helper)) {
-        return `${helper.name} is unavailable on ${deliveryDateLabel}. Please assign a different helper.`
+        return `${helper.name} is unavailable on ${deliveryDateLabel}. Please assign a different helper.`;
       }
     }
-    return null
-  }
+    return null;
+  };
 
   const moduleTabs = [
-    { id: 'inbox', label: 'Delivery Requests Inbox', mobileLabel: 'Inbox', count: inboxRows.length },
-    { id: 'assignment', label: 'Assign Vehicle', mobileLabel: 'Assign', count: pendingAssignments.length },
-    { id: 'transit', label: 'In Transit Deliveries', mobileLabel: 'In Transit', count: ongoingDeliveries.length },
-    { id: 'completed', label: 'Completed Deliveries', mobileLabel: 'Completed', count: completedDeliveries.length },
-    { id: 'cancelled', label: 'Cancellations', mobileLabel: 'Cancellations', count: cancelledDeliveries.length },
-  ]
+    {
+      id: "inbox",
+      label: "Delivery Requests Inbox",
+      mobileLabel: "Inbox",
+      count: inboxRows.length,
+    },
+    {
+      id: "assignment",
+      label: "Assign Vehicle",
+      mobileLabel: "Assign",
+      count: pendingAssignments.length,
+    },
+    {
+      id: "transit",
+      label: "In Transit Deliveries",
+      mobileLabel: "In Transit",
+      count: ongoingDeliveries.length,
+    },
+    {
+      id: "completed",
+      label: "Completed Deliveries",
+      mobileLabel: "Completed",
+      count: completedDeliveries.length,
+    },
+    {
+      id: "cancelled",
+      label: "Cancellations",
+      mobileLabel: "Cancellations",
+      count: cancelledDeliveries.length,
+    },
+  ];
 
   const goToModule = (mod) => {
-    setActiveModule(mod)
-    setStatusFilter('ALL')
-    setPage(1)
-    setAssignPage(1)
-    setCompletedPage(1)
-    setCancelledPage(1)
-    setTransitPage(1)
-  }
+    setActiveModule(mod);
+    setStatusFilter("ALL");
+    setPage(1);
+    setAssignPage(1);
+    setCompletedPage(1);
+    setCancelledPage(1);
+    setTransitPage(1);
+  };
 
   const onGlobalSearchChange = (value) => {
-    setSearch(value)
-    setPage(1)
-    setAssignPage(1)
-    setCompletedPage(1)
-    setCancelledPage(1)
-    setTransitPage(1)
-  }
+    setSearch(value);
+    setPage(1);
+    setAssignPage(1);
+    setCompletedPage(1);
+    setCancelledPage(1);
+    setTransitPage(1);
+  };
 
   const openDetails = (request) => {
-    setSelectedRequest(request)
+    setSelectedRequest(request);
     // If request is already past PENDING, expand the modal immediately
-    setHasApproved(request.status !== 'PENDING_REQUEST')
+    setHasApproved(request.status !== "PENDING_REQUEST");
     // Quotation step is considered done if the request already has a quotation
-    setQuotationSubmitted(Boolean(request.quotation))
-    setShowInitialQuotation(false)
+    setQuotationSubmitted(Boolean(request.quotation));
+    setShowInitialQuotation(false);
     // Collapse the Quotation section by default for APPROVED requests with an approved quotation,
     // so the dispatch/assignment section is seen first.
-    setShowQuotation(request.status !== 'APPROVED' || !request.quotation)
+    setShowQuotation(request.status !== "APPROVED" || !request.quotation);
     setQuotationForm({
-      directExpenses: request.quotation?.breakdown?.directExpenses || buildQuotationDefaults(request, quotationRules).directExpenses,
-      indirectExpenses: request.quotation?.breakdown?.indirectExpenses || buildQuotationDefaults(request, quotationRules).indirectExpenses,
-    })
+      directExpenses:
+        request.quotation?.breakdown?.directExpenses ||
+        buildQuotationDefaults(request, quotationRules).directExpenses,
+      indirectExpenses:
+        request.quotation?.breakdown?.indirectExpenses ||
+        buildQuotationDefaults(request, quotationRules).indirectExpenses,
+    });
     setAssignment({
-      driverId: request.crew?.driver?.id || '',
+      driverId: request.crew?.driver?.id || "",
       helperIds: request.crew?.helpers?.map((h) => h.id) || [],
-      plateNumber: request.crew?.truck?.plateNumber || '',
+      plateNumber: request.crew?.truck?.plateNumber || "",
       _showDrivers: false,
       _showHelpers: false,
       _showTrucks: false,
-    })
-  }
+    });
+  };
 
   const updateRequest = (id, patch) => {
-    setRequests((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)))
-    setDbRequests((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)))
-    setSelectedRequest((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev))
-  }
+    setRequests((prev) =>
+      prev.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+    );
+    setDbRequests((prev) =>
+      prev.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+    );
+    setSelectedRequest((prev) =>
+      prev && prev.id === id ? { ...prev, ...patch } : prev,
+    );
+  };
 
   const getDirectTotal = () => {
-    const d = quotationForm.directExpenses
-    const distKm = selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0
-    const dieselTotal = parseMoney(d.dieselRate) * distKm
-    return dieselTotal +
+    const d = quotationForm.directExpenses;
+    const distKm = selectedRequest
+      ? parseFloat(getTotalDistance(selectedRequest)) || 0
+      : 0;
+    const dieselTotal = parseMoney(d.dieselRate) * distKm;
+    return (
+      dieselTotal +
       parseMoney(d.depreciation) +
       parseMoney(d.repairsAndMaintenance.batteries) +
       parseMoney(d.repairsAndMaintenance.tires) +
@@ -3532,198 +4809,223 @@ function SupDeliveries() {
       parseMoney(d.tripAllowance) +
       parseMoney(d.lodgingAllowance) +
       parseMoney(d.tollParking)
-  }
+    );
+  };
   const getIndirectTotal = () => {
-    const i = quotationForm.indirectExpenses
-    return parseMoney(i.adminFees) +
+    const i = quotationForm.indirectExpenses;
+    return (
+      parseMoney(i.adminFees) +
       parseMoney(i.insurance) +
       parseMoney(i.motorVehicleReg) +
       parseMoney(i.garageRental)
-  }
-  const getOperatingTotal = () => getDirectTotal() + getIndirectTotal()
-  const getIncome = () => getOperatingTotal() * 0.15
-  const getProposedRate = () => getOperatingTotal() + getIncome()
+    );
+  };
+  const getOperatingTotal = () => getDirectTotal() + getIndirectTotal();
+  const getIncome = () => getOperatingTotal() * 0.15;
+  const getProposedRate = () => getOperatingTotal() + getIncome();
 
   const submitQuotation = () => {
-    if (!selectedRequest) return
-    setShowDetails(false)
-    setShowQuotationConfirmDialog(true)
-  }
+    if (!selectedRequest) return;
+    setShowDetails(false);
+    setShowQuotationConfirmDialog(true);
+  };
   const confirmQuotation = async () => {
-    if (!selectedRequest) return
-    const proposed = getProposedRate()
-    if (proposed <= 0) return alert('Fill in at least one expense amount before submitting.')
-    const distKm = selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0
+    if (!selectedRequest) return;
+    const proposed = getProposedRate();
+    if (proposed <= 0)
+      return alert("Fill in at least one expense amount before submitting.");
+    const distKm = selectedRequest
+      ? parseFloat(getTotalDistance(selectedRequest)) || 0
+      : 0;
     const breakdown = {
       directExpenses: quotationForm.directExpenses,
       indirectExpenses: quotationForm.indirectExpenses,
       calculated: {
         distanceKm: distKm,
         totalDays: getTotalDays(selectedRequest),
-        dieselTotal: parseMoney(quotationForm.directExpenses.dieselRate) * distKm,
+        dieselTotal:
+          parseMoney(quotationForm.directExpenses.dieselRate) * distKm,
         directTotal: getDirectTotal(),
         indirectTotal: getIndirectTotal(),
         operatingTotal: getOperatingTotal(),
         income: getIncome(),
         proposedRate: proposed,
       },
-    }
-    const { data: { user } } = await supabase.auth.getUser()
+    };
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     const { error: insertError } = await supabase
-      .from('delivery_quotations')
+      .from("delivery_quotations")
       .insert({
         delivery_id: selectedRequest.id,
-        quotation_type: 'initial',
+        quotation_type: "initial",
         amount: proposed,
         breakdown,
         notes: null,
         valid_until: null,
         submitted_by: user?.id ?? null,
-      })
+      });
     if (insertError) {
-      return alert('Failed to save the quotation. Please try again.')
+      return alert("Failed to save the quotation. Please try again.");
     }
     const { error: updateError } = await supabase
-      .from('delivery_requests')
-      .update({ status: 'QUOTATION_SUBMITTED' })
-      .eq('id', selectedRequest.id)
+      .from("delivery_requests")
+      .update({ status: "QUOTATION_SUBMITTED" })
+      .eq("id", selectedRequest.id);
     if (updateError) {
-      return alert('Quotation saved, but failed to update the request status. Please try again.')
+      return alert(
+        "Quotation saved, but failed to update the request status. Please try again.",
+      );
     }
-    updateRequest(selectedRequest.id, { quotation: { amount: proposed, breakdown }, status: 'QUOTATION_SUBMITTED' })
-    setQuotationSubmitted(true)
-    setShowQuotationConfirmDialog(false)
-  }
+    updateRequest(selectedRequest.id, {
+      quotation: { amount: proposed, breakdown },
+      status: "QUOTATION_SUBMITTED",
+    });
+    setQuotationSubmitted(true);
+    setShowQuotationConfirmDialog(false);
+  };
   const closeQuotationConfirmDialog = () => {
-    setShowQuotationConfirmDialog(false)
-    setShowDetails(true)
-  }
+    setShowQuotationConfirmDialog(false);
+    setShowDetails(true);
+  };
 
   const startQuotation = () => {
-    if (!selectedRequest) return
-    setHasApproved(true)
-    setQuotationSubmitted(false)
+    if (!selectedRequest) return;
+    setHasApproved(true);
+    setQuotationSubmitted(false);
     // Pre-fill every category with this request's dynamic defaults — the
     // Supervisor can still override any line before submitting.
-    setQuotationForm(buildQuotationDefaults(selectedRequest, quotationRules))
-    setShowDetails(false)
-  }
+    setQuotationForm(buildQuotationDefaults(selectedRequest, quotationRules));
+    setShowDetails(false);
+  };
 
   const openDeclineDialog = () => {
-    if (!selectedRequest) return
-    setShowDeclineDialog(true)
-  }
+    if (!selectedRequest) return;
+    setShowDeclineDialog(true);
+  };
   const confirmDecline = async () => {
-    if (!selectedRequest) return
-    const cancelledAt = new Date().toISOString()
+    if (!selectedRequest) return;
+    const cancelledAt = new Date().toISOString();
     const { error } = await supabase
-      .from('delivery_requests')
+      .from("delivery_requests")
       .update({
-        status: 'CANCELLED',
-        cancelled_by: 'supervisor',
-        cancel_reason: 'Location Restriction',
+        status: "CANCELLED",
+        cancelled_by: "supervisor",
+        cancel_reason: "Location Restriction",
         cancelled_at: cancelledAt,
         cancelled_from_status: selectedRequest.status,
       })
-      .eq('id', selectedRequest.id)
+      .eq("id", selectedRequest.id);
     if (error) {
-      return alert('Failed to decline the request. Please try again.')
+      return alert("Failed to decline the request. Please try again.");
     }
     updateRequest(selectedRequest.id, {
-      status: 'CANCELLED',
-      cancelledBy: 'supervisor',
-      cancelReason: 'Location Restriction',
+      status: "CANCELLED",
+      cancelledBy: "supervisor",
+      cancelReason: "Location Restriction",
       cancelledAt: formatIsoDateTime(cancelledAt),
       cancelledFromStatus: selectedRequest.status,
-    })
-    setShowDeclineDialog(false)
-    setSelectedRequest(null)
-  }
+    });
+    setShowDeclineDialog(false);
+    setSelectedRequest(null);
+  };
   const closeDeclineDialog = () => {
-    setShowDeclineDialog(false)
-  }
+    setShowDeclineDialog(false);
+  };
 
   const handleDeclineCounterOffer = () => {
-    setShowDeclineCounterOfferDialog(true)
-  }
+    setShowDeclineCounterOfferDialog(true);
+  };
   const confirmDeclineCounterOffer = () => {
-    if (!selectedRequest) return
-    setBidDeclined(true)
-    setShowDeclineCounterOfferDialog(false)
-  }
+    if (!selectedRequest) return;
+    setBidDeclined(true);
+    setShowDeclineCounterOfferDialog(false);
+  };
   const closeDeclineCounterOfferDialog = () => {
-    setShowDeclineCounterOfferDialog(false)
-  }
+    setShowDeclineCounterOfferDialog(false);
+  };
 
   const handleUpdateQuotation = () => {
-    setShowUpdateQuotationDialog(true)
-  }
+    setShowUpdateQuotationDialog(true);
+  };
   const confirmUpdateQuotation = () => {
-    setAdjustingQuotation(true)
-    setShowUpdateQuotationDialog(false)
-  }
+    setAdjustingQuotation(true);
+    setShowUpdateQuotationDialog(false);
+  };
   const closeUpdateQuotationDialog = () => {
-    setShowUpdateQuotationDialog(false)
-  }
+    setShowUpdateQuotationDialog(false);
+  };
 
   const handleSubmitUpdatedQuotation = async () => {
-    if (!selectedRequest) return
-    const proposed = getProposedRate()
-    if (proposed <= 0) return alert('Fill in at least one expense amount before submitting.')
-    const distKm = selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0
+    if (!selectedRequest) return;
+    const proposed = getProposedRate();
+    if (proposed <= 0)
+      return alert("Fill in at least one expense amount before submitting.");
+    const distKm = selectedRequest
+      ? parseFloat(getTotalDistance(selectedRequest)) || 0
+      : 0;
     const breakdown = {
       directExpenses: quotationForm.directExpenses,
       indirectExpenses: quotationForm.indirectExpenses,
       calculated: {
         distanceKm: distKm,
         totalDays: getTotalDays(selectedRequest),
-        dieselTotal: parseMoney(quotationForm.directExpenses.dieselRate) * distKm,
+        dieselTotal:
+          parseMoney(quotationForm.directExpenses.dieselRate) * distKm,
         directTotal: getDirectTotal(),
         indirectTotal: getIndirectTotal(),
         operatingTotal: getOperatingTotal(),
         income: getIncome(),
         proposedRate: proposed,
       },
-    }
-    const { data: { user } } = await supabase.auth.getUser()
+    };
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     const { error: insertError } = await supabase
-      .from('delivery_quotations')
+      .from("delivery_quotations")
       .insert({
         delivery_id: selectedRequest.id,
-        quotation_type: 'updated',
+        quotation_type: "updated",
         amount: proposed,
         breakdown,
         notes: null,
         valid_until: null,
         submitted_by: user?.id ?? null,
-      })
+      });
     if (insertError) {
-      return alert('Failed to save the updated quotation. Please try again.')
+      return alert("Failed to save the updated quotation. Please try again.");
     }
     const { error: updateError } = await supabase
-      .from('delivery_requests')
-      .update({ status: 'FINAL_QUOTATION_SUBMITTED' })
-      .eq('id', selectedRequest.id)
+      .from("delivery_requests")
+      .update({ status: "FINAL_QUOTATION_SUBMITTED" })
+      .eq("id", selectedRequest.id);
     if (updateError) {
-      return alert('Quotation saved, but failed to update the request status. Please try again.')
+      return alert(
+        "Quotation saved, but failed to update the request status. Please try again.",
+      );
     }
-    updateRequest(selectedRequest.id, { updatedQuotation: { amount: proposed, breakdown }, status: 'FINAL_QUOTATION_SUBMITTED' })
-    setAdjustingQuotation(false)
-    setBidDeclined(false)
-  }
+    updateRequest(selectedRequest.id, {
+      updatedQuotation: { amount: proposed, breakdown },
+      status: "FINAL_QUOTATION_SUBMITTED",
+    });
+    setAdjustingQuotation(false);
+    setBidDeclined(false);
+  };
 
   const toggleHelper = (id) => {
     setAssignment((prev) => {
       if (prev.helperIds.includes(id)) {
-        return { ...prev, helperIds: prev.helperIds.filter((v) => v !== id) }
+        return { ...prev, helperIds: prev.helperIds.filter((v) => v !== id) };
       }
-      if (prev.helperIds.length >= 2) return prev
-      return { ...prev, helperIds: [...prev.helperIds, id] }
-    })
-  }
+      if (prev.helperIds.length >= 2) return prev;
+      return { ...prev, helperIds: [...prev.helperIds, id] };
+    });
+  };
 
   const assignCrew = async () => {
-    if (!selectedRequest || !canConfirmAssignment) return
+    if (!selectedRequest || !canConfirmAssignment) return;
 
     // Off-type trucks are intentionally assignable -- the picker already
     // surfaces the mismatch (amber note + "Assigned Truck Type (mismatch)"
@@ -3731,1397 +5033,2376 @@ function SupDeliveries() {
     // not a hard block here. Specialty/availability rules, on the other hand,
     // are hard requirements — the pickers already prevent these, this is the
     // safety net before anything is persisted.
-    const validationError = assignmentValidationError()
+    const validationError = assignmentValidationError();
     if (validationError) {
-      showToast(validationError, 'error')
-      return
+      showToast(validationError, "error");
+      return;
     }
 
-    const previousCrew = selectedRequest.crew
-    const assignedAtIso = new Date().toISOString()
-    const assignedAt = new Date().toLocaleString('en-PH', {
+    const previousCrew = selectedRequest.crew;
+    const assignedAtIso = new Date().toISOString();
+    const assignedAt = new Date().toLocaleString("en-PH", {
       timeZone: MANILA_TIMEZONE,
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
 
     const { error } = await supabase
-      .from('delivery_requests')
+      .from("delivery_requests")
       .update({
-        status: 'ASSIGNED',
+        status: "ASSIGNED",
         assigned_driver_id: selectedDriver.id,
         assigned_helper_ids: selectedHelpers.map((h) => h.id),
         assigned_truck_plate: selectedTruck.plateNumber,
         assigned_at: assignedAtIso,
       })
-      .eq('id', selectedRequest.id)
+      .eq("id", selectedRequest.id);
     if (error) {
-      showToast('Failed to save the vehicle assignment. Please try again.', 'error')
-      return
+      showToast(
+        "Failed to save the vehicle assignment. Please try again.",
+        "error",
+      );
+      return;
     }
 
     updateRequest(selectedRequest.id, {
-      status: 'ASSIGNED',
-      crew: { driver: selectedDriver, helpers: selectedHelpers, truck: selectedTruck },
+      status: "ASSIGNED",
+      crew: {
+        driver: selectedDriver,
+        helpers: selectedHelpers,
+        truck: selectedTruck,
+      },
       assignedAt,
-    })
+    });
 
     // Immediate, visible confirmation of what exactly changed.
-    const truckChanged = previousCrew?.truck?.plateNumber !== selectedTruck.plateNumber
+    const truckChanged =
+      previousCrew?.truck?.plateNumber !== selectedTruck.plateNumber;
     const crewChanged =
       previousCrew?.driver?.id !== selectedDriver.id ||
-      selectedHelpers.map((h) => h.id).join(',') !== (previousCrew?.helpers || []).map((h) => h.id).join(',')
-    let detail = 'The crew and vehicle have been assigned to this delivery.'
-    if (truckChanged && crewChanged) detail = 'Vehicle and crew assignment updated.'
-    else if (truckChanged) detail = 'Vehicle assignment updated.'
-    else if (crewChanged) detail = 'Driver and helper assigned.'
-    setAssignmentConfirmed(detail)
-  }
+      selectedHelpers.map((h) => h.id).join(",") !==
+        (previousCrew?.helpers || []).map((h) => h.id).join(",");
+    let detail = "The crew and vehicle have been assigned to this delivery.";
+    if (truckChanged && crewChanged)
+      detail = "Vehicle and crew assignment updated.";
+    else if (truckChanged) detail = "Vehicle assignment updated.";
+    else if (crewChanged) detail = "Driver and helper assigned.";
+    setAssignmentConfirmed(detail);
+  };
 
   return (
     <SupLayout title="Deliveries" background={null} bg="bg-[#F6F7FB]">
       {selectedRequest ? (
         <>
-        <div className="flex flex-col gap-4 pb-6" style={interFontStyle}>
-          <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
-            <button
-              onClick={() => setSelectedRequest(null)}
-              className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back
-            </button>
-          </div>
-
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700">
-                  <Package className="h-5 w-5" />
-                </div>
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h1 className="text-base font-semibold text-slate-900 sm:text-lg">
-                      {selectedRequest.id} • {selectedRequest.companyName}
-                    </h1>
-                    <span className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge[selectedRequest.status]}`}>
-                      {statusLabel[selectedRequest.status] ?? selectedRequest.status.replaceAll('_', ' ')}
-                    </span>
-                    {specializedClientIds.has(selectedRequest.customerAuthId) && (
-                      <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">
-                        <Users className="h-3 w-3" />
-                        Requires Specialized Crew
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 text-xs text-slate-500">{selectedRequest.customerName}</p>
-                </div>
-              </div>
-              {selectedRequest.status === 'PENDING_REQUEST' && (
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setShowProceedQuotationDialog(true)}
-                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                    Submit Quotation
-                  </button>
-                  <button
-                    onClick={openDeclineDialog}
-                    className="inline-flex items-center gap-2 rounded-xl border border-rose-200 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
-                  >
-                    <XCircle className="h-4 w-4" />
-                    Decline Request
-                  </button>
-                </div>
-              )}
+          <div className="flex flex-col gap-4 pb-6" style={interFontStyle}>
+            <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
+              <button
+                onClick={() => setSelectedRequest(null)}
+                className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </button>
             </div>
-          </section>
 
-          {(() => {
-            const progressData = buildProgressData(selectedRequest)
-            const currentStage = progressData.find(s => s.status === 'current') || progressData[progressData.length - 1]
-
-            return (
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-center gap-3 mb-3">
-                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-                    currentStage.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-600 text-white'
-                  }`}>
-                    <Clock className="h-4 w-4" />
-                  </span>
-                  <div className="flex-1">
-                    <p className="text-sm font-semibold text-slate-900">
-                      {selectedRequest.status === 'CANCELLED'
-                        ? 'Request Cancelled'
-                        : currentStage.status === 'completed' ? currentStage.completedLabel || currentStage.label : currentStage.label}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {selectedRequest.status === 'CANCELLED'
-                        ? 'Cancelled'
-                        : currentStage.status === 'completed' ? 'Completed' : currentStage.status === 'current' ? 'In Progress' : 'Pending'}
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700">
+                    <Package className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h1 className="text-base font-semibold text-slate-900 sm:text-lg">
+                        {selectedRequest.id} • {selectedRequest.companyName}
+                      </h1>
+                      <span
+                        className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge[selectedRequest.status]}`}
+                      >
+                        {statusLabel[selectedRequest.status] ??
+                          selectedRequest.status.replaceAll("_", " ")}
+                      </span>
+                      {specializedClientIds.has(
+                        selectedRequest.customerAuthId,
+                      ) && (
+                        <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">
+                          <Users className="h-3 w-3" />
+                          Requires Specialized Crew
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {selectedRequest.customerName}
                     </p>
                   </div>
                 </div>
-
-                {(() => {
-                  const allDone = progressData.flatMap(s => s.substeps).filter(s => s.detail)
-                  const previewSubstep = selectedRequest.status === 'CANCELLED'
-                    ? allDone.find(s => s.cancelPoint) || allDone[allDone.length - 1]
-                    : allDone[allDone.length - 1]
-                  if (!previewSubstep) return null
-                  return (
-                    <div className="space-y-2 ml-11">
-                      <div className="flex items-start gap-2 text-sm">
-                        <span className="mt-1 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border border-emerald-500 bg-emerald-500">
-                          <Check className="h-2 w-2 text-white" />
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-slate-900">
-                            {previewSubstep.cancelPoint && selectedRequest.status === 'CANCELLED' ? (
-                              <span className="text-rose-600 font-medium">{previewSubstep.cancelReason || 'Cancelled'}</span>
-                            ) : (
-                              <>
-                                {previewSubstep.label}
-                                {previewSubstep.detail && <span className="text-slate-500 ml-1">{previewSubstep.detail}</span>}
-                              </>
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })()}
-
-                <button
-                  onClick={() => setShowProgressDetails(prev => !prev)}
-                  className="mt-3 ml-11 inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:text-blue-800 transition"
-                >
-                  <ClipboardList className="h-4 w-4" />
-                  Progress Details
-                  {showProgressDetails ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                </button>
-
-                {showProgressDetails && (
-                  <div className="mt-4 ml-11 space-y-5 border-l-2 border-slate-200 pl-4">
-                    {progressData.map((stage) => (
-                      <div key={stage.key}>
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
-                            stage.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
-                            stage.status === 'current' ? 'bg-blue-600 text-white' :
-                            'bg-slate-100 text-slate-400'
-                          }`}>
-                            {stage.status === 'completed' ? <Check className="h-3 w-3" /> :
-                             stage.status === 'current' ? <Clock className="h-3 w-3" /> :
-                             <div className="h-2 w-2 rounded-full bg-slate-300" />}
-                          </div>
-                          <p className={`text-sm font-semibold ${
-                            stage.status === 'completed' ? 'text-emerald-700' :
-                            stage.status === 'current' ? 'text-blue-700' :
-                            'text-slate-400'
-                          }`}>
-                            {stage.status === 'completed' ? stage.completedLabel || stage.label : stage.label}
-                          </p>
-                        </div>
-                        <div className="ml-8 space-y-2">
-                          {stage.substeps.filter(s => s.detail).map((substep, si2) => (
-                            <div key={si2} className="flex items-start gap-2 text-sm">
-                              <span className={`mt-1.5 flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-full ${substep.warning ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-                              <div className="flex-1 min-w-0">
-                                <p className={`${substep.warning ? 'font-medium text-amber-700' : 'text-slate-900'}`}>
-                                  {substep.label}
-                                  {substep.detail && <span className="text-slate-500 ml-1">{substep.detail}</span>}
-                                </p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+                {selectedRequest.status === "PENDING_REQUEST" && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowProceedQuotationDialog(true)}
+                      className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      Submit Quotation
+                    </button>
+                    <button
+                      onClick={openDeclineDialog}
+                      className="inline-flex items-center gap-2 rounded-xl border border-rose-200 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
+                    >
+                      <XCircle className="h-4 w-4" />
+                      Decline Request
+                    </button>
                   </div>
                 )}
               </div>
-            )
-          })()}
+            </section>
 
-          <div className="grid grid-cols-1 gap-5">
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <button
-                  onClick={() => setShowDetails((s) => !s)}
-                  className="flex w-full items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 bg-transparent cursor-pointer text-left transition hover:bg-slate-50"
-                  aria-expanded={showDetails}
-                >
-                  <span className="flex items-center gap-2">
-                    <ClipboardList className="h-4 w-4 text-blue-600" />
-                    <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Delivery Request Details</span>
-                  </span>
-                  {showDetails ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
-                </button>
-                {showDetails && <div className="p-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* Customer Details */}
-                    <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-                      <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
-                        Customer Details
-                      </h4>
-                      <div className="space-y-1.5">
-                        <Row label="Company" value={selectedRequest.companyName} />
-                      </div>
-                    </div>
+            {(() => {
+              const progressData = buildProgressData(selectedRequest);
+              const currentStage =
+                progressData.find((s) => s.status === "current") ||
+                progressData[progressData.length - 1];
 
-                    {/* Schedule */}
-                    <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-                      <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                        Schedule
-                      </h4>
-                      <div className="space-y-1.5">
-                        <Row label="Pickup" value={formatDateTime(selectedRequest.pickupDate, selectedRequest.pickupTime, selectedRequest.pickupTimeEnd)} />
-                        <Row label="Drop-off" value={formatDateTime(selectedRequest.dropoffDate, selectedRequest.dropoffTime)} />
-                      </div>
-                    </div>
-
-                    {/* Vehicle Type */}
-                    <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-                      <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-purple-400" />
-                        Vehicle Type
-                      </h4>
-                      <div className="space-y-1.5">
-                        <Row label="Truck Type" value={getRequestedTruckType(selectedRequest)} />
-                        {selectedRequest.crew?.truck && normalizeTruckType(selectedRequest.crew.truck.truckType) !== normalizeTruckType(getRequestedTruckType(selectedRequest)) && (
-                          <Row
-                            label="Assigned Truck Type"
-                            value={<span className="text-amber-600">{selectedRequest.crew.truck.truckType} (mismatch)</span>}
-                          />
-                        )}
-                        <Row label="Capacity" value={getTruckCapacity(selectedRequest)} />
-                        <Row label="Commodity Type" value={getCommodityType(selectedRequest.itemType)} />
-                        <Row label="Plate Number" value={selectedRequest.crew?.truck?.plateNumber || 'Not yet assigned'} />
-                        <Row label="Driver" value={selectedRequest.crew?.driver?.name || 'Not yet assigned'} />
-                        <Row label="Helpers" value={(selectedRequest.crew?.helpers || []).map((h) => h.name).join(', ') || 'Not yet assigned'} />
-                      </div>
-                    </div>
-
-                    {/* Deliverable Items */}
-                    <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-                      <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                        Deliverable Items
-                      </h4>
-                      <div className="space-y-1.5">
-                        <Row label="Item Type" value={selectedRequest.itemType} />
-                        <Row label="Est. Total Weight" value={getTotalWeight(selectedRequest)} />
-                      </div>
-                    </div>
-
-                    {/* Price Range Bid */}
-                    <div className="col-span-2">
-                      <div className="flex items-center justify-between rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50/50 border border-blue-100 px-4 py-3">
-                        <span className="text-sm font-semibold text-slate-600">Price Range Bid</span>
-                        <span className="text-sm font-bold text-blue-700">{getPriceRangeBid(selectedRequest)}</span>
-                      </div>
-                      {selectedRequest.customerCounterMin != null && selectedRequest.customerCounterMax != null && (
-                        <div className="mt-1.5 flex items-center gap-1.5 rounded-xl bg-orange-50 border border-orange-100 px-4 py-2 text-xs font-semibold text-orange-700">
-                          <Handshake className="h-3.5 w-3.5 shrink-0" />
-                          Customer requested a counter-offer: ₱{Number(selectedRequest.customerCounterMin).toLocaleString()} – ₱{Number(selectedRequest.customerCounterMax).toLocaleString()}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Delivery Notes */}
-                    {selectedRequest.notes && (
-                      <div className="col-span-2 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-                        <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2">
-                          <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-                          Delivery Notes
-                        </h4>
-                        <p className="text-sm text-slate-700 leading-relaxed">{selectedRequest.notes}</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Location */}
-                  <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-                    <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
-                      <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
-                      Location
-                    </h4>
-                    <div className="mb-3">
-                      <Row
-                        label={realDistanceKmBySelected[selectedRequest.id] ? 'Total Distance (Actual)' : 'Total Distance (2-way, Est.)'}
-                        value={realDistanceKmBySelected[selectedRequest.id] || getTotalDistance(selectedRequest)}
-                      />
-                    </div>
-                    <LocationSwitcher request={selectedRequest} />
-
-                    <div className="mt-3">
-                      <ProofOfDeliverySection request={selectedRequest} />
-                    </div>
-                  </div>
-                </div>}
-              </div>
-
-              {/* Quotation Form — appears below details */}
-              {hasApproved && (
-                <div ref={quotationSectionRef} className="rounded-2xl border border-slate-200 bg-white shadow-sm scroll-mt-20">
-                  <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-                    <button
-                      onClick={() => setShowQuotation((s) => !s)}
-                      className="flex flex-1 items-center gap-2 bg-transparent border-none cursor-pointer text-left transition hover:opacity-80"
-                      aria-expanded={showQuotation}
+              return (
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-center gap-3 mb-3">
+                    <span
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                        currentStage.status === "completed"
+                          ? "bg-emerald-100 text-emerald-700"
+                          : "bg-blue-600 text-white"
+                      }`}
                     >
-                      <Send className="h-4 w-4 text-sky-600" />
-                      <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                        {adjustingQuotation
-                          ? 'Adjusted Quotation'
-                          : selectedRequest.status === 'COUNTER_OFFER_SUBMITTED'
-                          ? 'Quotation Review'
-                          : selectedRequest.status === 'FINAL_QUOTATION_SUBMITTED'
-                          ? 'Quotation History'
-                          : 'Quotation'}
-                      </h3>
-                    </button>
-                    <div className="flex items-center gap-2">
-                    {(!selectedRequest.quotation || !quotationSubmitted) && !adjustingQuotation && (
-                      <button
-                        onClick={submitQuotation}
-                        className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-700 transition"
-                      >
-                        <Send className="h-4 w-4" />
-                        Submit Quotation
-                      </button>
-                    )}
-                    <button
-                      onClick={() => setShowQuotation((s) => !s)}
-                      className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition bg-transparent border-none cursor-pointer"
-                      aria-label={showQuotation ? 'Hide Quotation' : 'Show Quotation'}
-                    >
-                      {showQuotation ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                    </button>
+                      <Clock className="h-4 w-4" />
+                    </span>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-slate-900">
+                        {selectedRequest.status === "CANCELLED"
+                          ? "Request Cancelled"
+                          : currentStage.status === "completed"
+                            ? currentStage.completedLabel || currentStage.label
+                            : currentStage.label}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {selectedRequest.status === "CANCELLED"
+                          ? "Cancelled"
+                          : currentStage.status === "completed"
+                            ? "Completed"
+                            : currentStage.status === "current"
+                              ? "In Progress"
+                              : "Pending"}
+                      </p>
                     </div>
                   </div>
-                  {showQuotation && (
-                  <div className="p-4 space-y-4">
 
-                    {/* — Approved Amount (post-approval statuses) — */}
-                    {['APPROVED', 'ASSIGNED', 'OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(selectedRequest.status) && (selectedRequest.approvedAmount || selectedRequest.quotation) && (
-                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="text-xs font-medium text-emerald-600 uppercase tracking-wide">Approved Amount</p>
-                            <p className="text-2xl font-bold text-emerald-800">
-                              PHP {Number(selectedRequest.approvedAmount ?? selectedRequest.quotation?.amount).toLocaleString()}
+                  {(() => {
+                    const allDone = progressData
+                      .flatMap((s) => s.substeps)
+                      .filter((s) => s.detail);
+                    const previewSubstep =
+                      selectedRequest.status === "CANCELLED"
+                        ? allDone.find((s) => s.cancelPoint) ||
+                          allDone[allDone.length - 1]
+                        : allDone[allDone.length - 1];
+                    if (!previewSubstep) return null;
+                    return (
+                      <div className="space-y-2 ml-11">
+                        <div className="flex items-start gap-2 text-sm">
+                          <span className="mt-1 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border border-emerald-500 bg-emerald-500">
+                            <Check className="h-2 w-2 text-white" />
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-slate-900">
+                              {previewSubstep.cancelPoint &&
+                              selectedRequest.status === "CANCELLED" ? (
+                                <span className="text-rose-600 font-medium">
+                                  {previewSubstep.cancelReason || "Cancelled"}
+                                </span>
+                              ) : (
+                                <>
+                                  {previewSubstep.label}
+                                  {previewSubstep.detail && (
+                                    <span className="text-slate-500 ml-1">
+                                      {previewSubstep.detail}
+                                    </span>
+                                  )}
+                                </>
+                              )}
                             </p>
                           </div>
-                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                            <Check className="h-3 w-3" />
-                            Approved
-                          </span>
                         </div>
                       </div>
-                    )}
+                    );
+                  })()}
 
-                    {/* — Customer Info (read-only, always shown) — */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Customer Price Range Bid</p>
-                        <p className="text-sm font-semibold text-slate-800">{getPriceRangeBid(selectedRequest)}</p>
-                        {selectedRequest.customerCounterMin != null && selectedRequest.customerCounterMax != null && (
-                          <p className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-orange-700">
-                            <Handshake className="h-3 w-3 shrink-0" />
-                            Counter-offer: ₱{Number(selectedRequest.customerCounterMin).toLocaleString()} – ₱{Number(selectedRequest.customerCounterMax).toLocaleString()}
+                  <button
+                    onClick={() => setShowProgressDetails((prev) => !prev)}
+                    className="mt-3 ml-11 inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:text-blue-800 transition"
+                  >
+                    <ClipboardList className="h-4 w-4" />
+                    Progress Details
+                    {showProgressDetails ? (
+                      <ChevronUp className="h-4 w-4" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4" />
+                    )}
+                  </button>
+
+                  {showProgressDetails && (
+                    <div className="mt-4 ml-11 space-y-5 border-l-2 border-slate-200 pl-4">
+                      {progressData.map((stage) => (
+                        <div key={stage.key}>
+                          <div className="flex items-center gap-2 mb-2">
+                            <div
+                              className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
+                                stage.status === "completed"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : stage.status === "current"
+                                    ? "bg-blue-600 text-white"
+                                    : "bg-slate-100 text-slate-400"
+                              }`}
+                            >
+                              {stage.status === "completed" ? (
+                                <Check className="h-3 w-3" />
+                              ) : stage.status === "current" ? (
+                                <Clock className="h-3 w-3" />
+                              ) : (
+                                <div className="h-2 w-2 rounded-full bg-slate-300" />
+                              )}
+                            </div>
+                            <p
+                              className={`text-sm font-semibold ${
+                                stage.status === "completed"
+                                  ? "text-emerald-700"
+                                  : stage.status === "current"
+                                    ? "text-blue-700"
+                                    : "text-slate-400"
+                              }`}
+                            >
+                              {stage.status === "completed"
+                                ? stage.completedLabel || stage.label
+                                : stage.label}
+                            </p>
+                          </div>
+                          <div className="ml-8 space-y-2">
+                            {stage.substeps
+                              .filter((s) => s.detail)
+                              .map((substep, si2) => (
+                                <div
+                                  key={si2}
+                                  className="flex items-start gap-2 text-sm"
+                                >
+                                  <span
+                                    className={`mt-1.5 flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-full ${substep.warning ? "bg-amber-500" : "bg-emerald-500"}`}
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <p
+                                      className={`${substep.warning ? "font-medium text-amber-700" : "text-slate-900"}`}
+                                    >
+                                      {substep.label}
+                                      {substep.detail && (
+                                        <span className="text-slate-500 ml-1">
+                                          {substep.detail}
+                                        </span>
+                                      )}
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="grid grid-cols-1 gap-5">
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <button
+                    onClick={() => setShowDetails((s) => !s)}
+                    className="flex w-full items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 bg-transparent cursor-pointer text-left transition hover:bg-slate-50"
+                    aria-expanded={showDetails}
+                  >
+                    <span className="flex items-center gap-2">
+                      <ClipboardList className="h-4 w-4 text-blue-600" />
+                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        Delivery Request Details
+                      </span>
+                    </span>
+                    {showDetails ? (
+                      <ChevronUp className="h-4 w-4 text-slate-400" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-slate-400" />
+                    )}
+                  </button>
+                  {showDetails && (
+                    <div className="p-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        {/* Customer Details */}
+                        <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                          <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+                            Customer Details
+                          </h4>
+                          <div className="space-y-1.5">
+                            <Row
+                              label="Company"
+                              value={selectedRequest.companyName}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Schedule */}
+                        <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                          <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                            Schedule
+                          </h4>
+                          <div className="space-y-1.5">
+                            <Row
+                              label="Pickup"
+                              value={formatDateTime(
+                                selectedRequest.pickupDate,
+                                selectedRequest.pickupTime,
+                                selectedRequest.pickupTimeEnd,
+                              )}
+                            />
+                            <Row
+                              label="Drop-off"
+                              value={formatDateTime(
+                                selectedRequest.dropoffDate,
+                                selectedRequest.dropoffTime,
+                              )}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Vehicle Type */}
+                        <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                          <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-purple-400" />
+                            Vehicle Type
+                          </h4>
+                          <div className="space-y-1.5">
+                            <Row
+                              label="Truck Type"
+                              value={getRequestedTruckType(selectedRequest)}
+                            />
+                            {selectedRequest.crew?.truck &&
+                              normalizeTruckType(
+                                selectedRequest.crew.truck.truckType,
+                              ) !==
+                                normalizeTruckType(
+                                  getRequestedTruckType(selectedRequest),
+                                ) && (
+                                <Row
+                                  label="Assigned Truck Type"
+                                  value={
+                                    <span className="text-amber-600">
+                                      {selectedRequest.crew.truck.truckType}{" "}
+                                      (mismatch)
+                                    </span>
+                                  }
+                                />
+                              )}
+                            <Row
+                              label="Capacity"
+                              value={getTruckCapacity(selectedRequest)}
+                            />
+                            <Row
+                              label="Commodity Type"
+                              value={getCommodityType(selectedRequest.itemType)}
+                            />
+                            <Row
+                              label="Plate Number"
+                              value={
+                                selectedRequest.crew?.truck?.plateNumber ||
+                                "Not yet assigned"
+                              }
+                            />
+                            <Row
+                              label="Driver"
+                              value={
+                                selectedRequest.crew?.driver?.name ||
+                                "Not yet assigned"
+                              }
+                            />
+                            <Row
+                              label="Helpers"
+                              value={
+                                (selectedRequest.crew?.helpers || [])
+                                  .map((h) => h.name)
+                                  .join(", ") || "Not yet assigned"
+                              }
+                            />
+                          </div>
+                        </div>
+
+                        {/* Deliverable Items */}
+                        <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                          <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                            Deliverable Items
+                          </h4>
+                          <div className="space-y-1.5">
+                            <Row
+                              label="Item Type"
+                              value={selectedRequest.itemType}
+                            />
+                            <Row
+                              label="Est. Total Weight"
+                              value={getTotalWeight(selectedRequest)}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Price Range Bid */}
+                        <div className="col-span-2">
+                          <div className="flex items-center justify-between rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50/50 border border-blue-100 px-4 py-3">
+                            <span className="text-sm font-semibold text-slate-600">
+                              Price Range Bid
+                            </span>
+                            <span className="text-sm font-bold text-blue-700">
+                              {getPriceRangeBid(selectedRequest)}
+                            </span>
+                          </div>
+                          {selectedRequest.customerCounterMin != null &&
+                            selectedRequest.customerCounterMax != null && (
+                              <div className="mt-1.5 flex items-center gap-1.5 rounded-xl bg-orange-50 border border-orange-100 px-4 py-2 text-xs font-semibold text-orange-700">
+                                <Handshake className="h-3.5 w-3.5 shrink-0" />
+                                Customer requested a counter-offer: ₱
+                                {Number(
+                                  selectedRequest.customerCounterMin,
+                                ).toLocaleString()}{" "}
+                                – ₱
+                                {Number(
+                                  selectedRequest.customerCounterMax,
+                                ).toLocaleString()}
+                              </div>
+                            )}
+                        </div>
+
+                        {/* Delivery Notes */}
+                        {selectedRequest.notes && (
+                          <div className="col-span-2 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                            <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2">
+                              <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                              Delivery Notes
+                            </h4>
+                            <p className="text-sm text-slate-700 leading-relaxed">
+                              {selectedRequest.notes}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Location */}
+                      <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                        <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 mb-2.5">
+                          <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+                          Location
+                        </h4>
+                        <div className="mb-3">
+                          <Row
+                            label={
+                              realDistanceKmBySelected[selectedRequest.id]
+                                ? "Total Distance (Actual)"
+                                : "Total Distance (2-way, Est.)"
+                            }
+                            value={
+                              realDistanceKmBySelected[selectedRequest.id] ||
+                              getTotalDistance(selectedRequest)
+                            }
+                          />
+                        </div>
+                        <LocationSwitcher request={selectedRequest} />
+
+                        <div className="mt-3">
+                          <ProofOfDeliverySection request={selectedRequest} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Quotation Form — appears below details */}
+                {hasApproved && (
+                  <div
+                    ref={quotationSectionRef}
+                    className="rounded-2xl border border-slate-200 bg-white shadow-sm scroll-mt-20"
+                  >
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+                      <button
+                        onClick={() => setShowQuotation((s) => !s)}
+                        className="flex flex-1 items-center gap-2 bg-transparent border-none cursor-pointer text-left transition hover:opacity-80"
+                        aria-expanded={showQuotation}
+                      >
+                        <Send className="h-4 w-4 text-sky-600" />
+                        <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                          {adjustingQuotation
+                            ? "Adjusted Quotation"
+                            : selectedRequest.status ===
+                                "COUNTER_OFFER_SUBMITTED"
+                              ? "Quotation Review"
+                              : selectedRequest.status ===
+                                  "FINAL_QUOTATION_SUBMITTED"
+                                ? "Quotation History"
+                                : "Quotation"}
+                        </h3>
+                      </button>
+                      <div className="flex items-center gap-2">
+                        {(!selectedRequest.quotation || !quotationSubmitted) &&
+                          !adjustingQuotation && (
+                            <button
+                              onClick={submitQuotation}
+                              className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-700 transition"
+                            >
+                              <Send className="h-4 w-4" />
+                              Submit Quotation
+                            </button>
+                          )}
+                        <button
+                          onClick={() => setShowQuotation((s) => !s)}
+                          className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition bg-transparent border-none cursor-pointer"
+                          aria-label={
+                            showQuotation ? "Hide Quotation" : "Show Quotation"
+                          }
+                        >
+                          {showQuotation ? (
+                            <ChevronUp className="h-4 w-4" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                    {showQuotation && (
+                      <div className="p-4 space-y-4">
+                        {/* — Approved Amount (post-approval statuses) — */}
+                        {[
+                          "APPROVED",
+                          "ASSIGNED",
+                          "OUT_FOR_PICKUP",
+                          "ARRIVED_PICKUP",
+                          "OUT_FOR_DROPOFF",
+                          "ARRIVED_DROPOFF",
+                          "DELIVERED",
+                          "COMPLETED",
+                        ].includes(selectedRequest.status) &&
+                          (selectedRequest.approvedAmount ||
+                            selectedRequest.quotation) && (
+                            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <p className="text-xs font-medium text-emerald-600 uppercase tracking-wide">
+                                    Approved Amount
+                                  </p>
+                                  <p className="text-2xl font-bold text-emerald-800">
+                                    PHP{" "}
+                                    {Number(
+                                      selectedRequest.approvedAmount ??
+                                        selectedRequest.quotation?.amount,
+                                    ).toLocaleString()}
+                                  </p>
+                                </div>
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                                  <Check className="h-3 w-3" />
+                                  Approved
+                                </span>
+                              </div>
+                            </div>
+                          )}
+
+                        {/* — Customer Info (read-only, always shown) — */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                              Customer Price Range Bid
+                            </p>
+                            <p className="text-sm font-semibold text-slate-800">
+                              {getPriceRangeBid(selectedRequest)}
+                            </p>
+                            {selectedRequest.customerCounterMin != null &&
+                              selectedRequest.customerCounterMax != null && (
+                                <p className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-orange-700">
+                                  <Handshake className="h-3 w-3 shrink-0" />
+                                  Counter-offer: ₱
+                                  {Number(
+                                    selectedRequest.customerCounterMin,
+                                  ).toLocaleString()}{" "}
+                                  – ₱
+                                  {Number(
+                                    selectedRequest.customerCounterMax,
+                                  ).toLocaleString()}
+                                </p>
+                              )}
+                          </div>
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                              Total Distance (KM)
+                            </p>
+                            <p className="text-sm font-semibold text-slate-800">
+                              {getTotalDistance(selectedRequest)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                              Total Days
+                            </p>
+                            <p className="text-sm font-semibold text-slate-800">
+                              {getTotalDays(selectedRequest)} day(s)
+                            </p>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                              Truck Type
+                            </p>
+                            <p className="text-sm font-semibold text-slate-800">
+                              {getRequestedTruckType(selectedRequest)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                              Capacity
+                            </p>
+                            <p className="text-sm font-semibold text-slate-800">
+                              {getTruckCapacity(selectedRequest)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                              Commodity Type
+                            </p>
+                            <p className="text-sm font-semibold text-slate-800">
+                              {getCommodityType(selectedRequest.itemType)}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* === CASE 1: Editable form (new quotation — not yet submitted) === */}
+                        {(!selectedRequest.quotation || !quotationSubmitted) &&
+                          !adjustingQuotation && (
+                            <QuotationExpenseForm
+                              form={quotationForm}
+                              onFormChange={setQuotationForm}
+                              onOpenPricingSettings={() =>
+                                setShowQuotationSettings(true)
+                              }
+                              distanceKm={
+                                selectedRequest
+                                  ? parseFloat(
+                                      getTotalDistance(selectedRequest),
+                                    ) || 0
+                                  : 0
+                              }
+                              distanceLabel={
+                                selectedRequest
+                                  ? getTotalDistance(selectedRequest)
+                                  : "0"
+                              }
+                              isLargeTruckFlag={
+                                selectedRequest
+                                  ? isLargeTruck(selectedRequest)
+                                  : false
+                              }
+                              directTotal={getDirectTotal()}
+                              indirectTotal={getIndirectTotal()}
+                              operatingTotal={getOperatingTotal()}
+                              income={getIncome()}
+                              proposedRate={getProposedRate()}
+                              customerBidMin={
+                                selectedRequest
+                                  ? selectedRequest.budgetMin
+                                  : null
+                              }
+                              customerBidMax={
+                                selectedRequest
+                                  ? selectedRequest.budgetMax
+                                  : null
+                              }
+                              customerCounterMin={
+                                selectedRequest
+                                  ? selectedRequest.customerCounterMin
+                                  : null
+                              }
+                              customerCounterMax={
+                                selectedRequest
+                                  ? selectedRequest.customerCounterMax
+                                  : null
+                              }
+                              onSubmit={submitQuotation}
+                              submitLabel="Submit Quotation"
+                            />
+                          )}
+
+                        {/* === CASE 2: Read-only form (submitted — quotation submitted or counter-offer received) === */}
+                        {selectedRequest.quotation &&
+                          quotationSubmitted &&
+                          !adjustingQuotation && (
+                            <>
+                              {/* Collapsible toggle for COUNTER_OFFER_SUBMITTED and FINAL_QUOTATION_SUBMITTED */}
+                              {(selectedRequest.status ===
+                                "COUNTER_OFFER_SUBMITTED" ||
+                                selectedRequest.status ===
+                                  "FINAL_QUOTATION_SUBMITTED") && (
+                                <button
+                                  onClick={() =>
+                                    setShowInitialQuotation(
+                                      !showInitialQuotation,
+                                    )
+                                  }
+                                  className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900 transition bg-transparent border-none cursor-pointer"
+                                >
+                                  <ChevronDown
+                                    className={`h-4 w-4 transition ${showInitialQuotation ? "rotate-180" : ""}`}
+                                  />
+                                  {showInitialQuotation ? "Hide" : "Show"}{" "}
+                                  Initial Quotation
+                                </button>
+                              )}
+
+                              {/* Read-only form content (shown by default for QUOTATION_SUBMITTED, collapsible for COUNTER_OFFER_SUBMITTED and FINAL_QUOTATION_SUBMITTED) */}
+                              {(showInitialQuotation ||
+                                (selectedRequest.status !==
+                                  "COUNTER_OFFER_SUBMITTED" &&
+                                  selectedRequest.status !==
+                                    "FINAL_QUOTATION_SUBMITTED")) &&
+                                isDetailedBreakdown(
+                                  selectedRequest.quotation,
+                                ) && (
+                                  <div className="space-y-4">
+                                    {/* — Initial Quotation header for COUNTER_OFFER_SUBMITTED / FINAL_QUOTATION_SUBMITTED / APPROVED — */}
+                                    {(selectedRequest.status ===
+                                      "COUNTER_OFFER_SUBMITTED" ||
+                                      selectedRequest.status ===
+                                        "FINAL_QUOTATION_SUBMITTED" ||
+                                      selectedRequest.status ===
+                                        "APPROVED") && (
+                                      <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-200/60 px-4 py-2.5">
+                                        <FileText className="h-4 w-4 text-slate-600" />
+                                        <span className="text-sm font-bold uppercase tracking-wider text-slate-700">
+                                          Initial Quotation
+                                        </span>
+                                      </div>
+                                    )}
+
+                                    {/* — Direct Expenses (read-only) — */}
+                                    <div className="rounded-xl border-2 border-slate-200 bg-slate-50/60 p-4">
+                                      <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-slate-700 mb-4">
+                                        <span className="h-3 w-3 rounded-full bg-slate-500" />
+                                        Direct Expenses
+                                      </h4>
+                                      <div className="space-y-2">
+                                        <div className="flex items-center justify-between py-2 border-b border-slate-200">
+                                          <span className="text-sm font-medium text-slate-700">
+                                            Depreciation Expenses
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.directExpenses
+                                                .depreciation
+                                            }
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between py-2 border-b border-slate-200">
+                                          <span className="text-sm font-medium text-slate-700">
+                                            Total Diesel Expenses
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {Number(
+                                              selectedRequest.quotation
+                                                .breakdown.calculated
+                                                ?.dieselTotal,
+                                            ).toLocaleString("en-US", {
+                                              minimumFractionDigits: 2,
+                                            })}
+                                          </span>
+                                        </div>
+                                        {(() => {
+                                          const rate = Number(
+                                            selectedRequest.quotation.breakdown
+                                              .directExpenses.dieselRate || 0,
+                                          );
+                                          const total = Number(
+                                            selectedRequest.quotation.breakdown
+                                              .calculated?.dieselTotal || 0,
+                                          );
+                                          const distKm =
+                                            rate > 0 ? total / rate : 0;
+                                          return (
+                                            <p className="text-sm text-slate-600 ml-1">
+                                              a. Diesel Rate (₱{rate.toFixed(2)}
+                                              ) x Distance ({distKm.toFixed(1)}{" "}
+                                              km)
+                                            </p>
+                                          );
+                                        })()}
+                                        <p className="text-sm font-semibold text-slate-600 ml-0.5 mb-1 mt-3">
+                                          Repairs and Maintenance
+                                        </p>
+                                        <div className="flex items-center justify-between py-1.5">
+                                          <span className="text-sm font-medium text-slate-700 pl-4">
+                                            a. Batteries
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.directExpenses
+                                                .repairsAndMaintenance.batteries
+                                            }
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between py-1.5">
+                                          <span className="text-sm font-medium text-slate-700 pl-4">
+                                            b. Tires
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.directExpenses
+                                                .repairsAndMaintenance.tires
+                                            }
+                                          </span>
+                                        </div>
+                                        <p className="text-sm font-semibold text-slate-600 ml-0.5 mb-1 mt-3">
+                                          Salaries and Wages
+                                        </p>
+                                        <div className="flex items-center justify-between py-1.5">
+                                          <span className="text-sm font-medium text-slate-700 pl-4">
+                                            a. Driver
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.directExpenses
+                                                .salariesAndWages.driver
+                                            }
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between py-1.5">
+                                          <span className="text-sm font-medium text-slate-700 pl-4">
+                                            b. Helper (1)
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.directExpenses
+                                                .salariesAndWages.helper1
+                                            }
+                                          </span>
+                                        </div>
+                                        {selectedRequest.quotation.breakdown
+                                          .directExpenses.salariesAndWages
+                                          .helper2 && (
+                                          <div className="flex items-center justify-between py-1.5">
+                                            <span className="text-sm font-medium text-slate-700 pl-4">
+                                              c. Helper (2)
+                                            </span>
+                                            <span className="text-sm font-mono text-slate-900">
+                                              ₱
+                                              {
+                                                selectedRequest.quotation
+                                                  .breakdown.directExpenses
+                                                  .salariesAndWages.helper2
+                                              }
+                                            </span>
+                                          </div>
+                                        )}
+                                        <div className="flex items-center justify-between py-1.5">
+                                          <span className="text-sm font-medium text-slate-700">
+                                            Trip Allowance
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.directExpenses
+                                                .tripAllowance
+                                            }
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between py-1.5">
+                                          <span className="text-sm font-medium text-slate-700">
+                                            Lodging Allowance
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.directExpenses
+                                                .lodgingAllowance
+                                            }
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between py-1.5">
+                                          <span className="text-sm font-medium text-slate-700">
+                                            Toll/Parking (Delivery Truck)
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.directExpenses
+                                                .tollParking
+                                            }
+                                          </span>
+                                        </div>
+                                        <div className="mt-3 flex items-center justify-between rounded-lg bg-slate-200/60 px-4 py-3">
+                                          <span className="text-sm font-bold text-slate-800">
+                                            Total Direct Expenses
+                                          </span>
+                                          <span className="text-base font-bold text-slate-800">
+                                            ₱
+                                            {Number(
+                                              selectedRequest.quotation
+                                                .breakdown.calculated
+                                                ?.directTotal,
+                                            ).toLocaleString("en-US", {
+                                              minimumFractionDigits: 2,
+                                            })}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {/* — Indirect Expenses (read-only) — */}
+                                    <div className="rounded-xl border-2 border-slate-200 bg-slate-50/60 p-4">
+                                      <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-slate-700 mb-4">
+                                        <span className="h-3 w-3 rounded-full bg-slate-500" />
+                                        Indirect Expenses
+                                      </h4>
+                                      <div className="space-y-2">
+                                        <div className="flex items-center justify-between py-2 border-b border-slate-200">
+                                          <span className="text-sm font-medium text-slate-700">
+                                            Administration Fees
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.indirectExpenses
+                                                .adminFees
+                                            }
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between py-2 border-b border-slate-200">
+                                          <span className="text-sm font-medium text-slate-700">
+                                            Insurance (Vehicle)
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.indirectExpenses
+                                                .insurance
+                                            }
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between py-2 border-b border-slate-200">
+                                          <span className="text-sm font-medium text-slate-700">
+                                            Motor Vehicle Registration
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.indirectExpenses
+                                                .motorVehicleReg
+                                            }
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between py-2">
+                                          <span className="text-sm font-medium text-slate-700">
+                                            Rental (Garage)
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.quotation
+                                                .breakdown.indirectExpenses
+                                                .garageRental
+                                            }
+                                          </span>
+                                        </div>
+                                        <div className="mt-3 flex items-center justify-between rounded-lg bg-slate-200/60 px-4 py-3">
+                                          <span className="text-sm font-bold text-slate-800">
+                                            Total Indirect Expenses
+                                          </span>
+                                          <span className="text-base font-bold text-slate-800">
+                                            ₱
+                                            {Number(
+                                              selectedRequest.quotation
+                                                .breakdown.calculated
+                                                ?.indirectTotal,
+                                            ).toLocaleString("en-US", {
+                                              minimumFractionDigits: 2,
+                                            })}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {/* — Summary (read-only) — */}
+                                    <div className="rounded-xl border-2 border-slate-300 bg-slate-100/70 p-4 space-y-2">
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-sm font-semibold text-slate-700">
+                                          Total Operating Expenses
+                                        </span>
+                                        <span className="text-base font-bold text-slate-900">
+                                          ₱
+                                          {Number(
+                                            selectedRequest.quotation.breakdown
+                                              .calculated?.operatingTotal,
+                                          ).toLocaleString("en-US", {
+                                            minimumFractionDigits: 2,
+                                          })}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-sm font-semibold text-slate-700">
+                                          Income (15%)
+                                        </span>
+                                        <span className="text-base font-bold text-emerald-700">
+                                          ₱
+                                          {Number(
+                                            selectedRequest.quotation.breakdown
+                                              .calculated?.income,
+                                          ).toLocaleString("en-US", {
+                                            minimumFractionDigits: 2,
+                                          })}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between border-t-2 border-slate-300 pt-2">
+                                        <span className="text-sm font-bold text-slate-900 uppercase">
+                                          Proposed Rate
+                                        </span>
+                                        <span className="text-lg font-bold text-sky-700">
+                                          ₱
+                                          {Number(
+                                            selectedRequest.quotation.amount,
+                                          ).toLocaleString("en-US", {
+                                            minimumFractionDigits: 2,
+                                          })}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                              {/* QUOTED: Waiting message */}
+                              {selectedRequest.status ===
+                                "QUOTATION_SUBMITTED" &&
+                                !selectedRequest.customerWants && (
+                                  <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 mt-4">
+                                    <div className="h-2 w-2 animate-pulse rounded-full bg-sky-500" />
+                                    <p className="text-sm text-sky-800">
+                                      Waiting for customer to review quotation.
+                                    </p>
+                                  </div>
+                                )}
+
+                              {/* COUNTER_OFFER_SUBMITTED: Customer's Counter Offer section */}
+                              {selectedRequest.status ===
+                                "COUNTER_OFFER_SUBMITTED" && (
+                                <>
+                                  {!bidDeclined && (
+                                    <div className="rounded-xl border-2 border-orange-200 bg-orange-50/60 p-4 space-y-3">
+                                      <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-orange-800">
+                                        <span className="h-3 w-3 rounded-full bg-orange-600" />
+                                        Customer's Counter Offer
+                                      </h4>
+                                      <div className="flex items-center justify-between py-2">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Initial Quotation
+                                        </span>
+                                        <span className="text-base font-bold text-slate-900">
+                                          ₱
+                                          {Number(
+                                            selectedRequest.quotation.amount,
+                                          ).toLocaleString("en-US", {
+                                            minimumFractionDigits: 2,
+                                          })}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between py-2 border-t border-orange-200">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Customer's Counter Offer
+                                        </span>
+                                        <span className="text-base font-bold text-orange-700">
+                                          {getCounterOfferRange(
+                                            selectedRequest,
+                                          )}
+                                        </span>
+                                      </div>
+                                      <div className="flex gap-3 pt-2">
+                                        <button
+                                          onClick={handleUpdateQuotation}
+                                          className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-700 transition"
+                                        >
+                                          <Send className="h-4 w-4" />
+                                          Update Quotation
+                                        </button>
+                                        <button
+                                          onClick={handleDeclineCounterOffer}
+                                          className="inline-flex items-center gap-2 rounded-xl border border-rose-300 px-5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 transition"
+                                        >
+                                          <XCircle className="h-4 w-4" />
+                                          Decline Counter Offer
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                  {bidDeclined && (
+                                    <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                      <XCircle className="h-4 w-4 text-slate-400" />
+                                      <p className="text-sm text-slate-600">
+                                        Counter offer declined. Sticking with
+                                        the initial quotation.
+                                      </p>
+                                    </div>
+                                  )}
+                                </>
+                              )}
+
+                              {/* FINAL_QUOTATION_SUBMITTED: Show initial quotation + customer's counter offer record + updated quotation */}
+                              {selectedRequest.status ===
+                                "FINAL_QUOTATION_SUBMITTED" && (
+                                <>
+                                  <div className="flex flex-wrap gap-3 border-b border-slate-200 pb-4 mb-4">
+                                    <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2">
+                                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                                      <span className="text-sm font-medium text-emerald-800">
+                                        Updated Quotation Submitted
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {/* Customer's Counter Offer record */}
+                                  <div className="rounded-xl border-2 border-orange-200 bg-orange-50/60 p-4 space-y-3">
+                                    <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-orange-800">
+                                      <span className="h-3 w-3 rounded-full bg-orange-600" />
+                                      Customer's Counter Offer
+                                    </h4>
+                                    <div className="flex items-center justify-between py-2">
+                                      <span className="text-sm font-medium text-slate-700">
+                                        Initial Quotation
+                                      </span>
+                                      <span className="text-base font-bold text-slate-900">
+                                        ₱
+                                        {Number(
+                                          selectedRequest.quotation.amount,
+                                        ).toLocaleString("en-US", {
+                                          minimumFractionDigits: 2,
+                                        })}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between py-2 border-t border-orange-200">
+                                      <span className="text-sm font-medium text-slate-700">
+                                        Customer's Counter Offer
+                                      </span>
+                                      <span className="text-base font-bold text-orange-700">
+                                        {getCounterOfferRange(selectedRequest)}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {/* Updated Quotation (read-only) */}
+                                  <div className="rounded-xl border-2 border-purple-200 bg-purple-50/60 p-4 mt-4">
+                                    <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-purple-800 mb-4">
+                                      <span className="h-3 w-3 rounded-full bg-purple-600" />
+                                      Updated Quotation
+                                    </h4>
+                                    <div className="space-y-2">
+                                      <div className="flex items-center justify-between py-2 border-b border-purple-100">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Depreciation Expenses
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.directExpenses
+                                              .depreciation
+                                          }
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between py-2 border-b border-purple-100">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Total Diesel Expenses
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {Number(
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.calculated
+                                              ?.dieselTotal,
+                                          ).toLocaleString("en-US", {
+                                            minimumFractionDigits: 2,
+                                          })}
+                                        </span>
+                                      </div>
+                                      {(() => {
+                                        const rate = Number(
+                                          selectedRequest.updatedQuotation
+                                            .breakdown.directExpenses
+                                            .dieselRate || 0,
+                                        );
+                                        const total = Number(
+                                          selectedRequest.updatedQuotation
+                                            .breakdown.calculated
+                                            ?.dieselTotal || 0,
+                                        );
+                                        const distKm =
+                                          rate > 0 ? total / rate : 0;
+                                        return (
+                                          <p className="text-sm text-purple-700 ml-1">
+                                            a. Diesel Rate (₱{rate.toFixed(2)})
+                                            x Distance ({distKm.toFixed(1)} km)
+                                          </p>
+                                        );
+                                      })()}
+                                      <p className="text-sm font-semibold text-purple-700 ml-0.5 mb-1 mt-3">
+                                        Repairs and Maintenance
+                                      </p>
+                                      <div className="flex items-center justify-between py-1.5">
+                                        <span className="text-sm font-medium text-slate-700 pl-4">
+                                          a. Batteries
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.directExpenses
+                                              .repairsAndMaintenance.batteries
+                                          }
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between py-1.5">
+                                        <span className="text-sm font-medium text-slate-700 pl-4">
+                                          b. Tires
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.directExpenses
+                                              .repairsAndMaintenance.tires
+                                          }
+                                        </span>
+                                      </div>
+                                      <p className="text-sm font-semibold text-purple-700 ml-0.5 mb-1 mt-3">
+                                        Salaries and Wages
+                                      </p>
+                                      <div className="flex items-center justify-between py-1.5">
+                                        <span className="text-sm font-medium text-slate-700 pl-4">
+                                          a. Driver
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.directExpenses
+                                              .salariesAndWages.driver
+                                          }
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between py-1.5">
+                                        <span className="text-sm font-medium text-slate-700 pl-4">
+                                          b. Helper (1)
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.directExpenses
+                                              .salariesAndWages.helper1
+                                          }
+                                        </span>
+                                      </div>
+                                      {selectedRequest.updatedQuotation
+                                        .breakdown.directExpenses
+                                        .salariesAndWages.helper2 && (
+                                        <div className="flex items-center justify-between py-1.5">
+                                          <span className="text-sm font-medium text-slate-700 pl-4">
+                                            c. Helper (2)
+                                          </span>
+                                          <span className="text-sm font-mono text-slate-900">
+                                            ₱
+                                            {
+                                              selectedRequest.updatedQuotation
+                                                .breakdown.directExpenses
+                                                .salariesAndWages.helper2
+                                            }
+                                          </span>
+                                        </div>
+                                      )}
+                                      <div className="flex items-center justify-between py-1.5">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Trip Allowance
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.directExpenses
+                                              .tripAllowance
+                                          }
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between py-1.5">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Lodging Allowance
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.directExpenses
+                                              .lodgingAllowance
+                                          }
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between py-1.5">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Toll/Parking (Delivery Truck)
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.directExpenses
+                                              .tollParking
+                                          }
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-xl border-2 border-purple-200 bg-purple-50/60 p-4">
+                                    <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-purple-800 mb-4">
+                                      <span className="h-3 w-3 rounded-full bg-purple-600" />
+                                      Indirect Expenses
+                                    </h4>
+                                    <div className="space-y-2">
+                                      <div className="flex items-center justify-between py-2 border-b border-purple-100">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Administration Fees
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.indirectExpenses
+                                              .adminFees
+                                          }
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between py-2 border-b border-purple-100">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Insurance (Vehicle)
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.indirectExpenses
+                                              .insurance
+                                          }
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between py-2 border-b border-purple-100">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Motor Vehicle Registration
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.indirectExpenses
+                                              .motorVehicleReg
+                                          }
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between py-2">
+                                        <span className="text-sm font-medium text-slate-700">
+                                          Rental (Garage)
+                                        </span>
+                                        <span className="text-sm font-mono text-slate-900">
+                                          ₱
+                                          {
+                                            selectedRequest.updatedQuotation
+                                              .breakdown.indirectExpenses
+                                              .garageRental
+                                          }
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-xl border-2 border-purple-300 bg-purple-100/70 p-4 space-y-2">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-sm font-semibold text-slate-700">
+                                        Total Operating Expenses
+                                      </span>
+                                      <span className="text-base font-bold text-slate-900">
+                                        ₱
+                                        {Number(
+                                          selectedRequest.updatedQuotation
+                                            .breakdown.calculated
+                                            ?.operatingTotal,
+                                        ).toLocaleString("en-US", {
+                                          minimumFractionDigits: 2,
+                                        })}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-sm font-semibold text-slate-700">
+                                        Income (15%)
+                                      </span>
+                                      <span className="text-base font-bold text-emerald-700">
+                                        ₱
+                                        {Number(
+                                          selectedRequest.updatedQuotation
+                                            .breakdown.calculated?.income,
+                                        ).toLocaleString("en-US", {
+                                          minimumFractionDigits: 2,
+                                        })}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between border-t-2 border-purple-300 pt-2">
+                                      <span className="text-sm font-bold text-slate-900 uppercase">
+                                        Updated Proposed Rate
+                                      </span>
+                                      <span className="text-lg font-bold text-purple-700">
+                                        ₱
+                                        {Number(
+                                          selectedRequest.updatedQuotation
+                                            .amount,
+                                        ).toLocaleString("en-US", {
+                                          minimumFractionDigits: 2,
+                                        })}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </>
+                              )}
+                            </>
+                          )}
+
+                        {/* === CASE 3: Adjusting quotation (pre-filled editable form) === */}
+                        {adjustingQuotation && (
+                          <QuotationExpenseForm
+                            form={quotationForm}
+                            onFormChange={setQuotationForm}
+                            onOpenPricingSettings={() =>
+                              setShowQuotationSettings(true)
+                            }
+                            distanceKm={
+                              selectedRequest
+                                ? parseFloat(
+                                    getTotalDistance(selectedRequest),
+                                  ) || 0
+                                : 0
+                            }
+                            distanceLabel={
+                              selectedRequest
+                                ? getTotalDistance(selectedRequest)
+                                : "0"
+                            }
+                            isLargeTruckFlag={
+                              selectedRequest
+                                ? isLargeTruck(selectedRequest)
+                                : false
+                            }
+                            directTotal={getDirectTotal()}
+                            indirectTotal={getIndirectTotal()}
+                            operatingTotal={getOperatingTotal()}
+                            income={getIncome()}
+                            proposedRate={getProposedRate()}
+                            customerBidMin={
+                              selectedRequest ? selectedRequest.budgetMin : null
+                            }
+                            customerBidMax={
+                              selectedRequest ? selectedRequest.budgetMax : null
+                            }
+                            customerCounterMin={
+                              selectedRequest
+                                ? selectedRequest.customerCounterMin
+                                : null
+                            }
+                            customerCounterMax={
+                              selectedRequest
+                                ? selectedRequest.customerCounterMax
+                                : null
+                            }
+                            onSubmit={handleSubmitUpdatedQuotation}
+                            submitLabel="Submit Updated Quotation"
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {hasApproved &&
+                  quotationSubmitted &&
+                  [
+                    "APPROVED",
+                    "ASSIGNED",
+                    "OUT_FOR_PICKUP",
+                    "ARRIVED_PICKUP",
+                    "OUT_FOR_DROPOFF",
+                    "ARRIVED_DROPOFF",
+                    "DELIVERED",
+                    "COMPLETED",
+                  ].includes(selectedRequest.status) && (
+                    <div
+                      className={`rounded-2xl border bg-white bg-gradient-to-b p-4 transition-colors ${
+                        selectedRequest.crew?.driver &&
+                        selectedRequest.crew?.truck?.plateNumber
+                          ? "border-emerald-400 from-emerald-50 to-white"
+                          : "border-indigo-200 from-indigo-50 to-white"
+                      }`}
+                    >
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">
+                          {isInTransitStatus
+                            ? "Assigned Vehicle and Delivery Crew"
+                            : "Assign Vehicle and Delivery Crew"}
+                        </h3>
+                        {isInTransitStatus ? (
+                          <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-600">
+                            <Lock className="h-3.5 w-3.5 text-slate-400" />
+                            The crew is locked once the delivery is in transit.
+                            Changes can no longer be made.
+                          </p>
+                        ) : (
+                          <p className="mt-1 text-xs text-slate-600">
+                            Select a vehicle, then choose the driver and helpers
+                            to confirm the assignment.
                           </p>
                         )}
                       </div>
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Total Distance (KM)</p>
-                        <p className="text-sm font-semibold text-slate-800">{getTotalDistance(selectedRequest)}</p>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Total Days</p>
-                        <p className="text-sm font-semibold text-slate-800">{getTotalDays(selectedRequest)} day(s)</p>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Truck Type</p>
-                        <p className="text-sm font-semibold text-slate-800">{getRequestedTruckType(selectedRequest)}</p>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Capacity</p>
-                        <p className="text-sm font-semibold text-slate-800">{getTruckCapacity(selectedRequest)}</p>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Commodity Type</p>
-                        <p className="text-sm font-semibold text-slate-800">{getCommodityType(selectedRequest.itemType)}</p>
-                      </div>
-                    </div>
 
-                    {/* === CASE 1: Editable form (new quotation — not yet submitted) === */}
-                    {(!selectedRequest.quotation || !quotationSubmitted) && !adjustingQuotation && (
-                      <QuotationExpenseForm
-                        form={quotationForm}
-                        onFormChange={setQuotationForm}
-                        onOpenPricingSettings={() => setShowQuotationSettings(true)}
-                        distanceKm={selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0}
-                        distanceLabel={selectedRequest ? getTotalDistance(selectedRequest) : '0'}
-                        isLargeTruckFlag={selectedRequest ? isLargeTruck(selectedRequest) : false}
-                        directTotal={getDirectTotal()}
-                        indirectTotal={getIndirectTotal()}
-                        operatingTotal={getOperatingTotal()}
-                        income={getIncome()}
-                        proposedRate={getProposedRate()}
-                        customerBidMin={selectedRequest ? selectedRequest.budgetMin : null}
-                        customerBidMax={selectedRequest ? selectedRequest.budgetMax : null}
-                        customerCounterMin={selectedRequest ? selectedRequest.customerCounterMin : null}
-                        customerCounterMax={selectedRequest ? selectedRequest.customerCounterMax : null}
-                        onSubmit={submitQuotation}
-                        submitLabel="Submit Quotation"
-                      />
-                    )}
-
-                    {/* === CASE 2: Read-only form (submitted — quotation submitted or counter-offer received) === */}
-                    {(selectedRequest.quotation && quotationSubmitted) && !adjustingQuotation && (
-                      <>
-                        {/* Collapsible toggle for COUNTER_OFFER_SUBMITTED and FINAL_QUOTATION_SUBMITTED */}
-                        {(selectedRequest.status === 'COUNTER_OFFER_SUBMITTED' || selectedRequest.status === 'FINAL_QUOTATION_SUBMITTED') && (
-                          <button
-                            onClick={() => setShowInitialQuotation(!showInitialQuotation)}
-                            className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900 transition bg-transparent border-none cursor-pointer"
-                          >
-                            <ChevronDown className={`h-4 w-4 transition ${showInitialQuotation ? 'rotate-180' : ''}`} />
-                            {showInitialQuotation ? 'Hide' : 'Show'} Initial Quotation
-                          </button>
-                        )}
-
-                        {/* Read-only form content (shown by default for QUOTATION_SUBMITTED, collapsible for COUNTER_OFFER_SUBMITTED and FINAL_QUOTATION_SUBMITTED) */}
-                        {(showInitialQuotation || (selectedRequest.status !== 'COUNTER_OFFER_SUBMITTED' && selectedRequest.status !== 'FINAL_QUOTATION_SUBMITTED')) && isDetailedBreakdown(selectedRequest.quotation) && (
-                          <div className="space-y-4">
-
-                            {/* — Initial Quotation header for COUNTER_OFFER_SUBMITTED / FINAL_QUOTATION_SUBMITTED / APPROVED — */}
-                            {(selectedRequest.status === 'COUNTER_OFFER_SUBMITTED' || selectedRequest.status === 'FINAL_QUOTATION_SUBMITTED' || selectedRequest.status === 'APPROVED') && (
-                              <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-200/60 px-4 py-2.5">
-                                <FileText className="h-4 w-4 text-slate-600" />
-                                <span className="text-sm font-bold uppercase tracking-wider text-slate-700">Initial Quotation</span>
-                              </div>
-                            )}
-
-                            {/* — Direct Expenses (read-only) — */}
-                            <div className="rounded-xl border-2 border-slate-200 bg-slate-50/60 p-4">
-                              <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-slate-700 mb-4">
-                                <span className="h-3 w-3 rounded-full bg-slate-500" />
-                                Direct Expenses
-                              </h4>
-                              <div className="space-y-2">
-                                <div className="flex items-center justify-between py-2 border-b border-slate-200">
-                                  <span className="text-sm font-medium text-slate-700">Depreciation Expenses</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.depreciation}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-2 border-b border-slate-200">
-                                  <span className="text-sm font-medium text-slate-700">Total Diesel Expenses</span>
-                                  <span className="text-sm font-mono text-slate-900">
-                                    ₱{Number(selectedRequest.quotation.breakdown.calculated?.dieselTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                  </span>
-                                </div>
-                                {(() => {
-                                  const rate = Number(selectedRequest.quotation.breakdown.directExpenses.dieselRate || 0)
-                                  const total = Number(selectedRequest.quotation.breakdown.calculated?.dieselTotal || 0)
-                                  const distKm = rate > 0 ? total / rate : 0
-                                  return (
-                                    <p className="text-sm text-slate-600 ml-1">
-                                      a. Diesel Rate (₱{rate.toFixed(2)}) x Distance ({distKm.toFixed(1)} km)
-                                    </p>
-                                  )
-                                })()}
-                                <p className="text-sm font-semibold text-slate-600 ml-0.5 mb-1 mt-3">Repairs and Maintenance</p>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700 pl-4">a. Batteries</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.repairsAndMaintenance.batteries}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700 pl-4">b. Tires</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.repairsAndMaintenance.tires}</span>
-                                </div>
-                                <p className="text-sm font-semibold text-slate-600 ml-0.5 mb-1 mt-3">Salaries and Wages</p>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700 pl-4">a. Driver</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.salariesAndWages.driver}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700 pl-4">b. Helper (1)</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.salariesAndWages.helper1}</span>
-                                </div>
-                                {selectedRequest.quotation.breakdown.directExpenses.salariesAndWages.helper2 && (
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700 pl-4">c. Helper (2)</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.salariesAndWages.helper2}</span>
-                                </div>
-                                )}
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700">Trip Allowance</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.tripAllowance}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700">Lodging Allowance</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.lodgingAllowance}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700">Toll/Parking (Delivery Truck)</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.directExpenses.tollParking}</span>
-                                </div>
-                                <div className="mt-3 flex items-center justify-between rounded-lg bg-slate-200/60 px-4 py-3">
-                                  <span className="text-sm font-bold text-slate-800">Total Direct Expenses</span>
-                                  <span className="text-base font-bold text-slate-800">
-                                    ₱{Number(selectedRequest.quotation.breakdown.calculated?.directTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* — Indirect Expenses (read-only) — */}
-                            <div className="rounded-xl border-2 border-slate-200 bg-slate-50/60 p-4">
-                              <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-slate-700 mb-4">
-                                <span className="h-3 w-3 rounded-full bg-slate-500" />
-                                Indirect Expenses
-                              </h4>
-                              <div className="space-y-2">
-                                <div className="flex items-center justify-between py-2 border-b border-slate-200">
-                                  <span className="text-sm font-medium text-slate-700">Administration Fees</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.indirectExpenses.adminFees}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-2 border-b border-slate-200">
-                                  <span className="text-sm font-medium text-slate-700">Insurance (Vehicle)</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.indirectExpenses.insurance}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-2 border-b border-slate-200">
-                                  <span className="text-sm font-medium text-slate-700">Motor Vehicle Registration</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.indirectExpenses.motorVehicleReg}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-2">
-                                  <span className="text-sm font-medium text-slate-700">Rental (Garage)</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.quotation.breakdown.indirectExpenses.garageRental}</span>
-                                </div>
-                                <div className="mt-3 flex items-center justify-between rounded-lg bg-slate-200/60 px-4 py-3">
-                                  <span className="text-sm font-bold text-slate-800">Total Indirect Expenses</span>
-                                  <span className="text-base font-bold text-slate-800">
-                                    ₱{Number(selectedRequest.quotation.breakdown.calculated?.indirectTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* — Summary (read-only) — */}
-                            <div className="rounded-xl border-2 border-slate-300 bg-slate-100/70 p-4 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="text-sm font-semibold text-slate-700">Total Operating Expenses</span>
-                                <span className="text-base font-bold text-slate-900">
-                                  ₱{Number(selectedRequest.quotation.breakdown.calculated?.operatingTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-sm font-semibold text-slate-700">Income (15%)</span>
-                                <span className="text-base font-bold text-emerald-700">
-                                  ₱{Number(selectedRequest.quotation.breakdown.calculated?.income).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between border-t-2 border-slate-300 pt-2">
-                                <span className="text-sm font-bold text-slate-900 uppercase">Proposed Rate</span>
-                                <span className="text-lg font-bold text-sky-700">
-                                  ₱{Number(selectedRequest.quotation.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* QUOTED: Waiting message */}
-                        {selectedRequest.status === 'QUOTATION_SUBMITTED' && !selectedRequest.customerWants && (
-                          <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 mt-4">
-                            <div className="h-2 w-2 animate-pulse rounded-full bg-sky-500" />
-                            <p className="text-sm text-sky-800">Waiting for customer to review quotation.</p>
-                          </div>
-                        )}
-
-                        {/* COUNTER_OFFER_SUBMITTED: Customer's Counter Offer section */}
-                        {selectedRequest.status === 'COUNTER_OFFER_SUBMITTED' && (
-                          <>
-                            {!bidDeclined && (
-                              <div className="rounded-xl border-2 border-orange-200 bg-orange-50/60 p-4 space-y-3">
-                                <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-orange-800">
-                                  <span className="h-3 w-3 rounded-full bg-orange-600" />
-                                  Customer's Counter Offer
-                                </h4>
-                                <div className="flex items-center justify-between py-2">
-                                  <span className="text-sm font-medium text-slate-700">Initial Quotation</span>
-                                  <span className="text-base font-bold text-slate-900">₱{Number(selectedRequest.quotation.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-2 border-t border-orange-200">
-                                  <span className="text-sm font-medium text-slate-700">Customer's Counter Offer</span>
-                                  <span className="text-base font-bold text-orange-700">{getCounterOfferRange(selectedRequest)}</span>
-                                </div>
-                                <div className="flex gap-3 pt-2">
-                                  <button
-                                    onClick={handleUpdateQuotation}
-                                    className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-700 transition"
-                                  >
-                                    <Send className="h-4 w-4" />
-                                    Update Quotation
-                                  </button>
-                                  <button
-                                    onClick={handleDeclineCounterOffer}
-                                    className="inline-flex items-center gap-2 rounded-xl border border-rose-300 px-5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 transition"
-                                  >
-                                    <XCircle className="h-4 w-4" />
-                                    Decline Counter Offer
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                            {bidDeclined && (
-                              <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                <XCircle className="h-4 w-4 text-slate-400" />
-                                <p className="text-sm text-slate-600">Counter offer declined. Sticking with the initial quotation.</p>
-                              </div>
-                            )}
-                          </>
-                        )}
-
-                        {/* FINAL_QUOTATION_SUBMITTED: Show initial quotation + customer's counter offer record + updated quotation */}
-                        {selectedRequest.status === 'FINAL_QUOTATION_SUBMITTED' && (
-                          <>
-                            <div className="flex flex-wrap gap-3 border-b border-slate-200 pb-4 mb-4">
-                              <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2">
-                                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                                <span className="text-sm font-medium text-emerald-800">Updated Quotation Submitted</span>
-                              </div>
-                            </div>
-
-                            {/* Customer's Counter Offer record */}
-                            <div className="rounded-xl border-2 border-orange-200 bg-orange-50/60 p-4 space-y-3">
-                              <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-orange-800">
-                                <span className="h-3 w-3 rounded-full bg-orange-600" />
-                                Customer's Counter Offer
-                              </h4>
-                              <div className="flex items-center justify-between py-2">
-                                <span className="text-sm font-medium text-slate-700">Initial Quotation</span>
-                                <span className="text-base font-bold text-slate-900">₱{Number(selectedRequest.quotation.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
-                              </div>
-                              <div className="flex items-center justify-between py-2 border-t border-orange-200">
-                                <span className="text-sm font-medium text-slate-700">Customer's Counter Offer</span>
-                                <span className="text-base font-bold text-orange-700">{getCounterOfferRange(selectedRequest)}</span>
-                              </div>
-                            </div>
-
-                            {/* Updated Quotation (read-only) */}
-                            <div className="rounded-xl border-2 border-purple-200 bg-purple-50/60 p-4 mt-4">
-                              <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-purple-800 mb-4">
-                                <span className="h-3 w-3 rounded-full bg-purple-600" />
-                                Updated Quotation
-                              </h4>
-                              <div className="space-y-2">
-                                <div className="flex items-center justify-between py-2 border-b border-purple-100">
-                                  <span className="text-sm font-medium text-slate-700">Depreciation Expenses</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.depreciation}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-2 border-b border-purple-100">
-                                  <span className="text-sm font-medium text-slate-700">Total Diesel Expenses</span>
-                                  <span className="text-sm font-mono text-slate-900">
-                                    ₱{Number(selectedRequest.updatedQuotation.breakdown.calculated?.dieselTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                  </span>
-                                </div>
-                                {(() => {
-                                  const rate = Number(selectedRequest.updatedQuotation.breakdown.directExpenses.dieselRate || 0)
-                                  const total = Number(selectedRequest.updatedQuotation.breakdown.calculated?.dieselTotal || 0)
-                                  const distKm = rate > 0 ? total / rate : 0
-                                  return (
-                                    <p className="text-sm text-purple-700 ml-1">
-                                      a. Diesel Rate (₱{rate.toFixed(2)}) x Distance ({distKm.toFixed(1)} km)
-                                    </p>
-                                  )
-                                })()}
-                                <p className="text-sm font-semibold text-purple-700 ml-0.5 mb-1 mt-3">Repairs and Maintenance</p>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700 pl-4">a. Batteries</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.repairsAndMaintenance.batteries}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700 pl-4">b. Tires</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.repairsAndMaintenance.tires}</span>
-                                </div>
-                                <p className="text-sm font-semibold text-purple-700 ml-0.5 mb-1 mt-3">Salaries and Wages</p>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700 pl-4">a. Driver</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.salariesAndWages.driver}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700 pl-4">b. Helper (1)</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.salariesAndWages.helper1}</span>
-                                </div>
-                                {selectedRequest.updatedQuotation.breakdown.directExpenses.salariesAndWages.helper2 && (
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700 pl-4">c. Helper (2)</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.salariesAndWages.helper2}</span>
-                                </div>
-                                )}
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700">Trip Allowance</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.tripAllowance}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700">Lodging Allowance</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.lodgingAllowance}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-1.5">
-                                  <span className="text-sm font-medium text-slate-700">Toll/Parking (Delivery Truck)</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.directExpenses.tollParking}</span>
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="rounded-xl border-2 border-purple-200 bg-purple-50/60 p-4">
-                              <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-purple-800 mb-4">
-                                <span className="h-3 w-3 rounded-full bg-purple-600" />
-                                Indirect Expenses
-                              </h4>
-                              <div className="space-y-2">
-                                <div className="flex items-center justify-between py-2 border-b border-purple-100">
-                                  <span className="text-sm font-medium text-slate-700">Administration Fees</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.indirectExpenses.adminFees}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-2 border-b border-purple-100">
-                                  <span className="text-sm font-medium text-slate-700">Insurance (Vehicle)</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.indirectExpenses.insurance}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-2 border-b border-purple-100">
-                                  <span className="text-sm font-medium text-slate-700">Motor Vehicle Registration</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.indirectExpenses.motorVehicleReg}</span>
-                                </div>
-                                <div className="flex items-center justify-between py-2">
-                                  <span className="text-sm font-medium text-slate-700">Rental (Garage)</span>
-                                  <span className="text-sm font-mono text-slate-900">₱{selectedRequest.updatedQuotation.breakdown.indirectExpenses.garageRental}</span>
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="rounded-xl border-2 border-purple-300 bg-purple-100/70 p-4 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="text-sm font-semibold text-slate-700">Total Operating Expenses</span>
-                                <span className="text-base font-bold text-slate-900">
-                                  ₱{Number(selectedRequest.updatedQuotation.breakdown.calculated?.operatingTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-sm font-semibold text-slate-700">Income (15%)</span>
-                                <span className="text-base font-bold text-emerald-700">
-                                  ₱{Number(selectedRequest.updatedQuotation.breakdown.calculated?.income).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between border-t-2 border-purple-300 pt-2">
-                                <span className="text-sm font-bold text-slate-900 uppercase">Updated Proposed Rate</span>
-                                <span className="text-lg font-bold text-purple-700">
-                                  ₱{Number(selectedRequest.updatedQuotation.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                </span>
-                              </div>
-                            </div>
-                          </>
-                        )}
-                      </>
-                    )}
-
-                    {/* === CASE 3: Adjusting quotation (pre-filled editable form) === */}
-                    {adjustingQuotation && (
-                      <QuotationExpenseForm
-                        form={quotationForm}
-                        onFormChange={setQuotationForm}
-                        onOpenPricingSettings={() => setShowQuotationSettings(true)}
-                        distanceKm={selectedRequest ? parseFloat(getTotalDistance(selectedRequest)) || 0 : 0}
-                        distanceLabel={selectedRequest ? getTotalDistance(selectedRequest) : '0'}
-                        isLargeTruckFlag={selectedRequest ? isLargeTruck(selectedRequest) : false}
-                        directTotal={getDirectTotal()}
-                        indirectTotal={getIndirectTotal()}
-                        operatingTotal={getOperatingTotal()}
-                        income={getIncome()}
-                        proposedRate={getProposedRate()}
-                        customerBidMin={selectedRequest ? selectedRequest.budgetMin : null}
-                        customerBidMax={selectedRequest ? selectedRequest.budgetMax : null}
-                        customerCounterMin={selectedRequest ? selectedRequest.customerCounterMin : null}
-                        customerCounterMax={selectedRequest ? selectedRequest.customerCounterMax : null}
-                        onSubmit={handleSubmitUpdatedQuotation}
-                        submitLabel="Submit Updated Quotation"
-                      />
-                    )}
-
-                  </div>
-                  )}
-                </div>
-              )}
-
-              {hasApproved && quotationSubmitted && ['APPROVED', 'ASSIGNED', 'OUT_FOR_PICKUP', 'ARRIVED_PICKUP', 'OUT_FOR_DROPOFF', 'ARRIVED_DROPOFF', 'DELIVERED', 'COMPLETED'].includes(selectedRequest.status) && (
-                <div
-                  className={`rounded-2xl border bg-white bg-gradient-to-b p-4 transition-colors ${
-                    selectedRequest.crew?.driver && selectedRequest.crew?.truck?.plateNumber
-                      ? 'border-emerald-400 from-emerald-50 to-white'
-                      : 'border-indigo-200 from-indigo-50 to-white'
-                  }`}
-                >
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      {isInTransitStatus ? 'Assigned Vehicle and Delivery Crew' : 'Assign Vehicle and Delivery Crew'}
-                    </h3>
-                    {isInTransitStatus ? (
-                      <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-600">
-                        <Lock className="h-3.5 w-3.5 text-slate-400" />
-                        The crew is locked once the delivery is in transit. Changes can no longer be made.
-                      </p>
-                    ) : (
-                      <p className="mt-1 text-xs text-slate-600">Select a vehicle, then choose the driver and helpers to confirm the assignment.</p>
-                    )}
-                  </div>
-
-                  {selectedRequest.crew?.driver && selectedRequest.crew?.truck?.plateNumber && (
-                    <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                      <p className="flex items-center gap-2 font-semibold">
-                        <CheckCircle2 className="h-4 w-4" />
-                        Assignment saved successfully
-                      </p>
-                      <p className="mt-1 text-xs text-emerald-700">
-                        {selectedRequest.crew.driver.name} • {selectedRequest.crew.truck.plateNumber}
-                        {selectedRequest.assignedAt ? ` • Saved ${selectedRequest.assignedAt}` : ''}
-                      </p>
-                    </div>
-                  )}
-
-                  {isInTransitStatus ? (
-                    <div className="mt-4 space-y-3">
-                      {selectedRequest.crew?.truck && (
-                        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                          <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-200 text-center text-[10px] font-bold leading-tight text-slate-600">
-                            {selectedRequest.crew.truck.truckType}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold text-slate-900">{selectedRequest.crew.truck.plateNumber}</p>
-                            <p className="text-xs text-slate-500">
-                              {selectedRequest.crew.truck.truckType} • {selectedRequest.crew.truck.capacity}
+                      {selectedRequest.crew?.driver &&
+                        selectedRequest.crew?.truck?.plateNumber && (
+                          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                            <p className="flex items-center gap-2 font-semibold">
+                              <CheckCircle2 className="h-4 w-4" />
+                              Assignment saved successfully
+                            </p>
+                            <p className="mt-1 text-xs text-emerald-700">
+                              {selectedRequest.crew.driver.name} •{" "}
+                              {selectedRequest.crew.truck.plateNumber}
+                              {selectedRequest.assignedAt
+                                ? ` • Saved ${selectedRequest.assignedAt}`
+                                : ""}
                             </p>
                           </div>
-                        </div>
-                      )}
-                      {selectedRequest.crew?.driver && (
-                        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-200 text-sm font-bold text-slate-600">
-                            {getInitials(selectedRequest.crew.driver.name)}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold text-slate-900">{selectedRequest.crew.driver.name}</p>
-                            <p className="text-xs text-slate-500">
-                              {selectedRequest.crew.driver.id}
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                      {selectedRequest.crew?.helpers && selectedRequest.crew.helpers.length > 0 && (
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Helpers</p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {selectedRequest.crew.helpers.map((h) => (
-                              <span key={h.id} className="inline-flex items-center rounded-lg bg-slate-200 px-2 py-1 text-xs font-medium text-slate-700">
-                                {h.name}
+                        )}
+
+                      {isInTransitStatus ? (
+                        <div className="mt-4 space-y-3">
+                          {selectedRequest.crew?.truck && (
+                            <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                              <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-200 text-center text-[10px] font-bold leading-tight text-slate-600">
+                                {selectedRequest.crew.truck.truckType}
                               </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {selectedRequest.assignedAt && (
-                        <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                          <Clock className="h-3.5 w-3.5" />
-                          Saved {selectedRequest.assignedAt}
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <>
-                  <div className="mt-4 space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Available Vehicles</p>
-                    <div className="relative">
-                      <button
-                        type="button"
-                        onClick={() => { if (!fleetLoading) setAssignment(prev => ({ ...prev, _showTrucks: !prev._showTrucks, _showDrivers: false, _showHelpers: false })) }}
-                        className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
-                      >
-                        {fleetLoading ? (
-                          <div className="flex flex-1 items-center gap-3">
-                            <span className="h-10 w-16 shrink-0 animate-pulse rounded-lg bg-slate-200" />
-                            <div className="flex-1 space-y-1.5">
-                              <div className="h-3.5 w-28 animate-pulse rounded bg-slate-200" />
-                              <div className="h-3 w-44 animate-pulse rounded bg-slate-100" />
-                            </div>
-                          </div>
-                        ) : selectedTruck ? (
-                          <div className="flex flex-1 items-center gap-3 min-w-0">
-                            <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-center text-[10px] font-bold leading-tight text-indigo-700">{selectedTruck.truckType}</span>
-                            <div className="min-w-0 flex-1">
-                              <p className="flex flex-wrap items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
-                                {selectedTruck.plateNumber}
-                                {truckDriverWarning(selectedTruck) && (
-                                  <span
-                                    className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700"
-                                    title={truckDriverWarning(selectedTruck)}
-                                  >
-                                    <AlertTriangle className="h-2.5 w-2.5" />
-                                    Driver unavailable on {deliveryDateLabel}
-                                  </span>
-                                )}
-                              </p>
-                              <p className="text-xs text-slate-500">{selectedTruck.truckType} • {selectedTruck.capacity}</p>
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="flex-1 text-sm text-slate-400">Select a vehicle...</span>
-                        )}
-                        <svg className={`ml-auto h-5 w-5 shrink-0 text-slate-400 transition ${assignment._showTrucks ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                      {assignment._showTrucks && (
-                        <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {matchingTrucks.map(truck => {
-                            const currentCrew = getCrewForPlate(truck.plateNumber)
-                            const currentDriver = currentCrew?.driverId ? fleet.drivers.find((d) => d.id === currentCrew.driverId) : null
-                            const driverWarning = truckDriverWarning(truck)
-                            return (
-                              <button
-                                key={truck.plateNumber}
-                                type="button"
-                                onClick={() => prefillTruckCrew(truck)}
-                                className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
-                                  assignment.plateNumber === truck.plateNumber
-                                    ? 'bg-indigo-50 ring-1 ring-indigo-300'
-                                    : ''
-                                }`}
-                              >
-                                <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-center text-[10px] font-bold leading-tight text-slate-600">{truck.truckType}</span>
-                                <div className="min-w-0 flex-1">
-                                  <p className="flex flex-wrap items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
-                                    {truck.plateNumber}
-                                    <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700">
-                                      Requested type
-                                    </span>
-                                    {driverWarning && (
-                                      <span
-                                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700"
-                                        title={driverWarning}
-                                      >
-                                        <AlertTriangle className="h-2.5 w-2.5" />
-                                        Driver unavailable on {deliveryDateLabel}
-                                      </span>
-                                    )}
-                                  </p>
-                                  <p className="text-xs text-slate-500">{truck.truckType} • {truck.capacity}</p>
-                                  {currentDriver && !driverWarning && (
-                                    <p className="mt-0.5 text-[10px] text-slate-400">Current driver: {currentDriver.name}</p>
-                                  )}
-                                  {driverWarning && (
-                                    <p className="mt-0.5 text-[10px] font-medium text-amber-600">
-                                      {driverWarning} — pick another truck or assign a different driver
-                                    </p>
-                                  )}
-                                </div>
-                                {assignment.plateNumber === truck.plateNumber && (
-                                  <svg className="h-5 w-5 shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                  </svg>
-                                )}
-                              </button>
-                            )
-                          })}
-                          {!fleetLoading && matchingTrucks.length === 0 && (
-                            <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
-                              No truck matches the requested type ({selectedRequest.truckType}).
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-4 space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Driver
-                      <span className="ml-1 font-normal normal-case text-slate-400">(current driver for vehicle — change if needed)</span>
-                    </p>
-                    <div className="relative">
-                      <button
-                        type="button"
-                        onClick={() => { if (!fleetLoading) setAssignment(prev => ({ ...prev, _showDrivers: !prev._showDrivers, _showTrucks: false, _showHelpers: false })) }}
-                        className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
-                      >
-                        {fleetLoading ? (
-                          <div className="flex flex-1 items-center gap-3">
-                            <span className="h-10 w-10 shrink-0 animate-pulse rounded-lg bg-slate-200" />
-                            <div className="flex-1 space-y-1.5">
-                              <div className="h-3.5 w-32 animate-pulse rounded bg-slate-200" />
-                              <div className="h-3 w-20 animate-pulse rounded bg-slate-100" />
-                            </div>
-                          </div>
-                        ) : selectedDriver ? (
-                          <>
-                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">{getInitials(selectedDriver.name)}</span>
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-slate-900">{selectedDriver.name}</p>
-                              <p className="text-xs text-slate-500">{selectedDriver.id}</p>
-                            </div>
-                          </>
-                        ) : (
-                          <span className="flex-1 text-sm text-slate-400">Select a driver...</span>
-                        )}
-                        <svg className={`ml-auto h-5 w-5 text-slate-400 transition ${assignment._showDrivers ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                      {assignment._showDrivers && (
-                        <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {eligibleDrivers.map(driver => {
-                            const isSpecialized = isSpecializedForClient(driver, selectedRequest.customerName)
-                            const availability = crewAvailabilityOnDate(driver)
-                            const selectable = availability.key === 'available'
-                            return (
-                            <button
-                              key={driver.id}
-                              type="button"
-                              disabled={!selectable}
-                              onClick={() => {
-                                const usualHelpers = (helperIdsByDriver[driver.id] || [])
-                                  .map((id) => fleet.helpers.find((h) => h.id === id))
-                                  .filter(Boolean)
-                                  .filter(crewMeetsSpecialty)
-                                  .filter(crewAvailableOnDate)
-                                  .map((h) => h.id)
-                                setAssignment(prev => ({
-                                  ...prev,
-                                  driverId: driver.id,
-                                  // Pre-fill the driver's usual crew, but never
-                                  // wipe helpers the Supervisor already picked
-                                  // by hand (common when the driver has no
-                                  // active-trip crew yet).
-                                  helperIds: usualHelpers.length > 0 ? usualHelpers : prev.helperIds,
-                                  _showDrivers: false,
-                                }))
-                              }}
-                              className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition ${
-                                !selectable ? 'cursor-not-allowed opacity-50' : 'hover:bg-indigo-50'
-                              } ${
-                                assignment.driverId === driver.id ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
-                              }`}
-                            >
-                              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(driver.name)}</span>
                               <div className="min-w-0 flex-1">
-                                <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
-                                  {driver.name}
-                                  {isSpecialized && (
-                                    <span
-                                      className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700"
-                                      title="This driver has a Client Specialty for this customer"
-                                    >
-                                      Specialized Driver for this Client
-                                    </span>
-                                  )}
+                                <p className="truncate text-sm font-semibold text-slate-900">
+                                  {selectedRequest.crew.truck.plateNumber}
                                 </p>
-                                <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                  {driver.id}
-                                  <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${availability.badge}`}>
-                                    <span className={`h-1.5 w-1.5 rounded-full ${availability.dot}`} />
-                                    {availability.label}
-                                  </span>
-                                  {!selectable && (
-                                    <span className="text-[9px] font-medium text-amber-600">
-                                      {availability.key === 'assigned' ? 'On another delivery' : `Off on ${deliveryDateLabel}`}
-                                    </span>
-                                  )}
-                                  {selectable && availability.currentlyBusy && availability.currentTrip && (
-                                    <span className="text-[9px] font-medium text-amber-600">
-                                      On another delivery until {availability.currentTrip.end}
-                                    </span>
-                                  )}
+                                <p className="text-xs text-slate-500">
+                                  {selectedRequest.crew.truck.truckType} •{" "}
+                                  {selectedRequest.crew.truck.capacity}
                                 </p>
                               </div>
-                              {assignment.driverId === driver.id && (
-                                <svg className="h-5 w-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                </svg>
-                              )}
-                            </button>
-                            )
-                          })}
-                          {eligibleDrivers.length === 0 && (
-                            <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
-                              No drivers with the required specialty for {selectedRequest.customerName}.
-                            </p>
+                            </div>
                           )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-4 space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Helpers
-                      <span className="ml-1 font-normal normal-case text-slate-400">(current helpers for vehicle — change if needed)</span>
-                    </p>
-                    <div className="relative">
-                      <button
-                        type="button"
-                        onClick={() => { if (!fleetLoading) setAssignment(prev => ({ ...prev, _showHelpers: !prev._showHelpers, _showTrucks: false, _showDrivers: false }))}
-                        }
-                        className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
-                      >
-                        {fleetLoading ? (
-                          <div className="flex flex-1 items-center gap-2">
-                            <span className="h-6 w-20 shrink-0 animate-pulse rounded-lg bg-slate-200" />
-                            <span className="h-6 w-20 shrink-0 animate-pulse rounded-lg bg-slate-100" />
-                          </div>
-                        ) : selectedHelpers.length > 0 ? (
-                          <div className="flex flex-1 flex-wrap items-center gap-2">
-                            {selectedHelpers.map(h => (
-                              <span key={h.id} className="inline-flex items-center rounded-lg bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
-                                {h.name}
+                          {selectedRequest.crew?.driver && (
+                            <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-200 text-sm font-bold text-slate-600">
+                                {getInitials(selectedRequest.crew.driver.name)}
                               </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="flex-1 text-sm text-slate-400">Select helpers...</span>
-                        )}
-                        <svg className={`ml-auto h-5 w-5 shrink-0 text-slate-400 transition ${assignment._showHelpers ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                      {assignment._showHelpers && (
-                        <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                          {eligibleHelpers.map(helper => {
-                            const isSelected = assignment.helperIds.includes(helper.id)
-                            const availability = crewAvailabilityOnDate(helper)
-                            const selectable = availability.key === 'available'
-                            const disabled = !selectable || (!isSelected && assignment.helperIds.length >= 2)
-                            const isSpecialized = isSpecializedForClient(helper, selectedRequest.customerName)
-                            return (
-                              <button
-                                key={helper.id}
-                                type="button"
-                                disabled={disabled}
-                                onClick={() => toggleHelper(helper.id)}
-                                className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition ${
-                                  isSelected ? 'bg-indigo-50' : disabled ? 'opacity-40 cursor-not-allowed' : 'hover:bg-slate-50'
-                                }`}
-                              >
-                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{getInitials(helper.name)}</span>
-                                <div className="min-w-0 flex-1">
-                                  <p className={`flex items-center gap-1.5 truncate text-sm font-semibold ${isSelected ? 'text-indigo-900' : 'text-slate-900'}`}>
-                                    {helper.name}
-                                    {isSpecialized && (
-                                      <span
-                                        className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700"
-                                        title="This helper has a Client Specialty for this customer"
-                                      >
-                                        Specialized Helper for this Client
-                                      </span>
-                                    )}
-                                  </p>
-                                  <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                    {helper.id}
-                                    <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${availability.badge}`}>
-                                      <span className={`h-1.5 w-1.5 rounded-full ${availability.dot}`} />
-                                      {availability.label}
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-semibold text-slate-900">
+                                  {selectedRequest.crew.driver.name}
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  {selectedRequest.crew.driver.id}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                          {selectedRequest.crew?.helpers &&
+                            selectedRequest.crew.helpers.length > 0 && (
+                              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                  Helpers
+                                </p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {selectedRequest.crew.helpers.map((h) => (
+                                    <span
+                                      key={h.id}
+                                      className="inline-flex items-center rounded-lg bg-slate-200 px-2 py-1 text-xs font-medium text-slate-700"
+                                    >
+                                      {h.name}
                                     </span>
-                                    {!selectable && (
-                                      <span className="text-[9px] font-medium text-amber-600">
-                                        {availability.key === 'assigned' ? 'On another delivery' : `Off on ${deliveryDateLabel}`}
-                                      </span>
-                                    )}
-                                    {selectable && availability.currentlyBusy && availability.currentTrip && (
-                                      <span className="text-[9px] font-medium text-amber-600">
-                                        On another delivery until {availability.currentTrip.end}
-                                      </span>
-                                    )}
-                                  </p>
+                                  ))}
                                 </div>
-                                <span className={`flex h-5 w-5 items-center justify-center rounded border-2 ${
-                                  isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
-                                }`}>
-                                  {isSelected && (
-                                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                                    </svg>
-                                  )}
-                                </span>
-                              </button>
-                            )
-                          })}
-                          {eligibleHelpers.length === 0 && (
-                            <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
-                              No helpers with the required specialty for {selectedRequest.customerName}.
+                              </div>
+                            )}
+                          {selectedRequest.assignedAt && (
+                            <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                              <Clock className="h-3.5 w-3.5" />
+                              Saved {selectedRequest.assignedAt}
                             </p>
                           )}
                         </div>
+                      ) : (
+                        <>
+                          <div className="mt-4 space-y-2">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              Available Vehicles
+                            </p>
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!fleetLoading)
+                                    setAssignment((prev) => ({
+                                      ...prev,
+                                      _showTrucks: !prev._showTrucks,
+                                      _showDrivers: false,
+                                      _showHelpers: false,
+                                    }));
+                                }}
+                                className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
+                              >
+                                {fleetLoading ? (
+                                  <div className="flex flex-1 items-center gap-3">
+                                    <span className="h-10 w-16 shrink-0 animate-pulse rounded-lg bg-slate-200" />
+                                    <div className="flex-1 space-y-1.5">
+                                      <div className="h-3.5 w-28 animate-pulse rounded bg-slate-200" />
+                                      <div className="h-3 w-44 animate-pulse rounded bg-slate-100" />
+                                    </div>
+                                  </div>
+                                ) : selectedTruck ? (
+                                  <div className="flex flex-1 items-center gap-3 min-w-0">
+                                    <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-center text-[10px] font-bold leading-tight text-indigo-700">
+                                      {selectedTruck.truckType}
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="flex flex-wrap items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
+                                        {selectedTruck.plateNumber}
+                                        {truckDriverWarning(selectedTruck) && (
+                                          <span
+                                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700"
+                                            title={truckDriverWarning(
+                                              selectedTruck,
+                                            )}
+                                          >
+                                            <AlertTriangle className="h-2.5 w-2.5" />
+                                            Driver unavailable on{" "}
+                                            {deliveryDateLabel}
+                                          </span>
+                                        )}
+                                      </p>
+                                      <p className="text-xs text-slate-500">
+                                        {selectedTruck.truckType} •{" "}
+                                        {selectedTruck.capacity}
+                                      </p>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="flex-1 text-sm text-slate-400">
+                                    Select a vehicle...
+                                  </span>
+                                )}
+                                <svg
+                                  className={`ml-auto h-5 w-5 shrink-0 text-slate-400 transition ${assignment._showTrucks ? "rotate-180" : ""}`}
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M19 9l-7 7-7-7"
+                                  />
+                                </svg>
+                              </button>
+                              {assignment._showTrucks && (
+                                <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                                  {matchingTrucks.map((truck) => {
+                                    const currentCrew = getCrewForPlate(
+                                      truck.plateNumber,
+                                    );
+                                    const currentDriver = currentCrew?.driverId
+                                      ? fleet.drivers.find(
+                                          (d) => d.id === currentCrew.driverId,
+                                        )
+                                      : null;
+                                    const driverWarning =
+                                      truckDriverWarning(truck);
+                                    return (
+                                      <button
+                                        key={truck.plateNumber}
+                                        type="button"
+                                        onClick={() => prefillTruckCrew(truck)}
+                                        className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-indigo-50 ${
+                                          assignment.plateNumber ===
+                                          truck.plateNumber
+                                            ? "bg-indigo-50 ring-1 ring-indigo-300"
+                                            : ""
+                                        }`}
+                                      >
+                                        <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-center text-[10px] font-bold leading-tight text-slate-600">
+                                          {truck.truckType}
+                                        </span>
+                                        <div className="min-w-0 flex-1">
+                                          <p className="flex flex-wrap items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
+                                            {truck.plateNumber}
+                                            <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700">
+                                              Requested type
+                                            </span>
+                                            {driverWarning && (
+                                              <span
+                                                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700"
+                                                title={driverWarning}
+                                              >
+                                                <AlertTriangle className="h-2.5 w-2.5" />
+                                                Driver unavailable on{" "}
+                                                {deliveryDateLabel}
+                                              </span>
+                                            )}
+                                          </p>
+                                          <p className="text-xs text-slate-500">
+                                            {truck.truckType} • {truck.capacity}
+                                          </p>
+                                          {currentDriver && !driverWarning && (
+                                            <p className="mt-0.5 text-[10px] text-slate-400">
+                                              Current driver:{" "}
+                                              {currentDriver.name}
+                                            </p>
+                                          )}
+                                          {driverWarning && (
+                                            <p className="mt-0.5 text-[10px] font-medium text-amber-600">
+                                              {driverWarning} — pick another
+                                              truck or assign a different driver
+                                            </p>
+                                          )}
+                                        </div>
+                                        {assignment.plateNumber ===
+                                          truck.plateNumber && (
+                                          <svg
+                                            className="h-5 w-5 shrink-0 text-indigo-600"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            viewBox="0 0 24 24"
+                                          >
+                                            <path
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                              strokeWidth={2}
+                                              d="M5 13l4 4L19 7"
+                                            />
+                                          </svg>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+                                  {!fleetLoading &&
+                                    matchingTrucks.length === 0 && (
+                                      <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
+                                        No truck matches the requested type (
+                                        {selectedRequest.truckType}).
+                                      </p>
+                                    )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="mt-4 space-y-2">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              Driver
+                              <span className="ml-1 font-normal normal-case text-slate-400">
+                                (current driver for vehicle — change if needed)
+                              </span>
+                            </p>
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!fleetLoading)
+                                    setAssignment((prev) => ({
+                                      ...prev,
+                                      _showDrivers: !prev._showDrivers,
+                                      _showTrucks: false,
+                                      _showHelpers: false,
+                                    }));
+                                }}
+                                className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
+                              >
+                                {fleetLoading ? (
+                                  <div className="flex flex-1 items-center gap-3">
+                                    <span className="h-10 w-10 shrink-0 animate-pulse rounded-lg bg-slate-200" />
+                                    <div className="flex-1 space-y-1.5">
+                                      <div className="h-3.5 w-32 animate-pulse rounded bg-slate-200" />
+                                      <div className="h-3 w-20 animate-pulse rounded bg-slate-100" />
+                                    </div>
+                                  </div>
+                                ) : selectedDriver ? (
+                                  <>
+                                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">
+                                      {getInitials(selectedDriver.name)}
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="truncate text-sm font-semibold text-slate-900">
+                                        {selectedDriver.name}
+                                      </p>
+                                      <p className="text-xs text-slate-500">
+                                        {selectedDriver.id}
+                                      </p>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <span className="flex-1 text-sm text-slate-400">
+                                    Select a driver...
+                                  </span>
+                                )}
+                                <svg
+                                  className={`ml-auto h-5 w-5 text-slate-400 transition ${assignment._showDrivers ? "rotate-180" : ""}`}
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M19 9l-7 7-7-7"
+                                  />
+                                </svg>
+                              </button>
+                              {assignment._showDrivers && (
+                                <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                                  {eligibleDrivers.map((driver) => {
+                                    const isSpecialized =
+                                      isSpecializedForClient(
+                                        driver,
+                                        selectedRequest.customerName,
+                                      );
+                                    const availability =
+                                      crewAvailabilityOnDate(driver);
+                                    const selectable =
+                                      availability.key === "available";
+                                    return (
+                                      <button
+                                        key={driver.id}
+                                        type="button"
+                                        disabled={!selectable}
+                                        onClick={() => {
+                                          const usualHelpers = (
+                                            helperIdsByDriver[driver.id] || []
+                                          )
+                                            .map((id) =>
+                                              fleet.helpers.find(
+                                                (h) => h.id === id,
+                                              ),
+                                            )
+                                            .filter(Boolean)
+                                            .filter(crewMeetsSpecialty)
+                                            .filter(crewAvailableOnDate)
+                                            .map((h) => h.id);
+                                          setAssignment((prev) => ({
+                                            ...prev,
+                                            driverId: driver.id,
+                                            // Pre-fill the driver's usual crew, but never
+                                            // wipe helpers the Supervisor already picked
+                                            // by hand (common when the driver has no
+                                            // active-trip crew yet).
+                                            helperIds:
+                                              usualHelpers.length > 0
+                                                ? usualHelpers
+                                                : prev.helperIds,
+                                            _showDrivers: false,
+                                          }));
+                                        }}
+                                        className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition ${
+                                          !selectable
+                                            ? "cursor-not-allowed opacity-50"
+                                            : "hover:bg-indigo-50"
+                                        } ${
+                                          assignment.driverId === driver.id
+                                            ? "bg-indigo-50 ring-1 ring-indigo-300"
+                                            : ""
+                                        }`}
+                                      >
+                                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">
+                                          {getInitials(driver.name)}
+                                        </span>
+                                        <div className="min-w-0 flex-1">
+                                          <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
+                                            {driver.name}
+                                            {isSpecialized && (
+                                              <span
+                                                className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700"
+                                                title="This driver has a Client Specialty for this customer"
+                                              >
+                                                Specialized Driver for this
+                                                Client
+                                              </span>
+                                            )}
+                                          </p>
+                                          <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                            {driver.id}
+                                            <span
+                                              className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${availability.badge}`}
+                                            >
+                                              <span
+                                                className={`h-1.5 w-1.5 rounded-full ${availability.dot}`}
+                                              />
+                                              {availability.label}
+                                            </span>
+                                            {!selectable && (
+                                              <span className="text-[9px] font-medium text-amber-600">
+                                                {availability.key === "assigned"
+                                                  ? "On another delivery"
+                                                  : `Off on ${deliveryDateLabel}`}
+                                              </span>
+                                            )}
+                                            {selectable &&
+                                              availability.currentlyBusy &&
+                                              availability.currentTrip && (
+                                                <span className="text-[9px] font-medium text-amber-600">
+                                                  On another delivery until{" "}
+                                                  {availability.currentTrip.end}
+                                                </span>
+                                              )}
+                                          </p>
+                                        </div>
+                                        {assignment.driverId === driver.id && (
+                                          <svg
+                                            className="h-5 w-5 text-indigo-600"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            viewBox="0 0 24 24"
+                                          >
+                                            <path
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                              strokeWidth={2}
+                                              d="M5 13l4 4L19 7"
+                                            />
+                                          </svg>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+                                  {eligibleDrivers.length === 0 && (
+                                    <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
+                                      No drivers with the required specialty for{" "}
+                                      {selectedRequest.customerName}.
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="mt-4 space-y-2">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              Helpers
+                              <span className="ml-1 font-normal normal-case text-slate-400">
+                                (current helpers for vehicle — change if needed)
+                              </span>
+                            </p>
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!fleetLoading)
+                                    setAssignment((prev) => ({
+                                      ...prev,
+                                      _showHelpers: !prev._showHelpers,
+                                      _showTrucks: false,
+                                      _showDrivers: false,
+                                    }));
+                                }}
+                                className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200"
+                              >
+                                {fleetLoading ? (
+                                  <div className="flex flex-1 items-center gap-2">
+                                    <span className="h-6 w-20 shrink-0 animate-pulse rounded-lg bg-slate-200" />
+                                    <span className="h-6 w-20 shrink-0 animate-pulse rounded-lg bg-slate-100" />
+                                  </div>
+                                ) : selectedHelpers.length > 0 ? (
+                                  <div className="flex flex-1 flex-wrap items-center gap-2">
+                                    {selectedHelpers.map((h) => (
+                                      <span
+                                        key={h.id}
+                                        className="inline-flex items-center rounded-lg bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700"
+                                      >
+                                        {h.name}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="flex-1 text-sm text-slate-400">
+                                    Select helpers...
+                                  </span>
+                                )}
+                                <svg
+                                  className={`ml-auto h-5 w-5 shrink-0 text-slate-400 transition ${assignment._showHelpers ? "rotate-180" : ""}`}
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M19 9l-7 7-7-7"
+                                  />
+                                </svg>
+                              </button>
+                              {assignment._showHelpers && (
+                                <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                                  {eligibleHelpers.map((helper) => {
+                                    const isSelected =
+                                      assignment.helperIds.includes(helper.id);
+                                    const availability =
+                                      crewAvailabilityOnDate(helper);
+                                    const selectable =
+                                      availability.key === "available";
+                                    const disabled =
+                                      !selectable ||
+                                      (!isSelected &&
+                                        assignment.helperIds.length >= 2);
+                                    const isSpecialized =
+                                      isSpecializedForClient(
+                                        helper,
+                                        selectedRequest.customerName,
+                                      );
+                                    return (
+                                      <button
+                                        key={helper.id}
+                                        type="button"
+                                        disabled={disabled}
+                                        onClick={() => toggleHelper(helper.id)}
+                                        className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition ${
+                                          isSelected
+                                            ? "bg-indigo-50"
+                                            : disabled
+                                              ? "opacity-40 cursor-not-allowed"
+                                              : "hover:bg-slate-50"
+                                        }`}
+                                      >
+                                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">
+                                          {getInitials(helper.name)}
+                                        </span>
+                                        <div className="min-w-0 flex-1">
+                                          <p
+                                            className={`flex items-center gap-1.5 truncate text-sm font-semibold ${isSelected ? "text-indigo-900" : "text-slate-900"}`}
+                                          >
+                                            {helper.name}
+                                            {isSpecialized && (
+                                              <span
+                                                className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700"
+                                                title="This helper has a Client Specialty for this customer"
+                                              >
+                                                Specialized Helper for this
+                                                Client
+                                              </span>
+                                            )}
+                                          </p>
+                                          <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                            {helper.id}
+                                            <span
+                                              className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${availability.badge}`}
+                                            >
+                                              <span
+                                                className={`h-1.5 w-1.5 rounded-full ${availability.dot}`}
+                                              />
+                                              {availability.label}
+                                            </span>
+                                            {!selectable && (
+                                              <span className="text-[9px] font-medium text-amber-600">
+                                                {availability.key === "assigned"
+                                                  ? "On another delivery"
+                                                  : `Off on ${deliveryDateLabel}`}
+                                              </span>
+                                            )}
+                                            {selectable &&
+                                              availability.currentlyBusy &&
+                                              availability.currentTrip && (
+                                                <span className="text-[9px] font-medium text-amber-600">
+                                                  On another delivery until{" "}
+                                                  {availability.currentTrip.end}
+                                                </span>
+                                              )}
+                                          </p>
+                                        </div>
+                                        <span
+                                          className={`flex h-5 w-5 items-center justify-center rounded border-2 ${
+                                            isSelected
+                                              ? "border-indigo-600 bg-indigo-600 text-white"
+                                              : "border-slate-300"
+                                          }`}
+                                        >
+                                          {isSelected && (
+                                            <svg
+                                              className="h-3 w-3"
+                                              fill="none"
+                                              stroke="currentColor"
+                                              viewBox="0 0 24 24"
+                                            >
+                                              <path
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                strokeWidth={3}
+                                                d="M5 13l4 4L19 7"
+                                              />
+                                            </svg>
+                                          )}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
+                                  {eligibleHelpers.length === 0 && (
+                                    <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
+                                      No helpers with the required specialty for{" "}
+                                      {selectedRequest.customerName}.
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => setShowConfirmDialog(true)}
+                            disabled={!canConfirmAssignment}
+                            title={
+                              !canConfirmAssignment
+                                ? "Select a vehicle and at least one available helper."
+                                : undefined
+                            }
+                            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Users className="h-4 w-4" />
+                            {selectedRequest.crew?.driver
+                              ? "Update Vehicle and Crew"
+                              : "Confirm Vehicle and Crew"}
+                          </button>
+                        </>
                       )}
                     </div>
-                  </div>
-
-                  <button
-                    onClick={() => setShowConfirmDialog(true)}
-                    disabled={!canConfirmAssignment}
-                    title={!canConfirmAssignment ? 'Select a vehicle and at least one available helper.' : undefined}
-                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Users className="h-4 w-4" />
-                    {selectedRequest.crew?.driver ? 'Update Vehicle and Crew' : 'Confirm Vehicle and Crew'}
-                  </button>
-                    </>
                   )}
-                </div>
-              )}
 
-              {showConfirmDialog && selectedDriver && selectedTruck && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-                  <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden">
-                    <div className="p-6 space-y-4">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100">
-                          <Users className="h-5 w-5 text-indigo-600" />
-                        </div>
-                        <div>
-                          <h3 className="text-lg font-semibold text-slate-900">Confirm Assignment</h3>
-                          <p className="text-sm text-slate-500">Please review before confirming</p>
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                {showConfirmDialog && selectedDriver && selectedTruck && (
+                  <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+                    <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden">
+                      <div className="p-6 space-y-4">
                         <div className="flex items-center gap-3">
-                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">{getInitials(selectedDriver.name)}</span>
+                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100">
+                            <Users className="h-5 w-5 text-indigo-600" />
+                          </div>
                           <div>
-                            <p className="text-sm font-semibold text-slate-900">{selectedDriver.name}</p>
-                            <p className="text-xs text-slate-500">Driver</p>
+                            <h3 className="text-lg font-semibold text-slate-900">
+                              Confirm Assignment
+                            </h3>
+                            <p className="text-sm text-slate-500">
+                              Please review before confirming
+                            </p>
                           </div>
                         </div>
-                        {selectedHelpers.length > 0 && (
-                          <div className="border-t border-slate-200 pt-3 space-y-3">
-                            {selectedHelpers.map(h => (
-                              <div key={h.id} className="flex items-center gap-3">
-                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">{getInitials(h.name)}</span>
-                                <div>
-                                  <p className="text-sm font-semibold text-slate-900">{h.name}</p>
-                                  <p className="text-xs text-slate-500">Helper</p>
+
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                          <div className="flex items-center gap-3">
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">
+                              {getInitials(selectedDriver.name)}
+                            </span>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {selectedDriver.name}
+                              </p>
+                              <p className="text-xs text-slate-500">Driver</p>
+                            </div>
+                          </div>
+                          {selectedHelpers.length > 0 && (
+                            <div className="border-t border-slate-200 pt-3 space-y-3">
+                              {selectedHelpers.map((h) => (
+                                <div
+                                  key={h.id}
+                                  className="flex items-center gap-3"
+                                >
+                                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-sm font-bold text-indigo-700">
+                                    {getInitials(h.name)}
+                                  </span>
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-900">
+                                      {h.name}
+                                    </p>
+                                    <p className="text-xs text-slate-500">
+                                      Helper
+                                    </p>
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              ))}
+                            </div>
+                          )}
+                          <div className="border-t border-slate-200 pt-3 flex items-center gap-3">
+                            <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-center text-[10px] font-bold leading-tight text-slate-600">
+                              {selectedTruck.truckType}
+                            </span>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {selectedTruck.plateNumber}
+                              </p>
+                              <p className="text-xs text-slate-500">
+                                {selectedTruck.truckType} •{" "}
+                                {selectedTruck.capacity}
+                              </p>
+                            </div>
                           </div>
-                        )}
-                        <div className="border-t border-slate-200 pt-3 flex items-center gap-3">
-                          <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-center text-[10px] font-bold leading-tight text-slate-600">{selectedTruck.truckType}</span>
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">{selectedTruck.plateNumber}</p>
-                            <p className="text-xs text-slate-500">{selectedTruck.truckType} • {selectedTruck.capacity}</p>
-                          </div>
+                        </div>
+
+                        <p className="text-sm text-slate-700">
+                          Are you sure you want to set{" "}
+                          <strong>{selectedDriver.name}</strong>
+                          {selectedHelpers.length > 0 && (
+                            <>
+                              {" "}
+                              and{" "}
+                              <strong>
+                                {selectedHelpers.map((h) => h.name).join(", ")}
+                              </strong>
+                            </>
+                          )}{" "}
+                          to truck <strong>{selectedTruck.plateNumber}</strong>?
+                        </p>
+
+                        <div className="flex gap-3">
+                          <button
+                            onClick={() => setShowConfirmDialog(false)}
+                            className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => {
+                              assignCrew();
+                              setShowConfirmDialog(false);
+                            }}
+                            className="flex-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
+                          >
+                            Confirm
+                          </button>
                         </div>
                       </div>
+                    </div>
+                  </div>
+                )}
 
-                      <p className="text-sm text-slate-700">
-                        Are you sure you want to set <strong>{selectedDriver.name}</strong>
-                        {selectedHelpers.length > 0 && (
-                          <> and <strong>{selectedHelpers.map(h => h.name).join(', ')}</strong></>
-                        )} to truck <strong>{selectedTruck.plateNumber}</strong>?
-                      </p>
-
-                      <div className="flex gap-3">
+                {assignmentConfirmed && (
+                  <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
+                    <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl overflow-hidden">
+                      <div className="p-6 text-center space-y-4">
+                        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100">
+                          <CheckCircle2 className="h-7 w-7 text-emerald-600" />
+                        </div>
+                        <h3 className="text-lg font-semibold text-slate-900">
+                          Assignment Confirmed!
+                        </h3>
+                        <p className="text-sm text-slate-500">
+                          {assignmentConfirmed}
+                        </p>
                         <button
-                          onClick={() => setShowConfirmDialog(false)}
-                          className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          onClick={() => setAssignmentConfirmed(null)}
+                          className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
                         >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={() => {
-                            assignCrew()
-                            setShowConfirmDialog(false)
-                          }}
-                          className="flex-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
-                        >
-                          Confirm
+                          OK
                         </button>
                       </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
+            </div>
 
-              {assignmentConfirmed && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
-                  <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl overflow-hidden">
-                    <div className="p-6 text-center space-y-4">
-                      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100">
-                        <CheckCircle2 className="h-7 w-7 text-emerald-600" />
+            {showDeclineDialog && (
+              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+                <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl overflow-hidden">
+                  <div className="p-6 space-y-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-rose-100">
+                        <XCircle className="h-5 w-5 text-rose-600" />
                       </div>
-                      <h3 className="text-lg font-semibold text-slate-900">Assignment Confirmed!</h3>
-                      <p className="text-sm text-slate-500">{assignmentConfirmed}</p>
+                      <div>
+                        <h3 className="text-lg font-semibold text-slate-900">
+                          Decline Request
+                        </h3>
+                        <p className="text-sm text-slate-500">
+                          Location Restriction
+                        </p>
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 space-y-2">
+                      <p className="text-sm text-slate-700 leading-relaxed">
+                        This request can only be declined due to{" "}
+                        <strong className="text-slate-900">
+                          Location Restrictions
+                        </strong>
+                        . The pick-up or drop-off location is outside the
+                        serviceable area.
+                      </p>
+                      <p className="text-sm text-slate-700 leading-relaxed">
+                        Confirming will notify the customer that their request
+                        has been declined because their location falls outside
+                        the delivery coverage zone.
+                      </p>
+                    </div>
+                    <p className="text-sm font-medium text-slate-800">
+                      Are you sure you want to continue?
+                    </p>
+                    <div className="flex gap-3">
                       <button
-                        onClick={() => setAssignmentConfirmed(null)}
-                        className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
+                        onClick={closeDeclineDialog}
+                        className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
                       >
-                        OK
+                        No
+                      </button>
+                      <button
+                        onClick={confirmDecline}
+                        className="flex-1 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 transition"
+                      >
+                        Yes, Decline Request
                       </button>
                     </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {showDeclineDialog && (
-            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-              <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl overflow-hidden">
-                <div className="p-6 space-y-4">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-rose-100">
-                      <XCircle className="h-5 w-5 text-rose-600" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-semibold text-slate-900">Decline Request</h3>
-                      <p className="text-sm text-slate-500">Location Restriction</p>
-                    </div>
-                  </div>
-                  <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 space-y-2">
-                    <p className="text-sm text-slate-700 leading-relaxed">
-                      This request can only be declined due to <strong className="text-slate-900">Location Restrictions</strong>. The pick-up or drop-off location is outside the serviceable area.
-                    </p>
-                    <p className="text-sm text-slate-700 leading-relaxed">
-                      Confirming will notify the customer that their request has been declined because their location falls outside the delivery coverage zone.
-                    </p>
-                  </div>
-                  <p className="text-sm font-medium text-slate-800">Are you sure you want to continue?</p>
-                  <div className="flex gap-3">
-                    <button
-                      onClick={closeDeclineDialog}
-                      className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
-                    >
-                      No
-                    </button>
-                    <button
-                      onClick={confirmDecline}
-                      className="flex-1 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 transition"
-                    >
-                      Yes, Decline Request
-                    </button>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
           {showProceedQuotationDialog && (
             <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
@@ -5132,12 +7413,17 @@ function SupDeliveries() {
                       <CheckCircle2 className="h-5 w-5 text-emerald-600" />
                     </div>
                     <div>
-                      <h3 className="text-lg font-semibold text-slate-900">Submit Quotation</h3>
-                      <p className="text-sm text-slate-500">Confirm your intent</p>
+                      <h3 className="text-lg font-semibold text-slate-900">
+                        Submit Quotation
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        Confirm your intent
+                      </p>
                     </div>
                   </div>
                   <p className="text-sm text-slate-700 leading-relaxed">
-                    Are you sure you want to proceed with giving a quotation for this request?
+                    Are you sure you want to proceed with giving a quotation for
+                    this request?
                   </p>
                   <div className="flex gap-3">
                     <button
@@ -5148,11 +7434,14 @@ function SupDeliveries() {
                     </button>
                     <button
                       onClick={() => {
-                        setShowProceedQuotationDialog(false)
-                        startQuotation()
+                        setShowProceedQuotationDialog(false);
+                        startQuotation();
                         setTimeout(() => {
-                          quotationSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                        }, 100)
+                          quotationSectionRef.current?.scrollIntoView({
+                            behavior: "smooth",
+                            block: "start",
+                          });
+                        }, 100);
                       }}
                       className="flex-1 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 transition cursor-pointer"
                     >
@@ -5173,16 +7462,27 @@ function SupDeliveries() {
                       <Send className="h-5 w-5 text-sky-600" />
                     </div>
                     <div>
-                      <h3 className="text-lg font-semibold text-slate-900">Submit Quotation</h3>
-                      <p className="text-sm text-slate-500">Confirm your quotation</p>
+                      <h3 className="text-lg font-semibold text-slate-900">
+                        Submit Quotation
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        Confirm your quotation
+                      </p>
                     </div>
                   </div>
                   <div className="rounded-xl bg-sky-50 border border-sky-200 p-4 space-y-2">
                     <p className="text-sm text-slate-700 leading-relaxed">
-                      Once submitted, this quotation <strong className="text-slate-900">cannot be undone</strong>. The customer will be notified and will have the option to accept, negotiate, or decline.
+                      Once submitted, this quotation{" "}
+                      <strong className="text-slate-900">
+                        cannot be undone
+                      </strong>
+                      . The customer will be notified and will have the option
+                      to accept, negotiate, or decline.
                     </p>
                   </div>
-                  <p className="text-sm font-medium text-slate-800">Are you sure you want to submit this quotation?</p>
+                  <p className="text-sm font-medium text-slate-800">
+                    Are you sure you want to submit this quotation?
+                  </p>
                   <div className="flex gap-3">
                     <button
                       onClick={closeQuotationConfirmDialog}
@@ -5211,16 +7511,23 @@ function SupDeliveries() {
                       <Send className="h-5 w-5 text-sky-600" />
                     </div>
                     <div>
-                      <h3 className="text-lg font-semibold text-slate-900">Update Quotation</h3>
-                      <p className="text-sm text-slate-500">Confirm your update</p>
+                      <h3 className="text-lg font-semibold text-slate-900">
+                        Update Quotation
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        Confirm your update
+                      </p>
                     </div>
                   </div>
                   <div className="rounded-xl bg-sky-50 border border-sky-200 p-4 space-y-2">
                     <p className="text-sm text-slate-700 leading-relaxed">
-                      Are you sure you want to update the quotation? The customer will be notified of the adjusted amount.
+                      Are you sure you want to update the quotation? The
+                      customer will be notified of the adjusted amount.
                     </p>
                   </div>
-                  <p className="text-sm font-medium text-slate-800">Do you want to continue updating the quotation?</p>
+                  <p className="text-sm font-medium text-slate-800">
+                    Do you want to continue updating the quotation?
+                  </p>
                   <div className="flex gap-3">
                     <button
                       onClick={closeUpdateQuotationDialog}
@@ -5245,28 +7552,36 @@ function SupDeliveries() {
               rules={quotationRules}
               onClose={() => setShowQuotationSettings(false)}
               onSave={async (nextRules) => {
-                const { data: { user } } = await supabase.auth.getUser()
+                const {
+                  data: { user },
+                } = await supabase.auth.getUser();
                 const { error } = await supabase
-                  .from('quotation_settings')
+                  .from("quotation_settings")
                   .upsert({
                     id: 1,
                     rules: nextRules,
                     updated_at: new Date().toISOString(),
                     updated_by: user?.id ?? null,
-                  })
+                  });
                 if (error) {
-                  throw new Error(error.message)
+                  throw new Error(error.message);
                 }
-                setQuotationRules({ ...DEFAULT_QUOTATION_RULES, ...nextRules })
+                setQuotationRules({ ...DEFAULT_QUOTATION_RULES, ...nextRules });
                 // Re-prefill the open quotation form so a freshly saved rule
                 // set is reflected immediately — no need to close and reopen
                 // the request. Only for a brand-new quotation (no saved
                 // quotation yet); an existing quotation's saved values and the
                 // adjust-quotation edits are never overwritten.
-                if (selectedRequest && !selectedRequest.quotation && !adjustingQuotation) {
-                  setQuotationForm(buildQuotationDefaults(selectedRequest, nextRules))
+                if (
+                  selectedRequest &&
+                  !selectedRequest.quotation &&
+                  !adjustingQuotation
+                ) {
+                  setQuotationForm(
+                    buildQuotationDefaults(selectedRequest, nextRules),
+                  );
                 }
-                setShowQuotationSettings(false)
+                setShowQuotationSettings(false);
               }}
             />
           )}
@@ -5280,16 +7595,24 @@ function SupDeliveries() {
                       <XCircle className="h-5 w-5 text-rose-600" />
                     </div>
                     <div>
-                      <h3 className="text-lg font-semibold text-slate-900">Decline Counter Offer</h3>
-                      <p className="text-sm text-slate-500">Confirm your decision</p>
+                      <h3 className="text-lg font-semibold text-slate-900">
+                        Decline Counter Offer
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        Confirm your decision
+                      </p>
                     </div>
                   </div>
                   <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 space-y-2">
                     <p className="text-sm text-slate-700 leading-relaxed">
-                      Are you sure you want to decline the customer's counter offer? The initial quotation will remain as the final offer.
+                      Are you sure you want to decline the customer's counter
+                      offer? The initial quotation will remain as the final
+                      offer.
                     </p>
                   </div>
-                  <p className="text-sm font-medium text-slate-800">Do you want to decline the counter offer?</p>
+                  <p className="text-sm font-medium text-slate-800">
+                    Do you want to decline the counter offer?
+                  </p>
                   <div className="flex gap-3">
                     <button
                       onClick={closeDeclineCounterOfferDialog}
@@ -5310,14 +7633,17 @@ function SupDeliveries() {
           )}
         </>
       ) : (
-        <div className="flex h-full flex-col gap-4 overflow-hidden" style={interFontStyle}>
+        <div
+          className="flex h-full flex-col gap-4 overflow-hidden"
+          style={interFontStyle}
+        >
           {!selectedReportId && (
-          <>
-            {/* Global toolbar — search + status filter, styled to mirror
+            <>
+              {/* Global toolbar — search + status filter, styled to mirror
                 CustomerDeliveries.jsx (no card wrapper); keeps the supervisor's
                 slate/sky color scheme and the status-filter dropdown. */}
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="relative flex-1">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1">
                   <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 lg:pl-4">
                     <Search className="h-4 w-4 text-slate-400 lg:h-5 lg:w-5" />
                   </div>
@@ -5330,35 +7656,52 @@ function SupDeliveries() {
                   />
                   {search && (
                     <button
-                      onClick={() => onGlobalSearchChange('')}
+                      onClick={() => onGlobalSearchChange("")}
                       className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 transition hover:text-slate-600 lg:pr-4"
                     >
-                      <svg className="h-4 w-4 lg:h-5 lg:w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      <svg
+                        className="h-4 w-4 lg:h-5 lg:w-5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M6 18L18 6M6 6l12 12"
+                        />
                       </svg>
                     </button>
                   )}
                 </div>
-                {(activeModule === 'inbox' || activeModule === 'transit' || activeModule === 'assignment') && (
+                {(activeModule === "inbox" ||
+                  activeModule === "transit" ||
+                  activeModule === "assignment") && (
                   <select
                     value={statusFilter}
-                    onChange={(e) => { setStatusFilter(e.target.value); setPage(1); setAssignPage(1); setTransitPage(1) }}
+                    onChange={(e) => {
+                      setStatusFilter(e.target.value);
+                      setPage(1);
+                      setAssignPage(1);
+                      setTransitPage(1);
+                    }}
                     className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
                   >
                     <option value="ALL">All Statuses</option>
-                    {activeModule === 'inbox' && (
+                    {activeModule === "inbox" && (
                       <>
                         <option value="PENDING_REQUEST">Pending Request</option>
                         <option value="PROCESSING">Processing</option>
                       </>
                     )}
-                    {activeModule === 'assignment' && (
+                    {activeModule === "assignment" && (
                       <>
                         <option value="APPROVED">Approved</option>
                         <option value="ASSIGNED">Assigned</option>
                       </>
                     )}
-                    {activeModule === 'transit' && (
+                    {activeModule === "transit" && (
                       <>
                         <option value="PICKUP">Pickup</option>
                         <option value="DROPOFF">Dropoff</option>
@@ -5369,31 +7712,35 @@ function SupDeliveries() {
                 )}
               </div>
 
-            {/* Module tabs — compact horizontally scrollable underline strip at
+              {/* Module tabs — compact horizontally scrollable underline strip at
                 every breakpoint. Mirrors CustomerDeliveries.jsx. */}
-            <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-200 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {moduleTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => goToModule(tab.id)}
-                  className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[14px] font-semibold transition ${
-                    activeModule === tab.id
-                      ? 'border-slate-900 text-slate-900'
-                      : 'border-transparent text-slate-500 hover:text-slate-700'
-                  }`}
-                >
-                  <span className="lg:hidden">{tab.mobileLabel}</span>
-                  <span className="hidden lg:inline">{tab.label}</span>
-                  <span className={`ml-1.5 text-[10px] font-medium ${
-                    activeModule === tab.id ? 'text-slate-400' : 'text-slate-400'
-                  }`}>
-                    ({tab.count})
-                  </span>
-                </button>
-              ))}
-            </div>
-          </>
+              <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-200 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {moduleTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => goToModule(tab.id)}
+                    className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[14px] font-semibold transition ${
+                      activeModule === tab.id
+                        ? "border-slate-900 text-slate-900"
+                        : "border-transparent text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    <span className="lg:hidden">{tab.mobileLabel}</span>
+                    <span className="hidden lg:inline">{tab.label}</span>
+                    <span
+                      className={`ml-1.5 text-[10px] font-medium ${
+                        activeModule === tab.id
+                          ? "text-slate-400"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      ({tab.count})
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
           )}
 
           {loadError && (
@@ -5402,598 +7749,798 @@ function SupDeliveries() {
             </div>
           )}
 
-        {activeModule === 'inbox' && (
-          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.55fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
-                <span className="text-center">Status</span>
-                <span className="text-center">Request ID</span>
-                <span className="text-left">Customer</span>
-                <span className="text-left">Pick-up</span>
-                <span className="text-left">Drop-off</span>
-                <span className="text-center">Product Type</span>
-                <span></span>
-              </div>
-
-              <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-                {paginatedInbox.length === 0 && (
-                  <div className="px-5 py-14 text-center text-slate-500">
-                    {isLoading ? 'Loading delivery requests...' : 'No requests found in the inbox.'}
-                  </div>
-                )}
-
-                {paginatedInbox.map((row) => (
-                  <article
-                    key={row.id}
-                    onClick={() => openDetails(row)}
-                    className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.55fr_0.3fr] lg:items-center"
-                  >
-                    <div className="flex justify-center">
-                      <span className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[row.status]}`}>
-                        {statusLabel[row.status] ?? row.status.replaceAll('_', ' ')}
-                      </span>
-                    </div>
-                    <p className="text-sm font-mono font-semibold text-slate-900 text-center">{row.id}</p>
-                    <div>
-                      <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-                        {row.customerName}
-                        {specializedClientIds.has(row.customerAuthId) && (
-                          <span
-                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
-                            title="This client has crew specialized for them — assign a driver/helper with their Client Specialty"
-                          >
-                            <Users className="h-3 w-3" />
-                            Specialized Crew
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-xs text-slate-500">{row.companyName}</p>
-                    </div>
-                    <p className="text-sm text-slate-700 line-clamp-2">{row.pickupAddress}</p>
-                    <p className="text-sm text-slate-700 line-clamp-2">{row.deliveryAddress}</p>
-                    <p className="text-sm font-medium text-slate-800 text-center">{row.itemType}</p>
-                    <div className="flex justify-center">
-                      <ChevronRight className="h-4 w-4 text-slate-400" />
-                    </div>
-                  </article>
-                  ))}
-              </div>
-
-              <PaginationBar page={page} setPage={setPage} totalPages={totalPages} />
-            </div>
-          </section>
-        )}
-
-        {activeModule === 'assignment' && (
-          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
-                <span className="text-center">Status</span>
-                <span className="text-center">Request ID</span>
-                <span className="text-left">Customer</span>
-                <span className="text-left">Pick-up</span>
-                <span className="text-left">Drop-off</span>
-                <span className="text-center">Quotation Amount</span>
-                <span></span>
-              </div>
-
-              <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-                {paginatedAssign.length === 0 && (
-                  <div className="flex flex-col items-center justify-center py-16 text-center px-5">
-                    <CheckCircle2 className="h-10 w-10 text-emerald-400 mb-3" />
-                    <p className="text-sm font-medium text-slate-900">All crews assigned</p>
-                    <p className="text-xs text-slate-500 mt-1">No pending crew assignments at this time.</p>
-                  </div>
-                )}
-
-                {paginatedAssign.map((row) => (
-                  <article
-                    key={row.id}
-                    onClick={() => openDetails(row)}
-                    className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] lg:items-center"
-                  >
-                    <div className="flex justify-center">
-                      <span className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[row.status]}`}>
-                        {statusLabel[row.status] ?? row.status.replaceAll('_', ' ')}
-                      </span>
-                    </div>
-                    <p className="text-sm font-mono font-semibold text-slate-900 text-center">{row.id}</p>
-                    <div>
-                      <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-                        {row.customerName}
-                        {specializedClientIds.has(row.customerAuthId) && (
-                          <span
-                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
-                            title="This client has crew specialized for them — assign a driver/helper with their Client Specialty"
-                          >
-                            <Users className="h-3 w-3" />
-                            Specialized Crew
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-xs text-slate-500">{row.companyName}</p>
-                    </div>
-                    <p className="text-sm text-slate-700 line-clamp-2">{row.pickupAddress}</p>
-                    <p className="text-sm text-slate-700 line-clamp-2">{row.deliveryAddress}</p>
-                    <p className="text-sm font-semibold text-emerald-700 text-center">
-                      {row.quotation ? `₱${Number(row.quotation.amount).toLocaleString()}` : '—'}
-                    </p>
-                    <div className="flex justify-center">
-                      <ChevronRight className="h-4 w-4 text-slate-400" />
-                    </div>
-                  </article>
-                ))}
-              </div>
-
-              <PaginationBar page={assignPage} setPage={setAssignPage} totalPages={assignTotalPages} />
-            </div>
-          </section>
-        )}
-
-        {activeModule === 'transit' && (
-          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-            <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto lg:overflow-hidden lg:grid-cols-[1.15fr_0.85fr] lg:grid-rows-[minmax(0,1fr)]">
+          {activeModule === "inbox" && (
+            <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                <div className="shrink-0 hidden grid-cols-[0.6fr_0.7fr_1.2fr_0.5fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.55fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                   <span className="text-center">Status</span>
                   <span className="text-center">Request ID</span>
                   <span className="text-left">Customer</span>
-                  <span className="text-right">View Details</span>
+                  <span className="text-left">Pick-up</span>
+                  <span className="text-left">Drop-off</span>
+                  <span className="text-center">Product Type</span>
+                  <span></span>
                 </div>
 
                 <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-                  {paginatedTransit.length === 0 && (
-                    <div className="px-5 py-14 text-center text-slate-500">No in-transit deliveries found.</div>
+                  {paginatedInbox.length === 0 && (
+                    <div className="px-5 py-14 text-center text-slate-500">
+                      {isLoading
+                        ? "Loading delivery requests..."
+                        : "No requests found in the inbox."}
+                    </div>
                   )}
 
-                  {paginatedTransit.map((delivery) => (
+                  {paginatedInbox.map((row) => (
                     <article
-                      key={delivery.id}
-                      onClick={() => setMonitoredDeliveryId(delivery.id)}
-                      className={`grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.6fr_0.7fr_1.2fr_0.5fr] lg:items-center ${
-                        monitoredDelivery?.id === delivery.id ? 'bg-sky-50 hover:bg-sky-50' : 'hover:bg-slate-50'
-                      }`}
+                      key={row.id}
+                      onClick={() => openDetails(row)}
+                      className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.55fr_0.3fr] lg:items-center"
                     >
                       <div className="flex justify-center">
-                        <span className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[delivery.status]}`}>
-                          {statusLabel[delivery.status] ?? delivery.status.replaceAll('_', ' ')}
+                        <span
+                          className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[row.status]}`}
+                        >
+                          {statusLabel[row.status] ??
+                            row.status.replaceAll("_", " ")}
                         </span>
                       </div>
-                      <p className="text-sm font-mono font-semibold text-slate-900 text-center">{delivery.id}</p>
+                      <p className="text-sm font-mono font-semibold text-slate-900 text-center">
+                        {row.id}
+                      </p>
                       <div>
-                        <p className="text-sm font-semibold text-slate-900">{delivery.customerName}</p>
-                        <p className="text-xs text-slate-500">{delivery.companyName}</p>
+                        <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+                          {row.customerName}
+                          {specializedClientIds.has(row.customerAuthId) && (
+                            <span
+                              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
+                              title="This client has crew specialized for them — assign a driver/helper with their Client Specialty"
+                            >
+                              <Users className="h-3 w-3" />
+                              Specialized Crew
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {row.companyName}
+                        </p>
                       </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openDetails(delivery)
-                        }}
-                        className="flex items-center justify-end gap-0.5 text-sm font-semibold text-sky-600 hover:text-sky-700"
-                      >
-                        View Details
-                        <ChevronRight className="h-4 w-4" />
-                      </button>
+                      <p className="text-sm text-slate-700 line-clamp-2">
+                        {row.pickupAddress}
+                      </p>
+                      <p className="text-sm text-slate-700 line-clamp-2">
+                        {row.deliveryAddress}
+                      </p>
+                      <p className="text-sm font-medium text-slate-800 text-center">
+                        {row.itemType}
+                      </p>
+                      <div className="flex justify-center">
+                        <ChevronRight className="h-4 w-4 text-slate-400" />
+                      </div>
                     </article>
                   ))}
                 </div>
-              </div>
 
-              <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
-                <div className="flex flex-1 flex-col rounded-2xl border border-slate-200 bg-white">
-                  <div className="shrink-0 border-b border-slate-200 px-4 py-3">
-                    <h3 className="text-base font-semibold text-slate-900">Real-time Monitoring</h3>
-                    <p className="text-xs text-slate-500">
-                      {monitoredDelivery ? `${monitoredDelivery.id} • ${statusLabel[monitoredDelivery.status] ?? monitoredDelivery.status.replaceAll('_', ' ')}` : 'No active truck'}
-                    </p>
+                <PaginationBar
+                  page={page}
+                  setPage={setPage}
+                  totalPages={totalPages}
+                />
+              </div>
+            </section>
+          )}
+
+          {activeModule === "assignment" && (
+            <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                  <span className="text-center">Status</span>
+                  <span className="text-center">Request ID</span>
+                  <span className="text-left">Customer</span>
+                  <span className="text-left">Pick-up</span>
+                  <span className="text-left">Drop-off</span>
+                  <span className="text-center">Quotation Amount</span>
+                  <span></span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                  {paginatedAssign.length === 0 && (
+                    <div className="flex flex-col items-center justify-center py-16 text-center px-5">
+                      <CheckCircle2 className="h-10 w-10 text-emerald-400 mb-3" />
+                      <p className="text-sm font-medium text-slate-900">
+                        All crews assigned
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        No pending crew assignments at this time.
+                      </p>
+                    </div>
+                  )}
+
+                  {paginatedAssign.map((row) => (
+                    <article
+                      key={row.id}
+                      onClick={() => openDetails(row)}
+                      className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] lg:items-center"
+                    >
+                      <div className="flex justify-center">
+                        <span
+                          className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[row.status]}`}
+                        >
+                          {statusLabel[row.status] ??
+                            row.status.replaceAll("_", " ")}
+                        </span>
+                      </div>
+                      <p className="text-sm font-mono font-semibold text-slate-900 text-center">
+                        {row.id}
+                      </p>
+                      <div>
+                        <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+                          {row.customerName}
+                          {specializedClientIds.has(row.customerAuthId) && (
+                            <span
+                              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
+                              title="This client has crew specialized for them — assign a driver/helper with their Client Specialty"
+                            >
+                              <Users className="h-3 w-3" />
+                              Specialized Crew
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {row.companyName}
+                        </p>
+                      </div>
+                      <p className="text-sm text-slate-700 line-clamp-2">
+                        {row.pickupAddress}
+                      </p>
+                      <p className="text-sm text-slate-700 line-clamp-2">
+                        {row.deliveryAddress}
+                      </p>
+                      <p className="text-sm font-semibold text-emerald-700 text-center">
+                        {row.quotation
+                          ? `₱${Number(row.quotation.amount).toLocaleString()}`
+                          : "—"}
+                      </p>
+                      <div className="flex justify-center">
+                        <ChevronRight className="h-4 w-4 text-slate-400" />
+                      </div>
+                    </article>
+                  ))}
+                </div>
+
+                <PaginationBar
+                  page={assignPage}
+                  setPage={setAssignPage}
+                  totalPages={assignTotalPages}
+                />
+              </div>
+            </section>
+          )}
+
+          {activeModule === "transit" && (
+            <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+              <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto lg:overflow-hidden lg:grid-cols-[1.15fr_0.85fr] lg:grid-rows-[minmax(0,1fr)]">
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="shrink-0 hidden grid-cols-[0.6fr_0.7fr_1.2fr_0.5fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                    <span className="text-center">Status</span>
+                    <span className="text-center">Request ID</span>
+                    <span className="text-left">Customer</span>
+                    <span className="text-right">View Details</span>
                   </div>
-                  {monitoredDelivery ? (
-                    <div className="flex min-h-0 flex-1 flex-col p-4">
-                      <iframe
-                        title="Live Delivery Map"
-                        src={toGoogleMapEmbed(
-                          realLocationByDelivery[monitoredDelivery.id] ||
-                            monitoringByDelivery[monitoredDelivery.id]?.currentLocation ||
-                            monitoredDelivery.currentLocation ||
-                            monitoredDelivery.destinationCoords,
+
+                  <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                    {paginatedTransit.length === 0 && (
+                      <div className="px-5 py-14 text-center text-slate-500">
+                        No in-transit deliveries found.
+                      </div>
+                    )}
+
+                    {paginatedTransit.map((delivery) => (
+                      <article
+                        key={delivery.id}
+                        onClick={() => setMonitoredDeliveryId(delivery.id)}
+                        className={`grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.6fr_0.7fr_1.2fr_0.5fr] lg:items-center ${
+                          monitoredDelivery?.id === delivery.id
+                            ? "bg-sky-50 hover:bg-sky-50"
+                            : "hover:bg-slate-50"
+                        }`}
+                      >
+                        <div className="flex justify-center">
+                          <span
+                            className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[delivery.status]}`}
+                          >
+                            {statusLabel[delivery.status] ??
+                              delivery.status.replaceAll("_", " ")}
+                          </span>
+                        </div>
+                        <p className="text-sm font-mono font-semibold text-slate-900 text-center">
+                          {delivery.id}
+                        </p>
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">
+                            {delivery.customerName}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {delivery.companyName}
+                          </p>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDetails(delivery);
+                          }}
+                          className="flex items-center justify-end gap-0.5 text-sm font-semibold text-sky-600 hover:text-sky-700"
+                        >
+                          View Details
+                          <ChevronRight className="h-4 w-4" />
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+                  <div className="flex flex-1 flex-col rounded-2xl border border-slate-200 bg-white">
+                    <div className="shrink-0 border-b border-slate-200 px-4 py-3">
+                      <h3 className="text-base font-semibold text-slate-900">
+                        Real-time Monitoring
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        {monitoredDelivery
+                          ? `${monitoredDelivery.id} • ${statusLabel[monitoredDelivery.status] ?? monitoredDelivery.status.replaceAll("_", " ")}`
+                          : "No active truck"}
+                      </p>
+                    </div>
+                    {monitoredDelivery ? (
+                      <div className="flex min-h-0 flex-1 flex-col p-4">
+                        <iframe
+                          title="Live Delivery Map"
+                          src={toGoogleMapEmbed(
+                            realLocationByDelivery[monitoredDelivery.id] ||
+                              monitoringByDelivery[monitoredDelivery.id]
+                                ?.currentLocation ||
+                              monitoredDelivery.currentLocation ||
+                              monitoredDelivery.destinationCoords,
+                          )}
+                          className="min-h-[220px] w-full flex-1 rounded-xl"
+                          loading="lazy"
+                          referrerPolicy="no-referrer-when-downgrade"
+                        />
+                        {!monitoringByDelivery[monitoredDelivery.id] &&
+                          realLocationByDelivery[monitoredDelivery.id] && (
+                            <div className="mt-4 shrink-0 space-y-3">
+                              <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
+                                  {getInitials(
+                                    monitoredDelivery.crew?.driver?.name || "?",
+                                  )}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-slate-900">
+                                    {monitoredDelivery.crew?.driver?.name ||
+                                      "Driver TBA"}
+                                  </p>
+                                  <p className="truncate text-xs text-slate-500">
+                                    <Truck className="mr-1 inline h-3.5 w-3.5" />
+                                    {monitoredDelivery.crew?.truck
+                                      ?.plateNumber || "Truck TBA"}
+                                    {monitoredDelivery.crew?.truck &&
+                                      ` • ${monitoredDelivery.crew.truck.truckType}`}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="rounded-xl bg-slate-50 p-3">
+                                <p className="text-xs text-slate-500">
+                                  Last GPS Update
+                                </p>
+                                <p className="text-sm font-bold text-slate-900">
+                                  {formatManilaTimestamp(
+                                    realLocationByDelivery[monitoredDelivery.id]
+                                      .updatedAt,
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        {monitoringByDelivery[monitoredDelivery.id] && (
+                          <div className="mt-4 shrink-0 space-y-3">
+                            <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
+                                {getInitials(
+                                  monitoringByDelivery[monitoredDelivery.id]
+                                    .driver?.name || "?",
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-slate-900">
+                                  {monitoringByDelivery[monitoredDelivery.id]
+                                    .driver?.name || "Driver TBA"}
+                                </p>
+                                <p className="truncate text-xs text-slate-500">
+                                  <Truck className="mr-1 inline h-3.5 w-3.5" />
+                                  {monitoringByDelivery[monitoredDelivery.id]
+                                    .truck?.plateNumber || "Truck TBA"}
+                                  {monitoringByDelivery[monitoredDelivery.id]
+                                    .truck &&
+                                    ` • ${monitoringByDelivery[monitoredDelivery.id].truck.truckType}`}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="rounded-xl bg-slate-50 p-3">
+                                <p className="text-xs text-slate-500">Speed</p>
+                                <p className="text-xl font-bold text-slate-900">
+                                  {
+                                    monitoringByDelivery[monitoredDelivery.id]
+                                      .speedKmh
+                                  }{" "}
+                                  km/h
+                                </p>
+                              </div>
+                              <div className="rounded-xl bg-slate-50 p-3">
+                                <p className="text-xs text-slate-500">
+                                  Last Update
+                                </p>
+                                <p className="text-sm font-bold text-slate-900">
+                                  {
+                                    monitoringByDelivery[monitoredDelivery.id]
+                                      .lastUpdate
+                                  }
+                                </p>
+                              </div>
+                            </div>
+                          </div>
                         )}
-                        className="min-h-[220px] w-full flex-1 rounded-xl"
-                        loading="lazy"
-                        referrerPolicy="no-referrer-when-downgrade"
-                      />
-                      {!monitoringByDelivery[monitoredDelivery.id] && realLocationByDelivery[monitoredDelivery.id] && (
-                        <div className="mt-4 shrink-0 space-y-3">
-                          <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
-                              {getInitials(monitoredDelivery.crew?.driver?.name || '?')}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-slate-900">
-                                {monitoredDelivery.crew?.driver?.name || 'Driver TBA'}
-                              </p>
-                              <p className="truncate text-xs text-slate-500">
-                                <Truck className="mr-1 inline h-3.5 w-3.5" />
-                                {monitoredDelivery.crew?.truck?.plateNumber || 'Truck TBA'}
-                                {monitoredDelivery.crew?.truck && ` • ${monitoredDelivery.crew.truck.truckType}`}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="rounded-xl bg-slate-50 p-3">
-                            <p className="text-xs text-slate-500">Last GPS Update</p>
-                            <p className="text-sm font-bold text-slate-900">
-                              {formatManilaTimestamp(realLocationByDelivery[monitoredDelivery.id].updatedAt)}
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                      {monitoringByDelivery[monitoredDelivery.id] && (
-                        <div className="mt-4 shrink-0 space-y-3">
-                          <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
-                              {getInitials(monitoringByDelivery[monitoredDelivery.id].driver?.name || '?')}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-slate-900">
-                                {monitoringByDelivery[monitoredDelivery.id].driver?.name || 'Driver TBA'}
-                              </p>
-                              <p className="truncate text-xs text-slate-500">
-                                <Truck className="mr-1 inline h-3.5 w-3.5" />
-                                {monitoringByDelivery[monitoredDelivery.id].truck?.plateNumber || 'Truck TBA'}
-                                {monitoringByDelivery[monitoredDelivery.id].truck && ` • ${monitoringByDelivery[monitoredDelivery.id].truck.truckType}`}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="rounded-xl bg-slate-50 p-3">
-                              <p className="text-xs text-slate-500">Speed</p>
-                              <p className="text-xl font-bold text-slate-900">{monitoringByDelivery[monitoredDelivery.id].speedKmh} km/h</p>
-                          </div>
-                          <div className="rounded-xl bg-slate-50 p-3">
-                            <p className="text-xs text-slate-500">Last Update</p>
-                            <p className="text-sm font-bold text-slate-900">{monitoringByDelivery[monitoredDelivery.id].lastUpdate}</p>
-                          </div>
-                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-4">
+                        <p className="py-10 text-center text-sm text-slate-500">
+                          No active truck to monitor.
+                        </p>
                       </div>
                     )}
                   </div>
-                  ) : (
-                    <div className="p-4">
-                      <p className="py-10 text-center text-sm text-slate-500">No active truck to monitor.</p>
-                    </div>
-                  )}
-                </div>
 
-                <div className="shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                  <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-                    <div>
-                      <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-                        <Activity className="h-4 w-4 text-emerald-600" />
-                        DriveWise Alerts
-                      </h3>
-                      <p className="text-xs text-slate-500">AI driver monitoring • drowsiness & rest safety</p>
-                    </div>
-                    {monitoredAlert ? (
-                      <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700 ring-1 ring-inset ring-emerald-200">
-                        <span className="relative flex h-2 w-2">
-                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                  <div className="shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                      <div>
+                        <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                          <Activity className="h-4 w-4 text-emerald-600" />
+                          DriveWise Alerts
+                        </h3>
+                        <p className="text-xs text-slate-500">
+                          AI driver monitoring • drowsiness & rest safety
+                        </p>
+                      </div>
+                      {monitoredAlert ? (
+                        <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                          <span className="relative flex h-2 w-2">
+                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                          </span>
+                          LIVE
                         </span>
-                        LIVE
-                      </span>
-                    ) : null}
-                  </div>
+                      ) : null}
+                    </div>
 
-                  {monitoredDelivery && monitoredAlert ? (
-                    (() => {
-                      const alert = monitoredAlert
-                      const tone = DROWSINESS_TONES[alert.drowsinessLevel] || DROWSINESS_TONES.LOW
-                      return (
-                        <div className="space-y-3 p-4">
-                          <div className={`rounded-xl p-3 ${tone.box}`}>
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
-                                <AlertTriangle className="h-3.5 w-3.5" />
-                                Drowsiness Level
-                              </p>
-                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${tone.badge}`}>{alert.drowsinessLevel}</span>
-                            </div>
-                            <p className="mt-1 text-xs opacity-80">
-                              Avg. eye closure {alert.avgClosureDurationLabel}
-                            </p>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="rounded-xl bg-slate-50 p-3">
-                              <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                <Camera className="h-3.5 w-3.5" />
-                                Device
-                              </p>
-                              <p className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${alert.deviceOnline ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                <span className={`h-2 w-2 rounded-full ${alert.deviceOnline ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                                {alert.deviceOnline ? 'Online' : 'Offline'}
+                    {monitoredDelivery && monitoredAlert ? (
+                      (() => {
+                        const alert = monitoredAlert;
+                        const tone =
+                          DROWSINESS_TONES[alert.drowsinessLevel] ||
+                          DROWSINESS_TONES.LOW;
+                        return (
+                          <div className="space-y-3 p-4">
+                            <div className={`rounded-xl p-3 ${tone.box}`}>
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  Drowsiness Level
+                                </p>
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${tone.badge}`}
+                                >
+                                  {alert.drowsinessLevel}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs opacity-80">
+                                Avg. eye closure {alert.avgClosureDurationLabel}
                               </p>
                             </div>
-                            <div className="rounded-xl bg-slate-50 p-3">
-                              <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                <Timer className="h-3.5 w-3.5" />
-                                Driving Hours
-                              </p>
-                              <p className="mt-1 text-sm font-bold text-slate-900">{alert.drivingHoursLabel}</p>
-                            </div>
-                          </div>
 
-                          <div>
-                            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Alert Triggers</p>
                             <div className="grid grid-cols-2 gap-3">
                               <div className="rounded-xl bg-slate-50 p-3">
                                 <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                  <Repeat className="h-3.5 w-3.5" />
-                                  Prolonged Eye Closure
+                                  <Camera className="h-3.5 w-3.5" />
+                                  Device
                                 </p>
-                                <p className="mt-0.5 text-lg font-bold text-slate-900">{alert.prolongedEyeClosure}</p>
+                                <p
+                                  className={`mt-1 flex items-center gap-1.5 text-sm font-bold ${alert.deviceOnline ? "text-emerald-600" : "text-rose-600"}`}
+                                >
+                                  <span
+                                    className={`h-2 w-2 rounded-full ${alert.deviceOnline ? "bg-emerald-500" : "bg-rose-500"}`}
+                                  />
+                                  {alert.deviceOnline ? "Online" : "Offline"}
+                                </p>
                               </div>
                               <div className="rounded-xl bg-slate-50 p-3">
                                 <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                  <Repeat className="h-3.5 w-3.5" />
-                                  Repeated Eye Closure
+                                  <Timer className="h-3.5 w-3.5" />
+                                  Driving Hours
                                 </p>
-                                <p className="mt-0.5 text-lg font-bold text-slate-900">{alert.repeatedEyeClosure}</p>
-                              </div>
-                              <div className="rounded-xl bg-slate-50 p-3">
-                                <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                  <Activity className="h-3.5 w-3.5" />
-                                  Yawning
+                                <p className="mt-1 text-sm font-bold text-slate-900">
+                                  {alert.drivingHoursLabel}
                                 </p>
-                                <p className="mt-0.5 text-lg font-bold text-slate-900">{alert.yawnCount}</p>
-                              </div>
-                              <div className="rounded-xl bg-slate-50 p-3">
-                                <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                                  <EyeOff className="h-3.5 w-3.5" />
-                                  Eye Detection Failures
-                                </p>
-                                <p className="mt-0.5 text-lg font-bold text-slate-900">{alert.eyeDetectionFailures}</p>
                               </div>
                             </div>
-                          </div>
 
-                          <div className="overflow-hidden rounded-xl bg-slate-50">
-                            <button
-                              type="button"
-                              onClick={() => setAlertHistoryOpenId(alertHistoryOpenId === monitoredDelivery.id ? null : monitoredDelivery.id)}
-                              className="flex w-full items-center justify-between gap-2 p-3 text-left"
-                            >
-                              <div className="min-w-0">
-                                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Last Alert</p>
-                                <p className="mt-0.5 text-sm font-bold text-slate-900">{alert.lastAlert}</p>
-                                <p className="text-xs text-slate-500">{alert.lastAlertAt}</p>
+                            <div>
+                              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                Alert Triggers
+                              </p>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    <Repeat className="h-3.5 w-3.5" />
+                                    Prolonged Eye Closure
+                                  </p>
+                                  <p className="mt-0.5 text-lg font-bold text-slate-900">
+                                    {alert.prolongedEyeClosure}
+                                  </p>
+                                </div>
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    <Repeat className="h-3.5 w-3.5" />
+                                    Repeated Eye Closure
+                                  </p>
+                                  <p className="mt-0.5 text-lg font-bold text-slate-900">
+                                    {alert.repeatedEyeClosure}
+                                  </p>
+                                </div>
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    <Activity className="h-3.5 w-3.5" />
+                                    Yawning
+                                  </p>
+                                  <p className="mt-0.5 text-lg font-bold text-slate-900">
+                                    {alert.yawnCount}
+                                  </p>
+                                </div>
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    <EyeOff className="h-3.5 w-3.5" />
+                                    Eye Detection Failures
+                                  </p>
+                                  <p className="mt-0.5 text-lg font-bold text-slate-900">
+                                    {alert.eyeDetectionFailures}
+                                  </p>
+                                </div>
                               </div>
-                              <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-400">
-                                History ({alert.alertHistory.length})
-                                {alertHistoryOpenId === monitoredDelivery.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                              </span>
-                            </button>
-                            {alertHistoryOpenId === monitoredDelivery.id && (
-                              <div className="max-h-56 space-y-1 overflow-y-auto border-t border-slate-200 px-3 py-2">
-                                {alert.alertHistory.length > 0 ? (
-                                  alert.alertHistory.map((h, i) => (
-                                    <div key={i} className="flex items-center justify-between gap-2 py-1">
-                                      <span className="flex min-w-0 items-center gap-2 text-xs text-slate-700">
-                                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${ALERT_SEVERITY_DOTS[h.severity] || ALERT_SEVERITY_DOTS.INFO}`} />
-                                        <span className="truncate">{h.type}</span>
-                                      </span>
-                                      <span className="shrink-0 text-xs text-slate-500">{h.time}</span>
-                                    </div>
-                                  ))
-                                ) : (
-                                  <p className="py-2 text-center text-xs text-slate-500">No alert history recorded.</p>
-                                )}
-                              </div>
+                            </div>
+
+                            <div className="overflow-hidden rounded-xl bg-slate-50">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAlertHistoryOpenId(
+                                    alertHistoryOpenId === monitoredDelivery.id
+                                      ? null
+                                      : monitoredDelivery.id,
+                                  )
+                                }
+                                className="flex w-full items-center justify-between gap-2 p-3 text-left"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                    Last Alert
+                                  </p>
+                                  <p className="mt-0.5 text-sm font-bold text-slate-900">
+                                    {alert.lastAlert}
+                                  </p>
+                                  <p className="text-xs text-slate-500">
+                                    {alert.lastAlertAt}
+                                  </p>
+                                </div>
+                                <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-400">
+                                  History ({alert.alertHistory.length})
+                                  {alertHistoryOpenId ===
+                                  monitoredDelivery.id ? (
+                                    <ChevronUp className="h-4 w-4" />
+                                  ) : (
+                                    <ChevronDown className="h-4 w-4" />
+                                  )}
+                                </span>
+                              </button>
+                              {alertHistoryOpenId === monitoredDelivery.id && (
+                                <div className="max-h-56 space-y-1 overflow-y-auto border-t border-slate-200 px-3 py-2">
+                                  {alert.alertHistory.length > 0 ? (
+                                    alert.alertHistory.map((h, i) => (
+                                      <div
+                                        key={i}
+                                        className="flex items-center justify-between gap-2 py-1"
+                                      >
+                                        <span className="flex min-w-0 items-center gap-2 text-xs text-slate-700">
+                                          <span
+                                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${ALERT_SEVERITY_DOTS[h.severity] || ALERT_SEVERITY_DOTS.INFO}`}
+                                          />
+                                          <span className="truncate">
+                                            {h.type}
+                                          </span>
+                                        </span>
+                                        <span className="shrink-0 text-xs text-slate-500">
+                                          {h.time}
+                                        </span>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <p className="py-2 text-center text-xs text-slate-500">
+                                      No alert history recorded.
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      <div className="p-4">
+                        <p className="py-8 text-center text-sm text-slate-500">
+                          No DriveWise telemetry for this delivery yet.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="shrink-0 rounded-2xl border border-slate-200 bg-white">
+                <PaginationBar
+                  page={transitSafePage}
+                  setPage={setTransitPage}
+                  totalPages={transitTotalPages}
+                />
+              </div>
+            </section>
+          )}
+
+          {activeModule === "completed" && (
+            <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+              {selectedCompletedReport ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
+                    <button
+                      onClick={() => setSelectedReportId(null)}
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                      Back
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+                    <CompletedDeliveryReport
+                      delivery={selectedCompletedReport}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.8fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                      <span className="text-center">Status</span>
+                      <span className="text-center">Request ID</span>
+                      <span className="text-left">Customer</span>
+                      <span className="text-left">Pick-up</span>
+                      <span className="text-left">Drop-off</span>
+                      <span className="text-left">Crew</span>
+                      <span></span>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                      {paginatedCompleted.length === 0 && (
+                        <div className="flex flex-col items-center justify-center px-5 py-16 text-center">
+                          <CheckCircle2 className="h-10 w-10 text-emerald-400 mb-3" />
+                          <p className="text-sm font-medium text-slate-900">
+                            No completed deliveries found
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Adjust your search or check back later.
+                          </p>
+                        </div>
+                      )}
+
+                      {paginatedCompleted.map((delivery) => (
+                        <article
+                          key={delivery.id}
+                          onClick={() => setSelectedReportId(delivery.id)}
+                          className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.8fr_0.3fr] lg:items-center hover:bg-slate-50"
+                        >
+                          <div className="flex justify-center">
+                            <span className="inline-flex max-w-full rounded-full bg-emerald-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-emerald-700 xl:text-[11px]">
+                              {delivery.status}
+                            </span>
+                          </div>
+                          <p className="text-sm font-mono font-semibold text-slate-900 text-center">
+                            {delivery.id}
+                          </p>
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {delivery.customerName}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              {delivery.companyName}
+                            </p>
+                          </div>
+                          <p className="text-sm text-slate-700 line-clamp-2">
+                            {delivery.pickupAddress}
+                          </p>
+                          <p className="text-sm text-slate-700 line-clamp-2">
+                            {delivery.deliveryAddress}
+                          </p>
+                          <div className="min-w-0 text-xs text-slate-500">
+                            {delivery.crew?.truck && (
+                              <p className="flex items-center gap-1 truncate">
+                                <Truck className="h-3 w-3 shrink-0" />
+                                {delivery.crew.truck.plateNumber}
+                              </p>
+                            )}
+                            {delivery.crew?.driver && (
+                              <p className="flex items-center gap-1 truncate">
+                                <Users className="h-3 w-3 shrink-0" />
+                                {delivery.crew.driver.name}
+                              </p>
                             )}
                           </div>
-                        </div>
-                      )
-                    })()
-                  ) : (
-                    <div className="p-4">
-                      <p className="py-8 text-center text-sm text-slate-500">No DriveWise telemetry for this delivery yet.</p>
+                          <div className="flex justify-center">
+                            <ChevronRight className="h-4 w-4 text-slate-400" />
+                          </div>
+                        </article>
+                      ))}
                     </div>
-                  )}
-                </div>
-              </div>
-            </div>
 
-            <div className="shrink-0 rounded-2xl border border-slate-200 bg-white">
-              <PaginationBar page={transitSafePage} setPage={setTransitPage} totalPages={transitTotalPages} />
-            </div>
-          </section>
-        )}
-
-        {activeModule === 'completed' && (
-          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-            {selectedCompletedReport ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
-                  <button
-                    onClick={() => setSelectedReportId(null)}
-                    className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                    Back
-                  </button>
-                </div>
-                <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
-                  <CompletedDeliveryReport delivery={selectedCompletedReport} />
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                  <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.8fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
-                    <span className="text-center">Status</span>
-                    <span className="text-center">Request ID</span>
-                    <span className="text-left">Customer</span>
-                    <span className="text-left">Pick-up</span>
-                    <span className="text-left">Drop-off</span>
-                    <span className="text-left">Crew</span>
-                    <span></span>
+                    <PaginationBar
+                      page={completedSafePage}
+                      setPage={setCompletedPage}
+                      totalPages={completedTotalPages}
+                    />
                   </div>
+                </>
+              )}
+            </section>
+          )}
 
-                  <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-                    {paginatedCompleted.length === 0 && (
-                      <div className="flex flex-col items-center justify-center px-5 py-16 text-center">
-                        <CheckCircle2 className="h-10 w-10 text-emerald-400 mb-3" />
-                        <p className="text-sm font-medium text-slate-900">No completed deliveries found</p>
-                        <p className="mt-1 text-xs text-slate-500">Adjust your search or check back later.</p>
-                      </div>
-                    )}
-
-                    {paginatedCompleted.map((delivery) => (
-                      <article
-                        key={delivery.id}
-                        onClick={() => setSelectedReportId(delivery.id)}
-                        className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.8fr_0.3fr] lg:items-center hover:bg-slate-50"
-                      >
-                        <div className="flex justify-center">
-                          <span className="inline-flex max-w-full rounded-full bg-emerald-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-emerald-700 xl:text-[11px]">
-                            {delivery.status}
-                          </span>
-                        </div>
-                        <p className="text-sm font-mono font-semibold text-slate-900 text-center">{delivery.id}</p>
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">{delivery.customerName}</p>
-                          <p className="text-xs text-slate-500">{delivery.companyName}</p>
-                        </div>
-                        <p className="text-sm text-slate-700 line-clamp-2">{delivery.pickupAddress}</p>
-                        <p className="text-sm text-slate-700 line-clamp-2">{delivery.deliveryAddress}</p>
-                        <div className="min-w-0 text-xs text-slate-500">
-                          {delivery.crew?.truck && (
-                            <p className="flex items-center gap-1 truncate">
-                              <Truck className="h-3 w-3 shrink-0" />
-                              {delivery.crew.truck.plateNumber}
-                            </p>
-                          )}
-                          {delivery.crew?.driver && (
-                            <p className="flex items-center gap-1 truncate">
-                              <Users className="h-3 w-3 shrink-0" />
-                              {delivery.crew.driver.name}
-                            </p>
-                          )}
-                        </div>
-                        <div className="flex justify-center">
-                          <ChevronRight className="h-4 w-4 text-slate-400" />
-                        </div>
-                      </article>
-                    ))}
+          {activeModule === "cancelled" && (
+            <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+              {selectedCancelledReport ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
+                    <button
+                      onClick={() => setSelectedReportId(null)}
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                      Back
+                    </button>
                   </div>
-
-                  <PaginationBar page={completedSafePage} setPage={setCompletedPage} totalPages={completedTotalPages} />
-                </div>
-              </>
-            )}
-          </section>
-        )}
-
-        {activeModule === 'cancelled' && (
-          <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-            {selectedCancelledReport ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="shrink-0 border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
-                  <button
-                    onClick={() => setSelectedReportId(null)}
-                    className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                    Back
-                  </button>
-                </div>
-                <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
-                  <CancelledDeliveryDetails delivery={selectedCancelledReport} />
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                  <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.9fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
-                    <span className="text-center">Status</span>
-                    <span className="text-center">Request ID</span>
-                    <span className="text-left">Customer</span>
-                    <span className="text-left">Pick-up</span>
-                    <span className="text-left">Drop-off</span>
-                    <span className="text-center">Cancelled From</span>
-                    <span></span>
+                  <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+                    <CancelledDeliveryDetails
+                      delivery={selectedCancelledReport}
+                    />
                   </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.9fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                      <span className="text-center">Status</span>
+                      <span className="text-center">Request ID</span>
+                      <span className="text-left">Customer</span>
+                      <span className="text-left">Pick-up</span>
+                      <span className="text-left">Drop-off</span>
+                      <span className="text-center">Cancelled From</span>
+                      <span></span>
+                    </div>
 
-                  <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-                    {paginatedCancelled.length === 0 && (
-                      <div className="flex flex-col items-center justify-center px-5 py-16 text-center">
-                        <XCircle className="h-10 w-10 text-rose-300 mb-3" />
-                        <p className="text-sm font-medium text-slate-900">No cancellations found</p>
-                        <p className="mt-1 text-xs text-slate-500">Adjust your search or check back later.</p>
-                      </div>
-                    )}
+                    <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                      {paginatedCancelled.length === 0 && (
+                        <div className="flex flex-col items-center justify-center px-5 py-16 text-center">
+                          <XCircle className="h-10 w-10 text-rose-300 mb-3" />
+                          <p className="text-sm font-medium text-slate-900">
+                            No cancellations found
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Adjust your search or check back later.
+                          </p>
+                        </div>
+                      )}
 
-                    {paginatedCancelled.map((delivery) => (
-                      <article
-                        key={delivery.id}
-                        onClick={() => setSelectedReportId(`cancel-${delivery.id}`)}
-                        className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.9fr_0.3fr] lg:items-center hover:bg-slate-50"
-                      >
-                        <div className="flex justify-center">
-                          <span className="inline-flex max-w-full rounded-full bg-rose-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-rose-700 xl:text-[11px]">
-                            {delivery.status}
-                          </span>
-                        </div>
-                        <p className="text-sm font-mono font-semibold text-slate-900 text-center">{delivery.id}</p>
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">{delivery.customerName}</p>
-                          <p className="text-xs text-slate-500">{delivery.companyName}</p>
-                        </div>
-                        <p className="text-sm text-slate-700 line-clamp-2">{delivery.pickupAddress}</p>
-                        <p className="text-sm text-slate-700 line-clamp-2">{delivery.deliveryAddress}</p>
-                        <div className="flex justify-center">
-                          {(delivery.cancellation?.cancelledFromStatus || delivery.cancelledFromStatus) ? (
-                            <span className="inline-flex max-w-full rounded-full bg-slate-100 px-2 py-0.5 text-center text-[10px] font-semibold text-slate-600">
-                              {statusLabel[delivery.cancellation?.cancelledFromStatus || delivery.cancelledFromStatus] ?? (delivery.cancellation?.cancelledFromStatus || delivery.cancelledFromStatus).replaceAll('_', ' ')}
+                      {paginatedCancelled.map((delivery) => (
+                        <article
+                          key={delivery.id}
+                          onClick={() =>
+                            setSelectedReportId(`cancel-${delivery.id}`)
+                          }
+                          className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.9fr_0.3fr] lg:items-center hover:bg-slate-50"
+                        >
+                          <div className="flex justify-center">
+                            <span className="inline-flex max-w-full rounded-full bg-rose-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-rose-700 xl:text-[11px]">
+                              {delivery.status}
                             </span>
-                          ) : (
-                            <span className="text-sm text-slate-400">—</span>
-                          )}
-                        </div>
-                        <div className="flex justify-center">
-                          <ChevronRight className="h-4 w-4 text-slate-400" />
-                        </div>
-                      </article>
-                    ))}
-                  </div>
+                          </div>
+                          <p className="text-sm font-mono font-semibold text-slate-900 text-center">
+                            {delivery.id}
+                          </p>
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {delivery.customerName}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              {delivery.companyName}
+                            </p>
+                          </div>
+                          <p className="text-sm text-slate-700 line-clamp-2">
+                            {delivery.pickupAddress}
+                          </p>
+                          <p className="text-sm text-slate-700 line-clamp-2">
+                            {delivery.deliveryAddress}
+                          </p>
+                          <div className="flex justify-center">
+                            {delivery.cancellation?.cancelledFromStatus ||
+                            delivery.cancelledFromStatus ? (
+                              <span className="inline-flex max-w-full rounded-full bg-slate-100 px-2 py-0.5 text-center text-[10px] font-semibold text-slate-600">
+                                {statusLabel[
+                                  delivery.cancellation?.cancelledFromStatus ||
+                                    delivery.cancelledFromStatus
+                                ] ??
+                                  (
+                                    delivery.cancellation
+                                      ?.cancelledFromStatus ||
+                                    delivery.cancelledFromStatus
+                                  ).replaceAll("_", " ")}
+                              </span>
+                            ) : (
+                              <span className="text-sm text-slate-400">—</span>
+                            )}
+                          </div>
+                          <div className="flex justify-center">
+                            <ChevronRight className="h-4 w-4 text-slate-400" />
+                          </div>
+                        </article>
+                      ))}
+                    </div>
 
-                  <PaginationBar page={cancelledSafePage} setPage={setCancelledPage} totalPages={cancelledTotalPages} />
-                </div>
-              </>
-            )}
-          </section>
-         )}
-          </div>
-        )}
-        {toast && (
-          <div
-            key={toast.id}
-            role="status"
-            className={`fixed bottom-5 right-5 z-[90] flex max-w-sm items-start gap-2.5 rounded-xl px-4 py-3 text-sm font-medium shadow-lg ${
-              toast.tone === 'error'
-                ? 'border border-red-200 bg-red-50 text-red-800'
-                : 'border border-emerald-200 bg-emerald-50 text-emerald-800'
-            }`}
-          >
-            {toast.tone === 'error' ? (
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-            ) : (
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-            )}
-            <span>{toast.message}</span>
-          </div>
-        )}
+                    <PaginationBar
+                      page={cancelledSafePage}
+                      setPage={setCancelledPage}
+                      totalPages={cancelledTotalPages}
+                    />
+                  </div>
+                </>
+              )}
+            </section>
+          )}
+        </div>
+      )}
+      {toast && (
+        <div
+          key={toast.id}
+          role="status"
+          className={`fixed bottom-5 right-5 z-[90] flex max-w-sm items-start gap-2.5 rounded-xl px-4 py-3 text-sm font-medium shadow-lg ${
+            toast.tone === "error"
+              ? "border border-red-200 bg-red-50 text-red-800"
+              : "border border-emerald-200 bg-emerald-50 text-emerald-800"
+          }`}
+        >
+          {toast.tone === "error" ? (
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+          ) : (
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+          )}
+          <span>{toast.message}</span>
+        </div>
+      )}
     </SupLayout>
-  )
+  );
 }
 
-export default SupDeliveries
+export default SupDeliveries;
