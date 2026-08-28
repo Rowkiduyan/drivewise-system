@@ -62,8 +62,8 @@ function StatusText({ status }) {
 }
 
 const COMMODITY_TEXT_CLASSES = {
-  ordinary: "text-orange-700 font-bold",
-  chilled: "text-sky-700 font-bold",
+  ordinary: "text-orange-700",
+  chilled: "text-sky-700",
 };
 
 function CommodityText({ commodity }) {
@@ -271,7 +271,7 @@ function SupTrucks() {
   const [loading, setLoading] = useState(true);
   const userRole = useUserRole();
   const isSupervisor = userRole?.toLowerCase() === "supervisor";
-  console.log("DEBUG: userRole =", userRole, "isSupervisor =", isSupervisor);
+  // console.log("DEBUG: userRole =", userRole, "isSupervisor =", isSupervisor);
 
   // Devices list for mapping assigned device IDs to trucks
   const [devices, setDevices] = useState([]);

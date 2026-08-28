@@ -61,8 +61,8 @@ function StatusText({ status }) {
 }
 
 const COMMODITY_TEXT_CLASSES = {
-  ordinary: "text-orange-700 font-bold",
-  chilled: "text-sky-700 font-bold",
+  ordinary: "text-orange-700",
+  chilled: "text-sky-700",
 };
 
 function CommodityText({ commodity }) {
@@ -607,7 +607,7 @@ function AdminTrucks() {
             {userRole !== "supervisor" && (
               <button
                 onClick={() => setIsAddModalOpen(true)}
-                className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700"
+                className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-800"
               >
                 Add Truck
               </button>
@@ -736,7 +736,7 @@ function AdminTrucks() {
                                 e.stopPropagation();
                                 handleEditTruck(truck);
                               }}
-                              className="text-blue-600 hover:text-blue-800"
+                              className="text-violet-600 hover:text-violet-800"
                               title="Edit truck"
                             >
                               <Edit className="h-6 w-6" />

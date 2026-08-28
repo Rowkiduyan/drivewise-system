@@ -126,22 +126,20 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 function TypeTag({ type }) {
   return (
-    <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+    <span className="inline-flex items-center rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">
       {type}
     </span>
   );
 }
 
 const TRIP_STATUS_BADGE_CLASSES = {
-  Completed:
-    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  Ongoing: "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
+  Completed: "bg-green-50 text-green-700 ring-1 ring-inset ring-green-200",
+  Ongoing: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
   Cancelled: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
   "For Pickup": "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
   "Out for Delivery":
     "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
-  Delivered:
-    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+  Delivered: "bg-cyan-50 text-emerald-700 ring-1 ring-inset ring-cyan-200",
 };
 
 function TripStatusBadge({ status }) {
@@ -181,6 +179,7 @@ const TONE_TEXT_CLASSES = {
   emerald: "text-emerald-700",
   blue: "text-blue-700",
   slate: "text-slate-700",
+  violet: "text-violet-700",
 };
 
 function UrgencyChip({ record }) {
@@ -232,7 +231,7 @@ function SectionCard({ title, icon: Icon, children, className = "" }) {
       className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 ${className}`}
     >
       <div className="flex items-center gap-2">
-        {Icon && <Icon className="h-4 w-4 text-blue-600" />}
+        {Icon && <Icon className="h-4 w-4 text-violet-600" />}
         <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
           {title}
         </h2>
@@ -249,7 +248,7 @@ function StatTile({ label, icon: Icon, tone = "slate", children }) {
         <div
           className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${TONE_ICON_CLASSES[tone]}`}
         >
-          {Icon && <Icon className="h-3.5 w-3.5" />}
+          {Icon && <Icon className="h-3.5 w-3.5 text-violet-600" />}
         </div>
         <span className="text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-slate-500 text-center">
           {label}
@@ -868,8 +867,8 @@ function AdminTruckProfile() {
   const pmsStatusTone =
     {
       overdue: "rose",
-      upcoming: "amber",
-      healthy: "emerald",
+      scheduled: "amber",
+      completed: "emerald",
     }[pmsStatus] || "slate";
 
   const prevMaintDate = truck?.previous_maintenance_date
@@ -927,7 +926,7 @@ function AdminTruckProfile() {
           </p>
           <Link
             to="/admin/trucks"
-            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to Trucks
@@ -943,20 +942,20 @@ function AdminTruckProfile() {
         <div className="shrink-0 flex items-center justify-between border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
           <Link
             to="/admin/trucks"
-            className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-violet-600"
           >
             <ArrowLeft className="h-4 w-4" />
             Back
           </Link>
           {/* Edit button placeholder – backend functionality to be added later */}
-          <button
+          {/* <button
             type="button"
             onClick={() => setEditModalOpen(true)}
-            className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-blue-600"
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-violet-600"
           >
             <Pencil className="h-4 w-4" />
             Edit
-          </button>
+          </button> */}
           {/* Toast message with slide‑down animation */}
           {toast && (
             <div className="fixed inset-x-0 top-4 flex justify-center z-50">
@@ -984,7 +983,7 @@ function AdminTruckProfile() {
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-violet-50 text-violet-700">
                 <Truck className="h-5 w-5" />
               </div>
               <div>
@@ -1012,7 +1011,7 @@ function AdminTruckProfile() {
               onClick={() => setActiveTab(tab.id)}
               className={`whitespace-nowrap border-b-2 px-3.5 py-2 text-sm font-semibold transition ${
                 activeTab === tab.id
-                  ? "border-blue-600 text-blue-600"
+                  ? "border-violet-600 text-violet-600"
                   : "border-transparent text-slate-500 hover:text-slate-700"
               }`}
             >
@@ -1089,7 +1088,7 @@ function AdminTruckProfile() {
                   onClick={() => updateTripStatusFilter(status)}
                   className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
                     tripStatusFilter === status
-                      ? "border-blue-600 bg-blue-600 text-white"
+                      ? "border-violet-600 bg-violet-600 text-white"
                       : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
                   }`}
                 >
@@ -1140,7 +1139,7 @@ function AdminTruckProfile() {
                       <td className="px-5 py-4">
                         {/* Placeholder for future actions */}
                         <button
-                          className="rounded-md bg-blue-600 px-3 py-1 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="rounded-md bg-violet-600 px-3 py-1 text-white hover:bg-violet-700 focus:outline-none focus:ring-2 focus:ring-violet-500"
                           type="button"
                           onClick={() => openViewModal(trip)}
                         >
@@ -1217,7 +1216,7 @@ function AdminTruckProfile() {
                   <p className="text-lg font-bold text-center text-slate-900">
                     {currMileage}
                   </p>
-                  <p className="text-xs font-medium text-center text-blue-600">
+                  <p className="text-xs font-medium text-center text-violet-600">
                     Every 10,000km
                   </p>
                 </div>
@@ -1228,7 +1227,7 @@ function AdminTruckProfile() {
                   <p className="text-lg font-bold text-center text-slate-900">
                     {calculateNextMaintDate()}
                   </p>
-                  <p className="text-xs font-medium text-center text-blue-600">
+                  <p className="text-xs font-medium text-center text-violet-600">
                     Every 6 months
                   </p>
                 </div>
@@ -1240,7 +1239,7 @@ function AdminTruckProfile() {
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
                 <div className="bg-white rounded-2xl p-4 w-full max-w-sm shadow-xl">
                   <h3 className="text-xl font-semibold mb-2">
-                    Log Maintenance Service
+                    Add a Maintenance Log
                   </h3>
                   <form
                     onSubmit={handleLogMaintenanceSubmit}
@@ -1255,7 +1254,7 @@ function AdminTruckProfile() {
                         name="date"
                         value={logDate}
                         onChange={(e) => setLogDate(e.target.value)}
-                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-violet-500 focus:border-transparent"
                         required
                       />
                     </div>
@@ -1269,7 +1268,7 @@ function AdminTruckProfile() {
                         value={logEndDate}
                         onChange={(e) => setLogEndDate(e.target.value)}
                         min={logDate}
-                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-violet-500 focus:border-transparent"
                       />
                     </div>
                     <div>
@@ -1281,7 +1280,7 @@ function AdminTruckProfile() {
                         name="mileage"
                         value={logMileage}
                         onChange={(e) => setLogMileage(e.target.value)}
-                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-violet-500 focus:border-transparent"
                         required
                       />
                     </div>
@@ -1293,7 +1292,7 @@ function AdminTruckProfile() {
                         name="type"
                         value={logType}
                         onChange={(e) => setLogType(e.target.value)}
-                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-violet-500 focus:border-transparent"
                       >
                         <option value="Preventive Maintenance">
                           Preventive Maintenance
@@ -1327,7 +1326,7 @@ function AdminTruckProfile() {
                         value={logShop}
                         onChange={(e) => setLogShop(e.target.value)}
                         placeholder="e.g., In-House Garage, Casa Auto Shop"
-                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-violet-500 focus:border-transparent"
                       />
                     </div>
                     <div>
@@ -1338,7 +1337,7 @@ function AdminTruckProfile() {
                         name="status"
                         value={logStatus}
                         onChange={(e) => setLogStatus(e.target.value)}
-                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-violet-500 focus:border-transparent"
                       >
                         <option value="Completed">Completed</option>
                         <option value="Scheduled">Scheduled</option>
@@ -1354,7 +1353,7 @@ function AdminTruckProfile() {
                         value={logNotes}
                         onChange={(e) => setLogNotes(e.target.value)}
                         rows={3}
-                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-violet-500 focus:border-transparent"
                       ></textarea>
                     </div>
                     <div className="flex gap-3">
@@ -1378,7 +1377,7 @@ function AdminTruckProfile() {
                       <button
                         type="submit"
                         disabled={isSubmitting}
-                        className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="flex-1 px-4 py-2 bg-violet-600 text-white rounded-md text-sm font-medium hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {isSubmitting ? "Logging..." : "Log Service"}
                       </button>
@@ -1399,7 +1398,7 @@ function AdminTruckProfile() {
                       onClick={() => setMaintenanceStatusFilter(status)}
                       className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
                         maintenanceStatusFilter === status
-                          ? "border-blue-600 bg-blue-600 text-white"
+                          ? "border-violet-600 bg-violet-600 text-white"
                           : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
                       }`}
                     >
@@ -1418,10 +1417,10 @@ function AdminTruckProfile() {
                   <button
                     type="button"
                     onClick={() => setIsLogMaintenanceModalOpen(true)}
-                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm bg-amber-50 text-amber-700 hover:bg-amber-100 ml-auto`}
+                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm bg-violet-50 text-violet-700 hover:bg-violet-100 ml-auto`}
                   >
                     <Wrench className="h-3.5 w-3.5" />
-                    <span>Log Service</span>
+                    <span>Add a Maintenance Log</span>
                   </button>
                 </div>
 
@@ -1499,7 +1498,7 @@ function AdminTruckProfile() {
                                   setSelectedNote(record.notes);
                                   setIsNoteModalOpen(true);
                                 }}
-                                className="rounded-md bg-blue-600 px-3 py-1 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                className="rounded-md bg-violet-600 px-3 py-1 text-white hover:bg-violet-700 focus:outline-none focus:ring-2 focus:ring-violet-500"
                               >
                                 View
                               </button>
@@ -1553,7 +1552,7 @@ function AdminTruckProfile() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[80vh] overflow-y-auto overflow-x-hidden flex flex-col p-4">
             <div className="flex items-center justify-between border-b pb-2 mb-4">
-              <h2 className="text-lg font-semibold">Maintenance Note</h2>
+              <h3 className="text-lg font-semibold">Notes</h3>
               <button
                 type="button"
                 onClick={() => setIsNoteModalOpen(false)}
@@ -1569,7 +1568,7 @@ function AdminTruckProfile() {
               <button
                 type="button"
                 onClick={() => setIsNoteModalOpen(false)}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700"
               >
                 Close
               </button>

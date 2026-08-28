@@ -135,15 +135,13 @@ function TypeTag({ type }) {
 }
 
 const TRIP_STATUS_BADGE_CLASSES = {
-  Completed:
-    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  Ongoing: "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
+  Completed: "bg-green-50 text-green-700 ring-1 ring-inset ring-green-200",
+  Ongoing: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
   Cancelled: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
   "For Pickup": "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
   "Out for Delivery":
     "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
-  Delivered:
-    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+  Delivered: "bg-cyan-50 text-emerald-700 ring-1 ring-inset ring-cyan-200",
 };
 
 function TripStatusBadge({ status }) {
@@ -252,7 +250,7 @@ function StatTile({ label, icon: Icon, tone = "slate", children }) {
         <div
           className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${TONE_ICON_CLASSES[tone]}`}
         >
-          {Icon && <Icon className="h-3.5 w-3.5" />}
+          {Icon && <Icon className="h-3.5 w-3.5 text-blue-600" />}
         </div>
         <span className="text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-slate-500 text-center">
           {label}
@@ -880,8 +878,8 @@ function SupTruckProfile() {
   const pmsStatusTone =
     {
       overdue: "rose",
-      upcoming: "amber",
-      healthy: "emerald",
+      scheduled: "amber",
+      completed: "emerald",
     }[pmsStatus] || "slate";
 
   const prevMaintDate = truck?.previous_maintenance_date
@@ -1249,7 +1247,7 @@ function SupTruckProfile() {
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
                 <div className="bg-white rounded-2xl p-4 w-full max-w-sm shadow-xl">
                   <h3 className="text-xl font-semibold mb-2">
-                    Log Maintenance Service
+                    Add a Maintenance Log
                   </h3>
                   <form
                     onSubmit={handleLogMaintenanceSubmit}
@@ -1427,10 +1425,10 @@ function SupTruckProfile() {
                   <button
                     type="button"
                     onClick={() => setIsLogMaintenanceModalOpen(true)}
-                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm bg-amber-50 text-amber-700 hover:bg-amber-100 ml-auto`}
+                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm bg-blue-50 text-blue-700 hover:bg-blue-100 ml-auto`}
                   >
                     <Wrench className="h-3.5 w-3.5" />
-                    <span>Log Service</span>
+                    <span>Add a Maintenance Log</span>
                   </button>
                 </div>
 
@@ -1538,15 +1536,26 @@ function SupTruckProfile() {
       </div>
       {/* Notes view modal */}
       {isNoteModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl p-4 w-full max-w-sm max-h-[80vh] overflow-y-auto overflow-x-hidden shadow-xl">
-            <h3 className="text-lg font-semibold mb-2">Notes</h3>
-            <p className="whitespace-pre-wrap break-words">{selectedNote}</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[80vh] overflow-y-auto overflow-x-hidden flex flex-col p-4">
+            <div className="flex items-center justify-between border-b pb-2 mb-4">
+              <h3 className="text-lg font-semibold">Notes</h3>
+              <button
+                type="button"
+                onClick={() => setIsNoteModalOpen(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              <p className="whitespace-pre-wrap break-words">{selectedNote}</p>
+            </div>
             <div className="flex justify-end mt-4">
               <button
                 type="button"
                 onClick={() => setIsNoteModalOpen(false)}
-                className="px-4 py-2 border rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100"
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
               >
                 Close
               </button>
