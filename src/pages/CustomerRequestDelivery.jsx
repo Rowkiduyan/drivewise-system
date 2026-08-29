@@ -1,13 +1,31 @@
-import { useState, useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
-import { useNavigate, Link } from 'react-router-dom'
+import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
+import { useNavigate, Link } from "react-router-dom";
 import {
-  ArrowLeft, Box, Check, CheckCircle2, Clock, Info, MapPin, Package, Ruler, Search, Thermometer, X
-} from 'lucide-react'
-import CustomerLayout from '../layout/CustomerLayout.jsx'
-import { MapContainer, TileLayer, Marker, Polygon, useMapEvents, useMap } from 'react-leaflet'
-import 'leaflet/dist/leaflet.css'
-import L from 'leaflet'
+  ArrowLeft,
+  Box,
+  Check,
+  CheckCircle2,
+  Clock,
+  Info,
+  MapPin,
+  Package,
+  Ruler,
+  Search,
+  Thermometer,
+  X,
+} from "lucide-react";
+import CustomerLayout from "../layout/CustomerLayout.jsx";
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Polygon,
+  useMapEvents,
+  useMap,
+} from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
 import {
   truckTypes,
   itemTypes,
@@ -17,71 +35,86 @@ import {
   getMinDeliveryDate,
   getScheduleErrors,
   getPickupWindowError,
-  getBudgetError
-} from '../lib/deliveryOptions.js'
-import { photonGeocode } from '../lib/forwardGeocode.js'
+  getBudgetError,
+} from "../lib/deliveryOptions.js";
+import { photonGeocode } from "../lib/forwardGeocode.js";
 import {
   LUZON_SERVICE_AREA,
   SERVICE_AREA_MAX_BOUNDS,
   SERVICE_AREA_MESSAGE,
   isInsideLuzon,
-  snapToLuzon
-} from '../lib/serviceArea.js'
-import { weekdayOfDate } from '../lib/workingDays.js'
-import { supabase } from '../lib/supabaseClient.js'
+  snapToLuzon,
+} from "../lib/serviceArea.js";
+import { weekdayOfDate } from "../lib/workingDays.js";
+import { supabase } from "../lib/supabaseClient.js";
 
 // Fix default marker icon for Leaflet in React
-delete L.Icon.Default.prototype._getIconUrl
+delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png'
-})
+  iconRetinaUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
+  iconUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
+  shadowUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
+});
 
-const background = null
+const background = null;
 
 // Intermediate stops between Pick Up and Drop Off — capped to keep the form
 // and the driver navigation's waypoints request simple (02B_MULTI_STOP_DELIVERIES.md).
-const MAX_STOPS = 5
+const MAX_STOPS = 5;
 
 // Photon (Komoot) geocoding — free, no API key, CORS-enabled, and not rate
 // limited like the public Nominatim endpoint. Search is scoped to the
 // Philippines bounding box to match the app's service area.
 
-const PH_BBOX = '116.9,4.6,126.6,21.1'
+const PH_BBOX = "116.9,4.6,126.6,21.1";
 
 // Build a human-readable address from a Photon feature's properties.
 function photonAddress(feature) {
-  const p = feature?.properties || {}
-  const street = p.housenumber ? `${p.housenumber} ${p.street || ''}`.trim() : (p.street || '')
-  return [street || p.name || '', p.locality || p.district || '', p.city || p.county || '', p.state || '', p.country || '']
+  const p = feature?.properties || {};
+  const street = p.housenumber
+    ? `${p.housenumber} ${p.street || ""}`.trim()
+    : p.street || "";
+  return [
+    street || p.name || "",
+    p.locality || p.district || "",
+    p.city || p.county || "",
+    p.state || "",
+    p.country || "",
+  ]
     .filter(Boolean)
-    .join(', ')
+    .join(", ");
 }
 
 async function photonSearch(query) {
-  const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&bbox=${PH_BBOX}`)
-  if (!res.ok) throw new Error(`search ${res.status}`)
-  const data = await res.json()
-  return (data?.features || []).map(feature => ({
+  const res = await fetch(
+    `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&bbox=${PH_BBOX}`,
+  );
+  if (!res.ok) throw new Error(`search ${res.status}`);
+  const data = await res.json();
+  return (data?.features || []).map((feature) => ({
     display: photonAddress(feature),
     lat: feature.geometry.coordinates[1],
-    lon: feature.geometry.coordinates[0]
-  }))
+    lon: feature.geometry.coordinates[0],
+  }));
 }
 
 // Reverse-geocode a coordinate to an address, with a small backoff retry in
 // case the endpoint ever rate-limits us.
 async function reverseGeocode(lat, lng, attempt = 0) {
-  const res = await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}`)
+  const res = await fetch(
+    `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}`,
+  );
   if (res.status === 429 && attempt < 3) {
-    await new Promise(r => setTimeout(r, 1200 * (attempt + 1)))
-    return reverseGeocode(lat, lng, attempt + 1)
+    await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+    return reverseGeocode(lat, lng, attempt + 1);
   }
-  if (!res.ok) return ''
-  const data = await res.json()
-  const feature = data?.features?.[0]
-  return feature ? photonAddress(feature) : ''
+  if (!res.ok) return "";
+  const data = await res.json();
+  const feature = data?.features?.[0];
+  return feature ? photonAddress(feature) : "";
 }
 
 // Map controller — handles view changes, map clicks, and draggable marker.
@@ -90,49 +123,60 @@ async function reverseGeocode(lat, lng, attempt = 0) {
 // Every point is validated against the Luzon service-area polygons first:
 // an invalid placement never sticks — the pin snaps back to the nearest
 // valid spot inside Luzon and the UI flags the attempt.
-function MapController({ center, zoom, selectedLocation, onLocationChange, onResolvingChange, onServiceAreaResult }) {
-  const map = useMap()
+function MapController({
+  center,
+  zoom,
+  selectedLocation,
+  onLocationChange,
+  onResolvingChange,
+  onServiceAreaResult,
+}) {
+  const map = useMap();
 
   useEffect(() => {
     if (center) {
-      map.setView(center, zoom || map.getZoom(), { animate: true })
+      map.setView(center, zoom || map.getZoom(), { animate: true });
     }
-  }, [center, zoom, map])
+  }, [center, zoom, map]);
 
   const handlePoint = (lat, lng) => {
     // Validate against the Luzon polygons; an outside placement never sticks.
-    const inside = isInsideLuzon(lat, lng)
-    let finalLat = lat
-    let finalLng = lng
+    const inside = isInsideLuzon(lat, lng);
+    let finalLat = lat;
+    let finalLng = lng;
 
     if (!inside) {
       // Redirect the pin to the nearest valid location inside Luzon instead
       // of accepting the placement. The notice is driven by the raw attempt,
       // not by re-checking the snapped point (which sits on the boundary and
       // can flip the ray-cast check at exact coastline vertices).
-      const snapped = snapToLuzon(lat, lng)
-      finalLat = snapped.lat
-      finalLng = snapped.lng
-      map.panTo([finalLat, finalLng], { animate: true })
+      const snapped = snapToLuzon(lat, lng);
+      finalLat = snapped.lat;
+      finalLng = snapped.lng;
+      map.panTo([finalLat, finalLng], { animate: true });
     }
-    onServiceAreaResult(inside)
+    onServiceAreaResult(inside);
 
-    onLocationChange(`${finalLat.toFixed(6)}, ${finalLng.toFixed(6)}`, finalLat, finalLng)
-    onResolvingChange(true)
+    onLocationChange(
+      `${finalLat.toFixed(6)}, ${finalLng.toFixed(6)}`,
+      finalLat,
+      finalLng,
+    );
+    onResolvingChange(true);
     reverseGeocode(finalLat, finalLng)
-      .then(display => {
-        if (display) onLocationChange(display, finalLat, finalLng)
+      .then((display) => {
+        if (display) onLocationChange(display, finalLat, finalLng);
       })
       .catch(() => {})
-      .finally(() => onResolvingChange(false))
-  }
+      .finally(() => onResolvingChange(false));
+  };
 
   useMapEvents({
     click(e) {
-      const { lat, lng } = e.latlng
-      handlePoint(lat, lng)
-    }
-  })
+      const { lat, lng } = e.latlng;
+      handlePoint(lat, lng);
+    },
+  });
 
   return (
     <>
@@ -141,7 +185,12 @@ function MapController({ center, zoom, selectedLocation, onLocationChange, onRes
         <Polygon
           key={index}
           positions={ring}
-          pathOptions={{ color: '#059669', weight: 2, fillColor: '#10b981', fillOpacity: 0.08 }}
+          pathOptions={{
+            color: "#059669",
+            weight: 2,
+            fillColor: "#10b981",
+            fillOpacity: 0.08,
+          }}
         />
       ))}
       {selectedLocation && (
@@ -150,105 +199,119 @@ function MapController({ center, zoom, selectedLocation, onLocationChange, onRes
           draggable={true}
           eventHandlers={{
             dragend(e) {
-              const { lat, lng } = e.target.getLatLng()
-              handlePoint(lat, lng)
-            }
+              const { lat, lng } = e.target.getLatLng();
+              handlePoint(lat, lng);
+            },
           }}
         />
       )}
     </>
-  )
+  );
 }
 
 // Location Picker Modal Component
 function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
-  const [searchQuery, setSearchQuery] = useState('')
-  const [suggestions, setSuggestions] = useState([])
-  const [selectedLocation, setSelectedLocation] = useState(null)
-  const [mapCenter, setMapCenter] = useState([14.5995, 120.9842])
-  const [mapZoom, setMapZoom] = useState(13)
-  const [resolvingAddress, setResolvingAddress] = useState(false)
-  const [showServiceAreaNotice, setShowServiceAreaNotice] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [selectedLocation, setSelectedLocation] = useState(null);
+  const [mapCenter, setMapCenter] = useState([14.5995, 120.9842]);
+  const [mapZoom, setMapZoom] = useState(13);
+  const [resolvingAddress, setResolvingAddress] = useState(false);
+  const [showServiceAreaNotice, setShowServiceAreaNotice] = useState(false);
 
   // When the modal opens with free-typed text in the field (no pin picked
   // yet), resolve that text via the same Photon geocoder the search uses
   // and drop the pin on it right away — same Luzon-only rules apply.
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen) return;
 
-    const query = initialValue?.trim()
-    if (!query) return
+    const query = initialValue?.trim();
+    if (!query) return;
 
-    let cancelled = false
+    let cancelled = false;
     photonGeocode(query)
-      .then(coords => {
-        if (cancelled || !coords) return
+      .then((coords) => {
+        if (cancelled || !coords) return;
         if (!isInsideLuzon(coords.lat, coords.lng)) {
-          setShowServiceAreaNotice(true)
-          return
+          setShowServiceAreaNotice(true);
+          return;
         }
-        setShowServiceAreaNotice(false)
-        setSelectedLocation({ display: query, lat: coords.lat, lon: coords.lng })
-        setMapCenter([coords.lat, coords.lng])
-        setMapZoom(16)
+        setShowServiceAreaNotice(false);
+        setSelectedLocation({
+          display: query,
+          lat: coords.lat,
+          lon: coords.lng,
+        });
+        setMapCenter([coords.lat, coords.lng]);
+        setMapZoom(16);
       })
-      .catch(() => {})
+      .catch(() => {});
 
     return () => {
-      cancelled = true
-    }
-  }, [isOpen, initialValue])
+      cancelled = true;
+    };
+  }, [isOpen, initialValue]);
 
   useEffect(() => {
     if (searchQuery.length > 2) {
       const timer = setTimeout(() => {
         photonSearch(searchQuery)
-          .then(data => setSuggestions(data.filter(s => isInsideLuzon(s.lat, s.lon))))
-          .catch(() => setSuggestions([]))
-      }, 300)
-      return () => clearTimeout(timer)
+          .then((data) =>
+            setSuggestions(data.filter((s) => isInsideLuzon(s.lat, s.lon))),
+          )
+          .catch(() => setSuggestions([]));
+      }, 300);
+      return () => clearTimeout(timer);
     } else {
-      setSuggestions([])
+      setSuggestions([]);
     }
-  }, [searchQuery])
+  }, [searchQuery]);
 
   const handleSuggestionClick = (suggestion) => {
     if (!isInsideLuzon(suggestion.lat, suggestion.lon)) {
-      setShowServiceAreaNotice(true)
-      return
+      setShowServiceAreaNotice(true);
+      return;
     }
-    setShowServiceAreaNotice(false)
-    setSelectedLocation({ display: suggestion.display, lat: suggestion.lat, lon: suggestion.lon })
-    setMapCenter([suggestion.lat, suggestion.lon])
-    setMapZoom(16)
-    setSuggestions([])
-    setSearchQuery('')
-  }
+    setShowServiceAreaNotice(false);
+    setSelectedLocation({
+      display: suggestion.display,
+      lat: suggestion.lat,
+      lon: suggestion.lon,
+    });
+    setMapCenter([suggestion.lat, suggestion.lon]);
+    setMapZoom(16);
+    setSuggestions([]);
+    setSearchQuery("");
+  };
 
   const handleLocationChange = (display, lat, lng) => {
-    setSelectedLocation({ display, lat, lon: lng })
-  }
+    setSelectedLocation({ display, lat, lon: lng });
+  };
 
   const handleConfirm = () => {
     if (selectedLocation) {
-      onSelect(selectedLocation.display, selectedLocation.lat, selectedLocation.lon)
-      onClose()
+      onSelect(
+        selectedLocation.display,
+        selectedLocation.lat,
+        selectedLocation.lon,
+      );
+      onClose();
     }
-  }
+  };
   // Lock background scroll while the modal is open. This also keeps the blurred
   // backdrop cheap — the page behind it stays still instead of recomputing on scroll.
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen) return;
 
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
 
     return () => {
-      document.body.style.overflow = previousOverflow
-    }
-  }, [isOpen])
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isOpen]);
 
-  if (!isOpen) return null
+  if (!isOpen) return null;
 
   // Rendered into document.body so this overlay is a true top-level sibling of everything
   // else on the page (including CustomerLayout's fixed mobile navbar) — otherwise browsers can
@@ -258,10 +321,17 @@ function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
       <div className="w-full max-w-3xl rounded-3xl border border-emerald-200/70 bg-white shadow-2xl">
         <div className="flex items-center justify-between rounded-t-3xl border-b border-emerald-200/70 bg-white p-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Location Picker</p>
-            <h3 className="mt-1 text-lg font-semibold text-slate-900">Pick Location on Map</h3>
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+              Location Picker
+            </p>
+            <h3 className="mt-1 text-lg font-semibold text-slate-900">
+              Pick Location on Map
+            </h3>
           </div>
-          <button onClick={onClose} className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900">
+          <button
+            onClick={onClose}
+            className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -295,7 +365,9 @@ function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
           {showServiceAreaNotice && (
             <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3">
               <MapPin className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
-              <p className="text-xs text-red-700 leading-relaxed">{SERVICE_AREA_MESSAGE}</p>
+              <p className="text-xs text-red-700 leading-relaxed">
+                {SERVICE_AREA_MESSAGE}
+              </p>
             </div>
           )}
 
@@ -304,7 +376,7 @@ function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
             <MapContainer
               center={mapCenter}
               zoom={mapZoom}
-              style={{ height: '100%', width: '100%' }}
+              style={{ height: "100%", width: "100%" }}
               zoomControl={true}
               maxBounds={SERVICE_AREA_MAX_BOUNDS}
               maxBoundsViscosity={0.7}
@@ -319,7 +391,9 @@ function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
                 selectedLocation={selectedLocation}
                 onLocationChange={handleLocationChange}
                 onResolvingChange={setResolvingAddress}
-                onServiceAreaResult={(inside) => setShowServiceAreaNotice(!inside)}
+                onServiceAreaResult={(inside) =>
+                  setShowServiceAreaNotice(!inside)
+                }
               />
             </MapContainer>
           </div>
@@ -329,20 +403,28 @@ function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
             <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
               <MapPin className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-medium text-emerald-700">Selected Location</p>
-                <p className="text-sm text-emerald-900 mt-0.5 break-words">{selectedLocation.display}</p>
+                <p className="text-xs font-medium text-emerald-700">
+                  Selected Location
+                </p>
+                <p className="text-sm text-emerald-900 mt-0.5 break-words">
+                  {selectedLocation.display}
+                </p>
                 {resolvingAddress && (
-                  <p className="text-xs text-emerald-500 mt-0.5 italic">Getting address…</p>
+                  <p className="text-xs text-emerald-500 mt-0.5 italic">
+                    Getting address…
+                  </p>
                 )}
                 <p className="text-xs text-emerald-600 mt-0.5 font-mono">
-                  {selectedLocation.lat?.toFixed(6)}, {selectedLocation.lon?.toFixed(6)}
+                  {selectedLocation.lat?.toFixed(6)},{" "}
+                  {selectedLocation.lon?.toFixed(6)}
                 </p>
               </div>
             </div>
           )}
 
           <p className="text-xs text-slate-500 text-center">
-            Click on the map, drag the marker, or search above to pin a location within Luzon
+            Click on the map, drag the marker, or search above to pin a location
+            within Luzon
           </p>
         </div>
 
@@ -363,70 +445,82 @@ function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
         </div>
       </div>
     </div>,
-    document.body
-  )
+    document.body,
+  );
 }
 
 // Location Input with Autocomplete and Map Picker
 function LocationInput({ id, label, value, onChange, required }) {
-  const [suggestions, setSuggestions] = useState([])
-  const [showSuggestions, setShowSuggestions] = useState(false)
-  const [showMapPicker, setShowMapPicker] = useState(false)
-  const inputRef = useRef(null)
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showMapPicker, setShowMapPicker] = useState(false);
+  const inputRef = useRef(null);
   // Debounce + sequence guard so both pickup AND dropoff autocomplete stay
   // reliable: rapid keystrokes fire at most one geocoding request, and stale
   // responses (from a previous keystroke) are ignored.
-  const searchTimer = useRef(null)
-  const searchSeq = useRef(0)
+  const searchTimer = useRef(null);
+  const searchSeq = useRef(0);
 
-  useEffect(() => () => {
-    if (searchTimer.current) clearTimeout(searchTimer.current)
-  }, [])
+  useEffect(
+    () => () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    },
+    [],
+  );
 
   const handleInputChange = (e) => {
-    const query = e.target.value
-    onChange(e)
+    const query = e.target.value;
+    onChange(e);
 
-    if (searchTimer.current) clearTimeout(searchTimer.current)
+    if (searchTimer.current) clearTimeout(searchTimer.current);
 
     if (query.trim().length > 2) {
-      const seq = ++searchSeq.current
+      const seq = ++searchSeq.current;
       searchTimer.current = setTimeout(() => {
         photonSearch(query)
-          .then(data => {
-            if (seq !== searchSeq.current) return
-            setSuggestions(data.filter(s => isInsideLuzon(s.lat, s.lon)))
-            setShowSuggestions(true)
+          .then((data) => {
+            if (seq !== searchSeq.current) return;
+            setSuggestions(data.filter((s) => isInsideLuzon(s.lat, s.lon)));
+            setShowSuggestions(true);
           })
           .catch(() => {
-            if (seq !== searchSeq.current) return
-            setSuggestions([])
-            setShowSuggestions(false)
-          })
-      }, 300)
+            if (seq !== searchSeq.current) return;
+            setSuggestions([]);
+            setShowSuggestions(false);
+          });
+      }, 300);
     } else {
-      searchSeq.current++
-      setSuggestions([])
-      setShowSuggestions(false)
+      searchSeq.current++;
+      setSuggestions([]);
+      setShowSuggestions(false);
     }
-  }
+  };
 
   const handleSuggestionClick = (suggestion) => {
     // Belt-and-suspenders: suggestions are already filtered to Luzon, but a
     // stale list rendered before this guard existed can't slip through.
-    if (!isInsideLuzon(suggestion.lat, suggestion.lon)) return
-    onChange({ target: { name: id, value: suggestion.display, lat: suggestion.lat, lng: suggestion.lon } })
-    setShowSuggestions(false)
-    setSuggestions([])
-  }
+    if (!isInsideLuzon(suggestion.lat, suggestion.lon)) return;
+    onChange({
+      target: {
+        name: id,
+        value: suggestion.display,
+        lat: suggestion.lat,
+        lng: suggestion.lon,
+      },
+    });
+    setShowSuggestions(false);
+    setSuggestions([]);
+  };
 
   const handleLocationSelect = (address, lat, lng) => {
-    onChange({ target: { name: id, value: address, lat, lng } })
-  }
+    onChange({ target: { name: id, value: address, lat, lng } });
+  };
 
   return (
     <div className="space-y-2">
-      <label htmlFor={id} className="text-sm font-medium text-slate-700">{label}</label>
+      <label htmlFor={id} className="text-sm font-medium text-slate-700">
+        {label}
+      </label>
       <div className="relative">
         <div className="flex gap-2">
           <input
@@ -439,9 +533,9 @@ function LocationInput({ id, label, value, onChange, required }) {
             onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
             onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && suggestions.length > 0) {
-                e.preventDefault()
-                handleSuggestionClick(suggestions[0])
+              if (e.key === "Enter" && suggestions.length > 0) {
+                e.preventDefault();
+                handleSuggestionClick(suggestions[0]);
               }
             }}
             placeholder="Enter address or search..."
@@ -454,9 +548,24 @@ function LocationInput({ id, label, value, onChange, required }) {
             className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
             title="Pick from map"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+              />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+              />
             </svg>
             <span className="hidden sm:inline">Map</span>
           </button>
@@ -485,151 +594,195 @@ function LocationInput({ id, label, value, onChange, required }) {
         initialValue={value}
       />
     </div>
-  )
+  );
 }
 
 function CustomerRequestDelivery() {
-  const navigate = useNavigate()
-  const [dateError, setDateError] = useState('')
-  const [pickupWindowError, setPickupWindowError] = useState('')
-  const [dropoffDateError, setDropoffDateError] = useState('')
-  const [dropoffTimeError, setDropoffTimeError] = useState('')
-  const [budgetError, setBudgetError] = useState('')
-  const [truckSelectionError, setTruckSelectionError] = useState('')
-  const [submitError, setSubmitError] = useState('')
-  const [submitting, setSubmitting] = useState(false)
+  const navigate = useNavigate();
+  const [dateError, setDateError] = useState("");
+  const [pickupWindowError, setPickupWindowError] = useState("");
+  const [dropoffDateError, setDropoffDateError] = useState("");
+  const [dropoffTimeError, setDropoffTimeError] = useState("");
+  const [budgetError, setBudgetError] = useState("");
+  const [truckSelectionError, setTruckSelectionError] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   // Weekdays covered by at least one of this customer's specialized crew
   // members (crew_client_specialties -> crew_availability, via the
   // specialized_crew_available_days() RPC). null = still loading; empty =
   // no specialized crew coverage, so booking stays unrestricted.
-  const [specializedAvailableDays, setSpecializedAvailableDays] = useState(null)
-  const minDeliveryDate = getMinDeliveryDate()
+  const [specializedAvailableDays, setSpecializedAvailableDays] =
+    useState(null);
+  const minDeliveryDate = getMinDeliveryDate();
 
   useEffect(() => {
-    let isCurrent = true
+    let isCurrent = true;
 
-    supabase.rpc('specialized_crew_available_days')
-      .then(({ data, error }) => {
-        if (!isCurrent) return
-        if (error) {
-          // Fail open -- a broken lookup shouldn't block booking entirely.
-          setSpecializedAvailableDays(null)
-          return
-        }
-        setSpecializedAvailableDays(data || [])
-      })
+    supabase.rpc("specialized_crew_available_days").then(({ data, error }) => {
+      if (!isCurrent) return;
+      if (error) {
+        // Fail open -- a broken lookup shouldn't block booking entirely.
+        setSpecializedAvailableDays(null);
+        return;
+      }
+      setSpecializedAvailableDays(data || []);
+    });
 
     return () => {
-      isCurrent = false
-    }
-  }, [])
+      isCurrent = false;
+    };
+  }, []);
   const [formData, setFormData] = useState({
-    pickupDate: '',
-    pickupTime: '',
-    pickupTimeEnd: '',
-    dropoffDate: '',
-    dropoffTime: '',
-    pickupLocation: '',
+    pickupDate: "",
+    pickupTime: "",
+    pickupTimeEnd: "",
+    dropoffDate: "",
+    dropoffTime: "",
+    pickupLocation: "",
     pickupLat: null,
     pickupLng: null,
-    dropoffLocation: '',
+    dropoffLocation: "",
     dropoffLat: null,
     dropoffLng: null,
     stops: [],
-    truckType: '',
-    itemType: '',
-    cargoWeight: '',
-    budgetMin: '',
-    budgetMax: '',
-    notes: ''
-  })
+    truckType: "",
+    itemType: "",
+    cargoWeight: "",
+    budgetMin: "",
+    budgetMax: "",
+    notes: "",
+  });
   // Drop Off Date auto-fills to match Pick Up Date as a same-day-delivery
   // convenience default, but stays fully editable -- once the customer picks
   // a dropoff date themselves, further pickup date edits stop overwriting it.
-  const dropoffDateTouched = useRef(false)
-  const recommendedTruckValue = getRecommendedTruckValue(formData.itemType, formData.cargoWeight)
+  const dropoffDateTouched = useRef(false);
+  const recommendedTruckValue = getRecommendedTruckValue(
+    formData.itemType,
+    formData.cargoWeight,
+  );
 
   // Recommended truck first, then other compatible trucks, then unavailable ones last
   const sortedTruckTypes = [...truckTypes].sort((a, b) => {
     const rank = (truck) => {
-      if (truck.value === recommendedTruckValue) return 0
-      return getTruckAvailability(truck, formData.itemType, formData.cargoWeight).available ? 1 : 2
-    }
-    return rank(a) - rank(b)
-  })
+      if (truck.value === recommendedTruckValue) return 0;
+      return getTruckAvailability(
+        truck,
+        formData.itemType,
+        formData.cargoWeight,
+      ).available
+        ? 1
+        : 2;
+    };
+    return rank(a) - rank(b);
+  });
 
-  const goBackToDeliveries = () => navigate('/customer/deliveries')
+  const goBackToDeliveries = () =>
+    navigate("/customer/deliveries", {
+      state: { defaultTab: "PENDING_REQUEST" },
+    });
 
   // Returns an error string when the chosen Pick Up Date falls on a weekday
   // none of the customer's specialized crew members work — suggesting the
   // next few bookable dates their crew IS available. No-op while the lookup
   // is loading or when there's no specialized crew coverage.
   const pickupDateAvailabilityError = (dateStr) => {
-    if (!dateStr || !specializedAvailableDays || specializedAvailableDays.length === 0) return ''
-    if (specializedAvailableDays.includes(weekdayOfDate(dateStr))) return ''
+    if (
+      !dateStr ||
+      !specializedAvailableDays ||
+      specializedAvailableDays.length === 0
+    )
+      return "";
+    if (specializedAvailableDays.includes(weekdayOfDate(dateStr))) return "";
 
-    const covered = new Set(specializedAvailableDays)
-    const chosenDate = new Date(`${dateStr}T00:00:00`)
+    const covered = new Set(specializedAvailableDays);
+    const chosenDate = new Date(`${dateStr}T00:00:00`);
 
     // Suggest up to 3 upcoming dates (starting from the earliest bookable
     // date) that fall on a day the specialized crew works. Hard cap on scan
     // length so a sparse schedule can never loop forever.
-    const suggestions = []
-    const cursor = new Date(`${minDeliveryDate}T00:00:00`)
+    const suggestions = [];
+    const cursor = new Date(`${minDeliveryDate}T00:00:00`);
     for (let scanned = 0; scanned < 90 && suggestions.length < 3; scanned++) {
-      if (covered.has(cursor.getDay()) && cursor.getTime() !== chosenDate.getTime()) {
-        suggestions.push(cursor.toLocaleDateString('en-US', { month: 'short', day: 'numeric', weekday: 'short' }))
+      if (
+        covered.has(cursor.getDay()) &&
+        cursor.getTime() !== chosenDate.getTime()
+      ) {
+        suggestions.push(
+          cursor.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+            weekday: "short",
+          }),
+        );
       }
-      cursor.setDate(cursor.getDate() + 1)
+      cursor.setDate(cursor.getDate() + 1);
     }
 
-    const chosenLabel = chosenDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', weekday: 'long' })
-    const suggestionText = suggestions.length > 0 ? ` Available dates: ${suggestions.join(', ')}.` : ''
-    return `Your assigned delivery crew is not available on ${chosenLabel}. Please consider changing your pick up date.${suggestionText}`
-  }
+    const chosenLabel = chosenDate.toLocaleDateString("en-US", {
+      month: "long",
+      day: "numeric",
+      weekday: "long",
+    });
+    const suggestionText =
+      suggestions.length > 0
+        ? ` Available dates: ${suggestions.join(", ")}.`
+        : "";
+    return `Your assigned delivery crew is not available on ${chosenLabel}. Please consider changing your pick up date.${suggestionText}`;
+  };
 
   const handleChange = (e) => {
-    const { name, value, lat, lng } = e.target
-    const next = { ...formData, [name]: value }
+    const { name, value, lat, lng } = e.target;
+    const next = { ...formData, [name]: value };
 
     // LocationInput passes lat/lng alongside the address text when the
     // value came from a search suggestion or the map picker (both already
     // resolve real coordinates via Photon); a manually-typed address has
     // none, so clear any stale coordinate from a previously picked value.
-    if (name === 'pickupLocation' || name === 'dropoffLocation') {
-      const prefix = name === 'pickupLocation' ? 'pickup' : 'dropoff'
-      next[`${prefix}Lat`] = lat ?? null
-      next[`${prefix}Lng`] = lng ?? null
+    if (name === "pickupLocation" || name === "dropoffLocation") {
+      const prefix = name === "pickupLocation" ? "pickup" : "dropoff";
+      next[`${prefix}Lat`] = lat ?? null;
+      next[`${prefix}Lng`] = lng ?? null;
     }
 
-    if (name === 'pickupDate') {
-      const minDateError = value && value < minDeliveryDate ? `Delivery date must be on or after ${minDeliveryDate}.` : ''
-      setDateError(minDateError || pickupDateAvailabilityError(value))
+    if (name === "pickupDate") {
+      const minDateError =
+        value && value < minDeliveryDate
+          ? `Delivery date must be on or after ${minDeliveryDate}.`
+          : "";
+      setDateError(minDateError || pickupDateAvailabilityError(value));
       if (!dropoffDateTouched.current) {
-        next.dropoffDate = value
+        next.dropoffDate = value;
       }
     }
 
-    if (name === 'dropoffDate') {
-      dropoffDateTouched.current = true
+    if (name === "dropoffDate") {
+      dropoffDateTouched.current = true;
     }
 
-    if (name === 'pickupTime' || name === 'pickupTimeEnd') {
-      setPickupWindowError(getPickupWindowError(next))
+    if (name === "pickupTime" || name === "pickupTimeEnd") {
+      setPickupWindowError(getPickupWindowError(next));
     }
 
-    if (['pickupDate', 'pickupTime', 'pickupTimeEnd', 'dropoffDate', 'dropoffTime'].includes(name)) {
-      const { dropoffDateError, dropoffTimeError } = getScheduleErrors(next)
-      setDropoffDateError(dropoffDateError)
-      setDropoffTimeError(dropoffTimeError)
+    if (
+      [
+        "pickupDate",
+        "pickupTime",
+        "pickupTimeEnd",
+        "dropoffDate",
+        "dropoffTime",
+      ].includes(name)
+    ) {
+      const { dropoffDateError, dropoffTimeError } = getScheduleErrors(next);
+      setDropoffDateError(dropoffDateError);
+      setDropoffTimeError(dropoffTimeError);
     }
 
-    if (name === 'budgetMin' || name === 'budgetMax') {
-      setBudgetError(getBudgetError(next))
+    if (name === "budgetMin" || name === "budgetMax") {
+      setBudgetError(getBudgetError(next));
     }
 
-    setFormData(next)
-  }
+    setFormData(next);
+  };
 
   // No availability gate here -- any truck stays selectable regardless of
   // fit for the chosen item type/weight, same "recommended first, nothing
@@ -637,76 +790,84 @@ function CustomerRequestDelivery() {
   // uses; the Supervisor makes the final call on truck suitability when
   // assigning, so the customer isn't blocked from picking their preference.
   const handleTruckSelect = (truck) => {
-    setFormData(prev => ({ ...prev, truckType: truck.value }))
-    setTruckSelectionError('')
-  }
+    setFormData((prev) => ({ ...prev, truckType: truck.value }));
+    setTruckSelectionError("");
+  };
 
   // Stops are intermediate locations visited between Pick Up and Drop Off —
   // reference-only (no per-stop status), capped at MAX_STOPS to keep the
   // form and the route/waypoints request simple (02B_MULTI_STOP_DELIVERIES.md).
   const addStop = () => {
-    if (formData.stops.length >= MAX_STOPS) return
-    setFormData(prev => ({ ...prev, stops: [...prev.stops, ''] }))
-  }
+    if (formData.stops.length >= MAX_STOPS) return;
+    setFormData((prev) => ({ ...prev, stops: [...prev.stops, ""] }));
+  };
 
   const removeStop = (index) => {
-    setFormData(prev => ({ ...prev, stops: prev.stops.filter((_, i) => i !== index) }))
-  }
+    setFormData((prev) => ({
+      ...prev,
+      stops: prev.stops.filter((_, i) => i !== index),
+    }));
+  };
 
   const handleStopChange = (index, e) => {
-    const { value } = e.target
-    setFormData(prev => ({
+    const { value } = e.target;
+    setFormData((prev) => ({
       ...prev,
-      stops: prev.stops.map((stop, i) => (i === index ? value : stop))
-    }))
-  }
+      stops: prev.stops.map((stop, i) => (i === index ? value : stop)),
+    }));
+  };
 
   const handleSubmit = async (e) => {
-    e.preventDefault()
-    setSubmitError('')
+    e.preventDefault();
+    setSubmitError("");
 
     if (formData.pickupDate < minDeliveryDate) {
-      setDateError(`Delivery date must be on or after ${minDeliveryDate}.`)
-      return
+      setDateError(`Delivery date must be on or after ${minDeliveryDate}.`);
+      return;
     }
 
-    const availabilityErrorMessage = pickupDateAvailabilityError(formData.pickupDate)
+    const availabilityErrorMessage = pickupDateAvailabilityError(
+      formData.pickupDate,
+    );
     if (availabilityErrorMessage) {
-      setDateError(availabilityErrorMessage)
-      return
+      setDateError(availabilityErrorMessage);
+      return;
     }
 
-    const pickupWindowErrorMessage = getPickupWindowError(formData)
+    const pickupWindowErrorMessage = getPickupWindowError(formData);
     if (pickupWindowErrorMessage) {
-      setPickupWindowError(pickupWindowErrorMessage)
-      return
+      setPickupWindowError(pickupWindowErrorMessage);
+      return;
     }
 
-    const { dropoffDateError, dropoffTimeError } = getScheduleErrors(formData)
+    const { dropoffDateError, dropoffTimeError } = getScheduleErrors(formData);
     if (dropoffDateError || dropoffTimeError) {
-      setDropoffDateError(dropoffDateError)
-      setDropoffTimeError(dropoffTimeError)
-      return
+      setDropoffDateError(dropoffDateError);
+      setDropoffTimeError(dropoffTimeError);
+      return;
     }
 
-    const budgetErrorMessage = getBudgetError(formData)
+    const budgetErrorMessage = getBudgetError(formData);
     if (budgetErrorMessage) {
-      setBudgetError(budgetErrorMessage)
-      return
+      setBudgetError(budgetErrorMessage);
+      return;
     }
 
     if (!formData.truckType) {
-      setTruckSelectionError('Please select a truck for this delivery.')
-      return
+      setTruckSelectionError("Please select a truck for this delivery.");
+      return;
     }
 
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
     if (userError || !user) {
-      setSubmitError('You must be signed in to submit a delivery request.')
-      return
+      setSubmitError("You must be signed in to submit a delivery request.");
+      return;
     }
 
-    setSubmitting(true)
+    setSubmitting(true);
 
     // A customer who typed the address and submitted without ever clicking a
     // suggestion or using the map picker never had lat/lng captured (see
@@ -715,22 +876,22 @@ function CustomerRequestDelivery() {
     // resolving the typed text via the same Photon geocoder those
     // interactions already use, so the Supervisor/Driver maps aren't left
     // showing "no parseable coordinates" for what's likely the common case.
-    let pickupLat = formData.pickupLat
-    let pickupLng = formData.pickupLng
+    let pickupLat = formData.pickupLat;
+    let pickupLng = formData.pickupLng;
     if (pickupLat == null && formData.pickupLocation) {
-      const coords = await photonGeocode(formData.pickupLocation)
+      const coords = await photonGeocode(formData.pickupLocation);
       if (coords) {
-        pickupLat = coords.lat
-        pickupLng = coords.lng
+        pickupLat = coords.lat;
+        pickupLng = coords.lng;
       }
     }
-    let dropoffLat = formData.dropoffLat
-    let dropoffLng = formData.dropoffLng
+    let dropoffLat = formData.dropoffLat;
+    let dropoffLng = formData.dropoffLng;
     if (dropoffLat == null && formData.dropoffLocation) {
-      const coords = await photonGeocode(formData.dropoffLocation)
+      const coords = await photonGeocode(formData.dropoffLocation);
       if (coords) {
-        dropoffLat = coords.lat
-        dropoffLng = coords.lng
+        dropoffLat = coords.lat;
+        dropoffLng = coords.lng;
       }
     }
 
@@ -741,9 +902,9 @@ function CustomerRequestDelivery() {
       (pickupLat != null && !isInsideLuzon(pickupLat, pickupLng)) ||
       (dropoffLat != null && !isInsideLuzon(dropoffLat, dropoffLng))
     ) {
-      setSubmitting(false)
-      setSubmitError(SERVICE_AREA_MESSAGE)
-      return
+      setSubmitting(false);
+      setSubmitError(SERVICE_AREA_MESSAGE);
+      return;
     }
 
     const newRequest = {
@@ -768,24 +929,35 @@ function CustomerRequestDelivery() {
       budget_min: formData.budgetMin || null,
       budget_max: formData.budgetMax || null,
       notes: formData.notes || null,
-      status: 'PENDING_REQUEST'
-    }
+      status: "PENDING_REQUEST",
+    };
 
     const { error: insertError } = await supabase
-      .from('delivery_requests')
-      .insert(newRequest)
-    setSubmitting(false)
+      .from("delivery_requests")
+      .insert(newRequest);
+    setSubmitting(false);
 
     if (insertError) {
-      setSubmitError('Something went wrong while submitting your request. Please try again.')
-      return
+      setSubmitError(
+        "Something went wrong while submitting your request. Please try again.",
+      );
+      return;
     }
 
-    navigate('/customer/deliveries')
-  }
+    navigate("/customer/deliveries", {
+      state: {
+        defaultTab: "PENDING_REQUEST",
+        toastMessage: "Delivery request submitted successfully.",
+      },
+    });
+  };
 
   return (
-    <CustomerLayout title="Request Delivery" background={background} bg="bg-white md:bg-[#F6F7FB]">
+    <CustomerLayout
+      title="Request Delivery"
+      background={background}
+      bg="bg-white md:bg-[#F6F7FB]"
+    >
       <div className="flex flex-col gap-6 mb-2">
         {/* Header Section */}
         <header className="space-y-2 md:space-y-3">
@@ -800,7 +972,8 @@ function CustomerRequestDelivery() {
             Request Delivery
           </h1>
           <p className="max-w-3xl text-sm md:text-base text-slate-600 leading-relaxed">
-            Fill out the details below to submit a new delivery request for review.
+            Fill out the details below to submit a new delivery request for
+            review.
           </p>
         </header>
 
@@ -808,18 +981,30 @@ function CustomerRequestDelivery() {
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Schedule Section */}
             <div className="space-y-4">
-              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Schedule</h3>
+              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">
+                Schedule
+              </h3>
 
               <div className="flex items-start gap-2.5 rounded-xl border border-blue-200 bg-blue-50 p-3">
                 <Clock className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
                 <p className="text-xs text-blue-700 leading-relaxed">
-                  Deliveries must be scheduled at least <span className="font-semibold">{MIN_SCHEDULING_DAYS} days in advance</span>. The earliest available date is <span className="font-semibold">{minDeliveryDate}</span>.
+                  Deliveries must be scheduled at least{" "}
+                  <span className="font-semibold">
+                    {MIN_SCHEDULING_DAYS} days in advance
+                  </span>
+                  . The earliest available date is{" "}
+                  <span className="font-semibold">{minDeliveryDate}</span>.
                 </p>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="relative space-y-2">
-                  <label htmlFor="pickupDate" className="text-sm font-medium text-slate-700">Pick Up Date</label>
+                  <label
+                    htmlFor="pickupDate"
+                    className="text-sm font-medium text-slate-700"
+                  >
+                    Pick Up Date
+                  </label>
                   <input
                     type="date"
                     id="pickupDate"
@@ -829,7 +1014,9 @@ function CustomerRequestDelivery() {
                     min={minDeliveryDate}
                     required
                     className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
-                      dateError ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20' : 'border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20'
+                      dateError
+                        ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                        : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
                     }`}
                   />
                   {dateError && (
@@ -837,7 +1024,9 @@ function CustomerRequestDelivery() {
                   )}
                 </div>
                 <div className="relative space-y-2">
-                  <label className="text-sm font-medium text-slate-700">Pick Up Window</label>
+                  <label className="text-sm font-medium text-slate-700">
+                    Pick Up Window
+                  </label>
                   <div className="flex items-center gap-2">
                     <input
                       type="time"
@@ -848,7 +1037,9 @@ function CustomerRequestDelivery() {
                       onChange={handleChange}
                       required
                       className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
-                        pickupWindowError ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20' : 'border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20'
+                        pickupWindowError
+                          ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                          : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
                       }`}
                     />
                     <span className="shrink-0 text-sm text-slate-400">to</span>
@@ -861,16 +1052,25 @@ function CustomerRequestDelivery() {
                       onChange={handleChange}
                       required
                       className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
-                        pickupWindowError ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20' : 'border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20'
+                        pickupWindowError
+                          ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                          : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
                       }`}
                     />
                   </div>
                   {pickupWindowError && (
-                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">{pickupWindowError}</p>
+                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">
+                      {pickupWindowError}
+                    </p>
                   )}
                 </div>
                 <div className="relative space-y-2">
-                  <label htmlFor="dropoffDate" className="text-sm font-medium text-slate-700">Drop Off Date</label>
+                  <label
+                    htmlFor="dropoffDate"
+                    className="text-sm font-medium text-slate-700"
+                  >
+                    Drop Off Date
+                  </label>
                   <input
                     type="date"
                     id="dropoffDate"
@@ -880,29 +1080,46 @@ function CustomerRequestDelivery() {
                     min={formData.pickupDate || minDeliveryDate}
                     required
                     className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
-                      dropoffDateError ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20' : 'border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20'
+                      dropoffDateError
+                        ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                        : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
                     }`}
                   />
                   {dropoffDateError && (
-                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">{dropoffDateError}</p>
+                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">
+                      {dropoffDateError}
+                    </p>
                   )}
                 </div>
                 <div className="relative space-y-2">
-                  <label htmlFor="dropoffTime" className="text-sm font-medium text-slate-700">Drop Off Time</label>
+                  <label
+                    htmlFor="dropoffTime"
+                    className="text-sm font-medium text-slate-700"
+                  >
+                    Drop Off Time
+                  </label>
                   <input
                     type="time"
                     id="dropoffTime"
                     name="dropoffTime"
                     value={formData.dropoffTime}
                     onChange={handleChange}
-                    min={formData.dropoffDate === formData.pickupDate ? (formData.pickupTimeEnd || formData.pickupTime) : undefined}
+                    min={
+                      formData.dropoffDate === formData.pickupDate
+                        ? formData.pickupTimeEnd || formData.pickupTime
+                        : undefined
+                    }
                     required
                     className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
-                      dropoffTimeError ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20' : 'border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20'
+                      dropoffTimeError
+                        ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                        : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
                     }`}
                   />
                   {dropoffTimeError && (
-                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">{dropoffTimeError}</p>
+                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">
+                      {dropoffTimeError}
+                    </p>
                   )}
                 </div>
               </div>
@@ -910,7 +1127,9 @@ function CustomerRequestDelivery() {
 
             {/* Location Section */}
             <div className="space-y-4">
-              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Location</h3>
+              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">
+                Location
+              </h3>
               <div className="grid gap-4 grid-cols-1">
                 <LocationInput
                   id="pickupLocation"
@@ -931,8 +1150,9 @@ function CustomerRequestDelivery() {
               {formData.stops.length > 0 && (
                 <div className="space-y-4">
                   <p className="text-xs text-slate-500">
-                    These are additional drop-off destinations, not necessarily visited in this order — the driver is
-                    routed to whichever is nearest at each point along the trip.
+                    These are additional drop-off destinations, not necessarily
+                    visited in this order — the driver is routed to whichever is
+                    nearest at each point along the trip.
                   </p>
                   {formData.stops.map((stop, index) => (
                     <div key={index} className="flex items-end gap-2">
@@ -970,10 +1190,17 @@ function CustomerRequestDelivery() {
 
             {/* Cargo Details Section */}
             <div className="space-y-4">
-              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Cargo Details</h3>
+              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">
+                Cargo Details
+              </h3>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <label htmlFor="itemType" className="text-sm font-medium text-slate-700">Type of Item</label>
+                  <label
+                    htmlFor="itemType"
+                    className="text-sm font-medium text-slate-700"
+                  >
+                    Type of Item
+                  </label>
                   <select
                     id="itemType"
                     name="itemType"
@@ -983,13 +1210,20 @@ function CustomerRequestDelivery() {
                     className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                   >
                     <option value="">Select item type</option>
-                    {itemTypes.map(item => (
-                      <option key={item.value} value={item.value}>{item.label}</option>
+                    {itemTypes.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
                     ))}
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label htmlFor="cargoWeight" className="text-sm font-medium text-slate-700">Estimated Cargo Weight (kg)</label>
+                  <label
+                    htmlFor="cargoWeight"
+                    className="text-sm font-medium text-slate-700"
+                  >
+                    Estimated Cargo Weight (kg)
+                  </label>
                   <input
                     type="number"
                     id="cargoWeight"
@@ -1008,7 +1242,9 @@ function CustomerRequestDelivery() {
             {/* Truck Selection Section */}
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Truck Selection</h3>
+                <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">
+                  Truck Selection
+                </h3>
                 {recommendedTruckValue && (
                   <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
                     <CheckCircle2 className="h-3.5 w-3.5" />
@@ -1019,7 +1255,8 @@ function CustomerRequestDelivery() {
 
               {!formData.itemType ? (
                 <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-                  Select an item type and estimated cargo weight above to see compatible trucks.
+                  Select an item type and estimated cargo weight above to see
+                  compatible trucks.
                 </p>
               ) : (
                 <>
@@ -1035,10 +1272,15 @@ function CustomerRequestDelivery() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {sortedTruckTypes.map(truck => {
-                          const { available, reason } = getTruckAvailability(truck, formData.itemType, formData.cargoWeight)
-                          const isSelected = formData.truckType === truck.value
-                          const isRecommended = recommendedTruckValue === truck.value
+                        {sortedTruckTypes.map((truck) => {
+                          const { available, reason } = getTruckAvailability(
+                            truck,
+                            formData.itemType,
+                            formData.cargoWeight,
+                          );
+                          const isSelected = formData.truckType === truck.value;
+                          const isRecommended =
+                            recommendedTruckValue === truck.value;
 
                           return (
                             <tr
@@ -1046,32 +1288,49 @@ function CustomerRequestDelivery() {
                               onClick={() => handleTruckSelect(truck)}
                               className={`cursor-pointer transition ${
                                 isSelected
-                                  ? 'bg-emerald-50'
+                                  ? "bg-emerald-50"
                                   : isRecommended
-                                    ? 'bg-emerald-50/40 hover:bg-emerald-50'
-                                    : 'bg-white hover:bg-emerald-50/50'
+                                    ? "bg-emerald-50/40 hover:bg-emerald-50"
+                                    : "bg-white hover:bg-emerald-50/50"
                               }`}
                             >
                               <td className="px-4 py-3 align-top">
                                 <div className="flex items-center gap-2">
-                                  <span className="text-sm font-semibold text-slate-900">{truck.label}</span>
+                                  <span className="text-sm font-semibold text-slate-900">
+                                    {truck.label}
+                                  </span>
                                   {isRecommended && (
                                     <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
                                       Recommended
                                     </span>
                                   )}
                                 </div>
-                                <p className="mt-0.5 max-w-xs text-xs text-slate-500 leading-relaxed">{truck.description}</p>
+                                <p className="mt-0.5 max-w-xs text-xs text-slate-500 leading-relaxed">
+                                  {truck.description}
+                                </p>
                                 {!available && (
-                                  <p className="mt-1 text-[11px] font-medium text-amber-600">{reason} — the Supervisor can still confirm this truck when assigning.</p>
+                                  <p className="mt-1 text-[11px] font-medium text-amber-600">
+                                    {reason} — the Supervisor can still confirm
+                                    this truck when assigning.
+                                  </p>
                                 )}
                               </td>
                               <td className="px-4 py-3 align-top">
-                                <span className={`inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
-                                  truck.category === 'reefer' ? 'bg-sky-100 text-sky-700' : 'bg-amber-100 text-amber-700'
-                                }`}>
-                                  {truck.category === 'reefer' ? <Thermometer className="h-3 w-3" /> : <Box className="h-3 w-3" />}
-                                  {truck.category === 'reefer' ? 'Refrigerated' : 'Dry'}
+                                <span
+                                  className={`inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                                    truck.category === "reefer"
+                                      ? "bg-sky-100 text-sky-700"
+                                      : "bg-amber-100 text-amber-700"
+                                  }`}
+                                >
+                                  {truck.category === "reefer" ? (
+                                    <Thermometer className="h-3 w-3" />
+                                  ) : (
+                                    <Box className="h-3 w-3" />
+                                  )}
+                                  {truck.category === "reefer"
+                                    ? "Refrigerated"
+                                    : "Dry"}
                                 </span>
                               </td>
                               <td className="px-4 py-3 align-top text-slate-700">
@@ -1087,21 +1346,29 @@ function CustomerRequestDelivery() {
                                 </div>
                               </td>
                               <td className="px-4 py-3 align-top">
-                                <span className={`flex h-5 w-5 items-center justify-center rounded-full border-2 ${
-                                  isSelected ? 'border-emerald-600 bg-emerald-600' : 'border-slate-300'
-                                }`}>
-                                  {isSelected && <Check className="h-3 w-3 text-white" />}
+                                <span
+                                  className={`flex h-5 w-5 items-center justify-center rounded-full border-2 ${
+                                    isSelected
+                                      ? "border-emerald-600 bg-emerald-600"
+                                      : "border-slate-300"
+                                  }`}
+                                >
+                                  {isSelected && (
+                                    <Check className="h-3 w-3 text-white" />
+                                  )}
                                 </span>
                               </td>
                             </tr>
-                          )
+                          );
                         })}
                       </tbody>
                     </table>
                   </div>
 
                   {truckSelectionError && (
-                    <p className="text-xs text-red-600">{truckSelectionError}</p>
+                    <p className="text-xs text-red-600">
+                      {truckSelectionError}
+                    </p>
                   )}
                 </>
               )}
@@ -1109,13 +1376,21 @@ function CustomerRequestDelivery() {
 
             {/* Budget Section */}
             <div className="space-y-4">
-              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Budget Range</h3>
+              <h3 className="text-sm font-medium text-emerald-700 uppercase tracking-wider">
+                Budget Range
+              </h3>
               <p className="text-xs text-slate-500 leading-relaxed">
-                Enter your preferred budget range. The final quotation will be discussed with the supervisor.
+                Enter your preferred budget range. The final quotation will be
+                discussed with the supervisor.
               </p>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <label htmlFor="budgetMin" className="text-sm font-medium text-slate-700">Minimum Budget (₱)</label>
+                  <label
+                    htmlFor="budgetMin"
+                    className="text-sm font-medium text-slate-700"
+                  >
+                    Minimum Budget (₱)
+                  </label>
                   <input
                     type="number"
                     id="budgetMin"
@@ -1125,12 +1400,19 @@ function CustomerRequestDelivery() {
                     onChange={handleChange}
                     placeholder="e.g. 5000"
                     className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
-                      budgetError ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20' : 'border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20'
+                      budgetError
+                        ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                        : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
                     }`}
                   />
                 </div>
                 <div className="relative space-y-2">
-                  <label htmlFor="budgetMax" className="text-sm font-medium text-slate-700">Maximum Budget (₱)</label>
+                  <label
+                    htmlFor="budgetMax"
+                    className="text-sm font-medium text-slate-700"
+                  >
+                    Maximum Budget (₱)
+                  </label>
                   <input
                     type="number"
                     id="budgetMax"
@@ -1140,11 +1422,15 @@ function CustomerRequestDelivery() {
                     onChange={handleChange}
                     placeholder="e.g. 10000"
                     className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
-                      budgetError ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20' : 'border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20'
+                      budgetError
+                        ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                        : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
                     }`}
                   />
                   {budgetError && (
-                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">{budgetError}</p>
+                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">
+                      {budgetError}
+                    </p>
                   )}
                 </div>
               </div>
@@ -1152,16 +1438,24 @@ function CustomerRequestDelivery() {
               <div className="flex items-start gap-2.5 rounded-xl border border-blue-200 bg-blue-50 p-3">
                 <Info className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
                 <p className="text-xs text-blue-700 leading-relaxed">
-                  The budget you entered is only an estimate to give the Supervisor an idea of your expected budget. The final quotation may be higher than your indicated budget.
+                  The budget you entered is only an estimate to give the
+                  Supervisor an idea of your expected budget. The final
+                  quotation may be higher than your indicated budget.
                   <br />
-                  You may negotiate the quotation with the Supervisor after submitting your request.
+                  You may negotiate the quotation with the Supervisor after
+                  submitting your request.
                 </p>
               </div>
             </div>
 
             {/* Notes Section */}
             <div className="space-y-2">
-              <label htmlFor="notes" className="text-sm font-medium text-emerald-700 uppercase tracking-wider">Notes</label>
+              <label
+                htmlFor="notes"
+                className="text-sm font-medium text-emerald-700 uppercase tracking-wider"
+              >
+                Notes
+              </label>
               <textarea
                 id="notes"
                 name="notes"
@@ -1194,7 +1488,7 @@ function CustomerRequestDelivery() {
                   disabled={submitting}
                   className="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {submitting ? 'Submitting...' : 'Submit Request'}
+                  {submitting ? "Submitting..." : "Submit Request"}
                 </button>
               </div>
             </div>
@@ -1202,7 +1496,7 @@ function CustomerRequestDelivery() {
         </div>
       </div>
     </CustomerLayout>
-  )
+  );
 }
 
-export default CustomerRequestDelivery
+export default CustomerRequestDelivery;

@@ -1,95 +1,102 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ArrowRight,
+  BellRing,
+  CheckCircle2,
+  Clock3,
+  FileText,
+  PackageCheck,
+  ShieldCheck,
+  Sparkles,
+  Truck,
+} from "lucide-react";
 import CustomerLayout from "../layout/CustomerLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
-import {
-  Truck,
-  Phone,
-  Mail,
-  MapPin,
-  Clock,
-  Shield,
-  Star,
-  Heart,
-  Package,
-  ArrowRight,
-  CheckCircle,
-} from "lucide-react";
 
 const background = null;
 
-const truckTypes = [
-  {
-    name: "LUV",
-    desc: "Light commercial vehicle for small cargo, ideal for urban deliveries",
-  },
-  {
-    name: "AUV",
-    desc: "Utility vehicle for light cargo, suitable for small loads and flexible operations",
-  },
-  {
-    name: "1T DRY",
-    desc: "One-ton dry van for transporting general cargo securely",
-  },
-  { name: "2T DRY", desc: "Two-ton dry van for transporting bulk cargo" },
-  {
-    name: "1T REF",
-    desc: "One-ton reefer truck for perishable cargo with temperature control",
-  },
-  { name: "2T REF", desc: "Two-ton reefer for temperature-sensitive cargo" },
-  { name: "4T DRY", desc: "Four-ton dry van for large cargo transport" },
-  {
-    name: "4T REF",
-    desc: "Four-ton reefer for large volume cold-chain operations",
-  },
+const activeDeliveryStatuses = [
+  "PENDING_REQUEST",
+  "QUOTATION_SUBMITTED",
+  "COUNTER_OFFER_SUBMITTED",
+  "FINAL_QUOTATION_SUBMITTED",
+  "APPROVED",
+  "ASSIGNED",
+  "OUT_FOR_PICKUP",
+  "ARRIVED_PICKUP",
+  "OUT_FOR_DROPOFF",
+  "ARRIVED_DROPOFF",
+  "DELIVERED",
 ];
 
-const whyChooseUs = [
-  {
-    icon: Star,
-    title: "Customer Centric",
-    desc: "Personalized solutions tailored to your needs",
-  },
-  {
-    icon: Clock,
-    title: "Always on the Go",
-    desc: "24/7 service, day or night",
-  },
-  {
-    icon: Shield,
-    title: "Trustworthy",
-    desc: "Vetted drivers, on-time delivery",
-  },
-  {
-    icon: Heart,
-    title: "Passion for Excellence",
-    desc: "Investing in people and equipment",
-  },
+const pendingApprovalStatuses = ["PENDING_REQUEST"];
+
+const inProcessStatuses = [
+  "QUOTATION_SUBMITTED",
+  "COUNTER_OFFER_SUBMITTED",
+  "FINAL_QUOTATION_SUBMITTED",
 ];
 
-const services = [
+const upcomingPickupStatuses = [
+  "APPROVED",
+  "ASSIGNED",
+  "OUT_FOR_PICKUP",
+  "ARRIVED_PICKUP",
+];
+
+const outForDeliveryStatuses = ["OUT_FOR_DROPOFF", "ARRIVED_DROPOFF"];
+
+const quickActions = [
   {
-    icon: Package,
-    title: "Same-Day Delivery",
-    desc: "Fast and reliable delivery within the day",
+    title: "Request a delivery",
+    description: "Submit a new booking in a few steps.",
+    path: "/customer/deliveries/request",
+    icon: FileText,
+    tone: "emerald",
+    defaultTab: null,
   },
   {
-    icon: Truck,
-    title: "Nationwide Coverage",
-    desc: "Serving all provinces in the Philippines",
+    title: "Open deliveries",
+    description: "Review live requests and current status.",
+    path: "/customer/deliveries",
+    icon: PackageCheck,
+    tone: "sky",
+    defaultTab: "all",
   },
   {
-    icon: Shield,
-    title: "Insured Cargo",
-    desc: "Your packages are fully protected",
+    title: "Pending approvals",
+    description: "Check quotes waiting on your response.",
+    path: "/customer/deliveries",
+    icon: BellRing,
+    tone: "amber",
+    defaultTab: "PENDING_REQUEST",
+  },
+  {
+    title: "Profile",
+    description: "Update contact and account details.",
+    path: "/customer/profile",
+    icon: ShieldCheck,
+    tone: "violet",
+    defaultTab: null,
   },
 ];
 
 function CustomerHome() {
   const navigate = useNavigate();
   const [toast, setToast] = useState(null);
+  const [stats, setStats] = useState({
+    activeDeliveries: 0,
+    pendingApprovals: 0,
+    inProcess: 0,
+    upcomingPickups: 0,
+    outForDelivery: 0,
+    delivered: 0,
+    completedDeliveries: 0,
+    cancelledRequests: 0,
+  });
+  const [isLoadingStats, setIsLoadingStats] = useState(true);
 
-  // Auto-clear toast after 3 seconds
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => setToast(null), 3000);
@@ -97,12 +104,112 @@ function CustomerHome() {
     }
   }, [toast]);
 
-  // Notify the user immediately if they're not signed in, instead of
-  // letting them fill out the request form first and failing at submit.
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadDashboardStats() {
+      setIsLoadingStats(true);
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!isMounted) return;
+      if (!user) {
+        setStats({
+          activeDeliveries: 0,
+          pendingApprovals: 0,
+          inProcess: 0,
+          upcomingPickups: 0,
+          outForDelivery: 0,
+          delivered: 0,
+          completedDeliveries: 0,
+          cancelledRequests: 0,
+        });
+        setIsLoadingStats(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("delivery_requests")
+        .select("id,status,pickup_date")
+        .eq("customer_auth_id", user.id);
+
+      if (!isMounted) return;
+      if (error) {
+        setStats({
+          activeDeliveries: 0,
+          pendingApprovals: 0,
+          inProcess: 0,
+          upcomingPickups: 0,
+          outForDelivery: 0,
+          delivered: 0,
+          completedDeliveries: 0,
+          cancelledRequests: 0,
+        });
+        setIsLoadingStats(false);
+        return;
+      }
+
+      const rows = data || [];
+
+      const activeDeliveries = rows.filter(
+        (row) => !["CANCELLED", "COMPLETED"].includes(row.status),
+      ).length;
+
+      const pendingApprovals = rows.filter((row) =>
+        pendingApprovalStatuses.includes(row.status),
+      ).length;
+
+      const inProcess = rows.filter((row) =>
+        inProcessStatuses.includes(row.status),
+      ).length;
+
+      const outForDelivery = rows.filter((row) =>
+        outForDeliveryStatuses.includes(row.status),
+      ).length;
+
+      const delivered = rows.filter((row) => row.status === "DELIVERED").length;
+      const completedDeliveries = rows.filter(
+        (row) => row.status === "COMPLETED",
+      ).length;
+      const cancelledRequests = rows.filter(
+        (row) => row.status === "CANCELLED",
+      ).length;
+
+      const upcomingPickups = rows.filter((row) => {
+        if (!upcomingPickupStatuses.includes(row.status)) return false;
+        if (row.status === "CANCELLED") return false;
+        return true;
+      }).length;
+
+      if (isMounted) {
+        setStats({
+          activeDeliveries,
+          pendingApprovals,
+          inProcess,
+          upcomingPickups,
+          outForDelivery,
+          delivered,
+          completedDeliveries,
+          cancelledRequests,
+        });
+        setIsLoadingStats(false);
+      }
+    }
+
+    loadDashboardStats();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const handleRequestDelivery = async () => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+
     if (!user) {
       setToast({
         message: "Please log in to request a delivery.",
@@ -110,233 +217,251 @@ function CustomerHome() {
       });
       return;
     }
-    navigate("/customer/deliveries");
+
+    navigate("/customer/deliveries/request");
+  };
+
+  const summaryMetrics = [
+    {
+      label: "Active Deliveries",
+      value: isLoadingStats ? "--" : stats.activeDeliveries,
+      path: "/customer/deliveries",
+      defaultTab: "all",
+      icon: Truck,
+      tone: "emerald",
+    },
+    {
+      label: "Pending Approvals",
+      value: isLoadingStats ? "--" : stats.pendingApprovals,
+      path: "/customer/deliveries",
+      defaultTab: "PENDING_REQUEST",
+      icon: BellRing,
+      tone: "amber",
+    },
+    {
+      label: "In Process",
+      value: isLoadingStats ? "--" : stats.inProcess,
+      path: "/customer/deliveries",
+      defaultTab: "PROCESSING",
+      icon: Clock3,
+      tone: "sky",
+    },
+    {
+      label: "Upcoming Pickups",
+      value: isLoadingStats ? "--" : stats.upcomingPickups,
+      path: "/customer/deliveries",
+      defaultTab: "FOR_PICKUP",
+      icon: CheckCircle2,
+      tone: "violet",
+    },
+  ];
+
+  const lastRowMetrics = [
+    {
+      label: "Out for Delivery",
+      value: isLoadingStats ? "--" : stats.outForDelivery,
+      path: "/customer/deliveries",
+      defaultTab: "OUT_FOR_DELIVERY",
+      icon: Truck,
+      tone: "emerald",
+    },
+    {
+      label: "Delivered",
+      value: isLoadingStats ? "--" : stats.delivered,
+      path: "/customer/deliveries",
+      defaultTab: "DELIVERED",
+      icon: CheckCircle2,
+      tone: "sky",
+    },
+    {
+      label: "Completed Deliveries",
+      value: isLoadingStats ? "--" : stats.completedDeliveries,
+      path: "/customer/deliveries",
+      defaultTab: "DELIVERY_COMPLETED",
+      icon: Sparkles,
+      tone: "amber",
+    },
+    {
+      label: "Cancelled Requests",
+      value: isLoadingStats ? "--" : stats.cancelledRequests,
+      path: "/customer/deliveries",
+      defaultTab: "CANCELLED",
+      icon: BellRing,
+      tone: "violet",
+    },
+  ];
+
+  const navigateToCard = (path, defaultTab = null) => {
+    if (path === "/customer/deliveries") {
+      navigate(path, defaultTab ? { state: { defaultTab } } : undefined);
+      return;
+    }
+
+    navigate(path);
   };
 
   return (
     <CustomerLayout title="Customer Home" background={background}>
-      <div className="flex flex-col gap-8 pb-6">
-        {/* Login notification toast */}
+      <div className="flex flex-col gap-5 pb-6">
         {toast && (
-          <div className="fixed inset-x-0 top-4 flex justify-center z-50">
-            <p
-              className="px-4 py-2 rounded-md shadow-md text-sm font-medium
-                bg-red-100 text-red-800 border border-red-300
-                transition-transform duration-300 ease-out transform translate-y-0 opacity-100"
-            >
+          <div className="fixed inset-x-0 top-4 z-50 flex justify-center">
+            <p className="rounded-md border border-red-300 bg-red-100 px-4 py-2 text-sm font-medium text-red-800 shadow-md transition-transform duration-300">
               {toast.message}
             </p>
           </div>
         )}
 
-        {/* Hero Section */}
-        <section className="rounded-2xl border border-emerald-200/70 bg-white p-6 shadow-sm md:p-8">
-          <p className="text-xs uppercase tracking-[0.28em] text-emerald-700 font-semibold">
-            Marvel Trucking Solutions, Inc
-          </p>
-          <h1 className="mt-3 text-3xl md:text-5xl font-bold leading-tight text-slate-900">
-            Let Us Deliver It
-            <br />
-            For You!
-          </h1>
-          <p className="mt-3 max-w-xl text-base text-slate-600 leading-relaxed">
-            Your trusted partner for reliable, safe, and efficient trucking and
-            logistics solutions in the Philippines since 2016.
-          </p>
-          <div className="mt-6">
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="max-w-2xl">
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-700">
+                Customer dashboard
+              </p>
+              <h1 className="mt-1 text-3xl font-bold leading-tight text-slate-900 md:text-4xl">
+                Delivery command center
+              </h1>
+              <p className="mt-1 text-sm leading-relaxed text-slate-600 md:text-base">
+                Review requests, respond to quotations, and follow each shipment
+                from the next action to the final handoff.
+              </p>
+            </div>
+
+            <div className="hidden h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700 md:flex">
+              <Sparkles className="h-7 w-7" />
+            </div>
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-2.5">
             <button
+              type="button"
               onClick={handleRequestDelivery}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
             >
-              Request a Delivery Now
+              Request a delivery
               <ArrowRight className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/customer/deliveries")}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+            >
+              View my deliveries
             </button>
           </div>
         </section>
 
-        {/* Services Overview */}
-        <section className="grid gap-4 sm:grid-cols-3">
-          {services.map((service, index) => (
-            <div
-              key={index}
-              className="rounded-2xl border border-emerald-200/70 bg-white p-5 flex items-start gap-4"
-            >
-              <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                <service.icon className="w-6 h-6 text-emerald-600" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-slate-800 mb-1">
-                  {service.title}
-                </h3>
-                <p className="text-sm text-slate-600">{service.desc}</p>
-              </div>
-            </div>
-          ))}
-        </section>
-
-        {/* Mission Statement */}
-        <section className="rounded-2xl border border-emerald-200/70 bg-white p-5 shadow-sm sm:p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100">
-              <Star className="h-5 w-5 text-emerald-600" />
-            </div>
-            <h2 className="text-lg font-semibold text-slate-900">
-              Our Mission
-            </h2>
-          </div>
-          <p className="text-sm text-slate-600 leading-relaxed">
-            Every customer is our best customer. We do this by providing{" "}
-            <span className="font-semibold text-emerald-700">
-              reliable, safe, and efficient
-            </span>{" "}
-            logistics solutions with a personal touch. We're more than just
-            trucking services in the Philippines— we provide quality customer
-            service through happy, highly skilled workers and reliable, high
-            tech trucks.
-          </p>
-        </section>
-
-        {/* Why Choose Us */}
-        <section>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-slate-800">Why Choose Us</h2>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {whyChooseUs.map((item, index) => (
-              <div
-                key={index}
-                className="rounded-2xl border border-emerald-200/70 bg-white p-5 text-center hover:shadow-lg hover:border-emerald-300 transition-all"
+        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {quickActions.map(
+            ({ title, description, path, icon: Icon, tone, defaultTab }) => (
+              <button
+                key={title}
+                type="button"
+                onClick={() => navigateToCard(path, defaultTab)}
+                className="group flex items-start gap-4 rounded-2xl border border-slate-200 bg-white p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
               >
-                <div className="w-14 h-14 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center mx-auto mb-4">
-                  <item.icon className="w-7 h-7 text-white" />
+                <div
+                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
+                    tone === "emerald"
+                      ? "bg-emerald-100 text-emerald-700"
+                      : tone === "sky"
+                        ? "bg-sky-100 text-sky-700"
+                        : tone === "amber"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-violet-100 text-violet-700"
+                  }`}
+                >
+                  <Icon className="h-5 w-5" />
                 </div>
-                <h3 className="font-bold text-slate-800 mb-2">{item.title}</h3>
-                <p className="text-sm text-slate-600">{item.desc}</p>
-              </div>
-            ))}
-          </div>
-        </section>
 
-        {/* Available Truck Types */}
-        <section>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-slate-800">
-              Available Truck Types
-            </h2>
-            <span className="text-sm text-emerald-600 font-medium">
-              8 Vehicle Types
-            </span>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {truckTypes.map((truck, index) => (
-              <div
-                key={index}
-                className="rounded-xl border border-emerald-200/70 bg-white p-4 hover:shadow-md hover:border-emerald-400 transition-all group"
-              >
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center group-hover:bg-emerald-600 transition-colors">
-                    <Truck className="w-4 h-4 text-emerald-600 group-hover:text-white transition-colors" />
+                <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-900">
+                      {title}
+                    </h2>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                      {description}
+                    </p>
                   </div>
-                  <h3 className="font-bold text-slate-800">{truck.name}</h3>
+                  <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400 transition group-hover:text-slate-700" />
                 </div>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  {truck.desc}
-                </p>
-              </div>
-            ))}
-          </div>
+              </button>
+            ),
+          )}
         </section>
 
-        {/* Contact Information */}
-        <section className="rounded-2xl border border-emerald-200/70 bg-white p-8">
-          <h2 className="text-xl font-bold text-slate-800 mb-6">
-            Get In Touch
-          </h2>
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                <Phone className="w-5 h-5 text-emerald-600" />
-              </div>
-              <div>
-                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">
-                  Mobile
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {summaryMetrics.map(
+            ({ label, value, path, defaultTab, icon: Icon, tone }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => navigateToCard(path, defaultTab)}
+                className="rounded-2xl border border-slate-200 bg-white p-3.5 text-left shadow-sm transition hover:border-slate-300 hover:shadow-md"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div
+                    className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+                      tone === "emerald"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : tone === "sky"
+                          ? "bg-sky-100 text-sky-700"
+                          : tone === "amber"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-violet-100 text-violet-700"
+                    }`}
+                  >
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <ArrowRight className="h-4 w-4 text-slate-400" />
+                </div>
+
+                <p className="mt-4 text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                  {label}
                 </p>
-                <p className="font-semibold text-slate-800">+639-953-810-028</p>
-                <p className="text-sm text-slate-600">(02) 8395-9550</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                <Mail className="w-5 h-5 text-emerald-600" />
-              </div>
-              <div>
-                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">
-                  Email
+                <p className="mt-2 text-3xl font-bold text-slate-900">
+                  {value}
                 </p>
-                <p className="font-semibold text-slate-800 text-sm">
-                  jvdizon@marveltrucking.com
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                <MapPin className="w-5 h-5 text-emerald-600" />
-              </div>
-              <div>
-                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">
-                  Address
-                </p>
-                <p className="font-semibold text-slate-800">
-                  140 M. Suarez Avenue
-                </p>
-                <p className="text-sm text-slate-600">
-                  Brgy. San Miguel, Pasig, Metro Manila
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                <Clock className="w-5 h-5 text-emerald-600" />
-              </div>
-              <div>
-                <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">
-                  Operating Hours
-                </p>
-                <p className="font-semibold text-slate-800">Monday - Sunday</p>
-                <p className="text-sm text-emerald-600 font-medium">
-                  24/7 Service
-                </p>
-              </div>
-            </div>
-          </div>
+              </button>
+            ),
+          )}
         </section>
 
-        {/* CTA Banner */}
-        <section className="rounded-2xl border border-emerald-200/70 bg-white p-6 text-center shadow-sm sm:p-8">
-          <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">
-            Ready to Ship?
-          </h2>
-          <p className="mt-2 text-sm text-slate-600 max-w-md mx-auto">
-            Let us handle your delivery needs. Fast, reliable, and safe
-            transportation across the Philippines.
-          </p>
-          <div className="mt-5">
-            <button
-              onClick={handleRequestDelivery}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
-            >
-              Request a Delivery Now
-              <ArrowRight className="h-4 w-4" />
-            </button>
-          </div>
-        </section>
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {lastRowMetrics.map(
+            ({ label, value, path, defaultTab, icon: Icon, tone }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => navigateToCard(path, defaultTab)}
+                className="rounded-2xl border border-slate-200 bg-white p-3.5 text-left shadow-sm transition hover:border-slate-300 hover:shadow-md"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div
+                    className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+                      tone === "emerald"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : tone === "sky"
+                          ? "bg-sky-100 text-sky-700"
+                          : tone === "amber"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-violet-100 text-violet-700"
+                    }`}
+                  >
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <ArrowRight className="h-4 w-4 text-slate-400" />
+                </div>
 
-        {/* Footer */}
-        <footer className="pt-6 text-center text-xs text-slate-400">
-          Providing reliable, safe and efficient logistics and trucking
-          solutions since 2016 &bull; &copy; 2026 Marvel Trucking Solutions,
-          Inc. All rights reserved.
-        </footer>
+                <p className="mt-4 text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                  {label}
+                </p>
+                <p className="mt-2 text-3xl font-bold text-slate-900">
+                  {value}
+                </p>
+              </button>
+            ),
+          )}
+        </section>
       </div>
     </CustomerLayout>
   );
