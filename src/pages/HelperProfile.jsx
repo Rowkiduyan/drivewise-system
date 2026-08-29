@@ -140,7 +140,6 @@ function HelperProfile() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [formError, setFormError] = useState("");
-  const [formSuccess, setFormSuccess] = useState("");
   const [helper, setHelper] = useState(null);
   const [profileError, setProfileError] = useState("");
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
@@ -314,7 +313,6 @@ function HelperProfile() {
     setNewPassword("");
     setConfirmPassword("");
     setFormError("");
-    setFormSuccess("");
     setIsPasswordModalOpen(true);
   };
 
@@ -456,12 +454,6 @@ function HelperProfile() {
             <div className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs tracking-widest text-slate-500 sm:py-2.5 sm:text-sm">
               ••••••••••••
             </div>
-
-            {formSuccess && (
-              <p className="mt-2 text-xs text-emerald-600 sm:text-sm">
-                {formSuccess}
-              </p>
-            )}
 
             <button
               type="button"

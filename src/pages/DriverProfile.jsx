@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import ConfirmationModal from "../components/common/ConfirmationModal.jsx";
 import DriverLayout from "../layout/DriverLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { cropImageToSquareBase64 } from "../lib/profilePicture.js";
@@ -25,7 +26,8 @@ function calculateAge(birthdate) {
   let age = today.getUTCFullYear() - dob.getUTCFullYear();
   const hasHadBirthdayThisYear =
     today.getUTCMonth() > dob.getUTCMonth() ||
-    (today.getUTCMonth() === dob.getUTCMonth() && today.getUTCDate() >= dob.getUTCDate());
+    (today.getUTCMonth() === dob.getUTCMonth() &&
+      today.getUTCDate() >= dob.getUTCDate());
 
   if (!hasHadBirthdayThisYear) {
     age -= 1;
@@ -57,13 +59,19 @@ function formatAddress(address) {
     return "N/A";
   }
 
-  return [address.street, address.city, address.province].filter(Boolean).join(", ") || "N/A";
+  return (
+    [address.street, address.city, address.province]
+      .filter(Boolean)
+      .join(", ") || "N/A"
+  );
 }
 
 // Mirrors AdminHome.jsx's mapListedUser shape — both read the same
 // driver_records columns via the admin-users Edge Function.
 function mapProfile(row) {
-  const fullName = [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ");
+  const fullName = [row.first_name, row.middle_name, row.last_name]
+    .filter(Boolean)
+    .join(" ");
 
   return {
     id: row.id,
@@ -84,7 +92,9 @@ function SectionCard({ title, description, children }) {
       <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 sm:text-xs sm:tracking-[0.16em]">
         {title}
       </h2>
-      {description && <p className="mt-1 text-xs text-slate-500 sm:text-sm">{description}</p>}
+      {description && (
+        <p className="mt-1 text-xs text-slate-500 sm:text-sm">{description}</p>
+      )}
       <div className="mt-3 sm:mt-4">{children}</div>
     </section>
   );
@@ -106,7 +116,10 @@ function InfoField({ label, value, wide = false }) {
 function PasswordField({ id, label, value, onChange, placeholder }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-slate-700 sm:text-sm" htmlFor={id}>
+      <label
+        className="block text-xs font-medium text-slate-700 sm:text-sm"
+        htmlFor={id}
+      >
         {label} <span className="text-red-600">*</span>
       </label>
       <input
@@ -128,12 +141,24 @@ function DriverProfile() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [formError, setFormError] = useState("");
-  const [formSuccess, setFormSuccess] = useState("");
+  const [toast, setToast] = useState(null);
   const [driver, setDriver] = useState(null);
   const [profileError, setProfileError] = useState("");
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [pictureError, setPictureError] = useState("");
   const [isUpdatingPicture, setIsUpdatingPicture] = useState(false);
+  const [confirmingRemovePicture, setConfirmingRemovePicture] = useState(false);
+  const [confirmingPasswordChange, setConfirmingPasswordChange] =
+    useState(false);
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setToast(null), 3000);
+    return () => window.clearTimeout(timeoutId);
+  }, [toast]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -187,14 +212,29 @@ function DriverProfile() {
 
       if (error) {
         setPictureError(error.message || "Unable to upload profile picture.");
+        setToast({
+          message: error.message || "Unable to upload profile picture.",
+          type: "error",
+        });
         return;
       }
 
-      setDriver((current) => (current ? { ...current, profilePicture: data.profile_picture } : current));
-    } catch (uploadException) {
-      setPictureError(
-        uploadException instanceof Error ? uploadException.message : "Unable to process the selected image."
+      setDriver((current) =>
+        current
+          ? { ...current, profilePicture: data.profile_picture }
+          : current,
       );
+      setToast({
+        message: "Profile photo updated successfully.",
+        type: "success",
+      });
+    } catch (uploadException) {
+      const message =
+        uploadException instanceof Error
+          ? uploadException.message
+          : "Unable to process the selected image.";
+      setPictureError(message);
+      setToast({ message, type: "error" });
     } finally {
       setIsUpdatingPicture(false);
     }
@@ -215,10 +255,20 @@ function DriverProfile() {
 
       if (error) {
         setPictureError(error.message || "Unable to remove profile picture.");
+        setToast({
+          message: error.message || "Unable to remove profile picture.",
+          type: "error",
+        });
         return;
       }
 
-      setDriver((current) => (current ? { ...current, profilePicture: "" } : current));
+      setDriver((current) =>
+        current ? { ...current, profilePicture: "" } : current,
+      );
+      setToast({
+        message: "Profile photo removed successfully.",
+        type: "success",
+      });
     } finally {
       setIsUpdatingPicture(false);
     }
@@ -229,7 +279,6 @@ function DriverProfile() {
     setNewPassword("");
     setConfirmPassword("");
     setFormError("");
-    setFormSuccess("");
     setIsPasswordModalOpen(true);
   };
 
@@ -238,7 +287,7 @@ function DriverProfile() {
     setFormError("");
   };
 
-  const handleChangePassword = (event) => {
+  const handleChangePassword = async (event) => {
     event.preventDefault();
     setFormError("");
 
@@ -255,16 +304,58 @@ function DriverProfile() {
       return;
     }
 
-    setCurrentPassword("");
-    setNewPassword("");
-    setConfirmPassword("");
-    setIsPasswordModalOpen(false);
-    setFormSuccess("Password updated successfully.");
+    setConfirmingPasswordChange(true);
+  };
+
+  const executePasswordChange = async () => {
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (error) {
+        setFormError(error.message || "Unable to update password.");
+        setToast({
+          message: error.message || "Unable to update password.",
+          type: "error",
+        });
+        return;
+      }
+
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setIsPasswordModalOpen(false);
+      setToast({ message: "Password updated successfully.", type: "success" });
+    } catch (changeError) {
+      const message =
+        changeError instanceof Error
+          ? changeError.message
+          : "Unable to update password.";
+      setFormError(message);
+      setToast({ message, type: "error" });
+    } finally {
+      setConfirmingPasswordChange(false);
+    }
   };
 
   return (
     <DriverLayout title="Driver Profile" background={null}>
       <div className="flex w-full min-w-0 flex-col gap-4 pb-8 sm:gap-6 sm:pb-10">
+        {toast && (
+          <div className="fixed inset-x-0 top-4 z-50 flex justify-center px-4">
+            <div
+              className={`rounded-md border px-4 py-2 text-sm font-medium shadow-md ${
+                toast.type === "success"
+                  ? "border-amber-300 bg-amber-100 text-amber-800"
+                  : "border-red-300 bg-red-100 text-red-800"
+              }`}
+            >
+              {toast.message}
+            </div>
+          </div>
+        )}
+
         {profileError ? (
           <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 sm:px-4 sm:py-3 sm:text-sm">
             {profileError}
@@ -273,7 +364,9 @@ function DriverProfile() {
 
         {isLoadingProfile ? (
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-            <p className="text-xs text-slate-500 sm:text-sm">Loading profile…</p>
+            <p className="text-xs text-slate-500 sm:text-sm">
+              Loading profile…
+            </p>
           </div>
         ) : driver ? (
           <>
@@ -284,7 +377,11 @@ function DriverProfile() {
             <section className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:gap-4 sm:p-6">
               <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-50 text-sm font-semibold text-amber-700 sm:h-28 sm:w-28 sm:text-xl">
                 {driver.profilePicture ? (
-                  <img src={driver.profilePicture} alt="" className="h-full w-full object-cover" />
+                  <img
+                    src={driver.profilePicture}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
                 ) : (
                   getInitials(driver.fullName)
                 )}
@@ -293,7 +390,9 @@ function DriverProfile() {
                 <p className="truncate text-sm font-semibold text-slate-900 sm:text-lg">
                   {driver.fullName}
                 </p>
-                <p className="truncate text-xs text-slate-500 sm:text-sm">{driver.workEmail}</p>
+                <p className="truncate text-xs text-slate-500 sm:text-sm">
+                  {driver.workEmail}
+                </p>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5 sm:mt-2 sm:gap-2">
                   <label
                     htmlFor="driver-profile-picture"
@@ -306,7 +405,7 @@ function DriverProfile() {
                   {driver.profilePicture ? (
                     <button
                       type="button"
-                      onClick={handleRemoveProfilePicture}
+                      onClick={() => setConfirmingRemovePicture(true)}
                       disabled={isUpdatingPicture}
                       className="rounded-xl border border-red-200 px-2.5 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60 sm:px-3 sm:py-1.5 sm:text-xs"
                     >
@@ -322,7 +421,11 @@ function DriverProfile() {
                   disabled={isUpdatingPicture}
                   className="sr-only"
                 />
-                {pictureError ? <p className="mt-1.5 text-[11px] text-red-600 sm:text-xs">{pictureError}</p> : null}
+                {pictureError ? (
+                  <p className="mt-1.5 text-[11px] text-red-600 sm:text-xs">
+                    {pictureError}
+                  </p>
+                ) : null}
               </div>
             </section>
 
@@ -330,7 +433,10 @@ function DriverProfile() {
               <dl className="grid grid-cols-1 gap-x-6 gap-y-3.5 sm:grid-cols-2 sm:gap-x-8 sm:gap-y-5">
                 <InfoField label="Full Name" value={driver.fullName} />
                 <InfoField label="Role" value={driver.role} />
-                <InfoField label="Personal Email" value={driver.personalEmail} />
+                <InfoField
+                  label="Personal Email"
+                  value={driver.personalEmail}
+                />
                 <InfoField label="Work Email" value={driver.workEmail} />
                 <InfoField label="Age" value={driver.age ?? "N/A"} />
                 <InfoField label="Birthdate" value={driver.birthdate} />
@@ -344,12 +450,12 @@ function DriverProfile() {
 
         <SectionCard title="Change Password">
           <div className="max-w-md">
-            <p className="text-xs font-medium text-slate-700 sm:text-sm">Password</p>
+            <p className="text-xs font-medium text-slate-700 sm:text-sm">
+              Password
+            </p>
             <div className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs tracking-widest text-slate-500 sm:py-2.5 sm:text-sm">
               ••••••••••••
             </div>
-
-            {formSuccess && <p className="mt-2 text-xs text-emerald-600 sm:text-sm">{formSuccess}</p>}
 
             <button
               type="button"
@@ -374,11 +480,17 @@ function DriverProfile() {
             className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl sm:p-6"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 id="change-password-title" className="text-sm font-semibold text-slate-900 sm:text-base">
+            <h3
+              id="change-password-title"
+              className="text-sm font-semibold text-slate-900 sm:text-base"
+            >
               Change Password
             </h3>
 
-            <form onSubmit={handleChangePassword} className="mt-3 flex flex-col gap-3 sm:mt-4 sm:gap-4">
+            <form
+              onSubmit={handleChangePassword}
+              className="mt-3 flex flex-col gap-3 sm:mt-4 sm:gap-4"
+            >
               <PasswordField
                 id="current-password"
                 label="Current Password"
@@ -401,7 +513,9 @@ function DriverProfile() {
                 placeholder="Re-enter new password"
               />
 
-              {formError && <p className="text-xs text-red-600 sm:text-sm">{formError}</p>}
+              {formError && (
+                <p className="text-xs text-red-600 sm:text-sm">{formError}</p>
+              )}
 
               <div className="mt-1 flex items-center justify-end gap-2">
                 <button
@@ -421,6 +535,35 @@ function DriverProfile() {
             </form>
           </div>
         </div>
+      )}
+
+      {confirmingRemovePicture && (
+        <ConfirmationModal
+          isOpen={true}
+          onClose={() => setConfirmingRemovePicture(false)}
+          onConfirm={async () => {
+            await handleRemoveProfilePicture();
+            setConfirmingRemovePicture(false);
+          }}
+          title="Remove Profile Picture"
+          message="Are you sure you want to remove your profile picture? This action cannot be undone."
+          confirmText="Remove"
+          confirmVariant="danger"
+          isLoading={isUpdatingPicture}
+        />
+      )}
+
+      {confirmingPasswordChange && (
+        <ConfirmationModal
+          isOpen={true}
+          onClose={() => setConfirmingPasswordChange(false)}
+          onConfirm={executePasswordChange}
+          title="Change Password"
+          message="Are you sure you want to change your password?"
+          confirmText="Change"
+          confirmVariant="primary"
+          isLoading={false}
+        />
       )}
     </DriverLayout>
   );

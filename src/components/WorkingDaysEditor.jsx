@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CalendarDays, Check } from "lucide-react";
+import ConfirmationModal from "./common/ConfirmationModal.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { WORKING_DAY_LABELS } from "../lib/workingDays.js";
 
@@ -20,7 +21,14 @@ export default function WorkingDaysEditor() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [toast, setToast] = useState(null);
+  const [isConfirmingSave, setIsConfirmingSave] = useState(false);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timeoutId = window.setTimeout(() => setToast(null), 3000);
+    return () => window.clearTimeout(timeoutId);
+  }, [toast]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -38,7 +46,9 @@ export default function WorkingDaysEditor() {
         return;
       }
 
-      setSelectedDays((data || []).map((row) => row.day_of_week).sort((a, b) => a - b));
+      setSelectedDays(
+        (data || []).map((row) => row.day_of_week).sort((a, b) => a - b),
+      );
       setIsLoading(false);
     }
 
@@ -51,9 +61,11 @@ export default function WorkingDaysEditor() {
   const toggleDay = (day) => {
     if (isSaving) return;
     setError("");
-    setSuccess("");
+    setToast(null);
     setSelectedDays((current) =>
-      current.includes(day) ? current.filter((d) => d !== day) : [...current, day].sort((a, b) => a - b),
+      current.includes(day)
+        ? current.filter((d) => d !== day)
+        : [...current, day].sort((a, b) => a - b),
     );
   };
 
@@ -61,7 +73,7 @@ export default function WorkingDaysEditor() {
     if (isSaving) return;
     setIsSaving(true);
     setError("");
-    setSuccess("");
+    setToast(null);
 
     // Replace-all is the simplest correct sync for a small fixed set:
     // delete the caller's rows (RLS scopes this to their own), then insert
@@ -91,7 +103,12 @@ export default function WorkingDaysEditor() {
     if (selectedDays.length > 0) {
       const { error: insertError } = await supabase
         .from("crew_availability")
-        .insert(selectedDays.map((day) => ({ crew_auth_id: user.id, day_of_week: day })));
+        .insert(
+          selectedDays.map((day) => ({
+            crew_auth_id: user.id,
+            day_of_week: day,
+          })),
+        );
 
       if (insertError) {
         setError("Unable to save your working days. Please try again.");
@@ -100,11 +117,13 @@ export default function WorkingDaysEditor() {
       }
     }
 
-    setSuccess(
-      selectedDays.length > 0
-        ? "Working days saved."
-        : "Saved — no working days set. Customers cannot book you until you set at least one.",
-    );
+    setToast({
+      message:
+        selectedDays.length > 0
+          ? "Working days saved successfully."
+          : "No working days saved. Customers cannot book you until you set at least one.",
+      type: "success",
+    });
     setIsSaving(false);
   };
 
@@ -121,6 +140,20 @@ export default function WorkingDaysEditor() {
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+      {toast && (
+        <div className="fixed inset-x-0 top-4 z-50 flex justify-center px-4">
+          <div
+            className={`rounded-md border px-4 py-2 text-sm font-medium shadow-md ${
+              toast.type === "success"
+                ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+                : "border-red-300 bg-red-100 text-red-800"
+            }`}
+          >
+            {toast.message}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <CalendarDays className="h-4 w-4 text-emerald-600" />
         <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 sm:text-xs sm:tracking-[0.16em]">
@@ -128,11 +161,15 @@ export default function WorkingDaysEditor() {
         </h2>
       </div>
       <p className="mt-1 text-xs text-slate-500">
-        Select the days you are available for deliveries. Customers can only book pickups on days
-        covered by their specialized crew.
+        Select the days you are available for deliveries. Customers can only
+        book pickups on days covered by their specialized crew.
       </p>
 
-      <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Working days">
+      <div
+        className="mt-3 flex flex-wrap gap-2"
+        role="group"
+        aria-label="Working days"
+      >
         {DAY_ORDER.map((day) => {
           const isSelected = selectedDays.includes(day);
           return (
@@ -155,16 +192,33 @@ export default function WorkingDaysEditor() {
       </div>
 
       {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
-      {success && <p className="mt-3 text-xs text-emerald-600">{success}</p>}
 
       <button
         type="button"
-        onClick={saveAvailability}
+        onClick={() => setIsConfirmingSave(true)}
         disabled={isSaving}
         className="mt-4 inline-flex items-center justify-center rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
       >
         {isSaving ? "Saving…" : "Save Working Days"}
       </button>
+
+      <ConfirmationModal
+        isOpen={isConfirmingSave}
+        onClose={() => setIsConfirmingSave(false)}
+        onConfirm={async () => {
+          setIsConfirmingSave(false);
+          await saveAvailability();
+        }}
+        title="Save Working Days"
+        message={
+          selectedDays.length > 0
+            ? "Are you sure you want to save these working days? Customers will be able to book you on the selected days."
+            : "Are you sure you want to save no working days? Customers will not be able to book you until you set at least one day."
+        }
+        confirmText="Save"
+        confirmVariant="primary"
+        isLoading={isSaving}
+      />
     </section>
   );
 }
