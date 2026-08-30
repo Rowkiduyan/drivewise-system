@@ -26,6 +26,8 @@ import {
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
+import { useJsApiLoader } from "@react-google-maps/api";
+import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
 import {
   truckTypes,
   itemTypes,
@@ -35,9 +37,15 @@ import {
   getMinDeliveryDate,
   getScheduleErrors,
   getPickupWindowError,
+  getDropoffWindowError,
   getBudgetError,
+  getStopTimeError,
 } from "../lib/deliveryOptions.js";
-import { photonGeocode } from "../lib/forwardGeocode.js";
+import { photonGeocode, useResolvedStopCoords } from "../lib/forwardGeocode.js";
+import {
+  simulateSchedule,
+  MAX_TOTAL_DELIVERY_HOURS,
+} from "../lib/scheduleSimulator.js";
 import {
   LUZON_SERVICE_AREA,
   SERVICE_AREA_MAX_BOUNDS,
@@ -64,6 +72,48 @@ const background = null;
 // Intermediate stops between Pick Up and Drop Off — capped to keep the form
 // and the driver navigation's waypoints request simple (02B_MULTI_STOP_DELIVERIES.md).
 const MAX_STOPS = 5;
+
+// Estimated drive time (seconds) for each leg of the ordered chain
+// [pickup, dropoff, ...stops] -- one DirectionsService request with
+// waypoints for the whole chain, same traffic-aware shape every other route
+// computation in the app already uses (11_ROUTE_COMPARISON.md's
+// "Traffic-Aware Suggested Routes", DriverDeliveries.jsx's computeRoute).
+// optimizeWaypoints is deliberately NOT set (defaults false) -- the
+// schedule must reflect the customer-entered stop order, not a
+// re-optimized shortest path, since each returned leg maps 1:1 to an
+// unload event in scheduleSimulator.js's walk.
+function estimateLegDurations(waypointCoords) {
+  return new Promise((resolve, reject) => {
+    const [origin, ...rest] = waypointCoords;
+    const destination = rest[rest.length - 1];
+    const middleWaypoints = rest
+      .slice(0, -1)
+      .map((location) => ({ location, stopover: true }));
+    new window.google.maps.DirectionsService().route(
+      {
+        origin,
+        destination,
+        waypoints: middleWaypoints.length > 0 ? middleWaypoints : undefined,
+        travelMode: window.google.maps.TravelMode.DRIVING,
+        drivingOptions: {
+          departureTime: new Date(),
+          trafficModel: "bestguess",
+        },
+      },
+      (result, status) => {
+        if (status !== "OK" || !result?.routes?.[0]?.legs?.length) {
+          reject(new Error(status));
+          return;
+        }
+        resolve(
+          result.routes[0].legs.map(
+            (leg) => (leg.duration_in_traffic || leg.duration).value,
+          ),
+        );
+      },
+    );
+  });
+}
 
 // Photon (Komoot) geocoding — free, no API key, CORS-enabled, and not rate
 // limited like the public Nominatim endpoint. Search is scoped to the
@@ -597,16 +647,105 @@ function LocationInput({ id, label, value, onChange, required }) {
   );
 }
 
+// "Xh Ym" -- shared by the modal below and the live Schedule Summary card.
+function formatDuration(totalSeconds) {
+  const totalMinutes = Math.round(totalSeconds / 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${h}h ${m}m`;
+}
+
+// Shown instead of the inline submitError banner when the simulated
+// schedule (scheduleSimulator.js) exceeds MAX_TOTAL_DELIVERY_HOURS -- this
+// rejection means "restructure into a separate delivery," not "fix a typo
+// and resubmit," so it's an interrupting modal rather than an easy-to-skim
+// text line. Same createPortal/scroll-lock pattern LocationPickerModal
+// already uses.
+function TravelTimeExceededModal({ schedule, onClose }) {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-3xl border border-red-200/70 bg-white shadow-2xl">
+        <div className="p-6">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-100">
+              <Clock className="h-5 w-5 text-red-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">
+                Travel time exceeds our {MAX_TOTAL_DELIVERY_HOURS}-hour limit
+              </h3>
+              <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
+                This delivery's estimated schedule
+                {schedule.day2TotalSeconds != null ? (
+                  <>
+                    {" "}
+                    is Day 1: {formatDuration(schedule.day1TotalSeconds)},
+                    Day 2: {formatDuration(schedule.day2TotalSeconds)},
+                  </>
+                ) : (
+                  <> takes about {formatDuration(schedule.day1TotalSeconds)}</>
+                )}{" "}
+                for a combined total of{" "}
+                {formatDuration(schedule.totalSeconds)}, which is beyond
+                what we support in a single trip. Try splitting this into
+                separate delivery requests instead.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 rounded-b-3xl border-t border-red-200/70 bg-white p-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
+          >
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function CustomerRequestDelivery() {
   const navigate = useNavigate();
+  const { isLoaded: mapsApiLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS);
   const [dateError, setDateError] = useState("");
   const [pickupWindowError, setPickupWindowError] = useState("");
   const [dropoffDateError, setDropoffDateError] = useState("");
   const [dropoffTimeError, setDropoffTimeError] = useState("");
+  const [dropoffWindowError, setDropoffWindowError] = useState("");
   const [budgetError, setBudgetError] = useState("");
   const [truckSelectionError, setTruckSelectionError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Keyed by stop index -- each additional dropoff's own time error, kept
+  // separate from dropoffTimeError (the main dropoff's error) since stops
+  // are a variable-length list, not a fixed field.
+  const [stopTimeErrors, setStopTimeErrors] = useState({});
+  // null = hidden; a simulateSchedule() result = the 13-hour-cap rejection
+  // modal is shown, holding the Day1/Day2/Total breakdown for its message.
+  // A dedicated modal rather than the inline submitError banner, per
+  // explicit user request -- this rejection means "restructure into a
+  // separate delivery," not "fix a typo and resubmit," so it reads better
+  // as an interrupting dialog than a small text line easy to skim past.
+  const [travelTimeModalSchedule, setTravelTimeModalSchedule] =
+    useState(null);
+  // Live preview of the simulated schedule (scheduleSimulator.js), shown in
+  // the Schedule Summary card as the customer fills out the form -- not
+  // trusted at submit time, where handleSubmit always recomputes fresh.
+  const [scheduleResult, setScheduleResult] = useState(null);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState("");
   // Weekdays covered by at least one of this customer's specialized crew
   // members (crew_client_specialties -> crew_availability, via the
   // specialized_crew_available_days() RPC). null = still loading; empty =
@@ -638,6 +777,7 @@ function CustomerRequestDelivery() {
     pickupTimeEnd: "",
     dropoffDate: "",
     dropoffTime: "",
+    dropoffTimeEnd: "",
     pickupLocation: "",
     pickupLat: null,
     pickupLng: null,
@@ -656,6 +796,59 @@ function CustomerRequestDelivery() {
   // convenience default, but stays fully editable -- once the customer picks
   // a dropoff date themselves, further pickup date edits stop overwriting it.
   const dropoffDateTouched = useRef(false);
+  // "SAME_DAY" | "TWO_DAY" -- fully automatic, per explicit user decision
+  // (2026-08-30 follow-up): not a customer-clicked toggle, derived purely
+  // from whether Drop Off Date is later than Pick Up Date. Same-day is the
+  // default whenever dropoffDate isn't set yet (matches the auto-fill
+  // above, which keeps dropoffDate === pickupDate until the customer picks
+  // a later date themselves).
+  const deliveryMode =
+    formData.pickupDate &&
+    formData.dropoffDate &&
+    formData.dropoffDate > formData.pickupDate
+      ? "TWO_DAY"
+      : "SAME_DAY";
+  // Real bug found on review: dropoffTimeEnd is only rendered/editable in
+  // SAME_DAY mode, but its state doesn't reset itself just because the
+  // field got hidden -- a customer who fills a same-day window, then picks
+  // a later Drop Off Date (auto-switching to TWO_DAY), would be left with a
+  // stale dropoffTimeEnd sitting in state. getDropoffWindowError would then
+  // compare it against the repurposed "Day 2 Start Time" value and could
+  // easily fail ("window end must be later than start"), permanently
+  // blocking submission with an error pointing at a field that no longer
+  // exists in the UI -- a genuine dead end, not just a cosmetic issue. Also
+  // matters for persistence: dropoff_time_end's `|| null` fallback in
+  // newRequest only catches an EMPTY string, not a stale non-empty one, so
+  // without this it could silently write a meaningless leftover value to
+  // the DB. Clearing it the moment mode flips to TWO_DAY prevents both.
+  useEffect(() => {
+    if (deliveryMode === "TWO_DAY") {
+      Promise.resolve().then(() => {
+        setFormData((prev) =>
+          prev.dropoffTimeEnd ? { ...prev, dropoffTimeEnd: "" } : prev,
+        );
+        setDropoffWindowError("");
+      });
+    }
+  }, [deliveryMode]);
+  // Fallback coordinates for any stop whose LocationInput selection never
+  // captured lat/lng (a manually-typed address) -- same Photon-by-text
+  // lookup DriverDeliveries.jsx/HelperDeliveries.jsx already use for stops.
+  const stopLocationsKey = formData.stops.map((s) => s.location).join("|");
+  const { coordsByLocation: resolvedStopCoords, isReady: stopCoordsReady } =
+    useResolvedStopCoords(formData.stops.map((s) => s.location));
+  // Live-captured coordinates win over the Photon-by-text fallback (exact
+  // map-picker/autocomplete result beats a re-derived guess) -- same
+  // "captured beats re-derived" precedent handleSubmit already applies to
+  // pickup/dropoff. null entries mean "not resolved yet" (still loading, or
+  // an empty stop location the customer hasn't filled in).
+  const stopCoordsList = formData.stops
+    .filter((stop) => stop.location.trim())
+    .map((stop) =>
+      stop.lat != null && stop.lng != null
+        ? { lat: stop.lat, lng: stop.lng }
+        : resolvedStopCoords[stop.location] || null,
+    );
   const recommendedTruckValue = getRecommendedTruckValue(
     formData.itemType,
     formData.cargoWeight,
@@ -675,6 +868,88 @@ function CustomerRequestDelivery() {
     };
     return rank(a) - rank(b);
   });
+
+  // Live-preview schedule simulation -- debounced since (unlike the pure
+  // validators handleChange recomputes on every keystroke) this triggers a
+  // real Directions API call. Recomputes whenever mode/times/coordinates
+  // change; handleSubmit always recomputes fresh rather than trusting this.
+  useEffect(() => {
+    let cancelled = false;
+
+    const preconditionsMet =
+      mapsApiLoaded &&
+      window.google &&
+      formData.pickupLat != null &&
+      formData.pickupLng != null &&
+      formData.dropoffLat != null &&
+      formData.dropoffLng != null &&
+      formData.pickupTime &&
+      (deliveryMode !== "TWO_DAY" || formData.dropoffTime) &&
+      stopCoordsReady &&
+      stopCoordsList.every((c) => c != null);
+
+    if (!preconditionsMet) {
+      // Deferred via a microtask, matching useResolvedStopCoords's own
+      // "never call setState synchronously in the effect body" pattern.
+      Promise.resolve().then(() => {
+        if (cancelled) return;
+        setScheduleResult(null);
+        setScheduleError("");
+        setScheduleLoading(false);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const timer = setTimeout(() => {
+      setScheduleLoading(true);
+      setScheduleError("");
+      const waypoints = [
+        { lat: formData.pickupLat, lng: formData.pickupLng },
+        { lat: formData.dropoffLat, lng: formData.dropoffLng },
+        ...stopCoordsList,
+      ];
+      estimateLegDurations(waypoints)
+        .then((legTravelSeconds) => {
+          if (cancelled) return;
+          setScheduleResult(
+            simulateSchedule({
+              mode: deliveryMode,
+              day1StartTime: formData.pickupTime,
+              day2StartTime: formData.dropoffTime,
+              legTravelSeconds,
+            }),
+          );
+          setScheduleLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setScheduleResult(null);
+          setScheduleError(
+            "We couldn't estimate the schedule for these locations.",
+          );
+          setScheduleLoading(false);
+        });
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mapsApiLoaded,
+    deliveryMode,
+    formData.pickupTime,
+    formData.dropoffTime,
+    formData.pickupLat,
+    formData.pickupLng,
+    formData.dropoffLat,
+    formData.dropoffLng,
+    stopLocationsKey,
+    stopCoordsReady,
+  ]);
 
   const goBackToDeliveries = () =>
     navigate("/customer/deliveries", {
@@ -733,6 +1008,14 @@ function CustomerRequestDelivery() {
   const handleChange = (e) => {
     const { name, value, lat, lng } = e.target;
     const next = { ...formData, [name]: value };
+    // Recomputed per-change rather than reading the component-level
+    // deliveryMode, since `next` may already reflect a date edit this same
+    // call hasn't been committed to state yet (e.g. editing dropoffDate
+    // itself) -- must match what deliveryMode will become on the next
+    // render, not what it still is on this one.
+    const nextIsTwoDay = Boolean(
+      next.pickupDate && next.dropoffDate && next.dropoffDate > next.pickupDate,
+    );
 
     // LocationInput passes lat/lng alongside the address text when the
     // value came from a search suggestion or the map picker (both already
@@ -775,6 +1058,28 @@ function CustomerRequestDelivery() {
       const { dropoffDateError, dropoffTimeError } = getScheduleErrors(next);
       setDropoffDateError(dropoffDateError);
       setDropoffTimeError(dropoffTimeError);
+      // Recomputed on every date/time field that can flip Same-Day<->Two-Day
+      // or move the pickup window, not just pickupTime/pickupTimeEnd --
+      // crossing that mode boundary changes whether each stop's window
+      // should even be compared against the pickup window at all (see
+      // getStopTimeError's isTwoDay param and its own comment).
+      setStopTimeErrors(
+        Object.fromEntries(
+          next.stops.map((stop, i) => [
+            i,
+            getStopTimeError(stop, next, nextIsTwoDay),
+          ]),
+        ),
+      );
+    }
+
+    if (name === "dropoffTime" || name === "dropoffTimeEnd") {
+      // Window-end doesn't apply once dropoffDate is later than pickupDate
+      // (Two-Day mode) -- dropoffTime becomes the Day 2 start instant, not
+      // a window start, so a stale dropoffTimeEnd must never be validated
+      // against it here (see the auto-clear effect's comment above for the
+      // stuck-submission bug this guards against).
+      setDropoffWindowError(nextIsTwoDay ? "" : getDropoffWindowError(next));
     }
 
     if (name === "budgetMin" || name === "budgetMax") {
@@ -799,7 +1104,13 @@ function CustomerRequestDelivery() {
   // form and the route/waypoints request simple (02B_MULTI_STOP_DELIVERIES.md).
   const addStop = () => {
     if (formData.stops.length >= MAX_STOPS) return;
-    setFormData((prev) => ({ ...prev, stops: [...prev.stops, ""] }));
+    setFormData((prev) => ({
+      ...prev,
+      stops: [
+        ...prev.stops,
+        { location: "", dropoffTime: "", dropoffTimeEnd: "", lat: null, lng: null },
+      ],
+    }));
   };
 
   const removeStop = (index) => {
@@ -807,13 +1118,43 @@ function CustomerRequestDelivery() {
       ...prev,
       stops: prev.stops.filter((_, i) => i !== index),
     }));
+    setStopTimeErrors((prev) => {
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
   };
 
   const handleStopChange = (index, e) => {
-    const { value } = e.target;
+    // Mirrors handleChange's pickup/dropoff lat/lng capture -- LocationInput
+    // already emits lat/lng when the value came from a suggestion or the
+    // map picker; a manually-typed address has none, so any stale
+    // previously-picked coordinate is cleared (schedule simulation falls
+    // back to useResolvedStopCoords's Photon lookup for a null coordinate).
+    const { value, lat, lng } = e.target;
     setFormData((prev) => ({
       ...prev,
-      stops: prev.stops.map((stop, i) => (i === index ? value : stop)),
+      stops: prev.stops.map((stop, i) =>
+        i === index
+          ? { ...stop, location: value, lat: lat ?? null, lng: lng ?? null }
+          : stop,
+      ),
+    }));
+  };
+
+  const handleStopTimeChange = (index, field, value) => {
+    let updatedStop;
+    setFormData((prev) => ({
+      ...prev,
+      stops: prev.stops.map((stop, i) => {
+        if (i !== index) return stop;
+        updatedStop = { ...stop, [field]: value };
+        return updatedStop;
+      }),
+    }));
+    setStopTimeErrors((prev) => ({
+      ...prev,
+      [index]: getStopTimeError(updatedStop, formData, deliveryMode === "TWO_DAY"),
     }));
   };
 
@@ -840,10 +1181,32 @@ function CustomerRequestDelivery() {
       return;
     }
 
-    const { dropoffDateError, dropoffTimeError } = getScheduleErrors(formData);
+    const { dropoffDateError, dropoffTimeError } =
+      getScheduleErrors(formData);
     if (dropoffDateError || dropoffTimeError) {
       setDropoffDateError(dropoffDateError);
       setDropoffTimeError(dropoffTimeError);
+      return;
+    }
+
+    // Window-end doesn't apply in Two-Day mode (dropoffTime is the Day 2
+    // start instant, not a window start) -- never validate a stale
+    // dropoffTimeEnd against it here. See the auto-clear effect's comment.
+    const dropoffWindowErrorMessage =
+      deliveryMode === "TWO_DAY" ? "" : getDropoffWindowError(formData);
+    if (dropoffWindowErrorMessage) {
+      setDropoffWindowError(dropoffWindowErrorMessage);
+      return;
+    }
+
+    const nextStopTimeErrors = Object.fromEntries(
+      formData.stops.map((stop, i) => [
+        i,
+        getStopTimeError(stop, formData, deliveryMode === "TWO_DAY"),
+      ]),
+    );
+    if (Object.values(nextStopTimeErrors).some(Boolean)) {
+      setStopTimeErrors(nextStopTimeErrors);
       return;
     }
 
@@ -907,6 +1270,78 @@ function CustomerRequestDelivery() {
       return;
     }
 
+    // Reject deliveries whose simulated schedule (scheduleSimulator.js --
+    // pickup/loading, every travel leg in entered order, unloading, rest
+    // breaks, meal breaks) would exceed MAX_TOTAL_DELIVERY_HOURS combined
+    // across Day 1 + Day 2. Always recomputed fresh here rather than
+    // trusting the live-preview state, same "never trust stale client
+    // state at the final gate" pattern this check already used before.
+    const activeStops = formData.stops.filter((stop) => stop.location.trim());
+    if (pickupLat != null && dropoffLat != null) {
+      if (!mapsApiLoaded || !window.google) {
+        setSubmitting(false);
+        setSubmitError(
+          "Still loading map services — please try again in a moment.",
+        );
+        return;
+      }
+
+      // Stops are never geocoded on entry (see LocationInput) -- resolve
+      // any without a live-captured lat/lng via Photon, same fallback
+      // pickup/dropoff already use above.
+      const resolvedStopCoords = await Promise.all(
+        activeStops.map(async (stop) => {
+          if (stop.lat != null && stop.lng != null) {
+            return { lat: stop.lat, lng: stop.lng };
+          }
+          return photonGeocode(stop.location);
+        }),
+      );
+      if (resolvedStopCoords.some((coords) => !coords)) {
+        setSubmitting(false);
+        setSubmitError(
+          "We couldn't locate one of the additional drop-off addresses. Please double-check them.",
+        );
+        return;
+      }
+      if (
+        resolvedStopCoords.some(
+          (coords) => !isInsideLuzon(coords.lat, coords.lng),
+        )
+      ) {
+        setSubmitting(false);
+        setSubmitError(SERVICE_AREA_MESSAGE);
+        return;
+      }
+
+      let legTravelSeconds;
+      try {
+        legTravelSeconds = await estimateLegDurations([
+          { lat: pickupLat, lng: pickupLng },
+          { lat: dropoffLat, lng: dropoffLng },
+          ...resolvedStopCoords,
+        ]);
+      } catch {
+        setSubmitting(false);
+        setSubmitError(
+          "We couldn't calculate a route between these locations. Please double-check the pickup and dropoff addresses.",
+        );
+        return;
+      }
+
+      const schedule = simulateSchedule({
+        mode: deliveryMode,
+        day1StartTime: formData.pickupTime,
+        day2StartTime: formData.dropoffTime,
+        legTravelSeconds,
+      });
+      if (schedule.exceedsLimit) {
+        setSubmitting(false);
+        setTravelTimeModalSchedule(schedule);
+        return;
+      }
+    }
+
     const newRequest = {
       customer_auth_id: user.id,
       pickup_date: formData.pickupDate,
@@ -914,6 +1349,11 @@ function CustomerRequestDelivery() {
       pickup_time_end: formData.pickupTimeEnd,
       dropoff_date: formData.dropoffDate,
       dropoff_time: formData.dropoffTime,
+      // In Two-Day mode this field is hidden (dropoffTime is the Day 2
+      // start instant, not a window) -- send null, not an empty string,
+      // since the DB column is `time`.
+      dropoff_time_end: formData.dropoffTimeEnd || null,
+      delivery_mode: deliveryMode,
       pickup_location: formData.pickupLocation,
       pickup_lat: pickupLat,
       pickup_lng: pickupLng,
@@ -921,8 +1361,16 @@ function CustomerRequestDelivery() {
       dropoff_lat: dropoffLat,
       dropoff_lng: dropoffLng,
       stops: formData.stops
-        .filter((location) => location.trim())
-        .map((location) => ({ location })),
+        .filter((stop) => stop.location.trim())
+        .map((stop) => ({
+          location: stop.location,
+          ...(stop.dropoffTime && stop.dropoffTimeEnd
+            ? {
+                dropoffTime: stop.dropoffTime,
+                dropoffTimeEnd: stop.dropoffTimeEnd,
+              }
+            : {}),
+        })),
       truck_type: formData.truckType,
       item_type: formData.itemType,
       cargo_weight: formData.cargoWeight,
@@ -995,6 +1443,21 @@ function CustomerRequestDelivery() {
                   . The earliest available date is{" "}
                   <span className="font-semibold">{minDeliveryDate}</span>.
                 </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-slate-700">
+                  Delivery Mode:
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
+                  {deliveryMode === "SAME_DAY" ? "Same-Day" : "Two-Day"}
+                </span>
+                <span className="text-xs text-slate-500">
+                  {deliveryMode === "SAME_DAY"
+                    ? "— pick a later Drop Off Date to switch to Two-Day"
+                    : "— pickup on Day 1, all drop-offs on Day 2"}
+                </span>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
@@ -1091,37 +1554,6 @@ function CustomerRequestDelivery() {
                     </p>
                   )}
                 </div>
-                <div className="relative space-y-2">
-                  <label
-                    htmlFor="dropoffTime"
-                    className="text-sm font-medium text-slate-700"
-                  >
-                    Drop Off Time
-                  </label>
-                  <input
-                    type="time"
-                    id="dropoffTime"
-                    name="dropoffTime"
-                    value={formData.dropoffTime}
-                    onChange={handleChange}
-                    min={
-                      formData.dropoffDate === formData.pickupDate
-                        ? formData.pickupTimeEnd || formData.pickupTime
-                        : undefined
-                    }
-                    required
-                    className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
-                      dropoffTimeError
-                        ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
-                        : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
-                    }`}
-                  />
-                  {dropoffTimeError && (
-                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">
-                      {dropoffTimeError}
-                    </p>
-                  )}
-                </div>
               </div>
             </div>
 
@@ -1138,13 +1570,81 @@ function CustomerRequestDelivery() {
                   onChange={handleChange}
                   required
                 />
-                <LocationInput
-                  id="dropoffLocation"
-                  label="Drop Off Location"
-                  value={formData.dropoffLocation}
-                  onChange={handleChange}
-                  required
-                />
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="min-w-[220px] flex-1">
+                      <LocationInput
+                        id="dropoffLocation"
+                        label="Drop Off Location"
+                        value={formData.dropoffLocation}
+                        onChange={handleChange}
+                        required
+                      />
+                    </div>
+                    <div className="w-full space-y-2 sm:w-auto sm:shrink-0">
+                      <label
+                        htmlFor="dropoffTime"
+                        className="text-sm font-medium text-slate-700"
+                      >
+                        {deliveryMode === "TWO_DAY"
+                          ? "Day 2 Start Time"
+                          : "Open From – To"}
+                      </label>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <input
+                          type="time"
+                          id="dropoffTime"
+                          name="dropoffTime"
+                          aria-label={
+                            deliveryMode === "TWO_DAY"
+                              ? "Day 2 Start Time"
+                              : "Drop Off Window Start"
+                          }
+                          value={formData.dropoffTime}
+                          onChange={handleChange}
+                          min={
+                            deliveryMode === "SAME_DAY" &&
+                            formData.dropoffDate === formData.pickupDate
+                              ? formData.pickupTimeEnd || formData.pickupTime
+                              : undefined
+                          }
+                          required
+                          className={`w-full rounded-xl border bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 sm:w-[8.5rem] ${
+                            dropoffTimeError || dropoffWindowError
+                              ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                              : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
+                          }`}
+                        />
+                        {deliveryMode === "SAME_DAY" && (
+                          <>
+                            <span className="shrink-0 text-xs text-slate-400">
+                              to
+                            </span>
+                            <input
+                              type="time"
+                              id="dropoffTimeEnd"
+                              name="dropoffTimeEnd"
+                              aria-label="Drop Off Window End"
+                              value={formData.dropoffTimeEnd}
+                              onChange={handleChange}
+                              required
+                              className={`w-full rounded-xl border bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 sm:w-[8.5rem] ${
+                                dropoffWindowError
+                                  ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                                  : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
+                              }`}
+                            />
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  {(dropoffTimeError || dropoffWindowError) && (
+                    <p className="text-xs text-red-600">
+                      {dropoffTimeError || dropoffWindowError}
+                    </p>
+                  )}
+                </div>
               </div>
 
               {formData.stops.length > 0 && (
@@ -1155,23 +1655,79 @@ function CustomerRequestDelivery() {
                     nearest at each point along the trip.
                   </p>
                   {formData.stops.map((stop, index) => (
-                    <div key={index} className="flex items-end gap-2">
-                      <div className="flex-1">
-                        <LocationInput
-                          id={`stop-${index}`}
-                          label={`Dropoff ${index + 2}`}
-                          value={stop}
-                          onChange={(e) => handleStopChange(index, e)}
-                        />
+                    <div key={index} className="space-y-1.5">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="min-w-[220px] flex-1">
+                          <LocationInput
+                            id={`stop-${index}`}
+                            label={`Dropoff ${index + 2}`}
+                            value={stop.location}
+                            onChange={(e) => handleStopChange(index, e)}
+                          />
+                        </div>
+                        <div className="w-full space-y-2 sm:w-auto sm:shrink-0">
+                          <label
+                            htmlFor={`stop-time-${index}`}
+                            className="text-sm font-medium text-slate-700"
+                          >
+                            Open From – To
+                          </label>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <input
+                              type="time"
+                              id={`stop-time-${index}`}
+                              aria-label={`Dropoff ${index + 2} Window Start`}
+                              value={stop.dropoffTime}
+                              onChange={(e) =>
+                                handleStopTimeChange(
+                                  index,
+                                  "dropoffTime",
+                                  e.target.value,
+                                )
+                              }
+                              className={`w-full rounded-xl border bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 sm:w-[8.5rem] ${
+                                stopTimeErrors[index]
+                                  ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                                  : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
+                              }`}
+                            />
+                            <span className="shrink-0 text-xs text-slate-400">
+                              to
+                            </span>
+                            <input
+                              type="time"
+                              id={`stop-time-end-${index}`}
+                              aria-label={`Dropoff ${index + 2} Window End`}
+                              value={stop.dropoffTimeEnd}
+                              onChange={(e) =>
+                                handleStopTimeChange(
+                                  index,
+                                  "dropoffTimeEnd",
+                                  e.target.value,
+                                )
+                              }
+                              className={`w-full rounded-xl border bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 sm:w-[8.5rem] ${
+                                stopTimeErrors[index]
+                                  ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                                  : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
+                              }`}
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeStop(index)}
+                          className="mb-0.5 flex h-[42px] w-[42px] shrink-0 items-center justify-center self-end rounded-xl border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+                          title="Remove dropoff"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => removeStop(index)}
-                        className="mb-0.5 flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
-                        title="Remove dropoff"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
+                      {stopTimeErrors[index] && (
+                        <p className="text-xs text-red-600">
+                          {stopTimeErrors[index]}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1185,6 +1741,58 @@ function CustomerRequestDelivery() {
                 >
                   + Add another dropoff destination
                 </button>
+              )}
+
+              {/* Schedule Summary -- Day 1 / Day 2 / Total only, no
+                  itemized break-by-break listing (explicit user scope). */}
+              {scheduleLoading && (
+                <p className="text-xs text-slate-500">
+                  Estimating delivery schedule…
+                </p>
+              )}
+              {scheduleError && (
+                <p className="text-xs text-red-600">{scheduleError}</p>
+              )}
+              {scheduleResult && !scheduleLoading && (
+                <div
+                  className={`rounded-xl border p-3 ${
+                    scheduleResult.exceedsLimit
+                      ? "border-red-200 bg-red-50"
+                      : "border-emerald-200 bg-emerald-50"
+                  }`}
+                >
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                    Estimated Schedule
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                    <span className="text-slate-700">
+                      Day 1:{" "}
+                      <span className="font-semibold">
+                        {formatDuration(scheduleResult.day1TotalSeconds)}
+                      </span>
+                    </span>
+                    {scheduleResult.day2TotalSeconds != null && (
+                      <span className="text-slate-700">
+                        Day 2:{" "}
+                        <span className="font-semibold">
+                          {formatDuration(scheduleResult.day2TotalSeconds)}
+                        </span>
+                      </span>
+                    )}
+                    <span className="text-slate-700">
+                      Total:{" "}
+                      <span className="font-semibold">
+                        {formatDuration(scheduleResult.totalSeconds)}
+                      </span>
+                    </span>
+                  </div>
+                  {scheduleResult.exceedsLimit && (
+                    <p className="mt-1.5 text-xs text-red-700">
+                      This exceeds our {MAX_TOTAL_DELIVERY_HOURS}-hour limit
+                      — you'll need to book this as a separate trip.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 
@@ -1495,6 +2103,12 @@ function CustomerRequestDelivery() {
           </form>
         </div>
       </div>
+      {travelTimeModalSchedule != null && (
+        <TravelTimeExceededModal
+          schedule={travelTimeModalSchedule}
+          onClose={() => setTravelTimeModalSchedule(null)}
+        />
+      )}
     </CustomerLayout>
   );
 }

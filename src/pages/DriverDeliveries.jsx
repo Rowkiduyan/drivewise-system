@@ -47,6 +47,7 @@ import {
   GoogleMap,
   Marker as GoogleMapMarker,
   Polyline as GoogleMapPolyline,
+  TrafficLayer,
   useJsApiLoader,
 } from "@react-google-maps/api";
 import DriverLayout from "../layout/DriverLayout.jsx";
@@ -1344,6 +1345,7 @@ function LiveNavigationMap({
               mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID,
             }}
           >
+            <TrafficLayer />
             {/* Rendered as plain Polylines, not <DirectionsRenderer> --
                 DirectionsRenderer calls map.fitBounds() internally to zoom
                 out and fit the *entire* route on screen whenever it (re)sets

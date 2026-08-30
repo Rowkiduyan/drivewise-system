@@ -9,16 +9,31 @@ professor). **Local-only, never deployed**: open the file directly in a
 browser on your own machine (double-click it, or `file://` it) — it is not
 part of the built app and is never served by Vite.
 
-- **Part 1 (route colors)**: "Play GPS Route" replays the same saved
-  `fixtures/DR-0020-legs.json` route `simulate-dr0020.sh` uses, with a "Stop"
-  button to abort mid-replay. Open the Driver portal's Live Navigation for
-  DR-0020 in another tab first, then Play.
+A "Delivery" dropdown at the top switches between fixtures (currently
+DR-0020 and DR-0040) — all the buttons below act on whichever one is
+selected.
+
+- **Part 1 (route colors)**: "Play GPS Route" replays the selected
+  delivery's saved route fixture (`fixtures/DR-0020-legs.json` /
+  `fixtures/DR-0040-legs.json`), with a "Stop" button to abort mid-replay.
+  Open the Driver portal's Live Navigation for that delivery in another tab
+  first, then Play.
 - **Part 2/3 (photo upload + location gate)**: "Reset Chain" mirrors
-  `prep-proof-photos-test.sh` (assigns Helper H003, resets DR-0020 to a clean
-  `OUT_FOR_PICKUP` state, positions the crew at Pickup). "Next" cycles the
-  crew's position through Dropoff → Dropoff 2 → Dropoff 3, mirroring
-  `set-dr0020-location.sh` — click it right before completing each next step
-  in the real Helper UI.
+  `prep-proof-photos-test.sh` (assigns the fixture's Helper, resets the
+  delivery to a clean `OUT_FOR_PICKUP` state, positions the crew at Pickup).
+  "Next" cycles the crew's position through the remaining chain points
+  (Dropoff → Dropoff 2 → Dropoff 3 for DR-0020; just Dropoff for DR-0040,
+  which has no stops) — click it right before completing each next step in
+  the real Helper UI.
+
+DR-0020's driver (D002) is a synthetic test account with a documented
+password, so Play/Reset for it sign in as the driver and call the real
+`driver-trip` `start-trip` action. DR-0040's driver (D008) is a real
+person's account with no documented password, so Play/Reset for it instead
+insert the Active `sessions` row directly via `service_role` when none
+exists — same test-only shortcut `gps-route-simulate.py` already uses for
+`gps_logs`, just extended to session creation. See the terminal-script
+sections below for the non-browser equivalents of both.
 
 Needs your Supabase project's URL/anon key (prefilled with this project's
 public values, safe to hardcode — they already ship in the deployed app
@@ -129,6 +144,62 @@ bash scripts/set-dr0020-location.sh <pickup|dropoff|stop1|stop2>
 Run it right before each step. Skipping it (or being on the wrong point)
 makes that step's Complete button fail with a "too far" error from the
 server, showing the actual distance.
+
+## DR-0040 fixture (`simulate-dr0040.sh` + `set-dr0040-location.sh`)
+
+Same idea as the DR-0020 pair above, for a second permanent fixture:
+`DR-0040` (driver `D008`, pickup/dropoff in Manila, **no stops** — a single
+leg, unlike DR-0020's pickup+2-stops chain). Its route geometry lives in
+`fixtures/DR-0040-legs.json` (231 points, captured via `capture-route.mjs`
+below rather than `gps-route-capture.mjs`, since D008 is a real person's
+account with no documented test password — no browser/driver login was
+needed to capture it).
+
+```bash
+# 1. Open the app yourself, log in as D008, navigate to DR-0040's Live
+#    Navigation view.
+# 2. Replay the saved route:
+bash scripts/simulate-dr0040.sh [delay_seconds]   # default 0.1s/tick
+```
+
+Idempotent like `simulate-dr0020.sh`: reuses an existing Active session if
+one is open, otherwise resets DR-0040 to `ASSIGNED` and inserts a fresh
+Active `sessions` row **directly via `service_role`** (not through
+`driver-trip`'s `start-trip` action) — because D008's password isn't known.
+This is the same test-only shortcut `gps-route-simulate.py` already uses for
+`gps_logs`, just extended to session creation; never how a real trip starts.
+
+For the Helper photo-upload walkthrough (mirrors `set-dr0020-location.sh`,
+just two points since there are no stops):
+
+```bash
+bash scripts/set-dr0040-location.sh <pickup|dropoff>
+```
+
+Run it right before Confirm Pickup / Complete Dropoff in the Helper UI —
+Complete Dropoff on a no-stops delivery finalizes straight to `DELIVERED`.
+
+## Capturing a route without a driver login (`capture-route.mjs`)
+
+Like `gps-route-capture.mjs` below, but calls the Directions REST API
+directly instead of patching the JS SDK inside a real logged-in browser
+session — no Playwright, no driver credentials needed. Use this when the
+delivery's driver account has no documented test password (e.g. DR-0040's
+D008), or when you just want a route's geometry without going through the
+app at all.
+
+```bash
+node scripts/capture-route.mjs "<origin address>" "<destination address>" [waypoint address ...] > scripts/fixtures/<id>-legs.json
+```
+
+Outputs the same shape `gps-route-simulate.py` expects (one leg per
+origin→waypoint→…→destination segment, each a dense array of `{lat, lng}`
+points decoded from every step's polyline — not just each step's
+start/end). Reads `VITE_GOOGLE_MAPS_API_KEY` from `.env`; the request
+includes `departure_time=now&traffic_model=best_guess` to match what the
+app's own `DirectionsService` calls use (`11_ROUTE_COMPARISON.md`'s
+Traffic-Aware Suggested Routes) — note the REST API takes traffic model
+values in `snake_case` (`best_guess`), unlike the JS SDK's `bestguess`.
 
 ## GPS route simulation (`gps-route-capture.mjs` + `gps-route-simulate.py`)
 
