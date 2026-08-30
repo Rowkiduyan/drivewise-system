@@ -8,14 +8,14 @@ import { formatCutoff } from "../lib/deactivation.js";
 
 export const driverModules = [
   {
-    label: "Performance",
-    path: "/driver/performance",
-    description: "Scores and safety trends",
-  },
-  {
     label: "Deliveries",
     path: "/driver/trips",
     description: "Routes and deliveries",
+  },
+  {
+    label: "Performance",
+    path: "/driver/performance",
+    description: "Scores and safety trends",
   },
   {
     label: "Profile",

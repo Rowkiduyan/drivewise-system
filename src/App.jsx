@@ -43,7 +43,7 @@ function App() {
       <Route path="/customer/profile" element={<CustomerProfile />} />
       <Route
         path="/driver"
-        element={<Navigate to="/driver/performance" replace />}
+        element={<Navigate to="/driver/trips" replace />}
       />
       <Route path="/driver/performance" element={<DriverPerformance />} />
       <Route path="/driver/trips" element={<DriverDeliveries />} />
