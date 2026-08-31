@@ -809,10 +809,13 @@ function PlannedRouteMap({
 }
 
 // Live in-app turn-by-turn navigation (capstone requirement: built on the
-// Google Maps JavaScript API, not a static embed). Position comes from the
-// Raspberry Pi's gps_logs uploads (passed in as `livePosition`), not the
-// browser's own geolocation -- see 01_SYSTEM_ARCHITECTURE.md's Route
-// Comparison section. Only rendered while isDrivingStage (see call site).
+// Google Maps JavaScript API, not a static embed). Position (passed in as
+// `livePosition`) is the driver's own phone GPS, falling back to the Pi's
+// gps_logs uploads only when the phone has no reading -- see
+// 01_SYSTEM_ARCHITECTURE.md's Route Comparison section and
+// 05_GPS_PIPELINE.md's GPS Source Split section. Supervisor tracking still
+// reads gps_logs directly and is unaffected. Only rendered while
+// isDrivingStage (see call site).
 // isMonitoring/nextLabel/NextIcon/nextColor/onPause/onResume/onStageAdvance
 // mirror the page's own sticky bottom action bar exactly (same fields as
 // statusCfg + the same three confirm-modal triggers) -- used only while
@@ -1122,10 +1125,17 @@ function LiveNavigationMap({
         setHeading(nextHeading);
       }
     }
+    // NAV_ZOOM only applies to the very first position (previousPositionRef
+    // still empty at that point) -- every tick after that preserves whatever
+    // zoom the driver currently has, so a manual pinch/scroll-out sticks
+    // instead of being overwritten by the next GPS tick's own moveCamera()
+    // call. Explicit recenter (handleRecenter below) still snaps back to
+    // NAV_ZOOM on demand.
+    const isFirstPosition = !previousPositionRef.current;
     previousPositionRef.current = livePosition;
     mapRef.current.moveCamera({
       center: livePosition,
-      zoom: NAV_ZOOM,
+      zoom: isFirstPosition ? NAV_ZOOM : mapRef.current.getZoom(),
       tilt: 45,
       heading: nextHeading,
     });
@@ -2870,6 +2880,19 @@ function TodayBadge() {
   );
 }
 
+// A delivery whose pickup_date has passed without its status ever reaching a
+// terminal value (DELIVERED/COMPLETED/CANCELLED) -- e.g. nobody ran Start/End
+// Trip on it. The Upcoming bucket itself is purely status-driven (see
+// loadDeliveries above), so this is flagged visually rather than moved to a
+// different tab -- it still needs action, it's just not "upcoming" anymore.
+function OverdueBadge() {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+      Overdue
+    </span>
+  );
+}
+
 // The driver's workflow, start to finish. "Delivered" is the last step the driver takes —
 // any customer confirmation happens later and is a separate concern (see statusConfig above).
 const DRIVER_STAGES = [
@@ -2956,6 +2979,7 @@ function DeliveryRow({ delivery, showTime, todayISO, onSelect }) {
             {delivery.id} &bull; {delivery.companyName}
           </p>
           {delivery.pickupDate === todayISO && <TodayBadge />}
+          {delivery.pickupDate < todayISO && <OverdueBadge />}
         </div>
         <p className="truncate text-[11px] text-slate-600">
           {resolvedDeliveryAddress}
@@ -3546,9 +3570,14 @@ function DriverDeliveries() {
   const [liveAlerts, setLiveAlerts] = useState([]);
   const [isAlertHistoryExpanded, setIsAlertHistoryExpanded] = useState(false);
   const [completionNotice, setCompletionNotice] = useState(null);
-  // Live nav position, sourced from the Pi's gps_logs uploads -- see the
-  // Realtime subscription below. null until the first reading arrives.
-  const [livePosition, setLivePosition] = useState(null);
+  // Live nav position: the driver's own phone GPS is now the primary source
+  // (see the watchPosition effect below), falling back to the Pi's gps_logs
+  // uploads only when the phone has no reading yet (permission denied, no
+  // signal, unsupported). Supervisor tracking is unaffected -- that reads
+  // gps_logs directly and still relies solely on the Pi, never this state.
+  const [phonePosition, setPhonePosition] = useState(null);
+  const [piPosition, setPiPosition] = useState(null);
+  const livePosition = phonePosition || piPosition;
   // Rest-stop recommendation (12_REST_STOP_RECOMMENDATIONS.md): ephemeral,
   // client-side only, Trip-start-only, one-shot -- never persisted, never
   // resets once shown, ordinary dismiss just clears the banner. Refs (not
@@ -4146,15 +4175,36 @@ function DriverDeliveries() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMonitoring]);
 
-  // Live nav position (05_GPS_PIPELINE.md): the Pi uploads to gps_logs via
-  // the gps-upload Edge Function roughly once per second while its Session
-  // is Active. Same shape as the alerts subscription above -- seed-fetch the
-  // latest reading, then subscribe for new ones. Gated on isMonitoring (not
-  // just isDrivingStage): when Paused, this tears down and livePosition
-  // simply stops updating, freezing LiveNavigationMap's marker/route in
-  // place rather than tracking a closed session (gps_logs rows uploaded
-  // during a Pause carry a different, since-closed session_id and won't
-  // match this filter anyway).
+  // Live nav position, primary source: the driver's own phone GPS. Gated on
+  // isMonitoring (not just isDrivingStage) to match the fallback effect below
+  // -- when Paused, this tears down and phonePosition simply stops updating,
+  // freezing LiveNavigationMap's marker/route in place. On permission denial
+  // or a signal loss mid-trip, the error callback clears phonePosition so the
+  // combining effect below falls back to the Pi's piPosition instead of
+  // freezing on a stale phone reading.
+  useEffect(() => {
+    if (!isMonitoring || !navigator.geolocation) return undefined;
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        setPhonePosition({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        });
+      },
+      () => setPhonePosition(null),
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 },
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [isMonitoring]);
+
+  // Live nav position, fallback source (05_GPS_PIPELINE.md): the Pi uploads
+  // to gps_logs via the gps-upload Edge Function roughly once per second
+  // while its Session is Active. Same shape as the alerts subscription above
+  // -- seed-fetch the latest reading, then subscribe for new ones. Only ever
+  // used by the combining effect below when phonePosition is unavailable;
+  // this is also the exact feed the supervisor dashboard reads, unaffected
+  // by any of this. Gated on isMonitoring for the same reason as the phone
+  // effect above.
   useEffect(() => {
     if (!isMonitoring || !active?.sessionId) return undefined;
     let cancelled = false;
@@ -4167,15 +4217,7 @@ function DriverDeliveries() {
         .order("created_at", { ascending: false })
         .limit(1);
       if (cancelled || error || !data?.length) return;
-      setLivePosition({ lat: data[0].latitude, lng: data[0].longitude });
-      // Seeds the distance accumulator's reference point on mount/reload,
-      // without counting a "distance" against a point that arrived before
-      // this mount -- only a genuinely new tick (below) adds distance.
-      lastDistanceCheckPositionRef.current = {
-        lat: data[0].latitude,
-        lng: data[0].longitude,
-      };
-      checkRestStopThreshold();
+      setPiPosition({ lat: data[0].latitude, lng: data[0].longitude });
     }
     loadLatestPosition();
 
@@ -4190,25 +4232,10 @@ function DriverDeliveries() {
           filter: `session_id=eq.${active.sessionId}`,
         },
         (payload) => {
-          const next = {
+          setPiPosition({
             lat: payload.new.latitude,
             lng: payload.new.longitude,
-          };
-          setLivePosition(next);
-          // Rest-stop distance accumulation (12_REST_STOP_RECOMMENDATIONS.md):
-          // running total for the CURRENT session only -- prior Sessions'
-          // totals are summed once, separately, above.
-          if (lastDistanceCheckPositionRef.current) {
-            currentSessionKmRef.current +=
-              distanceMeters(
-                lastDistanceCheckPositionRef.current.lat,
-                lastDistanceCheckPositionRef.current.lng,
-                next.lat,
-                next.lng,
-              ) / 1000;
-          }
-          lastDistanceCheckPositionRef.current = next;
-          checkRestStopThreshold();
+          });
         },
       )
       .subscribe();
@@ -4216,12 +4243,37 @@ function DriverDeliveries() {
       cancelled = true;
       supabase.removeChannel(channel);
     };
+  }, [isMonitoring, active?.sessionId]);
+
+  // Resolves phonePosition/piPosition into livePosition and drives the
+  // rest-stop distance accumulator (12_REST_STOP_RECOMMENDATIONS.md) off
+  // whichever source is actually live -- kept in one place so a mid-trip
+  // handoff between phone and Pi (e.g. phone signal drops) never double-counts
+  // distance the way running accumulation in both source effects would.
+  useEffect(() => {
+    const next = phonePosition || piPosition;
+    if (!next) return;
+    // Seeds the distance accumulator's reference point on the first reading
+    // (from either source) without counting a "distance" against a point
+    // that arrived before this mount -- only a genuinely new tick adds
+    // distance.
+    if (lastDistanceCheckPositionRef.current) {
+      currentSessionKmRef.current +=
+        distanceMeters(
+          lastDistanceCheckPositionRef.current.lat,
+          lastDistanceCheckPositionRef.current.lng,
+          next.lat,
+          next.lng,
+        ) / 1000;
+    }
+    lastDistanceCheckPositionRef.current = next;
+    checkRestStopThreshold();
     // checkRestStopThreshold deliberately omitted -- a plain function
     // redefined every render, not memoized; including it would force this
-    // effect to tear down/resubscribe the Realtime channel every render
-    // instead of only when the Session actually changes.
+    // effect to fire on every render instead of only when the resolved
+    // position actually changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMonitoring, active?.sessionId]);
+  }, [phonePosition, piPosition]);
 
   // Runs a confirm-modal action while it's in flight: blocks re-entry (a second
   // tap while the first request is still pending is a no-op instead of firing
@@ -4999,16 +5051,49 @@ function DriverDeliveries() {
                   here once your supervisor schedules them.
                 </p>
               ) : (
-                <div className="space-y-1.5">
-                  {data.upcoming.map((delivery) => (
-                    <DeliveryRow
-                      key={delivery.id}
-                      delivery={delivery}
-                      showTime
-                      todayISO={todayISO}
-                      onSelect={setSelectedDelivery}
-                    />
-                  ))}
+                <div className="space-y-4">
+                  {/* Overdue: pickup_date already passed but status never
+                      reached DELIVERED/COMPLETED/CANCELLED -- see OverdueBadge
+                      above. Split into its own section (not just the row
+                      badge) since these need action, not scheduling. */}
+                  {data.upcoming.some((d) => d.pickupDate < todayISO) && (
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-red-600">
+                        Overdue
+                      </p>
+                      {data.upcoming
+                        .filter((d) => d.pickupDate < todayISO)
+                        .map((delivery) => (
+                          <DeliveryRow
+                            key={delivery.id}
+                            delivery={delivery}
+                            showTime
+                            todayISO={todayISO}
+                            onSelect={setSelectedDelivery}
+                          />
+                        ))}
+                    </div>
+                  )}
+                  {data.upcoming.some((d) => d.pickupDate >= todayISO) && (
+                    <div className="space-y-1.5">
+                      {data.upcoming.some((d) => d.pickupDate < todayISO) && (
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                          Scheduled
+                        </p>
+                      )}
+                      {data.upcoming
+                        .filter((d) => d.pickupDate >= todayISO)
+                        .map((delivery) => (
+                          <DeliveryRow
+                            key={delivery.id}
+                            delivery={delivery}
+                            showTime
+                            todayISO={todayISO}
+                            onSelect={setSelectedDelivery}
+                          />
+                        ))}
+                    </div>
+                  )}
                 </div>
               ))}
 

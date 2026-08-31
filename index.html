@@ -3,7 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/MLOGO.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.json" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#059669" />
+    <!-- iOS ignores manifest.json's display/theme settings on "Add to Home
+         Screen" -- these three tags are what actually make Safari treat the
+         shortcut as standalone/full-screen there. Android reads them from
+         manifest.json instead, but Chrome also honors theme-color here for
+         the address-bar-less toolbar tint. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="DriveWise" />
     <title>DriveWise</title>
   </head>
   <body>
