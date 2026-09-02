@@ -7,6 +7,7 @@
  */
 
 import { getPmsStatus } from "./pms.js";
+import { supabase } from "../../../lib/supabaseClient.js";
 
 /**
  * Return the most recent maintenance record from an array sorted in
@@ -90,4 +91,45 @@ export function getPreviousMileageFromRecords(records) {
       rec.mileage_at_service !== undefined && rec.mileage_at_service !== null,
   );
   return recordWithMileage ? recordWithMileage.mileage_at_service : null;
+}
+
+/**
+ * Auto-complete a truck's "In Progress" maintenance record and roll its PMS
+ * baseline forward (previous_mileage/previous_maintenance_date, then reset
+ * current_mileage to 0), the same way SupTruckProfile.jsx/AdminTruckProfile.jsx
+ * already do it in a page-mounted useEffect. That effect only fires while a
+ * Supervisor/Admin happens to have that specific truck's Profile page open --
+ * this is the same logic, called directly from wherever a truck's status is
+ * actually set to "Available" (SupTrucks.jsx/AdminTrucks.jsx's edit-submit
+ * handlers), so completion isn't dependent on which page the status change
+ * happened from. Safe to call even when there's no "In Progress" record (a
+ * no-op) -- callers don't need to check first.
+ */
+export async function completeInProgressMaintenance(truckId) {
+  const { data: inProgress, error: fetchError } = await supabase
+    .from("maintenance_records")
+    .select("id, mileage_at_service")
+    .eq("truck_id", truckId)
+    .eq("status", "In Progress")
+    .order("start_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (fetchError || !inProgress) return { error: fetchError || null };
+
+  const today = new Date().toISOString().split("T")[0];
+  const { error: completeError } = await supabase
+    .from("maintenance_records")
+    .update({ status: "Completed", end_date: today })
+    .eq("id", inProgress.id);
+  if (completeError) return { error: completeError };
+
+  const { error: truckError } = await supabase
+    .from("trucks")
+    .update({
+      previous_mileage: inProgress.mileage_at_service,
+      previous_maintenance_date: today,
+      current_mileage: 0,
+    })
+    .eq("id", truckId);
+  return { error: truckError || null };
 }

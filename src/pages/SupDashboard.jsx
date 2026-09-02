@@ -1,12 +1,13 @@
 import SupLayout from "../layout/SupLayout.jsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, LocateFixed, Loader2, MapPin } from "lucide-react";
+import { AlertTriangle, LocateFixed, Loader2, MapPin, Maximize2, Minimize2 } from "lucide-react";
 import { GoogleMap, Marker as GoogleMapMarker, useJsApiLoader } from "@react-google-maps/api";
 import DateRangeFilter from "../components/DateRangeFilter.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
+import { getPmsStatus } from "../components/trucks/utils/pms.js";
 
 const background = null;
 
@@ -100,10 +101,11 @@ function ViewAllLink({ to }) {
 // ----- KPI strip: the whole "what needs attention" summary, each tile links
 // straight to the page where it's resolved so there's no separate task list
 // duplicating the same numbers. -----
-function StatTile({ label, value, to, tone }) {
+function StatTile({ label, value, to, tone, state }) {
   return (
     <Link
       to={to}
+      state={state}
       className={`flex flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors hover:border-blue-200 hover:bg-blue-50/40 ${
         tone ? `border-l-4 ${TONE[tone].borderL}` : ""
       }`}
@@ -530,7 +532,7 @@ function useFleetOps() {
     }));
   }, [alertFeed]);
 
-  return { fleetOps, alertFeed, realDriverSafety, isLoading, now: nowTick };
+  return { fleetOps, alertFeed, realDriverSafety, isLoading, now: nowTick, trucks };
 }
 
 // ----- Active deliveries (live ops) -----
@@ -676,6 +678,15 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
   const [initialCenter] = useState(() => withPosition[0]?.position || FLEET_MAP_DEFAULT_CENTER);
   const mapRef = useRef(null);
   const [isMapReady, setIsMapReady] = useState(false);
+  // Fullscreen mode (same fixed-positioning pattern as Driver's
+  // LiveNavigationMap in DriverDeliveries.jsx, no browser Fullscreen API).
+  // The "center on this truck" control normally lives in ActiveDeliveries'
+  // Device column (a sibling panel, covered while maximized), so a
+  // fullscreen-only truck quick-select list is rendered below instead of
+  // losing that ability while maximized -- panToTruck bypasses the
+  // parent-owned focusedTruckId/focusToken state entirely since this map
+  // already holds its own mapRef.
+  const [isFullscreen, setIsFullscreen] = useState(false);
   // Only the set of truck ids, not their positions -- refitting the camera
   // on every single GPS tick (as often as once a second per truck) would
   // constantly yank the view out from under a supervisor manually panning
@@ -712,8 +723,130 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMapReady, focusToken]);
 
+  // Used by both the fullscreen quick-select list below and, indirectly, the
+  // focusedTruckId effect above's own inline pan/zoom (kept as its own
+  // function so the fullscreen list has a way to recenter without a path
+  // back to the parent's focus state).
+  const panToTruck = (row) => {
+    if (!mapRef.current) return;
+    mapRef.current.panTo(row.position);
+    mapRef.current.setZoom(17);
+  };
+
+  // heightClass: "h-80" in the normal Panel-wrapped layout, "h-full" filling
+  // the fullscreen container instead -- see GOOGLE_MAP_CONTAINER_STYLE's own
+  // 100%/100% comment, it already just fills whatever this wrapper is.
+  const mapBody = (heightClass) =>
+    isLoading ? (
+      <div className={`flex ${heightClass} items-center justify-center text-xs text-slate-400`}>
+        <Loader2 className="h-4 w-4 animate-spin" />
+      </div>
+    ) : !isLoaded ? (
+      <div className={`flex ${heightClass} items-center justify-center text-slate-400`}>
+        <Loader2 className="h-5 w-5 animate-spin" />
+      </div>
+    ) : withPosition.length === 0 ? (
+      <div className={`flex ${heightClass} items-center justify-center text-center text-xs text-slate-400`}>
+        No live GPS positions yet.
+      </div>
+    ) : (
+      <div className={`${heightClass} w-full overflow-hidden rounded-md`}>
+        <GoogleMap
+          mapContainerStyle={GOOGLE_MAP_CONTAINER_STYLE}
+          center={initialCenter}
+          zoom={17}
+          onLoad={(map) => {
+            mapRef.current = map;
+            setIsMapReady(true);
+          }}
+          options={{ disableDefaultUI: true, gestureHandling: "greedy", mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID }}
+        >
+          {withPosition.map((row) => (
+            <GoogleMapMarker
+              key={row.id}
+              position={row.position}
+              title={`${row.truckPlate} — ${row.driver}`}
+              icon={{
+                path: window.google.maps.SymbolPath.CIRCLE,
+                scale: 7,
+                fillColor: row.isAnomalous ? "#dc2626" : row.tripState === "Paused" ? "#d97706" : "#2563eb",
+                fillOpacity: 1,
+                strokeColor: "#fff",
+                strokeWeight: 2,
+              }}
+            />
+          ))}
+        </GoogleMap>
+      </div>
+    );
+
+  if (isFullscreen) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col bg-white p-3">
+        <div className="mb-2 flex items-center justify-between border-b border-slate-200/70 pb-1.5">
+          <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-600">Live GPS</h3>
+          <button
+            type="button"
+            onClick={() => setIsFullscreen(false)}
+            className="rounded p-1 text-slate-500 hover:bg-slate-100"
+            aria-label="Exit fullscreen"
+          >
+            <Minimize2 className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex min-h-0 flex-1 gap-3">
+          <div className="min-w-0 flex-1">{mapBody("h-full")}</div>
+          {/* Quick-select list -- keeps "center on a truck" reachable while
+              maximized, since ActiveDeliveries' own locate-icon control (a
+              sibling panel) is covered by this fixed overlay. */}
+          {withPosition.length > 0 && (
+            <div className="w-56 shrink-0 overflow-y-auto rounded-md border border-slate-200 p-2">
+              <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Trucks
+              </p>
+              <div className="space-y-1">
+                {withPosition.map((row) => (
+                  <button
+                    key={row.id}
+                    type="button"
+                    onClick={() => panToTruck(row)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] text-slate-700 hover:bg-blue-50"
+                  >
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${
+                        row.isAnomalous ? "bg-red-600" : row.tripState === "Paused" ? "bg-amber-600" : "bg-blue-600"
+                      }`}
+                    />
+                    <span className="truncate">
+                      {row.truckPlate} — {row.driver}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <Panel title="Live GPS" action={<MapPin className="h-3.5 w-3.5 text-slate-400" />}>
+    <Panel
+      title="Live GPS"
+      action={
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsFullscreen(true)}
+            className="rounded p-1 text-slate-500 hover:bg-slate-100"
+            aria-label="Maximize"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+          <MapPin className="h-3.5 w-3.5 text-slate-400" />
+        </div>
+      }
+    >
       {/* Explicit height here, not on Panel's own outer div -- Panel's base
           classes already set h-full there, and this component isn't inside
           a grid row with a sibling to stretch against, so a conflicting
@@ -721,48 +854,7 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
           ancestor and silently collapses to ~0 (found live-testing this
           panel: it rendered completely empty, no spinner or empty-state text
           visible, despite the data/logic all being correct). */}
-      {isLoading ? (
-        <div className="flex h-80 items-center justify-center text-xs text-slate-400">
-          <Loader2 className="h-4 w-4 animate-spin" />
-        </div>
-      ) : !isLoaded ? (
-        <div className="flex h-80 items-center justify-center text-slate-400">
-          <Loader2 className="h-5 w-5 animate-spin" />
-        </div>
-      ) : withPosition.length === 0 ? (
-        <div className="flex h-80 items-center justify-center text-center text-xs text-slate-400">
-          No live GPS positions yet.
-        </div>
-      ) : (
-        <div className="h-80 w-full overflow-hidden rounded-md">
-          <GoogleMap
-            mapContainerStyle={GOOGLE_MAP_CONTAINER_STYLE}
-            center={initialCenter}
-            zoom={17}
-            onLoad={(map) => {
-              mapRef.current = map;
-              setIsMapReady(true);
-            }}
-            options={{ disableDefaultUI: true, gestureHandling: "greedy", mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID }}
-          >
-            {withPosition.map((row) => (
-              <GoogleMapMarker
-                key={row.id}
-                position={row.position}
-                title={`${row.truckPlate} — ${row.driver}`}
-                icon={{
-                  path: window.google.maps.SymbolPath.CIRCLE,
-                  scale: 7,
-                  fillColor: row.isAnomalous ? "#dc2626" : row.tripState === "Paused" ? "#d97706" : "#2563eb",
-                  fillOpacity: 1,
-                  strokeColor: "#fff",
-                  strokeWeight: 2,
-                }}
-              />
-            ))}
-          </GoogleMap>
-        </div>
-      )}
+      {mapBody("h-80")}
     </Panel>
   );
 }
@@ -901,7 +993,7 @@ function WeeklySafetySummary({ data, dateRange, onDateRangeChange }) {
 
 function SupDashboard() {
   const [dateRange, setDateRange] = useState("7 Days");
-  const { fleetOps, alertFeed, realDriverSafety, isLoading, now } = useFleetOps();
+  const { fleetOps, alertFeed, realDriverSafety, isLoading, now, trucks } = useFleetOps();
   const [focusedTruckId, setFocusedTruckId] = useState(null);
   const [focusToken, setFocusToken] = useState(0);
   const handleFocusTruck = (id) => {
@@ -909,10 +1001,20 @@ function SupDashboard() {
     setFocusToken((t) => t + 1);
   };
 
+  // Real (not mock) PMS-overdue count, shortcutting straight into the Trucks
+  // list pre-filtered to Overdue -- getPmsStatus/pmsFilter mirror what
+  // MaintenanceSummaryWidget/SupTrucks.jsx already use for the same
+  // computation, just surfaced here too so a Supervisor doesn't have to
+  // navigate into Trucks first to see whether anything needs attention.
+  const pmsOverdueCount = useMemo(
+    () => trucks.filter((t) => getPmsStatus(t) === "overdue").length,
+    [trucks],
+  );
+
   // ----- KPI strip: doubles as the "needs attention" summary — each tile
   // routes to the page that resolves it, so there's no separate task list.
   // Left as mock per 08_REALTIME_DASHBOARD.md's reuse decision (out of scope
-  // for this phase). -----
+  // for this phase), except PMS Overdue which is real (see above). -----
   const kpis = [
     { label: "Active Deliveries", value: 18, to: "/supervisor/deliveries" },
     { label: "Pending Assignments", value: 5, to: "/supervisor/deliveries", tone: "amber" },
@@ -920,6 +1022,13 @@ function SupDashboard() {
     { label: "Alerts Today", value: 14, to: "/supervisor/deliveries", tone: "amber" },
     { label: "High-Risk Drivers", value: 3, to: "/supervisor/delivery-crew", tone: "red" },
     { label: "Fleet Available", value: "22/48", to: "/supervisor/trucks" },
+    {
+      label: "PMS Overdue",
+      value: pmsOverdueCount,
+      to: "/supervisor/trucks",
+      tone: pmsOverdueCount > 0 ? "red" : undefined,
+      state: { pmsFilter: "overdue" },
+    },
   ];
 
   const fleetStatus = { available: 22, onDelivery: 18, maintenance: 5, offline: 3 };
@@ -987,7 +1096,7 @@ function SupDashboard() {
         </div>
 
         {/* Top: KPI summary */}
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-7">
           {kpis.map((kpi) => (
             <StatTile key={kpi.label} {...kpi} />
           ))}

@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import MaintenanceSummaryWidget from "../components/trucks/MaintenanceSummaryWidget.jsx";
 import {
@@ -255,10 +255,18 @@ const PAGE_SIZE = 10;
 
 function SupTrucks() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedType, setSelectedType] = useState("All");
   const [selectedStatus, setSelectedStatus] = useState("All");
-  const [selectedPmsStatus, setSelectedPmsStatus] = useState("All");
+  // Arriving from SupDashboard's "PMS Overdue" shortcut (state.pmsFilter)
+  // pre-applies the filter, same as clicking MaintenanceSummaryWidget's own
+  // "Overdue" card would -- read once on mount, not on every location change,
+  // so manually clearing the filter afterward doesn't keep getting overridden
+  // by the same nav state on a re-render.
+  const [selectedPmsStatus, setSelectedPmsStatus] = useState(
+    () => location.state?.pmsFilter || "All",
+  );
   const [currentPage, setCurrentPage] = useState(1);
   // const [isAddModalOpen, setIsAddModalOpen] = useState(false); // Add modal disabled for supervisor view
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);

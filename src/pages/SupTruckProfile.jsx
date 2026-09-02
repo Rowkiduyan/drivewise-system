@@ -461,6 +461,13 @@ function SupTruckProfile() {
   const [logShop, setLogShop] = useState("");
   const [logStatus, setLogStatus] = useState("Completed");
   const [logNotes, setLogNotes] = useState("");
+  // "Mark truck as Available now" checkbox (only relevant/shown when
+  // logStatus is Completed) -- defaults checked since finishing a logged
+  // service usually does mean the truck is back in rotation, but stays an
+  // explicit per-submission choice rather than an automatic side effect,
+  // since a Completed log doesn't always mean the truck is physically ready
+  // (e.g. logged for record-keeping while still held for something else).
+  const [logMarkAvailable, setLogMarkAvailable] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Modal state for viewing long notes
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
@@ -576,17 +583,25 @@ function SupTruckProfile() {
         return;
       }
 
-      // Step B: Update the parent public.trucks baseline fields
+      // Step B: Update the parent public.trucks baseline fields. Also flips
+      // status back to "Available" when the Supervisor left the checkbox
+      // checked for a Completed log -- only when the truck is currently
+      // "Maintenance", never overriding some other status (e.g. Inactive).
       const newCurrentMileage = Math.max(
         truck.current_mileage || 0,
         Number(logMileage),
       );
+      const shouldMarkAvailable =
+        logStatus === "Completed" &&
+        logMarkAvailable &&
+        truck.status === "Maintenance";
       const { error: updateError } = await supabase
         .from("trucks")
         .update({
           previous_maintenance_date: logDate,
           previous_mileage: Number(logMileage),
           current_mileage: newCurrentMileage,
+          ...(shouldMarkAvailable ? { status: "Available" } : {}),
         })
         .eq("id", truck.id);
 
@@ -622,10 +637,13 @@ function SupTruckProfile() {
       setLogShop("");
       setLogStatus("Completed");
       setLogNotes("");
+      setLogMarkAvailable(true);
       setIsLogMaintenanceModalOpen(false);
       // Show success toast
       setToast({
-        message: "Maintenance service logged successfully",
+        message: shouldMarkAvailable
+          ? "Maintenance service logged successfully — truck marked Available"
+          : "Maintenance service logged successfully",
         type: "success",
       });
     } finally {
@@ -1418,6 +1436,26 @@ function SupTruckProfile() {
                         <option value="In Progress">In Progress</option>
                       </select>
                     </div>
+                    {logStatus === "Completed" &&
+                      truck?.status === "Maintenance" && (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="logMarkAvailable"
+                            checked={logMarkAvailable}
+                            onChange={(e) =>
+                              setLogMarkAvailable(e.target.checked)
+                            }
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <label
+                            htmlFor="logMarkAvailable"
+                            className="text-sm text-slate-700"
+                          >
+                            Mark truck as Available now
+                          </label>
+                        </div>
+                      )}
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
                         Remarks / Notes
@@ -1443,6 +1481,7 @@ function SupTruckProfile() {
                           setLogShop("");
                           setLogStatus("Completed");
                           setLogNotes("");
+                          setLogMarkAvailable(true);
                         }}
                         className="flex-1 px-4 py-2 border rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100"
                       >

@@ -6,6 +6,7 @@ import {
   DEFAULT_MAINTENANCE_INTERVAL_KM,
   DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
 } from "../constants/pms.js";
+import { completeInProgressMaintenance } from "./trucks/utils/maintenance.js";
 
 // Duplicate options to avoid circular imports
 // Utility: today’s date in YYYY‑MM‑DD format (no time component)
@@ -417,7 +418,7 @@ export default function AddTruckModal({
           .maybeSingle();
         if (fetchErr) {
           // Unexpected fetch error (e.g., network issue)
-          setToast({
+          setValidationToast({
             message:
               "Failed to verify existing maintenance record: " +
               fetchErr.message,
@@ -441,12 +442,38 @@ export default function AddTruckModal({
               status: "In Progress",
             });
           if (maintError) {
-            setToast({
+            setValidationToast({
               message:
                 "Failed to create maintenance record: " + maintError.message,
               type: "error",
             });
           }
+        }
+      }
+
+      // ---------------------------------------------------------------
+      // Auto‑complete any "In Progress" maintenance record when status
+      // changes to "Available" -- mirrors the block above. Previously this
+      // only happened via a useEffect on SupTruckProfile.jsx/
+      // AdminTruckProfile.jsx, which meant it silently never fired if the
+      // status was flipped from the Trucks list page instead of that
+      // truck's own Profile page. Living here (the shared modal both list
+      // pages already funnel status changes through) means it fires
+      // regardless of which page the edit came from.
+      // ---------------------------------------------------------------
+      const statusJustChangedToAvailable =
+        formData.status?.toLowerCase() === "available" &&
+        (initialData?.status?.toLowerCase() ?? "") !== "available";
+      if (statusJustChangedToAvailable) {
+        const { error: completeError } = await completeInProgressMaintenance(
+          initialData?.id,
+        );
+        if (completeError) {
+          setValidationToast({
+            message:
+              "Error completing maintenance: " + completeError.message,
+            type: "error",
+          });
         }
       }
 

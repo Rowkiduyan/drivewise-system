@@ -2081,6 +2081,15 @@ function LocationSwitcher({ request }) {
 // Only renders items that actually have a photo -- a delivery with stops
 // still in progress has photos for the items completed so far only.
 function ProofOfDeliverySection({ request }) {
+  // Only meaningful once the delivery has actually finished -- matches the
+  // Driver/Customer portals' own ProofOfDeliverySection gate. Without this,
+  // an in-progress request (still PROCESSING/PICKUP/DROPOFF) rendered "No
+  // Proof of Delivery" as if photos were missing, when the delivery simply
+  // hadn't reached the point where any exist yet.
+  if (request.status !== "DELIVERED" && request.status !== "COMPLETED") {
+    return null;
+  }
+
   const items = [
     request.pickupPhotoUrl && {
       label: "Pickup",
