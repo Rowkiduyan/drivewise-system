@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   ArrowLeft,
   Check,
@@ -3768,6 +3769,7 @@ function getCounterOfferRange(r) {
 }
 
 function SupDeliveries() {
+  const location = useLocation();
   // Mock inbox state kept for the legacy mock modules (writes only — the UI
   // reads the real dbRequests inbox now).
   const [, setRequests] = useState(() => autoCompleteDelivered(mockRequests));
@@ -4788,6 +4790,27 @@ function SupDeliveries() {
       _showTrucks: false,
     });
   };
+
+  // Arriving from SupDashboard's CriticalAlertPopup "View Delivery" link
+  // (state.openRequestId) auto-opens that request's detail view, same as
+  // clicking its row would -- dbRequests loads asynchronously after mount,
+  // so this waits for it rather than firing once against an empty array.
+  // Only fires once (openedFromNotificationRef) so it doesn't keep
+  // re-opening the modal every time dbRequests refreshes afterward (e.g. if
+  // the Supervisor closes it, a later Realtime refetch shouldn't reopen it).
+  const openedFromNotificationRef = useRef(false);
+  useEffect(() => {
+    const targetId = location.state?.openRequestId;
+    if (!targetId || openedFromNotificationRef.current || dbRequests.length === 0) return;
+    const match = dbRequests.find((r) => r.id === targetId);
+    if (!match) return;
+    openedFromNotificationRef.current = true;
+    openDetails(match);
+    // openDetails deliberately omitted -- a plain function redefined every
+    // render, not memoized; including it would fire this effect every
+    // render instead of only when dbRequests/location.state actually change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dbRequests, location.state]);
 
   const updateRequest = (id, patch) => {
     setRequests((prev) =>

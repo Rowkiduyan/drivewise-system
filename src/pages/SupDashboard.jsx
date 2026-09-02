@@ -8,6 +8,7 @@ import { supabase } from "../lib/supabaseClient.js";
 import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 import { getPmsStatus } from "../components/trucks/utils/pms.js";
+import CriticalAlertPopup from "../components/CriticalAlertPopup.jsx";
 
 const background = null;
 
@@ -129,6 +130,18 @@ const DEVICE_OFFLINE_TIMEOUT_MS = 30_000;
 // 08_REALTIME_DASHBOARD.md's "Deferred here from 03B..." section — not yet
 // tuned against real drift data.
 const PAUSED_MOVE_THRESHOLD_M = 100;
+
+// "Very High Possibility of Route Deviation" critical-alert threshold
+// (decided with the user 2026-09-02). Deliberately looser than
+// DriverDeliveries.jsx's own NAV_REROUTE_TOLERANCE_DEGREES (~100m, tuned to
+// eagerly recompute the driver's own turn-by-turn route) -- this is a
+// Supervisor-facing popup+sound, not a routing decision, so it should only
+// fire for a genuinely significant deviation, not ordinary GPS noise/a
+// missed turn the driver is already correcting. ~500m at this app's
+// operating latitude (same degrees-per-meter reasoning as
+// NAV_REROUTE_TOLERANCE_DEGREES's own comment). Not yet tuned against real
+// drift data, same caveat as PAUSED_MOVE_THRESHOLD_M above.
+const SUP_ROUTE_DEVIATION_TOLERANCE_DEGREES = 0.0045;
 
 // A delivery whose milestone status is past ASSIGNED but not yet DELIVERED —
 // the window in which a Trip (Session) can be Active or Paused.
@@ -254,6 +267,36 @@ function useFleetOps() {
   const [movementByDeliveryId, setMovementByDeliveryId] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  // Critical-alert popup queue (Very High Risk of Drowsiness / Very High
+  // Possibility of Route Deviation) -- see the two INSERT handlers below.
+  // Keyed by a stable string so the same underlying event can't be queued
+  // twice (e.g. a second gps_logs tick landing before the first popup is
+  // dismissed).
+  const [criticalAlerts, setCriticalAlerts] = useState([]);
+  const pushCriticalAlert = useCallback((alert) => {
+    setCriticalAlerts((prev) =>
+      prev.some((a) => a.key === alert.key) ? prev : [...prev, alert],
+    );
+  }, []);
+  const dismissCriticalAlert = useCallback((key) => {
+    setCriticalAlerts((prev) => prev.filter((a) => a.key !== key));
+  }, []);
+  // sessions/deliveries kept in refs too -- the two Realtime subscriptions
+  // below (empty dep arrays, same reasoning as positionsRef above) need a
+  // way to read current session->delivery/driver/client info without
+  // resubscribing on every sessions/deliveries change.
+  const sessionsRef = useRef(sessions);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+  const deliveriesRef = useRef(deliveries);
+  useEffect(() => {
+    deliveriesRef.current = deliveries;
+  }, [deliveries]);
+  // One-shot per Session -- a truck that stays off-route keeps generating
+  // gps_logs ticks that would each independently re-trigger the check
+  // otherwise; only the first crossing per Session should pop up.
+  const deviationAlertedSessionIdsRef = useRef(new Set());
 
   // Live-updating clock so Online/Offline/Waiting/Monitoring-Unavailable and
   // "last heartbeat" freshness advance even with no new Realtime events.
@@ -344,15 +387,46 @@ function useFleetOps() {
       });
     const channel = supabase
       .channel("sup-dashboard-alerts")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "alerts" }, (payload) => {
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "alerts" }, async (payload) => {
         setRecentAlerts((prev) => [payload.new, ...prev].slice(0, 50));
+
+        // Very High Risk of Drowsiness (decided with the user 2026-09-02):
+        // fires once a Session accumulates 5 alerts, excluding
+        // face_not_detected (a detection/camera issue, not a drowsiness
+        // event itself) -- not a rolling time window, a plain cumulative
+        // count for that Session. Queried directly against the DB rather
+        // than counted off recentAlerts, since that feed is capped at 50
+        // alerts app-wide and could undercount a session whose earlier
+        // alerts got pushed out by other trucks' alerts in between.
+        const row = payload.new;
+        if (row.event_type === "face_not_detected" || !row.session_id) return;
+        const { count } = await supabase
+          .from("alerts")
+          .select("id", { count: "exact", head: true })
+          .eq("session_id", row.session_id)
+          .neq("event_type", "face_not_detected");
+        if (count !== 5) return;
+
+        const session = sessionsRef.current.find((s) => s.session_id === row.session_id);
+        const delivery = session
+          ? deliveriesRef.current.find((d) => d.id === session.delivery_request_id)
+          : null;
+        if (!delivery) return;
+        pushCriticalAlert({
+          key: `drowsiness-${row.session_id}`,
+          type: "drowsiness",
+          title: "Very High Risk of Drowsiness",
+          message: `${delivery.assigned_truck_plate || "A truck"} (${delivery.id}) has logged 5 drowsiness alerts this trip.`,
+          deliveryId: delivery.id,
+          createdAt: row.created_at,
+        });
       })
       .subscribe();
     return () => {
       isMounted = false;
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [pushCriticalAlert]);
 
   // Deliveries currently Paused (no open Session, at least one closed one) —
   // drives both the paused-but-moving movement seed below and the anomaly
@@ -449,12 +523,53 @@ function useFleetOps() {
           setMovementByDeliveryId((prev) => ({ ...prev, [deliveryId]: (prev[deliveryId] || 0) + delta }));
         }
         setPositionsByDeliveryId((prev) => ({ ...prev, [deliveryId]: { lat: row.latitude, lng: row.longitude } }));
+
+        // Very High Possibility of Route Deviation (decided with the user
+        // 2026-09-02): only checked while a Session is actually open
+        // (row.session_id set -- an active trip in progress, not a
+        // Paused-trip anti-theft reading), and only against a delivery that
+        // actually has a saved suggested_route to compare against (nothing
+        // to deviate from otherwise -- see 01_SYSTEM_ARCHITECTURE.md's
+        // "suggested route is never persisted" gap note, still open for
+        // some deliveries). Silently skipped if the Maps JS geometry
+        // library (loaded by LiveFleetMap's own useJsApiLoader elsewhere on
+        // this same page) hasn't finished loading yet.
+        if (
+          row.session_id &&
+          !deviationAlertedSessionIdsRef.current.has(row.session_id) &&
+          window.google?.maps?.geometry
+        ) {
+          const delivery = deliveriesRef.current.find((d) => d.id === deliveryId);
+          const suggestedRoute = Array.isArray(delivery?.suggested_route) ? delivery.suggested_route : null;
+          const routePoints = suggestedRoute?.flatMap((leg) => leg.path || []) || [];
+          if (routePoints.length >= 2) {
+            const routePolyline = new window.google.maps.Polyline({
+              path: routePoints.map(([lat, lng]) => ({ lat, lng })),
+            });
+            const onRoute = window.google.maps.geometry.poly.isLocationOnEdge(
+              new window.google.maps.LatLng(row.latitude, row.longitude),
+              routePolyline,
+              SUP_ROUTE_DEVIATION_TOLERANCE_DEGREES,
+            );
+            if (!onRoute) {
+              deviationAlertedSessionIdsRef.current.add(row.session_id);
+              pushCriticalAlert({
+                key: `deviation-${row.session_id}`,
+                type: "deviation",
+                title: "Very High Possibility of Route Deviation",
+                message: `${delivery.assigned_truck_plate || "A truck"} (${delivery.id}) has moved significantly off its planned route.`,
+                deliveryId: delivery.id,
+                createdAt: row.created_at,
+              });
+            }
+          }
+        }
       })
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [pushCriticalAlert]);
 
   // ----- Derived: one row per in-progress delivery with a real Session
   // history (skips a delivery whose status advanced but never actually had
@@ -532,7 +647,16 @@ function useFleetOps() {
     }));
   }, [alertFeed]);
 
-  return { fleetOps, alertFeed, realDriverSafety, isLoading, now: nowTick, trucks };
+  return {
+    fleetOps,
+    alertFeed,
+    realDriverSafety,
+    isLoading,
+    now: nowTick,
+    trucks,
+    criticalAlerts,
+    dismissCriticalAlert,
+  };
 }
 
 // ----- Active deliveries (live ops) -----
@@ -993,7 +1117,16 @@ function WeeklySafetySummary({ data, dateRange, onDateRangeChange }) {
 
 function SupDashboard() {
   const [dateRange, setDateRange] = useState("7 Days");
-  const { fleetOps, alertFeed, realDriverSafety, isLoading, now, trucks } = useFleetOps();
+  const {
+    fleetOps,
+    alertFeed,
+    realDriverSafety,
+    isLoading,
+    now,
+    trucks,
+    criticalAlerts,
+    dismissCriticalAlert,
+  } = useFleetOps();
   const [focusedTruckId, setFocusedTruckId] = useState(null);
   const [focusToken, setFocusToken] = useState(0);
   const handleFocusTruck = (id) => {
@@ -1069,6 +1202,10 @@ function SupDashboard() {
 
   return (
     <SupLayout title="Supervisor Dashboard" background={background} bg="bg-[#F6F7FB]">
+      <CriticalAlertPopup
+        alerts={criticalAlerts}
+        onDismiss={dismissCriticalAlert}
+      />
       <div className="mx-auto flex max-w-[1600px] flex-col gap-4">
         {/* Header row */}
         <div className="flex flex-wrap items-center justify-between gap-2">
