@@ -47,7 +47,7 @@ Per `00_IMPLEMENTATION_RULES.md`'s "verify before implementing" process — befo
 ### Not yet built, but out of Phase 9's actual reach right now
 
 - **Multi-stop Trips / multiple customer branches within one Trip** — both depend on the `stops` column, which still doesn't exist (`DATABASE.md`'s `delivery_requests` entry, `02_BOOKING_AND_TRIP_CREATION.md`'s Required Schema gap #2). The "still ONE Trip" invariant these bullets care about is trivially true today only because there's no multi-stop Trip yet to accidentally split into two. Phase 9 can confirm the Session/Trip model has no dependency on stop count (it doesn't — verified, `sessions` only ever references `delivery_request_id`), but can't be tested against real multi-stop data until that column and its UI exist.
-- **Driver dismisses the rest-stop recommendation** — the underlying rest-stop notification itself isn't built at all yet (`03_START_TRIP_AND_SESSION.md` specifies it fully — a client-side 2-hour timer, no schema needed — but zero matches for it anywhere in `DriverDeliveries.jsx`). The "dismiss it" edge case is moot until that feature exists.
+- **Driver dismisses the rest-stop recommendation** — true as of this pre-work check (2026-08-12); **stale as of 2026-09-03** — the feature was since built (`12_REST_STOP_RECOMMENDATIONS.md`, 2026-08-13/14, `DriverDeliveries.jsx`'s `restStopRecommended`/`restStopDismissed` state), so this bullet's premise no longer holds. Dismissing it is already covered by that doc's own design (purely advisory, dismissing clears the banner without touching Trip/Session state, never re-shows itself once dismissed or the Trip ends) — not an open edge case for Phase 9 to pick up.
 
 ### Concrete gaps — the actual to-do list for this phase
 

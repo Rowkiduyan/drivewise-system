@@ -72,14 +72,7 @@ Do not implement alerts.
 
 ## Rest Stop Recommendation
 
-Every 2 hours of continuous driving within a single active Session, the Driver Web Application shows a rest stop recommendation notification. This is anchored to that Session's `start_time` (continuous driving time), not the Trip overall — since Pause/Resume already splits driving into separate Sessions, the 2-hour clock naturally resets whenever the driver actually takes a break, and doesn't carry over across days on a multi-Session Trip.
-
-This is advisory only:
-
-- It is entirely up to the driver whether to act on it (e.g. press Pause Trip) or dismiss it and keep driving.
-- It never automatically pauses, ends, or otherwise changes Trip or Session state — same principle as the "never auto-end" rules elsewhere (see `08_REALTIME_DASHBOARD.md`, `09_EDGE_CASES.md`).
-
-No new schema is needed — `sessions.start_time` already exists, so this is a client-side timer in the Driver Web Application while a Session is active, not a backend/database feature.
+**Superseded 2026-08-13 by `12_REST_STOP_RECOMMENDATIONS.md` — corrected here 2026-09-03, this section previously still described the old 2-hour-only design after that doc shipped a dual threshold, a stale-docs gap caught during an unrelated docs audit.** See that doc for the full current design; summary: the Driver Web Application recommends a rest stop once **either** 200 miles (321.9 km) traveled **or** 2 hours of driving time is crossed since Trip start, whichever first — not 2-hour-only as originally written here. Summed across all of the Trip's Sessions (not reset per-Session the way this section previously implied), one-shot, dismissible, advisory only, no schema/persistence. Built and live-verified 2026-08-13/14 (`DriverDeliveries.jsx`).
 
 ## Deliverable
 

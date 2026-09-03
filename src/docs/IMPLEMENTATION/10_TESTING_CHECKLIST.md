@@ -51,9 +51,12 @@ Verify every workflow and edge case described in Phases 1-9 before sign-off.
 
 ## Rest Stop Recommendation
 
-- Notification appears after 2 continuous hours of driving within a single active Session.
-- The 2-hour clock resets on Pause/Resume (measured from the current Session's `start_time`, not cumulative Trip time).
-- Dismissing/ignoring it never changes Trip or Session state.
+Per `12_REST_STOP_RECOMMENDATIONS.md` (supersedes `03_START_TRIP_AND_SESSION.md`'s original 2-hour-only design, corrected 2026-09-03 — this checklist previously only covered the stale half of the actual dual threshold):
+
+- Notification appears once **either** 200 miles (321.9 km) traveled **or** 2 continuous hours of driving is crossed since Trip start, whichever first.
+- Distance and time both sum across **all** of the Trip's Sessions (a Pause/Resume splits driving into a new Session, but doesn't reset either accumulator back to zero).
+- One-shot per Trip — does not re-fire after being dismissed, even if the driver keeps driving well past the threshold; only starting a genuinely different Trip resets it.
+- Dismissing/ignoring it never changes Trip or Session state, and nothing is persisted (no DB row, no Supervisor visibility).
 
 ## Multi-Stop Deliveries
 
