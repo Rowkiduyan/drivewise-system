@@ -12,7 +12,7 @@ import LandingPage from "./pages/LandingPage.jsx";
 import Login from "./pages/Login.jsx";
 import AdminHome from "./pages/AdminHome.jsx";
 import AdminDevices from "./pages/AdminDevices.jsx";
-import AdminAnalysis from "./pages/AdminAnalysis.jsx";
+import AdminDashboard from "./pages/AdminDashboard.jsx";
 import AdminProfile from "./pages/AdminProfile.jsx";
 import AdminTrucks from "./pages/AdminTrucks.jsx";
 import AdminTruckProfile from "./pages/AdminTruckProfile.jsx";
@@ -76,7 +76,7 @@ function App() {
       />
       <Route path="/admin/user-management" element={<AdminHome />} />
       <Route path="/admin/device-management" element={<AdminDevices />} />
-      <Route path="/admin/analysis" element={<AdminAnalysis />} />
+      <Route path="/admin/dashboard" element={<AdminDashboard />} />
       <Route path="/admin/profile" element={<AdminProfile />} />
       <Route path="/admin/trucks" element={<AdminTrucks />} />
       <Route path="/admin/trucks/profile" element={<AdminTruckProfile />} />

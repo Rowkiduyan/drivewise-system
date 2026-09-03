@@ -31,12 +31,50 @@ async function main() {
   const page = await context.newPage()
   const pageErrors = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
-  page.on('console', (msg) => { if (msg.text().includes('DEBUG')) console.log('BROWSER:', msg.text()) })
+  page.on('console', (msg) => console.log('BROWSER:', msg.type(), msg.text()))
+  page.on('requestfailed', (req) => console.log('REQFAIL:', req.url(), req.failure()?.errorText))
   await page.addInitScript(([key, s]) => localStorage.setItem(key, JSON.stringify(s)), [STORAGE_KEY, session])
+  // Spy on AudioContext (CriticalAlertPopup's synthesized tone, no more
+  // <audio> element) -- count oscillator .start() calls as "attempted playback".
+  await page.addInitScript(() => {
+    window.__oscillatorStarts = 0
+    const OrigCtx = window.AudioContext || window.webkitAudioContext
+    if (!OrigCtx) return
+    const PatchedCtx = function (...args) {
+      const ctx = new OrigCtx(...args)
+      const origCreateOscillator = ctx.createOscillator.bind(ctx)
+      ctx.createOscillator = () => {
+        const osc = origCreateOscillator()
+        const origStart = osc.start.bind(osc)
+        osc.start = (...startArgs) => {
+          window.__oscillatorStarts += 1
+          return origStart(...startArgs)
+        }
+        return osc
+      }
+      return ctx
+    }
+    PatchedCtx.prototype = OrigCtx.prototype
+    window.AudioContext = PatchedCtx
+    window.webkitAudioContext = PatchedCtx
+  })
 
   const results = {}
   let insertedAlertIds = []
   let insertedGpsLogId = null
+
+  // Clean fixture-drift baseline: this session accumulates leftover alerts
+  // across repeated test runs (e.g. earlier interrupted runs), which throws
+  // off the app's exact-count-of-5 trigger (SupDashboard.jsx). Clear it first
+  // so this run's own 4-then-5 sequence lands on a real count of 5.
+  const { count: preexistingCount } = await admin
+    .from('alerts')
+    .select('id', { count: 'exact', head: true })
+    .eq('session_id', SESSION_ID)
+  if (preexistingCount > 0) {
+    await admin.from('alerts').delete().eq('session_id', SESSION_ID)
+    console.log(`Cleared ${preexistingCount} leftover alert(s) for this session before testing.`)
+  }
 
   try {
     await page.goto(`${BASE}/supervisor/dashboard`, { waitUntil: 'load', timeout: 30000 })
@@ -68,9 +106,10 @@ async function main() {
     await page.waitForTimeout(3000)
     results.popupVisibleAfter5Alerts = await page.locator('text=Very High Risk of Drowsiness').first().isVisible().catch(() => false)
     results.popupMessageText = await page.locator('text=Very High Risk of Drowsiness').first().locator('xpath=../..').innerText().catch(() => null)
-    // Audio actually attempted playback -- headless Chromium still exposes
-    // paused/currentTime state even without real speakers.
-    results.audioAttemptedPlayback = await page.locator('audio').first().evaluate((el) => !el.paused || el.currentTime > 0).catch(() => false)
+    // Audio actually attempted playback -- via the AudioContext spy above,
+    // since CriticalAlertPopup now synthesizes a tone instead of playing an
+    // <audio> element.
+    results.audioAttemptedPlayback = await page.evaluate(() => window.__oscillatorStarts > 0).catch(() => false)
     await page.screenshot({ path: 'scripts/verify-alert-02-after-5-popup.png', fullPage: true })
 
     // ---------------- Hyperlink: click "View Delivery" ----------------

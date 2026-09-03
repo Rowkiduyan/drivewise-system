@@ -1,4 +1,4 @@
-import SupLayout from "../layout/SupLayout.jsx";
+import AdminLayout from "../layout/AdminLayout.jsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, LocateFixed, Loader2, MapPin, Maximize2, Minimize2 } from "lucide-react";
@@ -8,12 +8,26 @@ import { supabase } from "../lib/supabaseClient.js";
 import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 import { getPmsStatus, addMaintenanceBaselines } from "../components/trucks/utils/pms.js";
-import CriticalAlertPopup from "../components/CriticalAlertPopup.jsx";
+
+// Admin's own copy of SupDashboard.jsx's Operations Overview -- same real
+// data/panels (fleet ops, live GPS, drowsiness alerts, PMS), reusing the
+// existing per-role-duplicate-page convention already established by
+// AdminTrucks.jsx/SupTrucks.jsx and AdminTruckProfile.jsx/SupTruckProfile.jsx
+// rather than sharing one parameterized component.
+//
+// Deliberately different from the Supervisor version in two ways:
+// 1. No CriticalAlertPopup (the "Very High Risk of Drowsiness"/"Route
+//    Deviation" popup+siren) -- that notification is strictly a Supervisor
+//    surface, per the user (2026-09-03). This copy's useFleetOps also skips
+//    the underlying detection work that only existed to feed that popup.
+// 2. Admin has no /admin/deliveries or /admin/delivery-crew routes at all
+//    (only user-management, device-management, trucks, profile) -- decided
+//    with the user to render that data non-interactively (real numbers/rows,
+//    no click-through) rather than invent new routes or point links at the
+//    wrong page. Only /admin/trucks stays a real link, since it exists.
 
 const background = null;
 
-// Small, deliberately limited tone palette — blue is the Supervisor brand
-// accent; emerald/amber/red are reserved for status/severity meaning only.
 const TONE = {
   emerald: { text: "text-emerald-700", bg: "bg-emerald-50", dot: "bg-emerald-500", bar: "bg-emerald-400", borderL: "border-l-emerald-400" },
   sky: { text: "text-sky-700", bg: "bg-sky-50", dot: "bg-sky-500", bar: "bg-sky-400", borderL: "border-l-sky-400" },
@@ -43,18 +57,17 @@ function Avatar({ name }) {
     .join("")
     .toUpperCase();
   return (
-    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-700">
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-700">
       {initials}
     </span>
   );
 }
 
-// Compact panel wrapper. `muted` de-emphasizes secondary/bottom-tier content.
 function Panel({ title, action, children, className = "", muted = false }) {
   return (
     <div
       className={`flex h-full flex-col rounded-lg border p-3 ${
-        muted ? "border-slate-200 bg-slate-50/60" : "border-blue-100 bg-white shadow-sm"
+        muted ? "border-slate-200 bg-slate-50/60" : "border-violet-100 bg-white shadow-sm"
       } ${className}`}
     >
       <div className="mb-2 flex items-center justify-between border-b border-slate-200/70 pb-1.5">
@@ -77,10 +90,10 @@ function SectionHeader({ children, right, muted = false }) {
     <div className="flex items-center justify-between">
       <h2
         className={`flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider ${
-          muted ? "text-slate-400" : "text-blue-700"
+          muted ? "text-slate-400" : "text-violet-700"
         }`}
       >
-        {!muted && <span className="h-3 w-1 rounded-full bg-blue-600" />}
+        {!muted && <span className="h-3 w-1 rounded-full bg-violet-600" />}
         {children}
       </h2>
       {right}
@@ -92,59 +105,54 @@ function ViewAllLink({ to }) {
   return (
     <Link
       to={to}
-      className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 hover:underline"
+      className="text-[11px] font-semibold text-violet-600 hover:text-violet-800 hover:underline"
     >
       View all →
     </Link>
   );
 }
 
-// ----- KPI strip: the whole "what needs attention" summary, each tile links
-// straight to the page where it's resolved so there's no separate task list
-// duplicating the same numbers. -----
+// ----- KPI strip. Unlike SupDashboard's StatTile, `to` is optional here --
+// several of these tiles have no Admin route to link into (see file header),
+// so they render as a plain (non-Link) tile instead of a dead/wrong link. -----
 function StatTile({ label, value, to, tone, state }) {
-  return (
-    <Link
-      to={to}
-      state={state}
-      className={`flex flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors hover:border-blue-200 hover:bg-blue-50/40 ${
-        tone ? `border-l-4 ${TONE[tone].borderL}` : ""
-      }`}
-    >
+  const toneClass = tone ? `border-l-4 ${TONE[tone].borderL}` : "";
+  const body = (
+    <>
       <span className="text-[10.5px] font-medium uppercase tracking-wide text-slate-500">
         {label}
       </span>
       <span className="mt-0.5 text-xl font-bold leading-tight text-slate-900">
         {value}
       </span>
+    </>
+  );
+  if (!to) {
+    return (
+      <div className={`flex flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5 ${toneClass}`}>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <Link
+      to={to}
+      state={state}
+      className={`flex flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors hover:border-violet-200 hover:bg-violet-50/40 ${toneClass}`}
+    >
+      {body}
     </Link>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Phase 8 — Realtime Dashboard constants/helpers (08_REALTIME_DASHBOARD.md).
+// Constants/helpers -- identical to SupDashboard.jsx's own (08_REALTIME_
+// DASHBOARD.md governs both; Admin has the same direct RLS read access).
 // ---------------------------------------------------------------------------
 
-// PROJECT_CONSTRAINTS.md
 const DEVICE_OFFLINE_TIMEOUT_MS = 30_000;
-// 08_REALTIME_DASHBOARD.md's "Deferred here from 03B..." section — not yet
-// tuned against real drift data.
 const PAUSED_MOVE_THRESHOLD_M = 100;
 
-// "Very High Possibility of Route Deviation" critical-alert threshold
-// (decided with the user 2026-09-02). Deliberately looser than
-// DriverDeliveries.jsx's own NAV_REROUTE_TOLERANCE_DEGREES (~100m, tuned to
-// eagerly recompute the driver's own turn-by-turn route) -- this is a
-// Supervisor-facing popup+sound, not a routing decision, so it should only
-// fire for a genuinely significant deviation, not ordinary GPS noise/a
-// missed turn the driver is already correcting. ~500m at this app's
-// operating latitude (same degrees-per-meter reasoning as
-// NAV_REROUTE_TOLERANCE_DEGREES's own comment). Not yet tuned against real
-// drift data, same caveat as PAUSED_MOVE_THRESHOLD_M above.
-const SUP_ROUTE_DEVIATION_TOLERANCE_DEGREES = 0.0045;
-
-// A delivery whose milestone status is past ASSIGNED but not yet DELIVERED —
-// the window in which a Trip (Session) can be Active or Paused.
 const IN_PROGRESS_STATUSES = ["OUT_FOR_PICKUP", "ARRIVED_PICKUP", "OUT_FOR_DROPOFF", "ARRIVED_DROPOFF"];
 
 const MILESTONE_TONE = {
@@ -163,11 +171,6 @@ const DEVICE_STATE_TONE = {
   "Monitoring Unavailable": "amber",
 };
 
-// 06_DROWSINESS_ALERT_PIPELINE.md's four event types. No `severity` column
-// exists anywhere in the schema (DATABASE.md's `alerts` entry) — this is a
-// UI-only judgment call, consistent with face_not_detected already being
-// treated as the least urgent of the four elsewhere (DriverDeliveries.jsx
-// skips its audio clip for the same reason).
 const ALERT_TYPE_LABELS = {
   prolonged_eye_closure: "Prolonged Eye Closure",
   pattern_eye_closure_yawn: "Eye Closure + Yawn",
@@ -183,13 +186,8 @@ const ALERT_SEVERITY = {
 const SEVERITY_RANK = { High: 3, Medium: 2, Low: 1 };
 
 const GOOGLE_MAP_CONTAINER_STYLE = { width: "100%", height: "100%" };
-// Metro Manila fallback center, used only until at least one truck reports a
-// live position.
 const FLEET_MAP_DEFAULT_CENTER = { lat: 14.5995, lng: 120.9842 };
 
-// Haversine distance in meters — mirrors `driver-trip`'s `distanceKm` (same
-// formula, kept in km there for mileage) since Edge Functions and the
-// frontend don't share modules in this repo.
 function distanceMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -212,9 +210,6 @@ function formatAgo(isoString, now) {
   return `${h}h ago`;
 }
 
-// Resolves a delivery's Device state (Online/Offline/Waiting for
-// Device/Monitoring Unavailable) and Trip state (Active/Paused) per
-// 08_REALTIME_DASHBOARD.md's "Monitoring Status"/"Important Rules" sections.
 function resolveOpsState({ openSession, closedSessions, device, now }) {
   const hasEverHadSession = openSession || closedSessions.length > 0;
   if (!hasEverHadSession) return null;
@@ -233,9 +228,6 @@ function resolveOpsState({ openSession, closedSessions, device, now }) {
     return { tripState: "Active", deviceState, pauseStartedAt: null };
   }
 
-  // Paused: past ASSIGNED, no open Active session, but at least one Session
-  // has existed for this delivery (hasOpenSession's false branch, same
-  // computation as get-driver-deliveries/get-helper-deliveries).
   let deviceState;
   if (!device?.last_ping) {
     deviceState = "Monitoring Unavailable";
@@ -250,10 +242,11 @@ function resolveOpsState({ openSession, closedSessions, device, now }) {
 }
 
 // ---------------------------------------------------------------------------
-// Live fleet-ops data hook — seed-fetch + Realtime subscriptions against
-// devices/sessions/delivery_requests/alerts/gps_logs, all readable directly
-// by a Supervisor session per the schema/access check already done in
-// 08_REALTIME_DASHBOARD.md's Implementation Plan.
+// Live fleet-ops data hook -- same seed-fetch + Realtime subscriptions as
+// SupDashboard.jsx's useFleetOps, minus everything that only existed to feed
+// the Supervisor-only CriticalAlertPopup (the 5-alert-count "Very High Risk
+// of Drowsiness" check and the route-deviation check inside the gps_logs
+// INSERT handler, and the criticalAlerts queue itself).
 // ---------------------------------------------------------------------------
 function useFleetOps() {
   const [trucks, setTrucks] = useState([]);
@@ -267,24 +260,6 @@ function useFleetOps() {
   const [movementByDeliveryId, setMovementByDeliveryId] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [nowTick, setNowTick] = useState(() => Date.now());
-  // Critical-alert popup queue (Very High Risk of Drowsiness / Very High
-  // Possibility of Route Deviation) -- see the two INSERT handlers below.
-  // Keyed by a stable string so the same underlying event can't be queued
-  // twice (e.g. a second gps_logs tick landing before the first popup is
-  // dismissed).
-  const [criticalAlerts, setCriticalAlerts] = useState([]);
-  const pushCriticalAlert = useCallback((alert) => {
-    setCriticalAlerts((prev) =>
-      prev.some((a) => a.key === alert.key) ? prev : [...prev, alert],
-    );
-  }, []);
-  const dismissCriticalAlert = useCallback((key) => {
-    setCriticalAlerts((prev) => prev.filter((a) => a.key !== key));
-  }, []);
-  // sessions/deliveries kept in refs too -- the two Realtime subscriptions
-  // below (empty dep arrays, same reasoning as positionsRef above) need a
-  // way to read current session->delivery/driver/client info without
-  // resubscribing on every sessions/deliveries change.
   const sessionsRef = useRef(sessions);
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -293,20 +268,16 @@ function useFleetOps() {
   useEffect(() => {
     deliveriesRef.current = deliveries;
   }, [deliveries]);
-  // One-shot per Session -- a truck that stays off-route keeps generating
-  // gps_logs ticks that would each independently re-trigger the check
-  // otherwise; only the first crossing per Session should pop up.
-  const deviationAlertedSessionIdsRef = useRef(new Set());
 
-  // Live-updating clock so Online/Offline/Waiting/Monitoring-Unavailable and
-  // "last heartbeat" freshness advance even with no new Realtime events.
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 5000);
     return () => clearInterval(timer);
   }, []);
 
-  // Static-ish reference data (crew names, client names, truck roster) —
-  // fetched once; nothing in this phase's spec requires these to be live.
+  // Static-ish reference data (crew names, client names, truck roster) --
+  // fetched once, baseline-corrected the same way SupTrucks.jsx/AdminTrucks.jsx
+  // are (a truck's raw previous_mileage/previous_maintenance_date columns go
+  // stale as soon as a newer completed maintenance_records row exists).
   useEffect(() => {
     let isMounted = true;
     async function loadRefs() {
@@ -314,11 +285,6 @@ function useFleetOps() {
         supabase.functions.invoke("admin-users", { body: { action: "list-crew" } }),
         supabase.functions.invoke("admin-users", { body: { action: "list-clients" } }),
         supabase.from("trucks").select("*"),
-        // Same baseline correction SupTrucks.jsx applies -- without it, a
-        // truck's raw previous_mileage/previous_maintenance_date columns go
-        // stale as soon as a newer completed maintenance_records row exists
-        // for it, and this KPI tile silently disagrees with the Trucks page
-        // (a truck just serviced still reads as Overdue here).
         supabase.from("maintenance_records").select("truck_id, status, mileage_at_service, start_date, end_date"),
       ]);
       if (!isMounted) return;
@@ -339,19 +305,8 @@ function useFleetOps() {
     };
   }, []);
 
-  // devices/sessions/delivery_requests — the three tables whose changes
-  // actually move Device/Trip state. Reloaded together on any change to any
-  // of the three, same "just refetch" pattern SupDeliveries.jsx already uses
-  // for its own delivery_requests subscription.
   const loadOps = useCallback(async () => {
     const [{ data: devicesData }, { data: sessionsData }, { data: deliveriesData }] = await Promise.all([
-      // Explicit column list, not select('*') -- `authenticated`'s grant on
-      // devices is column-scoped and deliberately excludes
-      // device_secret_hash (DATABASE.md's devices "Grants" note); selecting
-      // '*' tries to read that column too and Postgres 403s the whole
-      // request rather than just omitting it (SUPABASE_GOTCHAS.md #1's same
-      // grant-checked-before-RLS mechanism, hit here via a column grant
-      // instead of a table grant).
       supabase.from("devices").select("id, device_id, plate_number, device_status, created_at, last_ping"),
       supabase.from("sessions").select("*").order("created_at", { ascending: false }).limit(300),
       supabase.from("delivery_requests").select("*").in("status", IN_PROGRESS_STATUSES),
@@ -363,13 +318,10 @@ function useFleetOps() {
   }, []);
 
   useEffect(() => {
-    // Seed-fetch on mount, same external-system-sync shape already accepted
-    // elsewhere in this codebase (DriverDeliveries.jsx/HelperDeliveries.jsx)
-    // — not a derived-state anti-pattern.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadOps();
     const channel = supabase
-      .channel("sup-dashboard-ops")
+      .channel("admin-dashboard-ops")
       .on("postgres_changes", { event: "*", schema: "public", table: "devices" }, loadOps)
       .on("postgres_changes", { event: "*", schema: "public", table: "sessions" }, loadOps)
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_requests" }, loadOps)
@@ -379,8 +331,9 @@ function useFleetOps() {
     };
   }, [loadOps]);
 
-  // Latest Alerts feed — seed-fetch + append on INSERT, same shape as
-  // DriverDeliveries.jsx's own alerts subscription.
+  // Latest Alerts feed -- seed-fetch + append on INSERT. No critical-alert
+  // threshold check here (that's Supervisor-only); this just keeps the real
+  // Driver Safety list current.
   useEffect(() => {
     let isMounted = true;
     supabase
@@ -392,51 +345,17 @@ function useFleetOps() {
         if (isMounted) setRecentAlerts(data || []);
       });
     const channel = supabase
-      .channel("sup-dashboard-alerts")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "alerts" }, async (payload) => {
+      .channel("admin-dashboard-alerts")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "alerts" }, (payload) => {
         setRecentAlerts((prev) => [payload.new, ...prev].slice(0, 50));
-
-        // Very High Risk of Drowsiness (decided with the user 2026-09-02):
-        // fires once a Session accumulates 5 alerts, excluding
-        // face_not_detected (a detection/camera issue, not a drowsiness
-        // event itself) -- not a rolling time window, a plain cumulative
-        // count for that Session. Queried directly against the DB rather
-        // than counted off recentAlerts, since that feed is capped at 50
-        // alerts app-wide and could undercount a session whose earlier
-        // alerts got pushed out by other trucks' alerts in between.
-        const row = payload.new;
-        if (row.event_type === "face_not_detected" || !row.session_id) return;
-        const { count } = await supabase
-          .from("alerts")
-          .select("id", { count: "exact", head: true })
-          .eq("session_id", row.session_id)
-          .neq("event_type", "face_not_detected");
-        if (count !== 5) return;
-
-        const session = sessionsRef.current.find((s) => s.session_id === row.session_id);
-        const delivery = session
-          ? deliveriesRef.current.find((d) => d.id === session.delivery_request_id)
-          : null;
-        if (!delivery) return;
-        pushCriticalAlert({
-          key: `drowsiness-${row.session_id}`,
-          type: "drowsiness",
-          title: "Very High Risk of Drowsiness",
-          message: `${delivery.assigned_truck_plate || "A truck"} (${delivery.id}) has logged 5 drowsiness alerts this trip.`,
-          deliveryId: delivery.id,
-          createdAt: row.created_at,
-        });
       })
       .subscribe();
     return () => {
       isMounted = false;
       supabase.removeChannel(channel);
     };
-  }, [pushCriticalAlert]);
+  }, []);
 
-  // Deliveries currently Paused (no open Session, at least one closed one) —
-  // drives both the paused-but-moving movement seed below and the anomaly
-  // banner. Recomputed whenever deliveries/sessions change.
   const pausedInfo = useMemo(() => {
     const map = {};
     for (const d of deliveries) {
@@ -452,29 +371,11 @@ function useFleetOps() {
     return map;
   }, [deliveries, sessions]);
 
-  // Kept in sync via effect (not during render) so the gps_logs INSERT
-  // handler below can read the latest position without becoming a
-  // dependency of that subscription effect — same pattern as
-  // DriverDeliveries.jsx's liveAlertsRef.
   const positionsRef = useRef(positionsByDeliveryId);
   useEffect(() => {
     positionsRef.current = positionsByDeliveryId;
   }, [positionsByDeliveryId]);
 
-  // Seed current position (any in-progress delivery) and cumulative
-  // paused-movement (Paused deliveries only) for anything not seeded yet.
-  //
-  // Both use `session_id is null` as the "this reading happened during a
-  // Pause" signal, not a locally-cached pause-start timestamp -- per the
-  // GPS-during-Pause design (DATABASE.md), the real gps-upload Edge
-  // Function itself already leaves session_id null exactly when a reading
-  // lands during a Pause, so it's a race-free signal straight from the row.
-  // An earlier version compared row.timestamp against a pauseStart value
-  // cached in a ref (synced via its own effect off the sessions table); live
-  // testing caught a real gap in that approach -- a GPS reading arriving
-  // right after Pause could beat the sessions-Realtime-event -> refetch ->
-  // ref-sync chain, silently dropping that reading's distance from the
-  // anomaly total even though the position itself still updated correctly.
   const seededPositionIds = useRef(new Set());
   const seededMovementIds = useRef(new Set());
   useEffect(() => {
@@ -513,13 +414,11 @@ function useFleetOps() {
     }
   }, [deliveries, pausedInfo]);
 
-  // Fleet-wide GPS live position — one subscription, not per-truck, since the
-  // dashboard needs every truck's position, not just one. Also extends the
-  // paused-movement accumulator incrementally whenever the reading itself
-  // (session_id null) marks it as having happened during a Pause.
+  // Fleet-wide GPS live position -- unlike SupDashboard's copy, no route-
+  // deviation check here (that only fed the Supervisor-only popup).
   useEffect(() => {
     const channel = supabase
-      .channel("sup-dashboard-gps")
+      .channel("admin-dashboard-gps")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "gps_logs" }, (payload) => {
         const row = payload.new;
         const deliveryId = row.delivery_request_id;
@@ -529,57 +428,13 @@ function useFleetOps() {
           setMovementByDeliveryId((prev) => ({ ...prev, [deliveryId]: (prev[deliveryId] || 0) + delta }));
         }
         setPositionsByDeliveryId((prev) => ({ ...prev, [deliveryId]: { lat: row.latitude, lng: row.longitude } }));
-
-        // Very High Possibility of Route Deviation (decided with the user
-        // 2026-09-02): only checked while a Session is actually open
-        // (row.session_id set -- an active trip in progress, not a
-        // Paused-trip anti-theft reading), and only against a delivery that
-        // actually has a saved suggested_route to compare against (nothing
-        // to deviate from otherwise -- see 01_SYSTEM_ARCHITECTURE.md's
-        // "suggested route is never persisted" gap note, still open for
-        // some deliveries). Silently skipped if the Maps JS geometry
-        // library (loaded by LiveFleetMap's own useJsApiLoader elsewhere on
-        // this same page) hasn't finished loading yet.
-        if (
-          row.session_id &&
-          !deviationAlertedSessionIdsRef.current.has(row.session_id) &&
-          window.google?.maps?.geometry
-        ) {
-          const delivery = deliveriesRef.current.find((d) => d.id === deliveryId);
-          const suggestedRoute = Array.isArray(delivery?.suggested_route) ? delivery.suggested_route : null;
-          const routePoints = suggestedRoute?.flatMap((leg) => leg.path || []) || [];
-          if (routePoints.length >= 2) {
-            const routePolyline = new window.google.maps.Polyline({
-              path: routePoints.map(([lat, lng]) => ({ lat, lng })),
-            });
-            const onRoute = window.google.maps.geometry.poly.isLocationOnEdge(
-              new window.google.maps.LatLng(row.latitude, row.longitude),
-              routePolyline,
-              SUP_ROUTE_DEVIATION_TOLERANCE_DEGREES,
-            );
-            if (!onRoute) {
-              deviationAlertedSessionIdsRef.current.add(row.session_id);
-              pushCriticalAlert({
-                key: `deviation-${row.session_id}`,
-                type: "deviation",
-                title: "Very High Possibility of Route Deviation",
-                message: `${delivery.assigned_truck_plate || "A truck"} (${delivery.id}) has moved significantly off its planned route.`,
-                deliveryId: delivery.id,
-                createdAt: row.created_at,
-              });
-            }
-          }
-        }
       })
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [pushCriticalAlert]);
+  }, []);
 
-  // ----- Derived: one row per in-progress delivery with a real Session
-  // history (skips a delivery whose status advanced but never actually had
-  // Start Trip pressed — "no session at all" per the doc's state table). -----
   const fleetOps = useMemo(() => {
     return deliveries
       .map((d) => {
@@ -608,13 +463,8 @@ function useFleetOps() {
       .filter(Boolean);
   }, [deliveries, sessions, trucks, devices, driverNameById, clientNameById, positionsByDeliveryId, movementByDeliveryId, nowTick]);
 
-  // ----- Derived: Latest Alerts feed, joined to driver/truck via the
-  // session cache already loaded above. -----
   const alertFeed = useMemo(() => {
     const sessionById = new Map(sessions.map((s) => [s.session_id, s]));
-    // Running per-session tally, computed oldest-first, so each alert shows
-    // the count *as of that alert* (12, 13, 14, ...) instead of the final
-    // total repeated identically across every row of the session.
     const ascending = [...recentAlerts].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     const runningCountById = new Map();
     const countBySession = {};
@@ -638,13 +488,6 @@ function useFleetOps() {
     });
   }, [recentAlerts, sessions, trucks, driverNameById]);
 
-  // ----- Derived: real per-driver alert rollup, same shape as
-  // WeeklySafetySummary's mock rows ({ name, alerts, risk }) -- computed
-  // from the same real alertFeed above, not a separate query. No date-range
-  // filtering yet (recentAlerts is just "last 50, most recent"), so this
-  // rolls up the same real totals into Today/7 Days/30 Days alike; a real
-  // per-range breakdown is 08B_ANALYTICS_AND_REPORTING.md's job, not this
-  // dashboard's.
   const realDriverSafety = useMemo(() => {
     const byDriver = new Map();
     for (const a of alertFeed) {
@@ -661,22 +504,14 @@ function useFleetOps() {
     }));
   }, [alertFeed]);
 
-  return {
-    fleetOps,
-    alertFeed,
-    realDriverSafety,
-    isLoading,
-    now: nowTick,
-    trucks,
-    criticalAlerts,
-    dismissCriticalAlert,
-  };
+  return { fleetOps, alertFeed, realDriverSafety, isLoading, now: nowTick, trucks };
 }
 
-// ----- Active deliveries (live ops) -----
+// ----- Active deliveries (live ops). No ViewAllLink action -- there's no
+// /admin/deliveries page to send it to. -----
 function ActiveDeliveries({ data, isLoading, now, focusedTruckId, onFocusTruck }) {
   return (
-    <Panel title="Active Deliveries" action={<ViewAllLink to="/supervisor/deliveries" />}>
+    <Panel title="Active Deliveries">
       {isLoading ? (
         <div className="flex items-center gap-2 py-6 text-xs text-slate-400">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading live fleet…
@@ -702,7 +537,7 @@ function ActiveDeliveries({ data, isLoading, now, focusedTruckId, onFocusTruck }
                 const milestone = MILESTONE_TONE[row.milestone] || { label: row.milestone, tone: "slate" };
                 const isFocused = row.id === focusedTruckId;
                 return (
-                  <tr key={row.id} className={isFocused ? "bg-blue-50/60" : "hover:bg-slate-50"}>
+                  <tr key={row.id} className={isFocused ? "bg-violet-50/60" : "hover:bg-slate-50"}>
                     <td className="py-1.5 pr-2 font-medium text-slate-800">{row.driver}</td>
                     <td className="py-1.5 pr-2 text-slate-600">{row.truckPlate}</td>
                     <td className="py-1.5 pr-2 text-slate-600">{row.client}</td>
@@ -724,8 +559,8 @@ function ActiveDeliveries({ data, isLoading, now, focusedTruckId, onFocusTruck }
                           title={`Center map on ${row.truckPlate}`}
                           className={`rounded-md border p-1 transition-colors ${
                             isFocused
-                              ? "border-blue-300 bg-blue-100 text-blue-700"
-                              : "border-slate-200 text-slate-400 hover:border-blue-200 hover:text-blue-600"
+                              ? "border-violet-300 bg-violet-100 text-violet-700"
+                              : "border-slate-200 text-slate-400 hover:border-violet-200 hover:text-violet-600"
                           }`}
                         >
                           <LocateFixed className="h-3.5 w-3.5" />
@@ -743,8 +578,6 @@ function ActiveDeliveries({ data, isLoading, now, focusedTruckId, onFocusTruck }
   );
 }
 
-// ----- Live fleet: trucks + crew status, one compact panel (mock — left
-// untouched per 08_REALTIME_DASHBOARD.md's reuse decision, out of scope). -----
 function StatusBar({ segments, total }) {
   return (
     <div className="flex h-2 w-full overflow-hidden rounded-full bg-slate-100">
@@ -793,7 +626,7 @@ function LiveFleet({ trucks, crew }) {
     { label: "Off Duty", value: crew.offDuty, tone: "slate" },
   ];
   return (
-    <Panel title="Live Fleet" action={<ViewAllLink to="/supervisor/trucks" />}>
+    <Panel title="Live Fleet" action={<ViewAllLink to="/admin/trucks" />}>
       <div className="flex flex-col gap-3">
         <StatusRow title="Trucks" total={truckTotal} unitLabel="total" segments={truckSegments} />
         <StatusRow title="Crew" total={crewTotal} unitLabel="on roster" segments={crewSegments} />
@@ -802,33 +635,13 @@ function LiveFleet({ trucks, crew }) {
   );
 }
 
-// ----- Live GPS map: one marker per truck currently on an in-progress
-// delivery. Net-new per 08_REALTIME_DASHBOARD.md's Map Display section —
-// simpler than Driver nav's LiveNavigationMap: no tilt/rotation/turn-by-turn/
-// route rendering, just a live position per truck. -----
 function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
   const { isLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS);
   const withPosition = data.filter((row) => row.position);
-  // Captured once, never reactive -- a `center` prop that changes on every
-  // GPS tick would call map.setCenter() constantly and fight the
-  // fitBounds/panTo effect below (same lesson as LiveNavigationMap's
-  // initialCenter in DriverDeliveries.jsx, minus the tilt/heading angle).
   const [initialCenter] = useState(() => withPosition[0]?.position || FLEET_MAP_DEFAULT_CENTER);
   const mapRef = useRef(null);
   const [isMapReady, setIsMapReady] = useState(false);
-  // Fullscreen mode (same fixed-positioning pattern as Driver's
-  // LiveNavigationMap in DriverDeliveries.jsx, no browser Fullscreen API).
-  // The "center on this truck" control normally lives in ActiveDeliveries'
-  // Device column (a sibling panel, covered while maximized), so a
-  // fullscreen-only truck quick-select list is rendered below instead of
-  // losing that ability while maximized -- panToTruck bypasses the
-  // parent-owned focusedTruckId/focusToken state entirely since this map
-  // already holds its own mapRef.
   const [isFullscreen, setIsFullscreen] = useState(false);
-  // Only the set of truck ids, not their positions -- refitting the camera
-  // on every single GPS tick (as often as once a second per truck) would
-  // constantly yank the view out from under a supervisor manually panning
-  // it. Only reframes when a truck newly appears/disappears from the view.
   const truckIdsKey = withPosition.map((row) => row.id).sort().join(",");
 
   useEffect(() => {
@@ -844,14 +657,6 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMapReady, truckIdsKey]);
 
-  // "Center on this truck" (the locate icon in ActiveDeliveries' Device
-  // column) -- a deliberate one-shot user action, so it's its own effect,
-  // not folded into the fitBounds effect above. Keyed on focusToken (a
-  // counter bumped on every click), not just focusedTruckId -- clicking the
-  // *same* truck a second time after manually panning away sets the same id
-  // both times, which React treats as no change and the effect would never
-  // re-fire; the token guarantees a dependency change on every click
-  // regardless of whether the id repeats.
   useEffect(() => {
     if (!isMapReady || !mapRef.current || !focusedTruckId) return;
     const row = withPosition.find((r) => r.id === focusedTruckId);
@@ -861,19 +666,12 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMapReady, focusToken]);
 
-  // Used by both the fullscreen quick-select list below and, indirectly, the
-  // focusedTruckId effect above's own inline pan/zoom (kept as its own
-  // function so the fullscreen list has a way to recenter without a path
-  // back to the parent's focus state).
   const panToTruck = (row) => {
     if (!mapRef.current) return;
     mapRef.current.panTo(row.position);
     mapRef.current.setZoom(17);
   };
 
-  // heightClass: "h-80" in the normal Panel-wrapped layout, "h-full" filling
-  // the fullscreen container instead -- see GOOGLE_MAP_CONTAINER_STYLE's own
-  // 100%/100% comment, it already just fills whatever this wrapper is.
   const mapBody = (heightClass) =>
     isLoading ? (
       <div className={`flex ${heightClass} items-center justify-center text-xs text-slate-400`}>
@@ -907,7 +705,7 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
               icon={{
                 path: window.google.maps.SymbolPath.CIRCLE,
                 scale: 7,
-                fillColor: row.isAnomalous ? "#dc2626" : row.tripState === "Paused" ? "#d97706" : "#2563eb",
+                fillColor: row.isAnomalous ? "#dc2626" : row.tripState === "Paused" ? "#d97706" : "#7c3aed",
                 fillOpacity: 1,
                 strokeColor: "#fff",
                 strokeWeight: 2,
@@ -934,9 +732,6 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
         </div>
         <div className="flex min-h-0 flex-1 gap-3">
           <div className="min-w-0 flex-1">{mapBody("h-full")}</div>
-          {/* Quick-select list -- keeps "center on a truck" reachable while
-              maximized, since ActiveDeliveries' own locate-icon control (a
-              sibling panel) is covered by this fixed overlay. */}
           {withPosition.length > 0 && (
             <div className="w-56 shrink-0 overflow-y-auto rounded-md border border-slate-200 p-2">
               <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
@@ -948,11 +743,11 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
                     key={row.id}
                     type="button"
                     onClick={() => panToTruck(row)}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] text-slate-700 hover:bg-blue-50"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] text-slate-700 hover:bg-violet-50"
                   >
                     <span
                       className={`h-2 w-2 shrink-0 rounded-full ${
-                        row.isAnomalous ? "bg-red-600" : row.tripState === "Paused" ? "bg-amber-600" : "bg-blue-600"
+                        row.isAnomalous ? "bg-red-600" : row.tripState === "Paused" ? "bg-amber-600" : "bg-violet-600"
                       }`}
                     />
                     <span className="truncate">
@@ -985,21 +780,11 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
         </div>
       }
     >
-      {/* Explicit height here, not on Panel's own outer div -- Panel's base
-          classes already set h-full there, and this component isn't inside
-          a grid row with a sibling to stretch against, so a conflicting
-          height override on Panel itself resolves against an auto-height
-          ancestor and silently collapses to ~0 (found live-testing this
-          panel: it rendered completely empty, no spinner or empty-state text
-          visible, despite the data/logic all being correct). */}
       {mapBody("h-80")}
     </Panel>
   );
 }
 
-// ----- Paused-but-moving anomaly banner: its own visual state, distinct from
-// the Latest Alerts feed (drowsiness) per 08_REALTIME_DASHBOARD.md's
-// "Decided 2026-08-12" note — a security/theft concern, not driver-attention. -----
 function PausedMovementBanner({ data }) {
   const anomalies = data.filter((row) => row.isAnomalous);
   if (anomalies.length === 0) return null;
@@ -1019,13 +804,12 @@ function PausedMovementBanner({ data }) {
   );
 }
 
-// ----- Driver safety: drowsiness priority list (replaces the old chart) -----
+// ----- Driver safety: drowsiness priority list, same paginated shape as
+// SupDashboard.jsx's DriverSafetyList. The last column has no "View Trip"
+// link -- no /admin/deliveries page exists to send it to. -----
 const SEVERITY_TONE = { High: "red", Medium: "amber", Low: "emerald" };
 const DRIVER_SAFETY_PAGE_SIZE = 15;
 
-// Same page-nav format as SupTrucks.jsx's PaginationBar, just with lighter
-// px/py so it fits Panel's own padding instead of assuming an edge-to-edge
-// card of its own.
 function DriverSafetyPaginationBar({ page, setPage, totalPages }) {
   return (
     <div className="flex shrink-0 items-center justify-between border-t border-slate-100 pt-2 mt-1">
@@ -1117,7 +901,7 @@ function DriverSafetyList({ data, isLoading }) {
   const pageStart = (safePage - 1) * DRIVER_SAFETY_PAGE_SIZE;
   const paged = sorted.slice(pageStart, pageStart + DRIVER_SAFETY_PAGE_SIZE);
   return (
-    <Panel title="Driver Safety — Drowsiness Alerts" action={<ViewAllLink to="/supervisor/deliveries" />}>
+    <Panel title="Driver Safety — Drowsiness Alerts">
       {isLoading ? (
         <div className="flex items-center gap-2 py-6 text-xs text-slate-400">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading alerts…
@@ -1135,7 +919,6 @@ function DriverSafetyList({ data, isLoading }) {
                   <th className="pb-1.5 pr-3 font-medium">Time</th>
                   <th className="pb-1.5 pr-3 font-medium">Severity</th>
                   <th className="pb-1.5 pr-3 font-medium">This Trip</th>
-                  <th className="pb-1.5 font-medium" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1156,14 +939,6 @@ function DriverSafetyList({ data, isLoading }) {
                       <Badge tone={SEVERITY_TONE[d.severity]}>{d.severity}</Badge>
                     </td>
                     <td className="whitespace-nowrap py-2 pr-3 text-slate-500">{d.tripAlerts} alerts</td>
-                    <td className="py-2">
-                      <Link
-                        to={d.deliveryId ? `/supervisor/deliveries?deliveryId=${d.deliveryId}` : "/supervisor/deliveries"}
-                        className="whitespace-nowrap rounded-md border border-blue-100 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50"
-                      >
-                        View Trip
-                      </Link>
-                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1176,7 +951,6 @@ function DriverSafetyList({ data, isLoading }) {
   );
 }
 
-// ----- Bottom tier: recent activity + weekly rollup (secondary, quieter) -----
 function RecentActivity({ items }) {
   return (
     <Panel title="Recent Activity" muted>
@@ -1222,18 +996,9 @@ function WeeklySafetySummary({ data, dateRange, onDateRangeChange }) {
   );
 }
 
-function SupDashboard() {
+function AdminDashboard() {
   const [dateRange, setDateRange] = useState("7 Days");
-  const {
-    fleetOps,
-    alertFeed,
-    realDriverSafety,
-    isLoading,
-    now,
-    trucks,
-    criticalAlerts,
-    dismissCriticalAlert,
-  } = useFleetOps();
+  const { fleetOps, alertFeed, realDriverSafety, isLoading, now, trucks } = useFleetOps();
   const [focusedTruckId, setFocusedTruckId] = useState(null);
   const [focusToken, setFocusToken] = useState(0);
   const handleFocusTruck = (id) => {
@@ -1241,106 +1006,71 @@ function SupDashboard() {
     setFocusToken((t) => t + 1);
   };
 
-  // Real (not mock) PMS-overdue count, shortcutting straight into the Trucks
-  // list pre-filtered to Overdue -- getPmsStatus/pmsFilter mirror what
-  // MaintenanceSummaryWidget/SupTrucks.jsx already use for the same
-  // computation, just surfaced here too so a Supervisor doesn't have to
-  // navigate into Trucks first to see whether anything needs attention.
+  // Real PMS-overdue count, deep-linking into /admin/trucks pre-filtered to
+  // Overdue (AdminTrucks.jsx reads state.pmsFilter the same way
+  // SupTrucks.jsx does).
   const pmsOverdueCount = useMemo(
     () => trucks.filter((t) => getPmsStatus(t) === "overdue").length,
     [trucks],
   );
 
-  // ----- KPI strip: doubles as the "needs attention" summary — each tile
-  // routes to the page that resolves it, so there's no separate task list.
-  // Left as mock per 08_REALTIME_DASHBOARD.md's reuse decision (out of scope
-  // for this phase), except PMS Overdue which is real (see above). -----
+  // KPI strip: PMS Overdue and Fleet Available are real and link into
+  // /admin/trucks (the only Admin route this data can point to). The rest
+  // have no backing Admin route (no /admin/deliveries or /admin/delivery-crew)
+  // so they render as plain, non-interactive tiles -- same real-data-where-
+  // possible precedent as SupDashboard.jsx, minus links to pages that don't
+  // exist here.
   const kpis = [
-    { label: "Active Deliveries", value: 18, to: "/supervisor/deliveries" },
-    { label: "Pending Assignments", value: 5, to: "/supervisor/deliveries", tone: "amber" },
-    { label: "Requests Inbox", value: 9, to: "/supervisor/deliveries" },
-    { label: "Alerts Today", value: 14, to: "/supervisor/deliveries", tone: "amber" },
-    { label: "High-Risk Drivers", value: 3, to: "/supervisor/delivery-crew", tone: "red" },
-    { label: "Fleet Available", value: "22/48", to: "/supervisor/trucks" },
+    { label: "Active Deliveries", value: fleetOps.length },
+    { label: "Alerts Today", value: alertFeed.length, tone: alertFeed.length > 0 ? "amber" : undefined },
+    { label: "High-Risk Drivers", value: realDriverSafety.filter((d) => d.risk === "High Risk").length, tone: "red" },
+    { label: "Fleet Available", value: `${trucks.filter((t) => t.status === "Available").length}/${trucks.length}`, to: "/admin/trucks" },
     {
       label: "PMS Overdue",
       value: pmsOverdueCount,
-      to: "/supervisor/trucks",
+      to: "/admin/trucks",
       tone: pmsOverdueCount > 0 ? "red" : undefined,
       state: { pmsFilter: "overdue" },
     },
   ];
 
-  const fleetStatus = { available: 22, onDelivery: 18, maintenance: 5, offline: 3 };
-  const crewStatus = { available: 10, onDelivery: 16, offDuty: 4 };
-
-  const recentActivity = [
-    { id: 1, text: "Trip to Shaw Traders marked Delivered — TR-45", time: "5m ago", tone: "emerald" },
-    { id: 2, text: "J. Doe assigned to TR-12 for SM Supply Co.", time: "22m ago", tone: "blue" },
-    { id: 3, text: "Truck TR-27 flagged for maintenance", time: "1h ago", tone: "amber" },
-    { id: 4, text: "New delivery request from Ortigas Retail", time: "1h ago", tone: "slate" },
-    { id: 5, text: "Trip cancelled — Pasig Logistics", time: "2h ago", tone: "red" },
-  ];
-
-  // ----- Historical rollup, keyed by date range (mock — out of scope). -----
-  const topRiskDriversByRange = {
-    Today: [{ name: "J. Doe", alerts: 10, risk: "High Risk" }],
-    "7 Days": [
-      { name: "J. Doe", alerts: 10, risk: "High Risk" },
-      { name: "M. Lee", alerts: 8, risk: "High Risk" },
-      { name: "A. Smith", alerts: 6, risk: "High Risk" },
-    ],
-    "30 Days": [
-      { name: "J. Doe", alerts: 30, risk: "High Risk" },
-      { name: "M. Lee", alerts: 25, risk: "High Risk" },
-      { name: "A. Smith", alerts: 22, risk: "Moderate" },
-    ],
+  const fleetStatus = {
+    available: trucks.filter((t) => t.status === "Available").length,
+    onDelivery: trucks.filter((t) => t.status === "Active").length,
+    maintenance: trucks.filter((t) => t.status === "Maintenance").length,
+    offline: trucks.filter((t) => t.status === "Inactive").length,
   };
-  // Real per-driver alert data (e.g. DR-0020's driver) layered on top of the
-  // mock rollup above, not replacing it -- same "real data if present,
-  // otherwise the existing mock" precedent used elsewhere on this page.
-  // De-duped by name (a real driver already present in the mock list keeps
-  // the mock's row rather than double-counting).
-  const mockRiskDrivers = topRiskDriversByRange[dateRange];
-  const topRiskDrivers = [
-    ...realDriverSafety.filter((real) => !mockRiskDrivers.some((mock) => mock.name === real.name)),
-    ...mockRiskDrivers,
-  ].sort((a, b) => b.alerts - a.alerts);
+  // No Admin crew roster query exists yet (list-crew only returns names, not
+  // duty status) -- left as an even split placeholder, same "mock until a
+  // real source exists" precedent SupDashboard.jsx used for this exact panel
+  // before Phase 8 wired in real trucks/PMS data.
+  const crewStatus = { available: 0, onDelivery: 0, offDuty: 0 };
+
+  const recentActivity = alertFeed.slice(0, 5).map((a) => ({
+    id: a.id,
+    text: `${a.alertType} — ${a.name} (${a.truck})`,
+    time: a.time,
+    tone: SEVERITY_TONE[a.severity] === "red" ? "red" : SEVERITY_TONE[a.severity] === "amber" ? "amber" : "emerald",
+  }));
 
   return (
-    <SupLayout title="Supervisor Dashboard" background={background} bg="bg-[#F6F7FB]">
-      <CriticalAlertPopup
-        alerts={criticalAlerts}
-        onDismiss={dismissCriticalAlert}
-      />
+    <AdminLayout title="Dashboard" background={background} bg="bg-[#F6F7FB]">
       <div className="mx-auto flex max-w-[1600px] flex-col gap-4">
         {/* Header row */}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">
-              Operations Overview
+            <p className="text-[11px] font-bold uppercase tracking-widest text-violet-700">
+              Fleet Operations Overview
             </p>
             <p className="text-xs text-slate-500">Live fleet, delivery &amp; driver-safety status</p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <Link
-              to="/supervisor/deliveries"
-              className="rounded-md bg-blue-700 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-800"
-            >
-              Assign Vehicles
-            </Link>
-            <nav className="flex items-center gap-2 text-[11px] font-medium text-blue-600">
-              <Link to="/supervisor/deliveries" className="hover:underline">Deliveries</Link>
-              <span className="text-slate-300">·</span>
-              <Link to="/supervisor/delivery-crew" className="hover:underline">Crew</Link>
-              <span className="text-slate-300">·</span>
-              <Link to="/supervisor/trucks" className="hover:underline">Trucks</Link>
-            </nav>
-          </div>
+          <nav className="flex items-center gap-2 text-[11px] font-medium text-violet-600">
+            <Link to="/admin/trucks" className="hover:underline">Trucks</Link>
+          </nav>
         </div>
 
         {/* Top: KPI summary */}
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-7">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
           {kpis.map((kpi) => (
             <StatTile key={kpi.label} {...kpi} />
           ))}
@@ -1383,15 +1113,15 @@ function SupDashboard() {
           </div>
           <div className="lg:col-span-5">
             <WeeklySafetySummary
-              data={topRiskDrivers}
+              data={realDriverSafety.sort((a, b) => b.alerts - a.alerts)}
               dateRange={dateRange}
               onDateRangeChange={setDateRange}
             />
           </div>
         </div>
       </div>
-    </SupLayout>
+    </AdminLayout>
   );
 }
 
-export default SupDashboard;
+export default AdminDashboard;

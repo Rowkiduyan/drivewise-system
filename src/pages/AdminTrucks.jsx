@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import AdminLayout from "../layout/AdminLayout.jsx";
 import AddTruckModal from "../components/AddTruckModal.jsx";
 import { Search, ChevronRight, Trash2, Edit, RefreshCw } from "lucide-react";
@@ -7,6 +7,7 @@ import MaintenanceSummaryWidget from "../components/trucks/MaintenanceSummaryWid
 import {
   addMaintenanceBaselines,
   getPmsStatus,
+  getPmsStatusDisplayLabel,
 } from "../components/trucks/utils/pms.js";
 // Truck type options are defined directly here as mockTrucks.js has been removed.
 const TRUCK_TYPES = [
@@ -82,6 +83,29 @@ function getCommodityLabel(truck) {
   return /REF/i.test(truck.truck_type || "") ? "Chilled" : "Ordinary";
 }
 
+// Same red/amber/emerald scheme as MaintenanceSummaryWidget's own
+// Overdue/Scheduled/Completed cards, mirrored from SupTrucks.jsx's own
+// PmsTag for parity -- there was previously no way to see a truck's PMS
+// status here without going through the filter or the summary cards.
+const PMS_TAG_CLASSES = {
+  overdue: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200",
+  scheduled: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
+  completed: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+};
+
+function PmsTag({ truck }) {
+  const status = getPmsStatus(truck);
+  return (
+    <span
+      className={`inline-flex items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.01em] ${
+        PMS_TAG_CLASSES[status] || "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200"
+      }`}
+    >
+      {getPmsStatusDisplayLabel(status)}
+    </span>
+  );
+}
+
 function FilterSelect({
   id,
   label,
@@ -90,6 +114,7 @@ function FilterSelect({
   options,
   counts,
   allLabel,
+  className = "",
 }) {
   return (
     <>
@@ -100,11 +125,11 @@ function FilterSelect({
         id={id}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
+        className={`rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white ${className}`}
       >
         <option value="All">{allLabel}</option>
         {options.map((option) => (
-          <option key={option} value={option}>
+          <option key={option} value={option} className={className}>
             {option} ({counts[option] ?? 0})
           </option>
         ))}
@@ -254,10 +279,17 @@ const PAGE_SIZE = 10;
 
 function AdminTrucks() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedType, setSelectedType] = useState("All");
   const [selectedStatus, setSelectedStatus] = useState("All");
-  const [selectedPmsStatus, setSelectedPmsStatus] = useState("All");
+  // Arriving from AdminDashboard's "PMS Overdue" shortcut (state.pmsFilter)
+  // pre-applies the filter, same pattern as SupTrucks.jsx's own -- read once
+  // on mount so manually clearing the filter afterward isn't overridden by
+  // the same nav state on a re-render.
+  const [selectedPmsStatus, setSelectedPmsStatus] = useState(
+    () => location.state?.pmsFilter || "All",
+  );
   const [currentPage, setCurrentPage] = useState(1);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -400,6 +432,17 @@ function AdminTrucks() {
     return counts;
   }, [trucks]);
 
+  // Compute PMS status counts for the PMS filter dropdown -- same
+  // getPmsStatus computation the summary cards/badge column already use.
+  const pmsCounts = useMemo(() => {
+    const counts = { All: trucks.length };
+    trucks.forEach((t) => {
+      const status = getPmsStatus(t);
+      counts[status] = (counts[status] || 0) + 1;
+    });
+    return counts;
+  }, [trucks]);
+
   // Filter trucks based on search term and selected type, then sort by type order and plate number.
 
   const filteredTrucks = useMemo(() => {
@@ -509,13 +552,33 @@ function AdminTrucks() {
   };
 
   // Refresh trucks list from Supabase – used after edit to reflect changes.
+  // Must apply addMaintenanceBaselines the same way the initial load effect
+  // does (line ~305) -- skipping it here was a real bug (found via the same
+  // issue on SupTrucks.jsx's copy of this function): it made this path fall
+  // back to the trucks table's own raw previous_mileage/
+  // previous_maintenance_date columns, which go stale as soon as a truck's
+  // latest completed maintenance_records row moves ahead of them, silently
+  // flipping a just-serviced truck back to "Overdue" on every refresh/edit.
   const refreshTrucks = async () => {
     // Reset widget filter to default (All) and pagination to first page
     setSelectedPmsStatus("All");
     setCurrentPage(1);
     setLoading(true);
-    const { data, error } = await supabase.from("trucks").select("*");
-    if (!error && data) setTrucks(data);
+    const [
+      { data, error },
+      { data: maintenanceRecords, error: maintenanceError },
+    ] = await Promise.all([
+      supabase.from("trucks").select("*"),
+      supabase
+        .from("maintenance_records")
+        .select("truck_id, status, mileage_at_service, start_date, end_date"),
+    ]);
+    if (maintenanceError) {
+      console.error("Failed to fetch maintenance records:", maintenanceError);
+    }
+    if (!error && data) {
+      setTrucks(addMaintenanceBaselines(data, maintenanceRecords || []));
+    }
     setLoading(false);
   };
 
@@ -545,6 +608,11 @@ function AdminTrucks() {
   // Update selected status for the status filter
   const updateStatus = (value) => {
     setSelectedStatus(value);
+    setCurrentPage(1);
+  };
+
+  const updatePmsStatus = (value) => {
+    setSelectedPmsStatus(value);
     setCurrentPage(1);
   };
 
@@ -648,6 +716,19 @@ function AdminTrucks() {
                 counts={typeCounts}
                 allLabel="Truck Type"
               />
+              {/* PMS filter -- same overdue/scheduled/completed values the
+                  summary cards and AdminDashboard deep-link already set;
+                  `capitalize` since getPmsStatus returns lowercase. */}
+              <FilterSelect
+                id="pms-filter"
+                label="PMS Status"
+                value={selectedPmsStatus}
+                onChange={updatePmsStatus}
+                options={["overdue", "scheduled", "completed"]}
+                counts={pmsCounts}
+                allLabel="PMS Status"
+                className="capitalize"
+              />
               {/* Manual refresh button (icon) */}
               <button
                 onClick={refreshTrucks}
@@ -730,6 +811,9 @@ function AdminTrucks() {
                         Status
                       </th>
                       <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 text-center font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                        PMS
+                      </th>
+                      <th className="sticky top-0 z-10 bg-slate-50 px-5 py-3 text-center font-semibold shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                         Assigned Device
                       </th>
                       {userRole !== "supervisor" && (
@@ -773,6 +857,9 @@ function AdminTrucks() {
                         {/* Status column */}
                         <td className="px-5 py-2.5 text-center">
                           <StatusText status={truck.status} />
+                        </td>
+                        <td className="px-5 py-2.5 text-center">
+                          <PmsTag truck={truck} />
                         </td>
                         <td className="px-5 py-2.5 text-center text-slate-700">
                           {(() => {

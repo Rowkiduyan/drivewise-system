@@ -8,7 +8,7 @@ import { formatCutoff } from "../lib/deactivation.js";
 
 // Order of modules as requested:
 // 1. User Management
-// 2. Admin Analysis
+// 2. Dashboard
 // 3. Device Management
 // 4. Trucks
 // 5. Profile
@@ -19,9 +19,9 @@ const adminModules = [
     description: "Users, roles, and accounts",
   },
   {
-    label: "Admin Analysis",
-    path: "/admin/analysis",
-    description: "Delivery and alert analysis",
+    label: "Dashboard",
+    path: "/admin/dashboard",
+    description: "Fleet operations overview",
   },
   {
     label: "Device Management",
@@ -69,7 +69,7 @@ const adminIcons = {
       <circle cx="15" cy="16" r="1.4" />
     </svg>
   ),
-  "Admin Analysis": (
+  Dashboard: (
     <svg
       viewBox="0 0 24 24"
       fill="none"

@@ -2,50 +2,33 @@ import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
 
-// Reuses the Driver portal's own "5+ Multiple Alert" clip (DriverDeliveries.jsx)
-// rather than a new asset -- it's already this app's vocabulary for "an
-// escalated, attention-grabbing safety moment," which is exactly what both
-// critical-alert types here are.
-const ALERT_AUDIO_SRC = encodeURI("/5+ Multiple Alert.mp3");
-
-// Browsers block <audio>.play() with no prior user interaction on the page.
-// Identical technique to DriverDeliveries.jsx's unlockAlertAudio -- play
-// muted-and-immediately-paused on the Supervisor's first click anywhere on
-// the page (there's no trip-lifecycle gesture like Driver's Start Trip to
-// hook into instead), so a later real alert can just play.
-function unlockAlertAudio(audioEl) {
-  if (!audioEl) return;
-  const wasMuted = audioEl.muted;
-  audioEl.muted = true;
-  audioEl
-    .play()
-    .then(() => {
-      audioEl.pause();
-      audioEl.currentTime = 0;
-      audioEl.muted = wasMuted;
-    })
-    .catch(() => {
-      audioEl.muted = wasMuted;
-    });
-}
-
-// Plays the clip twice in a row, same reasoning as DriverDeliveries.jsx's
-// playAlertClip -- one pass isn't attention-grabbing enough for a critical
-// real-time incident.
-function playAlertClip(audioEl) {
-  if (!audioEl) return;
-  const attemptPlay = () =>
-    audioEl.play().catch((err) => {
-      console.warn("Critical alert audio failed to play:", err);
-    });
-  const playSecondTime = () => {
-    audioEl.removeEventListener("ended", playSecondTime);
-    audioEl.currentTime = 0;
-    attemptPlay();
+// Synthesized via Web Audio API rather than reusing the Driver portal's
+// "Usual Alert"/"5+ Multiple Alert" clips (DriverDeliveries.jsx) -- those are
+// the Driver's own vocabulary for their two severity tiers, and reusing one
+// here made the Supervisor popup indistinguishable-by-ear from a Driver-side
+// alert. This is a two-tone descending siren (unique to the Supervisor
+// surface), played twice in a row for the same "one pass isn't
+// attention-grabbing enough" reasoning the Driver clips use.
+function playCriticalTone(ctx) {
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const beep = (startAt, freq) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(freq, startAt);
+    gain.gain.setValueAtTime(0, startAt);
+    gain.gain.linearRampToValueAtTime(0.25, startAt + 0.02);
+    gain.gain.linearRampToValueAtTime(0, startAt + 0.22);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(startAt);
+    osc.stop(startAt + 0.22);
   };
-  audioEl.addEventListener("ended", playSecondTime, { once: true });
-  audioEl.currentTime = 0;
-  attemptPlay();
+  // Two descending two-tone bursts (siren-like), a beat apart.
+  [0, 0.5].forEach((offset) => {
+    beep(now + offset, 1046.5); // C6
+    beep(now + offset + 0.24, 830.6); // G#5
+  });
 }
 
 // Pop-up + sound for critical real-time incidents (Very High Risk of
@@ -55,13 +38,25 @@ function playAlertClip(audioEl) {
 // movement anomalies) stays in the existing passive DriverSafetyList/
 // PausedMovementBanner feeds, exactly so this doesn't become notification
 // spam -- only these two named, threshold-crossing events reach this popup.
-export default function CriticalAlertPopup({ alerts, onDismiss }) {
-  const audioRef = useRef(null);
+// deliveryLinkTo: base path for "View Delivery →" (defaults to the
+// Supervisor's own deliveries page). Pass null to omit that link entirely --
+// used by AdminDashboard.jsx, which has no deliveries page to deep-link into.
+export default function CriticalAlertPopup({ alerts, onDismiss, deliveryLinkTo = "/supervisor/deliveries" }) {
+  const audioCtxRef = useRef(null);
   const playedKeysRef = useRef(new Set());
 
   useEffect(() => {
+    // AudioContext must be created (or resumed) from a real user gesture --
+    // same browser restriction the Driver portal's <audio> unlock works
+    // around, just the Web Audio API's version of it.
     const unlock = () => {
-      unlockAlertAudio(audioRef.current);
+      if (!audioCtxRef.current) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        audioCtxRef.current = new AudioCtx();
+      }
+      if (audioCtxRef.current.state === "suspended") {
+        audioCtxRef.current.resume();
+      }
       document.removeEventListener("pointerdown", unlock);
     };
     document.addEventListener("pointerdown", unlock);
@@ -74,12 +69,11 @@ export default function CriticalAlertPopup({ alerts, onDismiss }) {
   useEffect(() => {
     if (!current || playedKeysRef.current.has(current.key)) return;
     playedKeysRef.current.add(current.key);
-    playAlertClip(audioRef.current);
+    playCriticalTone(audioCtxRef.current);
   }, [current]);
 
   return (
     <>
-      <audio ref={audioRef} src={ALERT_AUDIO_SRC} preload="auto" hidden />
       {current && (
         <div
           role="alertdialog"
@@ -98,14 +92,18 @@ export default function CriticalAlertPopup({ alerts, onDismiss }) {
             </div>
             <p className="mt-2 text-sm text-slate-700">{current.message}</p>
             <div className="mt-4 flex items-center justify-between gap-3">
-              <Link
-                to="/supervisor/deliveries"
-                state={{ openRequestId: current.deliveryId }}
-                onClick={() => onDismiss(current.key)}
-                className="text-sm font-semibold text-blue-700 hover:underline"
-              >
-                View Delivery →
-              </Link>
+              {deliveryLinkTo ? (
+                <Link
+                  to={deliveryLinkTo}
+                  state={{ openRequestId: current.deliveryId }}
+                  onClick={() => onDismiss(current.key)}
+                  className="text-sm font-semibold text-blue-700 hover:underline"
+                >
+                  View Delivery →
+                </Link>
+              ) : (
+                <span />
+              )}
               <button
                 type="button"
                 onClick={() => onDismiss(current.key)}
