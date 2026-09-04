@@ -952,6 +952,7 @@ Deno.serve(async (req) => {
           // read-only for the Driver, mirrors get-helper-deliveries'
           // equivalent fields (02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
           pickupPhotoUrl: r.pickup_photo_url || null,
+          pickupCompletedAt: r.pickup_completed_at || null,
           dropoffPhotoUrl: r.dropoff_photo_url || null,
           dropoffCompletedAt: r.dropoff_completed_at || null,
           // Frozen planned-route (Pickup -> Dropoff -> Stops), if the
@@ -1165,6 +1166,7 @@ Deno.serve(async (req) => {
           // authorized for the assigned Driver only).
           suggestedRoute: r.suggested_route || null,
           pickupPhotoUrl: r.pickup_photo_url || null,
+          pickupCompletedAt: r.pickup_completed_at || null,
           dropoffPhotoUrl: r.dropoff_photo_url || null,
           dropoffCompletedAt: r.dropoff_completed_at || null,
           status: r.status,
@@ -1250,16 +1252,22 @@ Deno.serve(async (req) => {
         return json({ error: upload.error }, 400);
       }
 
+      const pickupCompletedAt = new Date().toISOString();
       const { error: updateError } = await adminClient
         .from("delivery_requests")
-        .update({ status: nextStatus, pickup_photo_url: upload.url, updated_at: new Date().toISOString() })
+        .update({
+          status: nextStatus,
+          pickup_photo_url: upload.url,
+          pickup_completed_at: pickupCompletedAt,
+          updated_at: pickupCompletedAt,
+        })
         .eq("id", deliveryId);
 
       if (updateError) {
         return json({ error: updateError.message }, 400);
       }
 
-      return json({ ok: true, status: nextStatus, pickupPhotoUrl: upload.url });
+      return json({ ok: true, status: nextStatus, pickupPhotoUrl: upload.url, pickupCompletedAt });
     }
 
     // The customer's dropoff (item 2 of the chain) — final only when there

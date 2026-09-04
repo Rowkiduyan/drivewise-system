@@ -11,7 +11,12 @@ const ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 const PROJECT_REF = SUPABASE_URL.match(/https:\/\/([^.]+)\./)[1]
 const STORAGE_KEY = `sb-${PROJECT_REF}-auth-token`
-const ADMIN_EMAIL = 'alexisyvone@gmail.com'
+// NOT alexisyvone@gmail.com -- that account has no public.users row at all
+// (admin_records.A002's auth_id actually points to an unrelated Supervisor
+// test account), so every role-gated table 403'd silently. Found 2026-09-04
+// -- see STATUS.md's correction note on this script's original 2026-09-03
+// entry. admin@drivewise.com is a real, confirmed role='Admin' account.
+const ADMIN_EMAIL = 'admin@drivewise.com'
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 const anon = createClient(SUPABASE_URL, ANON_KEY)

@@ -291,6 +291,87 @@ function formatTimestamp(iso) {
  * placeholder below in favor of it, exactly as noted in buildProgressData's
  * own backend guide.
  */
+// Ordinal word for the Nth drop-off in the chain (1st = the primary
+// dropoff_location, 2nd+ = each of `stops` in order) — capped at 5 stops
+// (DATABASE.md's `stops` limit), so 6 words covers every real case.
+const DROPOFF_ORDINAL_WORDS = ["First", "Second", "Third", "Fourth", "Fifth", "Sixth"];
+
+// Builds the "Out for Delivery" stage's real, sequential pickup/drop-off
+// progress messages (2026-09-04, per user request — the Customer portal has
+// no live truck navigation, so this is how a customer knows the crew's
+// current pickup/drop-off status instead). Chain order is Pickup -> primary
+// Dropoff -> each of `stops` in order, matching the real chain
+// 02B_MULTI_STOP_DELIVERIES.md's Helper-owned completion actions already
+// enforce (also ProofOfDeliverySection's existing "Dropoff N" labeling).
+// Purely derived from real completion fields (pickupCompletedAt/
+// dropoffCompletedAt/stops[i].completedAt) and each location's own address
+// text — no live position/ETA involved, so "on its way to X" is inferred
+// from chain progress, not a truck's actual location.
+function buildTransitSubsteps(request) {
+  const stops = request.stops || [];
+  // Only qualify drop-offs with an ordinal ("First"/"Second"/...) when more
+  // than one actually exists in the chain -- for a plain single-dropoff
+  // delivery (no stops), calling it "First Drop-Off Location" is misleading
+  // (implies a second one exists that never will).
+  const hasMultipleDropoffs = stops.length > 0;
+  const chain = [
+    {
+      kind: "pickup",
+      location: request.pickupLocation,
+      done: Boolean(request.pickupPhotoUrl),
+      completedAt: request.pickupCompletedAt,
+    },
+    {
+      kind: "dropoff",
+      ordinalLabel: hasMultipleDropoffs ? `${DROPOFF_ORDINAL_WORDS[0]} Drop-Off Location` : null,
+      location: request.dropoffLocation,
+      done: Boolean(request.dropoffPhotoUrl),
+      completedAt: request.dropoffCompletedAt,
+    },
+    ...stops.map((s, i) => ({
+      kind: "dropoff",
+      ordinalLabel: `${DROPOFF_ORDINAL_WORDS[i + 1] || `${i + 2}th`} Drop-Off Location`,
+      location: s.location,
+      done: Boolean(s.completed),
+      completedAt: s.completedAt,
+    })),
+  ];
+
+  const substeps = [];
+  for (const item of chain) {
+    if (!item.location) continue; // no address to name in the message
+    const suffix = item.ordinalLabel ? ` (${item.ordinalLabel})` : "";
+    if (item.done) {
+      substeps.push({
+        label:
+          item.kind === "pickup"
+            ? `The delivery crew has completed the pickup from ${item.location}.`
+            : `The delivery crew arrived at ${item.location}${suffix}.`,
+        timestamp: formatTimestamp(item.completedAt),
+      });
+      continue;
+    }
+    // First not-done item in the chain: stop here, showing at most one
+    // "on its way" message. Deliberately no "on its way to pickup" message
+    // though -- this whole stage only ever becomes the customer's current
+    // status once dbStatus already reached OUT_FOR_DROPOFF
+    // (CUSTOMER_STATUS_MAP), by which point pickup is always already done,
+    // so that combination can't happen in real data. Without this guard, an
+    // in-progress pickup would show a substep here while the stage above is
+    // still greyed out/not-yet-started, violating this file's own "only add
+    // a sub-event once it has actually happened" rule (see the doc comment
+    // above buildCustomerTimeline).
+    if (item.kind !== "pickup") {
+      substeps.push({
+        label: `The delivery crew is on its way to ${item.location}${suffix}.`,
+        timestamp: null,
+      });
+    }
+    break;
+  }
+  return substeps;
+}
+
 function buildCustomerTimeline(request) {
   if (request.status === "CANCELLED") {
     return [
@@ -407,19 +488,7 @@ function buildCustomerTimeline(request) {
     {
       key: "transit",
       label: "Out for Delivery",
-      substeps: [
-        ...(request.trip?.actualPickup
-          ? [{ label: "Picked Up", timestamp: request.trip.actualPickup }]
-          : []),
-        ...(request.trip?.actualDropoff
-          ? [
-              {
-                label: "Arrived at Drop-off",
-                timestamp: request.trip.actualDropoff,
-              },
-            ]
-          : []),
-      ],
+      substeps: buildTransitSubsteps(request),
     },
     {
       key: "delivered",
@@ -3023,6 +3092,7 @@ function mapDeliveryRow(row) {
     // (02B_MULTI_STOP_DELIVERIES.md, 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
     stops: Array.isArray(row.stops) ? row.stops : [],
     pickupPhotoUrl: row.pickup_photo_url || null,
+    pickupCompletedAt: row.pickup_completed_at || null,
     dropoffPhotoUrl: row.dropoff_photo_url || null,
     dropoffCompletedAt: row.dropoff_completed_at || null,
     status: CUSTOMER_STATUS_MAP[row.status] || row.status,

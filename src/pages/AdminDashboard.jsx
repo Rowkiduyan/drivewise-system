@@ -153,6 +153,12 @@ function StatTile({ label, value, to, tone, state }) {
 const DEVICE_OFFLINE_TIMEOUT_MS = 30_000;
 const PAUSED_MOVE_THRESHOLD_M = 100;
 
+// Phone-GPS broadcast freshness window (2026-09-04, mirrors SupDashboard.jsx's
+// own -- see that file's Live GPS section / STATUS.md's 2026-09-03 entry for
+// the full design). A phone position older than this falls back to the Pi's
+// gps_logs-sourced position instead.
+const PHONE_POSITION_STALE_MS = 20_000;
+
 const IN_PROGRESS_STATUSES = ["OUT_FOR_PICKUP", "ARRIVED_PICKUP", "OUT_FOR_DROPOFF", "ARRIVED_DROPOFF"];
 
 const MILESTONE_TONE = {
@@ -258,6 +264,13 @@ function useFleetOps() {
   const [recentAlerts, setRecentAlerts] = useState([]);
   const [positionsByDeliveryId, setPositionsByDeliveryId] = useState({});
   const [movementByDeliveryId, setMovementByDeliveryId] = useState({});
+  // Phone-GPS live view (mirrors SupDashboard.jsx's own -- see
+  // STATUS.md's 2026-09-03 entry for the full design). Ephemeral Realtime
+  // broadcast only, per delivery; never touches gps_logs/mileage/Route
+  // Comparison. Preferred over positionsByDeliveryId (the Pi's gps_logs
+  // feed) when recent, falling back to it otherwise.
+  const [phonePositionsByDeliveryId, setPhonePositionsByDeliveryId] = useState({});
+  const phoneChannelsRef = useRef({});
   const [isLoading, setIsLoading] = useState(true);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const sessionsRef = useRef(sessions);
@@ -353,6 +366,50 @@ function useFleetOps() {
     return () => {
       isMounted = false;
       supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Phone-GPS broadcast subscriptions: one Realtime channel per in-progress
+  // delivery (`phone-gps-<deliveryId>`, matching DriverDeliveries.jsx's
+  // sender), joined/left as the deliveries list itself changes. Mirrors
+  // SupDashboard.jsx's own copy exactly.
+  useEffect(() => {
+    const currentIds = new Set(deliveries.map((d) => d.id));
+    for (const d of deliveries) {
+      if (phoneChannelsRef.current[d.id]) continue;
+      const channel = supabase
+        .channel(`phone-gps-${d.id}`)
+        .on("broadcast", { event: "phone_position" }, (msg) => {
+          setPhonePositionsByDeliveryId((prev) => ({
+            ...prev,
+            [d.id]: { lat: msg.payload.lat, lng: msg.payload.lng, receivedAt: Date.now() },
+          }));
+        })
+        .subscribe();
+      phoneChannelsRef.current[d.id] = channel;
+    }
+    for (const id of Object.keys(phoneChannelsRef.current)) {
+      if (currentIds.has(id)) continue;
+      supabase.removeChannel(phoneChannelsRef.current[id]);
+      delete phoneChannelsRef.current[id];
+      setPhonePositionsByDeliveryId((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
+  }, [deliveries]);
+
+  // Unmount-only cleanup for whatever's left in phoneChannelsRef -- see
+  // SupDashboard.jsx's identical effect for why this is separate from the
+  // one above.
+  useEffect(() => {
+    return () => {
+      for (const channel of Object.values(phoneChannelsRef.current)) {
+        supabase.removeChannel(channel);
+      }
+      phoneChannelsRef.current = {};
     };
   }, []);
 
@@ -455,13 +512,31 @@ function useFleetOps() {
           tripState: state.tripState,
           deviceState: state.deviceState,
           lastHeartbeat: device?.last_ping || null,
-          position: positionsByDeliveryId[d.id] || null,
+          // Phone GPS preferred when a broadcast has arrived recently,
+          // falling back to the Pi's gps_logs-sourced position otherwise --
+          // display only, mirrors SupDashboard.jsx. movementMeters/
+          // isAnomalous stay gps_logs-only (keyed on the Pi's own
+          // session_id-is-null marker).
+          position: (() => {
+            const phone = phonePositionsByDeliveryId[d.id];
+            if (phone && nowTick - phone.receivedAt < PHONE_POSITION_STALE_MS) {
+              return { lat: phone.lat, lng: phone.lng };
+            }
+            return positionsByDeliveryId[d.id] || null;
+          })(),
+          positionSource:
+            phonePositionsByDeliveryId[d.id] &&
+            nowTick - phonePositionsByDeliveryId[d.id].receivedAt < PHONE_POSITION_STALE_MS
+              ? "phone"
+              : positionsByDeliveryId[d.id]
+                ? "pi"
+                : null,
           movementMeters: movementByDeliveryId[d.id] || 0,
           isAnomalous: state.tripState === "Paused" && (movementByDeliveryId[d.id] || 0) > PAUSED_MOVE_THRESHOLD_M,
         };
       })
       .filter(Boolean);
-  }, [deliveries, sessions, trucks, devices, driverNameById, clientNameById, positionsByDeliveryId, movementByDeliveryId, nowTick]);
+  }, [deliveries, sessions, trucks, devices, driverNameById, clientNameById, positionsByDeliveryId, phonePositionsByDeliveryId, movementByDeliveryId, nowTick]);
 
   const alertFeed = useMemo(() => {
     const sessionById = new Map(sessions.map((s) => [s.session_id, s]));
@@ -550,6 +625,11 @@ function ActiveDeliveries({ data, isLoading, now, focusedTruckId, onFocusTruck }
                     <td className="py-1.5 pr-2">
                       <Badge tone={DEVICE_STATE_TONE[row.deviceState]}>{row.deviceState}</Badge>
                       <p className="mt-0.5 text-[10px] text-slate-400">Heartbeat: {formatAgo(row.lastHeartbeat, now)}</p>
+                      {row.positionSource && (
+                        <p className="mt-0.5 text-[10px] text-slate-400">
+                          Position: {row.positionSource === "phone" ? "📱 Phone GPS" : "📡 Pi GPS"}
+                        </p>
+                      )}
                     </td>
                     <td className="py-1.5">
                       {row.position && (
@@ -701,7 +781,7 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
             <GoogleMapMarker
               key={row.id}
               position={row.position}
-              title={`${row.truckPlate} — ${row.driver}`}
+              title={`${row.truckPlate} — ${row.driver} (${row.positionSource === "phone" ? "Phone GPS" : "Pi GPS"})`}
               icon={{
                 path: window.google.maps.SymbolPath.CIRCLE,
                 scale: 7,
