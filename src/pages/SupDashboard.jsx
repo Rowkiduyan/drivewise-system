@@ -131,6 +131,13 @@ const DEVICE_OFFLINE_TIMEOUT_MS = 30_000;
 // tuned against real drift data.
 const PAUSED_MOVE_THRESHOLD_M = 100;
 
+// Phone-GPS broadcast freshness window (2026-09-03) — a phone position older
+// than this falls back to the Pi's gps_logs-sourced position instead, same
+// "don't freeze on a stale reading" reasoning DriverDeliveries.jsx's own
+// phone/Pi fallback uses. Generous relative to the phone's ~2s watchPosition
+// cadence — covers ordinary network/broadcast latency, not meant to be tight.
+const PHONE_POSITION_STALE_MS = 20_000;
+
 // "Very High Possibility of Route Deviation" critical-alert threshold
 // (decided with the user 2026-09-02). Deliberately looser than
 // DriverDeliveries.jsx's own NAV_REROUTE_TOLERANCE_DEGREES (~100m, tuned to
@@ -265,6 +272,16 @@ function useFleetOps() {
   const [recentAlerts, setRecentAlerts] = useState([]);
   const [positionsByDeliveryId, setPositionsByDeliveryId] = useState({});
   const [movementByDeliveryId, setMovementByDeliveryId] = useState({});
+  // Phone-GPS live view (2026-09-03, user request: easier to demo/track
+  // during testing/panel presentations without needing real Pi hardware in
+  // the room). Ephemeral Realtime broadcast only, per delivery -- see
+  // DriverDeliveries.jsx's phoneBroadcastChannelRef for the sender side.
+  // Never touches gps_logs/mileage/Route Comparison; purely an optional,
+  // fresher position preferred over positionsByDeliveryId (the Pi's
+  // gps_logs feed) when recent, falling back to it otherwise -- same
+  // fallback shape the Driver's own LiveNavigationMap already uses.
+  const [phonePositionsByDeliveryId, setPhonePositionsByDeliveryId] = useState({});
+  const phoneChannelsRef = useRef({});
   const [isLoading, setIsLoading] = useState(true);
   const [nowTick, setNowTick] = useState(() => Date.now());
   // Critical-alert popup queue (Very High Risk of Drowsiness / Very High
@@ -434,6 +451,53 @@ function useFleetOps() {
     };
   }, [pushCriticalAlert]);
 
+  // Phone-GPS broadcast subscriptions: one Realtime channel per in-progress
+  // delivery (`phone-gps-<deliveryId>`, matching DriverDeliveries.jsx's
+  // sender), joined/left as the deliveries list itself changes. Deliberately
+  // separate from the gps_logs seeding/subscription effect below -- this is
+  // an additive, optional live-view feed, not a replacement for it.
+  useEffect(() => {
+    const currentIds = new Set(deliveries.map((d) => d.id));
+    for (const d of deliveries) {
+      if (phoneChannelsRef.current[d.id]) continue;
+      const channel = supabase
+        .channel(`phone-gps-${d.id}`)
+        .on("broadcast", { event: "phone_position" }, (msg) => {
+          setPhonePositionsByDeliveryId((prev) => ({
+            ...prev,
+            [d.id]: { lat: msg.payload.lat, lng: msg.payload.lng, receivedAt: Date.now() },
+          }));
+        })
+        .subscribe();
+      phoneChannelsRef.current[d.id] = channel;
+    }
+    for (const id of Object.keys(phoneChannelsRef.current)) {
+      if (currentIds.has(id)) continue;
+      supabase.removeChannel(phoneChannelsRef.current[id]);
+      delete phoneChannelsRef.current[id];
+      setPhonePositionsByDeliveryId((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
+  }, [deliveries]);
+
+  // Unmount-only cleanup for whatever's left in phoneChannelsRef -- the
+  // effect above only tears down channels for deliveries that *left* the
+  // list on a `deliveries` change, it doesn't run a cleanup on every
+  // re-render (that would thrash-resubscribe every still-in-progress
+  // delivery's channel on every unrelated `deliveries` update).
+  useEffect(() => {
+    return () => {
+      for (const channel of Object.values(phoneChannelsRef.current)) {
+        supabase.removeChannel(channel);
+      }
+      phoneChannelsRef.current = {};
+    };
+  }, []);
+
   // Deliveries currently Paused (no open Session, at least one closed one) —
   // drives both the paused-but-moving movement seed below and the anomaly
   // banner. Recomputed whenever deliveries/sessions change.
@@ -600,13 +664,32 @@ function useFleetOps() {
           tripState: state.tripState,
           deviceState: state.deviceState,
           lastHeartbeat: device?.last_ping || null,
-          position: positionsByDeliveryId[d.id] || null,
+          // Phone GPS preferred when a broadcast has arrived recently,
+          // falling back to the Pi's gps_logs-sourced position otherwise --
+          // display only. movementMeters/isAnomalous below stay gps_logs-only
+          // (the paused-but-moving anti-theft check is keyed on the Pi's own
+          // session_id-is-null marker, which a phone broadcast has no
+          // equivalent for and shouldn't be blended into).
+          position: (() => {
+            const phone = phonePositionsByDeliveryId[d.id];
+            if (phone && nowTick - phone.receivedAt < PHONE_POSITION_STALE_MS) {
+              return { lat: phone.lat, lng: phone.lng };
+            }
+            return positionsByDeliveryId[d.id] || null;
+          })(),
+          positionSource:
+            phonePositionsByDeliveryId[d.id] &&
+            nowTick - phonePositionsByDeliveryId[d.id].receivedAt < PHONE_POSITION_STALE_MS
+              ? "phone"
+              : positionsByDeliveryId[d.id]
+                ? "pi"
+                : null,
           movementMeters: movementByDeliveryId[d.id] || 0,
           isAnomalous: state.tripState === "Paused" && (movementByDeliveryId[d.id] || 0) > PAUSED_MOVE_THRESHOLD_M,
         };
       })
       .filter(Boolean);
-  }, [deliveries, sessions, trucks, devices, driverNameById, clientNameById, positionsByDeliveryId, movementByDeliveryId, nowTick]);
+  }, [deliveries, sessions, trucks, devices, driverNameById, clientNameById, positionsByDeliveryId, phonePositionsByDeliveryId, movementByDeliveryId, nowTick]);
 
   // ----- Derived: Latest Alerts feed, joined to driver/truck via the
   // session cache already loaded above. -----
@@ -715,6 +798,11 @@ function ActiveDeliveries({ data, isLoading, now, focusedTruckId, onFocusTruck }
                     <td className="py-1.5 pr-2">
                       <Badge tone={DEVICE_STATE_TONE[row.deviceState]}>{row.deviceState}</Badge>
                       <p className="mt-0.5 text-[10px] text-slate-400">Heartbeat: {formatAgo(row.lastHeartbeat, now)}</p>
+                      {row.positionSource && (
+                        <p className="mt-0.5 text-[10px] text-slate-400">
+                          Position: {row.positionSource === "phone" ? "📱 Phone GPS" : "📡 Pi GPS"}
+                        </p>
+                      )}
                     </td>
                     <td className="py-1.5">
                       {row.position && (
@@ -903,7 +991,7 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
             <GoogleMapMarker
               key={row.id}
               position={row.position}
-              title={`${row.truckPlate} — ${row.driver}`}
+              title={`${row.truckPlate} — ${row.driver} (${row.positionSource === "phone" ? "Phone GPS" : "Pi GPS"})`}
               icon={{
                 path: window.google.maps.SymbolPath.CIRCLE,
                 scale: 7,

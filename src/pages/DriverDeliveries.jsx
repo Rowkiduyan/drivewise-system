@@ -3573,11 +3573,26 @@ function DriverDeliveries() {
   // Live nav position: the driver's own phone GPS is now the primary source
   // (see the watchPosition effect below), falling back to the Pi's gps_logs
   // uploads only when the phone has no reading yet (permission denied, no
-  // signal, unsupported). Supervisor tracking is unaffected -- that reads
-  // gps_logs directly and still relies solely on the Pi, never this state.
+  // signal, unsupported). Supervisor's own gps_logs-sourced tracking is
+  // unaffected by this state directly -- but see phoneBroadcastChannelRef
+  // below: phonePosition is also broadcast (ephemeral, never written to
+  // gps_logs) so the Supervisor Dashboard can optionally prefer it live too,
+  // per 2026-09-03 user request (easier to demo/track without needing real
+  // Pi hardware in the room), same fallback shape as this effect's own.
   const [phonePosition, setPhonePosition] = useState(null);
   const [piPosition, setPiPosition] = useState(null);
   const livePosition = phonePosition || piPosition;
+  // Supabase Realtime broadcast channel (not a table write -- see comment
+  // above) that Supervisor's LiveFleetMap subscribes to per in-progress
+  // delivery. One channel per Trip, joined only while isMonitoring (the
+  // effect below), (re)sent on every phone position tick.
+  const phoneBroadcastChannelRef = useRef(null);
+  // Latest phone reading, mirrored into a ref so the channel-join effect can
+  // resend it the moment the channel actually finishes subscribing --
+  // .send() before SUBSCRIBED is a no-op, and watchPosition only re-fires on
+  // a genuine position *change* (a real phone jitters enough to retrigger it
+  // naturally, but this closes the gap for a near-stationary reading too).
+  const latestPhonePositionRef = useRef(null);
   // Rest-stop recommendation (12_REST_STOP_RECOMMENDATIONS.md): ephemeral,
   // client-side only, Trip-start-only, one-shot -- never persisted, never
   // resets once shown, ordinary dismiss just clears the banner. Refs (not
@@ -4175,6 +4190,39 @@ function DriverDeliveries() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMonitoring]);
 
+  // Phone-GPS broadcast channel for the Supervisor Dashboard (2026-09-03):
+  // one Realtime broadcast channel per Trip (`active.id`), joined only while
+  // isMonitoring -- same gating as the watchPosition effect below, so the
+  // channel goes away on Pause the same way phonePosition itself freezes.
+  // Broadcast, not a table write: never touches gps_logs, mileage, or Route
+  // Comparison (05_GPS_PIPELINE.md's "GPS Source Split" rationale) -- purely
+  // an ephemeral live-view feed a Supervisor's browser can optionally join.
+  useEffect(() => {
+    if (!isMonitoring || !active?.id) {
+      phoneBroadcastChannelRef.current = null;
+      return undefined;
+    }
+    const channel = supabase.channel(`phone-gps-${active.id}`);
+    channel.subscribe((status) => {
+      // Resend the latest known reading once the channel is actually ready
+      // -- closes the race where watchPosition's first tick (or its only
+      // tick, if the phone is stationary) lands before .subscribe()
+      // resolves, which would otherwise silently drop it.
+      if (status === "SUBSCRIBED" && latestPhonePositionRef.current) {
+        channel.send({
+          type: "broadcast",
+          event: "phone_position",
+          payload: latestPhonePositionRef.current,
+        });
+      }
+    });
+    phoneBroadcastChannelRef.current = channel;
+    return () => {
+      phoneBroadcastChannelRef.current = null;
+      supabase.removeChannel(channel);
+    };
+  }, [isMonitoring, active?.id]);
+
   // Live nav position, primary source: the driver's own phone GPS. Gated on
   // isMonitoring (not just isDrivingStage) to match the fallback effect below
   // -- when Paused, this tears down and phonePosition simply stops updating,
@@ -4186,9 +4234,13 @@ function DriverDeliveries() {
     if (!isMonitoring || !navigator.geolocation) return undefined;
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
-        setPhonePosition({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
+        const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setPhonePosition(next);
+        latestPhonePositionRef.current = next;
+        phoneBroadcastChannelRef.current?.send({
+          type: "broadcast",
+          event: "phone_position",
+          payload: next,
         });
       },
       () => setPhonePosition(null),
