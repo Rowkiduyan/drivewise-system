@@ -955,14 +955,22 @@ const stageStatus = {
  * 6. DROPOFF (one of):
  *      OUT_FOR_DROPOFF            — crew is on the way to the dropoff location.
  *      ARRIVED_DROPOFF            — crew has arrived at the dropoff location.
- * 7. DELIVERED                   — crew confirmed delivery. If the customer
- *                                  confirms receipt, the request moves to
- *                                  COMPLETED; otherwise it auto-completes
- *                                  7 days later (see `autoCompleteDelivered`).
- * 8. COMPLETED                   — customer confirmed the delivery, OR the
- *                                  request auto-completes 7 days after
- *                                  DELIVERED with no other action
- *                                  (see `autoCompleteDelivered`).
+ * 7. DELIVERED                   — crew confirmed delivery. Required gate:
+ *                                  stays DELIVERED indefinitely until the
+ *                                  customer's own "Confirm Received" action
+ *                                  (`CustomerDeliveries.jsx`,
+ *                                  `persistReceivedConfirmation`) moves it to
+ *                                  COMPLETED — no auto-complete (decided
+ *                                  2026-09-05, reversing an earlier
+ *                                  auto-complete-after-7-days design that was
+ *                                  briefly implemented then explicitly
+ *                                  rejected same day). The in-file
+ *                                  `autoCompleteDelivered` below this comment
+ *                                  is dead code (only ever ran against the
+ *                                  unused legacy mock state, never real data)
+ *                                  — left in place, not wired up.
+ * 8. COMPLETED                   — customer confirmed the delivery. No other
+ *                                  path reaches COMPLETED today.
  *
  * STAGES → REQUIRED BACKEND DATA
  * ------------------------------
@@ -4285,6 +4293,10 @@ function SupDeliveries() {
     safePage * itemsPerPage,
   );
 
+  // DELIVERED is excluded here -- the crew is done driving once a delivery
+  // reaches DELIVERED, so it no longer belongs in "In Transit" even though it
+  // isn't COMPLETED yet (that only happens once the customer confirms receipt
+  // or the request auto-completes -- see completedDeliveries below).
   const ongoingDeliveries = useMemo(
     () =>
       dbRequests.filter((r) =>
@@ -4293,7 +4305,6 @@ function SupDeliveries() {
           "ARRIVED_PICKUP",
           "OUT_FOR_DROPOFF",
           "ARRIVED_DROPOFF",
-          "DELIVERED",
         ].includes(r.status),
       ),
     [dbRequests],
@@ -4487,8 +4498,15 @@ function SupDeliveries() {
     );
   }, [monitoredDelivery, realAlertsByDelivery]);
 
+  // Includes DELIVERED alongside COMPLETED: the crew's work is finished
+  // either way, it's only the customer-confirmation/auto-complete step still
+  // pending -- each row's own status badge still shows "Delivered" vs
+  // "Completed" distinctly (see statusLabel).
   const completedDeliveries = useMemo(
-    () => dbRequests.filter((r) => r.status === "COMPLETED"),
+    () =>
+      dbRequests.filter(
+        (r) => r.status === "COMPLETED" || r.status === "DELIVERED",
+      ),
     [dbRequests],
   );
 
@@ -5590,7 +5608,8 @@ function SupDeliveries() {
                       </button>
                       <div className="flex items-center gap-2">
                         {(!selectedRequest.quotation || !quotationSubmitted) &&
-                          !adjustingQuotation && (
+                          !adjustingQuotation &&
+                          stageStatus[selectedRequest.status] < stageStatus.ASSIGNED && (
                             <button
                               onClick={submitQuotation}
                               className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-700 transition"
@@ -5721,7 +5740,8 @@ function SupDeliveries() {
 
                         {/* === CASE 1: Editable form (new quotation — not yet submitted) === */}
                         {(!selectedRequest.quotation || !quotationSubmitted) &&
-                          !adjustingQuotation && (
+                          !adjustingQuotation &&
+                          stageStatus[selectedRequest.status] < stageStatus.ASSIGNED && (
                             <QuotationExpenseForm
                               form={quotationForm}
                               onFormChange={setQuotationForm}
