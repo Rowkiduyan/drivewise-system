@@ -56,6 +56,12 @@ import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
 import { useResolvedStopCoords } from "../lib/forwardGeocode.js";
 import {
+  WAREHOUSE_COORDS,
+  distanceMeters,
+  nearestDropoffOrder,
+  computeSuggestedRoute,
+} from "../lib/suggestedRoute.js";
+import {
   formatManilaTimestamp,
   formatManilaShortTime,
   manilaTodayISO,
@@ -407,23 +413,12 @@ const NAV_LEG_COLORS = [
   "#DB2777",
 ];
 
-// Fixed depot/warehouse address every Trip starts from, per user instruction
-// -- PlannedRouteMap's whole-trip guide now leads with this Warehouse ->
-// Pickup leg (in addition to Pickup -> Dropoffs/Stops), so the map/
-// suggested_route matches the full real GPS trace, not just the Pickup-
-// onward portion. Kept as a plain address string (not lat/lng) -- passed
-// straight to DirectionsService, same as any other address in this file.
-const WAREHOUSE_ADDRESS =
-  "140 M. Suarez Avenue, Brgy. San Miguel, Pasig, Metro Manila";
-// WAREHOUSE_ADDRESS's own real geocoded position (captured from a live
-// DirectionsService response, `suggested_route`'s warehouse->pickup leg's
-// first point -- see scripts/repro-route-comparison-demo.mjs) -- reconciled
-// 2026-08-14 with `activeNavOrigin` below, which previously hardcoded a
-// *different* depot lat/lng ({lat: 14.5506, lng: 121.0471}) representing
-// the same real place under a different, never-reconciled guess. Anywhere
-// that needs actual coordinates (not a DirectionsService-geocodable string)
-// should use this constant instead of a second magic-number literal.
-const WAREHOUSE_COORDS = { lat: 14.57147, lng: 121.08762 };
+// WAREHOUSE_ADDRESS/WAREHOUSE_COORDS moved to lib/suggestedRoute.js
+// (2026-09-06, Supervisor Route Review & Approval feature) -- imported
+// above. WAREHOUSE_COORDS was reconciled 2026-08-14 with `activeNavOrigin`
+// below, which previously hardcoded a *different* depot lat/lng
+// ({lat: 14.5506, lng: 121.0471}) representing the same real place under a
+// different, never-reconciled guess.
 
 function stripHtml(html) {
   return String(html || "").replace(/<[^>]+>/g, "");
@@ -547,6 +542,7 @@ function PlannedRouteMap({
   dropoffCoordsProp,
   stops,
   suggestedRoute,
+  routeApprovedAt,
   deliveryRequestId,
   onSaved,
 }) {
@@ -562,7 +558,12 @@ function PlannedRouteMap({
     useResolvedStopCoords(stopLocations);
 
   useEffect(() => {
-    if (suggestedRoute) return;
+    // Only a Supervisor-approved route (route_approved_at set) is trusted
+    // as-is -- a route that already exists but was never reviewed (every
+    // request gets one auto-generated at creation time now, see
+    // CustomerRequestDelivery.jsx) still gets a fresh recompute here, same
+    // as before this feature existed. See DATABASE.md's route_approved_at.
+    if (routeApprovedAt) return;
     if (
       !isLoaded ||
       !pickupAddress ||
@@ -590,61 +591,23 @@ function PlannedRouteMap({
     // Photon before this effect is allowed to run, see stopCoordsReady
     // above) covers those instead, same reasoning as pickup/dropoff.
     const pickupCoords = pickupCoordsProp || parseCoords(pickupAddress);
-    const orderedStops = nearestDropoffOrder(pickupCoords, [
-      {
-        location: dropoffAddress,
-        coords: dropoffCoordsProp || parseCoords(dropoffAddress),
-        key: "dropoff",
-      },
-      ...(stops || []).map((s) => ({
+    const dropoffCoords = dropoffCoordsProp || parseCoords(dropoffAddress);
+
+    computeSuggestedRoute({
+      pickupCoords,
+      pickupAddress,
+      dropoffCoords,
+      dropoffAddress,
+      stops: (stops || []).map((s) => ({
         location: s.location,
         coords: parseCoords(s.location) || stopCoords[s.location] || null,
-        key: "stop",
       })),
-    ]);
-    if (orderedStops.length === 0) return;
-
-    const destination = orderedStops[orderedStops.length - 1];
-    // Pickup itself is now a waypoint (Warehouse is the origin), followed by
-    // every ordered dropoff/stop except the last, which becomes the request's
-    // own destination.
-    const waypointStops = [
-      { location: pickupAddress, coords: pickupCoords, key: "pickup" },
-      ...orderedStops.slice(0, -1),
-    ];
-
-    new window.google.maps.DirectionsService().route(
-      {
-        origin: WAREHOUSE_ADDRESS,
-        destination: destination.coords || destination.location,
-        waypoints: waypointStops.map((s) => ({
-          location: s.coords || s.location,
-          stopover: true,
-        })),
-        travelMode: window.google.maps.TravelMode.DRIVING,
-        drivingOptions: {
-          departureTime: new Date(),
-          trafficModel: "bestguess",
-        },
-      },
-      (result, status) => {
-        if (status !== "OK" || !result) {
-          setRouteError(true);
-          return;
-        }
+    })
+      .then(({ legs: payload, bounds }) => {
         setRouteError(false);
-        const fromKeys = ["warehouse", ...waypointStops.map((s) => s.key)];
-        const toKeys = [...waypointStops.map((s) => s.key), destination.key];
-        const payload = result.routes[0].legs.map((leg, i) => ({
-          from: fromKeys[i],
-          to: toKeys[i],
-          path: leg.steps.flatMap((step) =>
-            step.path.map((p) => [p.lat(), p.lng()]),
-          ),
-        }));
         setComputedLegs(payload);
-        if (mapRef.current && result.routes[0].bounds) {
-          mapRef.current.fitBounds(result.routes[0].bounds, 16);
+        if (mapRef.current && bounds) {
+          mapRef.current.fitBounds(bounds, 16);
         }
 
         if (!savingRef.current) {
@@ -662,12 +625,12 @@ function PlannedRouteMap({
                 onSaved?.(data.suggestedRoute);
             });
         }
-      },
-    );
+      })
+      .catch(() => setRouteError(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     isLoaded,
-    suggestedRoute,
+    routeApprovedAt,
     pickupAddress,
     dropoffAddress,
     stopsKey,
@@ -2627,61 +2590,11 @@ function parseCoords(value) {
   return { lat, lng };
 }
 
-// Plain-JS haversine, no google.maps dependency -- mirrors SupDashboard.jsx's
-// own distanceMeters helper exactly, reused here for the rest-stop
-// recommendation's distance accumulation (12_REST_STOP_RECOMMENDATIONS.md)
-// so it works regardless of whether the Maps JS API has finished loading
-// yet at the point this runs (unlike google.maps.geometry.spherical, which
-// LiveNavigationMap can rely on since it gates on its own isLoaded).
-function distanceMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-// Greedy nearest-neighbor ordering for dropoff-type candidates (02B_MULTI_
-// STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering", decided
-// 2026-08-14). Each candidate is `{ location, coords }`; `coords` may be
-// null for a candidate whose address doesn't parse to "lat, lng" (a real
-// street address, same limitation parseCoords already has elsewhere) -- such
-// a candidate can't be ranked by distance, so it's kept in its original
-// relative position among the other un-rankable candidates and only ever
-// picked once no coordinate-bearing candidate remains closer. Chains from
-// each picked candidate's own coords for the next pick (simulating "having
-// arrived there"), since only the very first pick is ever actually driven to
-// before the caller re-derives this list from a real position again.
-function nearestDropoffOrder(referencePos, candidates) {
-  const remaining = [...candidates];
-  const ordered = [];
-  let fromPos = referencePos;
-  while (remaining.length > 0) {
-    let pickIndex = 0;
-    let pickDistance = Infinity;
-    remaining.forEach((candidate, i) => {
-      if (!candidate.coords || !fromPos) return;
-      const d = distanceMeters(
-        fromPos.lat,
-        fromPos.lng,
-        candidate.coords.lat,
-        candidate.coords.lng,
-      );
-      if (d < pickDistance) {
-        pickDistance = d;
-        pickIndex = i;
-      }
-    });
-    const [next] = remaining.splice(pickIndex, 1);
-    ordered.push(next);
-    if (next.coords) fromPos = next.coords;
-  }
-  return ordered;
-}
+// distanceMeters/nearestDropoffOrder moved to lib/suggestedRoute.js
+// (2026-09-06, Supervisor Route Review & Approval feature) -- imported
+// above. Still used here for the rest-stop recommendation's distance
+// accumulation (12_REST_STOP_RECOMMENDATIONS.md) and the live-nav dynamic
+// dropoff reordering below.
 
 // Full ordered legend -- Pickup, then every Dropoff/Stop in the same
 // nearest-first order a computed `legs` route actually visits them (walks
@@ -2819,6 +2732,10 @@ function mapDelivery(d) {
     // screen already computed+saved it -- see PlannedRouteMap below and
     // 11_ROUTE_COMPARISON.md. Null until the first successful save.
     suggestedRoute: Array.isArray(d.suggestedRoute) ? d.suggestedRoute : null,
+    // Set once a Supervisor explicitly approves the route during
+    // PENDING_REQUEST review (SupDeliveries.jsx) -- gates whether
+    // PlannedRouteMap trusts suggestedRoute as-is or recomputes it fresh.
+    routeApprovedAt: d.routeApprovedAt || null,
     status: DB_TO_DRIVER_STATUS[d.status] || str(d.status),
     hasOpenSession: Boolean(d.hasOpenSession),
     sessionId: d.sessionId || null,
@@ -3409,6 +3326,7 @@ function DeliveryDetailView({
               dropoffCoordsProp={delivery.destinationCoords}
               stops={delivery.stops}
               suggestedRoute={delivery.suggestedRoute}
+              routeApprovedAt={delivery.routeApprovedAt}
               deliveryRequestId={delivery.id}
               onSaved={onSuggestedRouteSaved}
             />
@@ -4743,6 +4661,7 @@ function DriverDeliveries() {
                         dropoffCoordsProp={active.destinationCoords}
                         stops={active.stops}
                         suggestedRoute={active.suggestedRoute}
+                        routeApprovedAt={active.routeApprovedAt}
                         deliveryRequestId={active.id}
                         onSaved={(route) =>
                           setData((prev) => ({

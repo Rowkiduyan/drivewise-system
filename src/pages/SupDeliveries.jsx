@@ -57,6 +57,7 @@ import { useSearchParams } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
+import EditableRouteMap from "../components/EditableRouteMap.jsx";
 import {
   formatManilaTimestamp,
   formatManilaDateTime,
@@ -3732,6 +3733,13 @@ function mapDbRequest(row, clientName, fleet) {
     suggestedRoute: Array.isArray(row.suggested_route)
       ? row.suggested_route
       : null,
+    // Set once a Supervisor explicitly approves the (possibly edited) route
+    // during PENDING_REQUEST review, before submitting a quotation
+    // (2026-09-06, Supervisor Route Review & Approval feature) -- gates
+    // EditableRouteMap's editable/approve-button state here, and whether the
+    // Driver's PlannedRouteMap trusts suggestedRoute as-is (DriverDeliveries.jsx).
+    routeApprovedAt: row.route_approved_at || null,
+    routeApprovedBy: row.route_approved_by || null,
     budgetMin: row.budget_min,
     budgetMax: row.budget_max,
     notes: row.notes,
@@ -4980,6 +4988,36 @@ function SupDeliveries() {
     setShowDeclineDialog(false);
     setSelectedRequest(null);
   };
+
+  // Freezes the (possibly edited) route as the request's suggested_route and
+  // stamps route_approved_at/by -- once set, DriverDeliveries.jsx's
+  // PlannedRouteMap trusts it as-is instead of recomputing (2026-09-06,
+  // Supervisor Route Review & Approval feature). Distinct from `hasApproved`
+  // (unrelated local state gating the quotation form's visibility) --
+  // deliberately not reusing that name to avoid confusing the two.
+  const approveRoute = async (routeToApprove) => {
+    if (!selectedRequest) return;
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const approvedAt = new Date().toISOString();
+    const { error } = await supabase
+      .from("delivery_requests")
+      .update({
+        suggested_route: routeToApprove,
+        route_approved_at: approvedAt,
+        route_approved_by: user?.id ?? null,
+      })
+      .eq("id", selectedRequest.id);
+    if (error) {
+      return alert("Failed to approve the route. Please try again.");
+    }
+    updateRequest(selectedRequest.id, {
+      suggestedRoute: routeToApprove,
+      routeApprovedAt: approvedAt,
+      routeApprovedBy: user?.id ?? null,
+    });
+  };
   const closeDeclineDialog = () => {
     setShowDeclineDialog(false);
   };
@@ -5572,6 +5610,37 @@ function SupDeliveries() {
                           />
                         </div>
                         <LocationSwitcher request={selectedRequest} />
+
+                        {selectedRequest.status === "PENDING_REQUEST" && (
+                          <div className="mt-3">
+                            <EditableRouteMap
+                              key={selectedRequest.id}
+                              pickupAddress={selectedRequest.pickupAddress}
+                              pickupCoords={
+                                selectedRequest.pickupLat != null
+                                  ? {
+                                      lat: selectedRequest.pickupLat,
+                                      lng: selectedRequest.pickupLng,
+                                    }
+                                  : null
+                              }
+                              dropoffAddress={selectedRequest.deliveryAddress}
+                              dropoffCoords={
+                                selectedRequest.dropoffLat != null
+                                  ? {
+                                      lat: selectedRequest.dropoffLat,
+                                      lng: selectedRequest.dropoffLng,
+                                    }
+                                  : null
+                              }
+                              stops={selectedRequest.stops}
+                              suggestedRoute={selectedRequest.suggestedRoute}
+                              editable={!selectedRequest.routeApprovedAt}
+                              approvedAt={selectedRequest.routeApprovedAt}
+                              onApprove={approveRoute}
+                            />
+                          </div>
+                        )}
 
                         <div className="mt-3">
                           <ProofOfDeliverySection request={selectedRequest} />

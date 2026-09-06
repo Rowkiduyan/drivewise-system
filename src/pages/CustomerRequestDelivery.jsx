@@ -42,6 +42,7 @@ import {
   getStopTimeError,
 } from "../lib/deliveryOptions.js";
 import { photonGeocode, useResolvedStopCoords } from "../lib/forwardGeocode.js";
+import { computeSuggestedRoute } from "../lib/suggestedRoute.js";
 import {
   simulateSchedule,
   MAX_TOTAL_DELIVERY_HOURS,
@@ -260,7 +261,14 @@ function MapController({
 }
 
 // Location Picker Modal Component
-function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
+function LocationPickerModal({
+  isOpen,
+  onClose,
+  onSelect,
+  initialValue,
+  initialLat,
+  initialLng,
+}) {
   const [searchQuery, setSearchQuery] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [selectedLocation, setSelectedLocation] = useState(null);
@@ -269,9 +277,18 @@ function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
   const [resolvingAddress, setResolvingAddress] = useState(false);
   const [showServiceAreaNotice, setShowServiceAreaNotice] = useState(false);
 
-  // When the modal opens with free-typed text in the field (no pin picked
-  // yet), resolve that text via the same Photon geocoder the search uses
-  // and drop the pin on it right away — same Luzon-only rules apply.
+  // When the modal opens, prefer the exact previously-picked coordinate
+  // (initialLat/initialLng, already captured from an earlier search
+  // selection or a drag on this same field) over re-geocoding the address
+  // text. Real bug found live 2026-09-06: re-forward-geocoding the text via
+  // Photon on every reopen silently discarded a manual drag adjustment,
+  // since reverse-geocoding is coarse enough that a dragged point and its
+  // surrounding street often share the exact same display address — Photon
+  // then returns its own canonical point for that text, not the dragged
+  // one, making a careful adjustment appear to "revert" the moment the
+  // picker was reopened (e.g. to double-check the pin before submitting).
+  // Only fall back to forward-geocoding the text when no precise coordinate
+  // exists yet — a manually-typed address that was never picked/dragged.
   useEffect(() => {
     if (!isOpen) return;
 
@@ -279,6 +296,22 @@ function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
     if (!query) return;
 
     let cancelled = false;
+
+    if (initialLat != null && initialLng != null) {
+      // Deferred via a microtask, matching this file's other geocode-effect
+      // below -- avoids calling setState synchronously in the effect body.
+      Promise.resolve().then(() => {
+        if (cancelled) return;
+        setShowServiceAreaNotice(false);
+        setSelectedLocation({ display: query, lat: initialLat, lon: initialLng });
+        setMapCenter([initialLat, initialLng]);
+        setMapZoom(16);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     photonGeocode(query)
       .then((coords) => {
         if (cancelled || !coords) return;
@@ -300,7 +333,7 @@ function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
     return () => {
       cancelled = true;
     };
-  }, [isOpen, initialValue]);
+  }, [isOpen, initialValue, initialLat, initialLng]);
 
   useEffect(() => {
     if (searchQuery.length > 2) {
@@ -500,7 +533,7 @@ function LocationPickerModal({ isOpen, onClose, onSelect, initialValue }) {
 }
 
 // Location Input with Autocomplete and Map Picker
-function LocationInput({ id, label, value, onChange, required }) {
+function LocationInput({ id, label, value, lat, lng, onChange, required }) {
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showMapPicker, setShowMapPicker] = useState(false);
@@ -642,6 +675,8 @@ function LocationInput({ id, label, value, onChange, required }) {
         onClose={() => setShowMapPicker(false)}
         onSelect={handleLocationSelect}
         initialValue={value}
+        initialLat={lat}
+        initialLng={lng}
       />
     </div>
   );
@@ -1143,14 +1178,17 @@ function CustomerRequestDelivery() {
   };
 
   const handleStopTimeChange = (index, field, value) => {
-    let updatedStop;
+    // Computed directly from the current formData.stops[index] (this
+    // handler closes over the latest formData every render) rather than
+    // relying on a side-effect variable set inside the setFormData updater
+    // below -- that updater isn't guaranteed to run before this line does,
+    // and when it hadn't yet, `updatedStop` stayed undefined, crashing
+    // getStopTimeError's destructuring (real bug, found live 2026-09-06 with
+    // multiple stops).
+    const updatedStop = { ...formData.stops[index], [field]: value };
     setFormData((prev) => ({
       ...prev,
-      stops: prev.stops.map((stop, i) => {
-        if (i !== index) return stop;
-        updatedStop = { ...stop, [field]: value };
-        return updatedStop;
-      }),
+      stops: prev.stops.map((stop, i) => (i === index ? updatedStop : stop)),
     }));
     setStopTimeErrors((prev) => ({
       ...prev,
@@ -1277,6 +1315,15 @@ function CustomerRequestDelivery() {
     // trusting the live-preview state, same "never trust stale client
     // state at the final gate" pattern this check already used before.
     const activeStops = formData.stops.filter((stop) => stop.location.trim());
+    // Warehouse -> Pickup -> Dropoff -> Stops route, generated up front so a
+    // Supervisor can review/adjust it during PENDING_REQUEST, before ever
+    // submitting a quotation (2026-09-06, Supervisor Route Review & Approval
+    // feature) -- see SupDeliveries.jsx's EditableRouteMap and
+    // route_approved_at in DATABASE.md. Non-fatal on failure: unlike
+    // estimateLegDurations below (which blocks submission because a wrong
+    // schedule is a correctness problem), a missing route is just a display/
+    // review convenience the Supervisor can still generate later.
+    let suggestedRoute = null;
     if (pickupLat != null && dropoffLat != null) {
       if (!mapsApiLoaded || !window.google) {
         setSubmitting(false);
@@ -1312,6 +1359,22 @@ function CustomerRequestDelivery() {
         setSubmitting(false);
         setSubmitError(SERVICE_AREA_MESSAGE);
         return;
+      }
+
+      try {
+        const { legs } = await computeSuggestedRoute({
+          pickupCoords: { lat: pickupLat, lng: pickupLng },
+          pickupAddress: formData.pickupLocation,
+          dropoffCoords: { lat: dropoffLat, lng: dropoffLng },
+          dropoffAddress: formData.dropoffLocation,
+          stops: activeStops.map((stop, i) => ({
+            location: stop.location,
+            coords: resolvedStopCoords[i],
+          })),
+        });
+        suggestedRoute = legs;
+      } catch {
+        // Non-fatal -- see the comment above activeStops.
       }
 
       let legTravelSeconds;
@@ -1378,6 +1441,7 @@ function CustomerRequestDelivery() {
       budget_max: formData.budgetMax || null,
       notes: formData.notes || null,
       status: "PENDING_REQUEST",
+      suggested_route: suggestedRoute,
     };
 
     const { error: insertError } = await supabase
@@ -1567,6 +1631,8 @@ function CustomerRequestDelivery() {
                   id="pickupLocation"
                   label="Pick Up Location"
                   value={formData.pickupLocation}
+                  lat={formData.pickupLat}
+                  lng={formData.pickupLng}
                   onChange={handleChange}
                   required
                 />
@@ -1577,6 +1643,8 @@ function CustomerRequestDelivery() {
                         id="dropoffLocation"
                         label="Drop Off Location"
                         value={formData.dropoffLocation}
+                        lat={formData.dropoffLat}
+                        lng={formData.dropoffLng}
                         onChange={handleChange}
                         required
                       />
@@ -1662,6 +1730,8 @@ function CustomerRequestDelivery() {
                             id={`stop-${index}`}
                             label={`Dropoff ${index + 2}`}
                             value={stop.location}
+                            lat={stop.lat}
+                            lng={stop.lng}
                             onChange={(e) => handleStopChange(index, e)}
                           />
                         </div>

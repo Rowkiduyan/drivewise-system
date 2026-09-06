@@ -279,7 +279,7 @@ Deno.serve(async (req) => {
 
     const { data: delivery, error: deliveryError } = await adminClient
       .from("delivery_requests")
-      .select("id, assigned_driver_id, suggested_route")
+      .select("id, assigned_driver_id, suggested_route, route_approved_at")
       .eq("id", deliveryRequestId)
       .single();
 
@@ -291,10 +291,15 @@ Deno.serve(async (req) => {
       return json({ error: "This delivery is not assigned to you" }, 403);
     }
 
-    // Frozen once written (11_ROUTE_COMPARISON.md) -- a second call (e.g. the
-    // pre-trip screen remounting before the first write's response lands)
-    // silently no-ops instead of overwriting an already-saved route.
-    if (delivery.suggested_route) {
+    // Frozen once a Supervisor has explicitly approved the route
+    // (route_approved_at set during PENDING_REQUEST review, SupDeliveries.jsx)
+    // -- a second call (e.g. the pre-trip screen remounting before the first
+    // write's response lands) silently no-ops instead of overwriting it.
+    // Every request now gets an auto-generated suggested_route at creation
+    // time (CustomerRequestDelivery.jsx), so checking suggested_route's mere
+    // presence here would make this guard fire even for a route nobody ever
+    // reviewed -- route_approved_at is the actual "is this final" signal.
+    if (delivery.route_approved_at) {
       return json({ ok: true, suggestedRoute: delivery.suggested_route });
     }
 

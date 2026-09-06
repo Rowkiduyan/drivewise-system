@@ -36,6 +36,8 @@ Stop order within `suggested_route` reuses the same nearest-neighbor heuristic `
 
 Either way: reuse `DirectionsService`, not the Routes API — `01_SYSTEM_ARCHITECTURE.md`'s Route Comparison section already corrected `02_BOOKING_AND_TRIP_CREATION.md`'s Routes-API assumption once (`02B_MULTI_STOP_DELIVERIES.md`'s "Real contradiction found and corrected"); this build reuses that same client-side `DirectionsService` approach, not a fresh Routes API call.
 
+**Corrected a third time, 2026-09-06, per explicit user instruction (Supervisor Route Review & Approval feature):** generation moves back to request-creation time after all — but this time reviewable/editable by a Supervisor before a quotation is submitted, not invisible the way the original 2026-08-13 assignment-time design was. `CustomerRequestDelivery.jsx` now calls the same route-computation logic (extracted into `lib/suggestedRoute.js`'s `computeSuggestedRoute`, shared with `PlannedRouteMap`) for every submitted request, non-fatally on failure. A Supervisor can view/drag-adjust it during `PENDING_REQUEST` review (`SupDeliveries.jsx`'s `EditableRouteMap`) and explicitly approve it (`route_approved_at`/`route_approved_by`, see `DATABASE.md`) before ever submitting a quotation; the approved route is then shown to the customer alongside the quotation too. `suggested_route` is no longer frozen by mere presence — the Driver's `PlannedRouteMap` still recomputes and overwrites it fresh whenever `route_approved_at` is unset (e.g. a request nobody reviewed before it was assigned), same fallback role it always had. `driver-trip`'s `save-suggested-route` guard was updated to match (checks `route_approved_at`, not `suggested_route`'s presence).
+
 ## Design
 
 ### Capturing the suggested route

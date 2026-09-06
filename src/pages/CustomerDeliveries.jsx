@@ -25,6 +25,7 @@ import CustomerLayout from "../layout/CustomerLayout.jsx";
 import { truckTypes, getItemTypeLabel } from "../lib/deliveryOptions.js";
 import { supabase } from "../lib/supabaseClient.js";
 import { manilaTodayISO, MANILA_TIMEZONE } from "../lib/manilaTime.js";
+import EditableRouteMap from "../components/EditableRouteMap.jsx";
 
 const background = null;
 
@@ -721,6 +722,30 @@ function ExpandableBreakdown({ quotation, label = "View Full Breakdown" }) {
         )}
       </button>
       {open && <QuotationCostBreakdown quotation={quotation} />}
+    </div>
+  );
+}
+
+// The Supervisor's reviewed/approved route (2026-09-06, Supervisor Route
+// Review & Approval feature) -- always visible alongside the quotation
+// (not collapsed, per the explicit requirement), read-only, and only once
+// a Supervisor has actually approved it. An auto-generated-but-unreviewed
+// suggested_route must never be presented to the customer as if final.
+function ApprovedRouteMap({ request }) {
+  if (!request.suggestedRoute || !request.routeApprovedAt) return null;
+  return (
+    <div className="mt-2 md:mt-3">
+      <EditableRouteMap
+        key={request.id}
+        pickupAddress={request.pickupLocation}
+        pickupCoords={request.pickupCoords}
+        dropoffAddress={request.dropoffLocation}
+        dropoffCoords={request.dropoffCoords}
+        stops={request.stops}
+        suggestedRoute={request.suggestedRoute}
+        editable={false}
+        approvedAt={request.routeApprovedAt}
+      />
     </div>
   );
 }
@@ -1757,6 +1782,7 @@ function RequestDetailView({
                           quotation={request.quotation}
                           label="View Round 2 Breakdown"
                         />
+                        <ApprovedRouteMap request={request} />
                       </>
                     ) : (
                       <p className="mt-1 text-xs text-slate-500 md:text-sm">
@@ -2149,6 +2175,7 @@ function RequestDetailView({
                             : "View Full Breakdown"
                         }
                       />
+                      <ApprovedRouteMap request={request} />
 
                       {/* Approve/Reject — folded into the panel itself,
                           matching how the supervisor's own Update/Decline
@@ -2446,6 +2473,7 @@ function RequestDetailView({
                     </p>
                     <ExpandableBreakdown quotation={request.quotation} />
                   </div>
+                  <ApprovedRouteMap request={request} />
                   <div className="mt-2 flex flex-col gap-2 md:mt-3 md:flex-row md:gap-3">
                     <button
                       onClick={() => {
@@ -3095,6 +3123,15 @@ function mapDeliveryRow(row) {
     pickupCompletedAt: row.pickup_completed_at || null,
     dropoffPhotoUrl: row.dropoff_photo_url || null,
     dropoffCompletedAt: row.dropoff_completed_at || null,
+    // The Supervisor-reviewed/approved route (2026-09-06, Supervisor Route
+    // Review & Approval feature) -- only shown to the customer once
+    // routeApprovedAt is set (see EditableRouteMap usage below); an
+    // auto-generated-but-unreviewed suggested_route must never be presented
+    // as if it were final.
+    suggestedRoute: Array.isArray(row.suggested_route)
+      ? row.suggested_route
+      : null,
+    routeApprovedAt: row.route_approved_at || null,
     status: CUSTOMER_STATUS_MAP[row.status] || row.status,
     dbStatus: row.status,
     customerCounterMin: row.customer_counter_min,
