@@ -23,7 +23,13 @@ const RESEND_FROM_EMAIL = Deno.env.get("RESEND_FROM_EMAIL");
 
 const ADMIN_ROLES = ["Admin"];
 const CREW_VIEW_ROLES = ["Admin", "Supervisor"];
-const ASSIGNABLE_ROLES = ["Supervisor", "Admin", "Driver", "Helper", "Customer"];
+const ASSIGNABLE_ROLES = [
+  "Supervisor",
+  "Admin",
+  "Driver",
+  "Helper",
+  "Customer",
+];
 const LOGIN_EMAIL_DOMAIN = "marveltrucking.local";
 
 // Profile pictures are stored in this Storage bucket, keyed by the user's
@@ -68,9 +74,13 @@ const PROOF_LOCATION_RADIUS_METERS = 200;
 // Mirrors DriverDeliveries.jsx's client-side parseCoords -- some pickup/
 // dropoff/stop locations are stored as a "lat, lng" pair rather than a
 // street address; only those can be geofence-checked.
-function parseCoords(value: string | null | undefined): { lat: number; lng: number } | null {
+function parseCoords(
+  value: string | null | undefined,
+): { lat: number; lng: number } | null {
   if (!value) return null;
-  const m = String(value).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  const m = String(value)
+    .trim()
+    .match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
   if (!m) return null;
   const lat = parseFloat(m[1]);
   const lng = parseFloat(m[2]);
@@ -79,14 +89,19 @@ function parseCoords(value: string | null | undefined): { lat: number; lng: numb
   return { lat, lng };
 }
 
-function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+function haversineMeters(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
   const R = 6371000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
   const dLat = toRad(b.lat - a.lat);
   const dLng = toRad(b.lng - a.lng);
   const sinLat = Math.sin(dLat / 2);
   const sinLng = Math.sin(dLng / 2);
-  const h = sinLat * sinLat + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinLng * sinLng;
+  const h =
+    sinLat * sinLat +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinLng * sinLng;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
@@ -108,8 +123,13 @@ async function checkProofLocation(
   targetLocation: string | null | undefined,
   targetCoords?: { lat: number | null; lng: number | null } | null,
 ): Promise<string | null> {
-  const hasRealCoords = targetCoords != null && Number.isFinite(targetCoords.lat) && Number.isFinite(targetCoords.lng);
-  const target = hasRealCoords ? (targetCoords as { lat: number; lng: number }) : parseCoords(targetLocation);
+  const hasRealCoords =
+    targetCoords != null &&
+    Number.isFinite(targetCoords.lat) &&
+    Number.isFinite(targetCoords.lng);
+  const target = hasRealCoords
+    ? (targetCoords as { lat: number; lng: number })
+    : parseCoords(targetLocation);
   if (!target) return null;
 
   const { data: lastFix } = await adminClient
@@ -122,7 +142,10 @@ async function checkProofLocation(
 
   if (!lastFix) return null;
 
-  const distance = haversineMeters(target, { lat: lastFix.latitude as number, lng: lastFix.longitude as number });
+  const distance = haversineMeters(target, {
+    lat: lastFix.latitude as number,
+    lng: lastFix.longitude as number,
+  });
   if (distance > PROOF_LOCATION_RADIUS_METERS) {
     return `You're too far from the location to complete this (about ${Math.round(distance)}m away, must be within ${PROOF_LOCATION_RADIUS_METERS}m)`;
   }
@@ -150,7 +173,9 @@ async function uploadProofPhoto(
 ): Promise<{ url: string } | { error: string }> {
   const extension = EXTENSION_BY_CONTENT_TYPE[contentType];
   if (!extension) {
-    return { error: "contentType must be image/jpeg, image/png, or image/webp" };
+    return {
+      error: "contentType must be image/jpeg, image/png, or image/webp",
+    };
   }
 
   const bytes = decodeBase64(fileBase64);
@@ -167,7 +192,9 @@ async function uploadProofPhoto(
     return { error: uploadError.message };
   }
 
-  const { data: publicUrlData } = adminClient.storage.from(DELIVERY_PROOF_BUCKET).getPublicUrl(path);
+  const { data: publicUrlData } = adminClient.storage
+    .from(DELIVERY_PROOF_BUCKET)
+    .getPublicUrl(path);
   return { url: `${publicUrlData.publicUrl}?v=${Date.now()}` };
 }
 
@@ -192,7 +219,8 @@ const ROLE_PREFIX: Record<string, string> = {
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -217,21 +245,32 @@ function generateTempPassword() {
 function generateDeviceSecret() {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 // Must match the hashing the device-heartbeat Edge Function uses to verify
 // this same secret on every heartbeat — plain lowercase-hex SHA-256, no salt,
 // same format the 2026-08-08 backfill used for existing devices.
 async function sha256Hex(input: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(input),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 // Builds the local part of a generated login email from structured name
 // parts: first-name initial + middle-name initial(s), if any + surname,
 // e.g. firstName "John", middleName "Michael", lastName "Doe" -> "jmdoe".
-function loginEmailLocalPart(firstName: string, middleName: string | null | undefined, lastName: string) {
+function loginEmailLocalPart(
+  firstName: string,
+  middleName: string | null | undefined,
+  lastName: string,
+) {
   const middleInitials = (middleName || "")
     .trim()
     .split(/\s+/)
@@ -243,7 +282,10 @@ function loginEmailLocalPart(firstName: string, middleName: string | null | unde
   return cleaned || "user";
 }
 
-async function nextLoginEmail(adminClient: ReturnType<typeof createClient>, localPrefix: string) {
+async function nextLoginEmail(
+  adminClient: ReturnType<typeof createClient>,
+  localPrefix: string,
+) {
   const { data, error } = await adminClient
     .from("users")
     .select("login_email")
@@ -257,7 +299,10 @@ async function nextLoginEmail(adminClient: ReturnType<typeof createClient>, loca
 
   const lastEmail = data?.[0]?.login_email as string | undefined;
   const lastNumber = lastEmail
-    ? Number.parseInt(lastEmail.slice(localPrefix.length, lastEmail.indexOf("@")), 10) || 0
+    ? Number.parseInt(
+        lastEmail.slice(localPrefix.length, lastEmail.indexOf("@")),
+        10,
+      ) || 0
     : 0;
 
   return `${localPrefix}${String(lastNumber + 1).padStart(2, "0")}@${LOGIN_EMAIL_DOMAIN}`;
@@ -267,9 +312,18 @@ async function nextLoginEmail(adminClient: ReturnType<typeof createClient>, loca
 // Resend. Returns { sent: false, error } instead of throwing so a delivery
 // failure never rolls back an already-created account or password reset —
 // the caller falls back to returning the password directly in that case.
-async function sendCredentialsEmail(to: string, loginEmail: string, tempPassword: string, heading: string) {
+async function sendCredentialsEmail(
+  to: string,
+  loginEmail: string,
+  tempPassword: string,
+  heading: string,
+) {
   if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) {
-    return { sent: false, error: "Email delivery is not configured (missing RESEND_API_KEY/RESEND_FROM_EMAIL)." };
+    return {
+      sent: false,
+      error:
+        "Email delivery is not configured (missing RESEND_API_KEY/RESEND_FROM_EMAIL).",
+    };
   }
 
   const response = await fetch("https://api.resend.com/emails", {
@@ -293,7 +347,10 @@ async function sendCredentialsEmail(to: string, loginEmail: string, tempPassword
 
   if (!response.ok) {
     const message = await response.text();
-    return { sent: false, error: message || `Resend responded with ${response.status}` };
+    return {
+      sent: false,
+      error: message || `Resend responded with ${response.status}`,
+    };
   }
 
   return { sent: true as const };
@@ -312,19 +369,32 @@ type ProfileInput = {
 };
 
 function normalizeProfile(body: Record<string, unknown>): ProfileInput {
-  const address = body.address && typeof body.address === "object"
-    ? body.address as { street?: string; city?: string; province?: string }
-    : null;
+  const address =
+    body.address && typeof body.address === "object"
+      ? (body.address as { street?: string; city?: string; province?: string })
+      : null;
 
   return {
     firstName: typeof body.firstName === "string" ? body.firstName.trim() : "",
-    middleName: typeof body.middleName === "string" ? body.middleName.trim() || null : null,
+    middleName:
+      typeof body.middleName === "string"
+        ? body.middleName.trim() || null
+        : null,
     lastName: typeof body.lastName === "string" ? body.lastName.trim() : "",
-    position: typeof body.position === "string" ? body.position.trim() || null : null,
-    clientName: typeof body.clientName === "string" ? body.clientName.trim() || null : null,
-    email: typeof body.email === "string" ? body.email.trim().toLowerCase() : "",
-    contactNumber: typeof body.contactNumber === "string" ? body.contactNumber.trim() || null : null,
-    birthdate: typeof body.birthdate === "string" ? body.birthdate || null : null,
+    position:
+      typeof body.position === "string" ? body.position.trim() || null : null,
+    clientName:
+      typeof body.clientName === "string"
+        ? body.clientName.trim() || null
+        : null,
+    email:
+      typeof body.email === "string" ? body.email.trim().toLowerCase() : "",
+    contactNumber:
+      typeof body.contactNumber === "string"
+        ? body.contactNumber.trim() || null
+        : null,
+    birthdate:
+      typeof body.birthdate === "string" ? body.birthdate || null : null,
     address,
   };
 }
@@ -346,7 +416,11 @@ function profileRow(role: string, profile: ProfileInput) {
   };
 }
 
-async function nextRecordId(adminClient: ReturnType<typeof createClient>, table: string, prefix: string) {
+async function nextRecordId(
+  adminClient: ReturnType<typeof createClient>,
+  table: string,
+  prefix: string,
+) {
   const { data, error } = await adminClient
     .from(table)
     .select("id")
@@ -359,7 +433,9 @@ async function nextRecordId(adminClient: ReturnType<typeof createClient>, table:
   }
 
   const lastId = data?.[0]?.id as string | undefined;
-  const lastNumber = lastId ? Number.parseInt(lastId.slice(prefix.length), 10) || 0 : 0;
+  const lastNumber = lastId
+    ? Number.parseInt(lastId.slice(prefix.length), 10) || 0
+    : 0;
 
   return `${prefix}${String(lastNumber + 1).padStart(3, "0")}`;
 }
@@ -417,7 +493,11 @@ async function upsertRoleRecord(
   return { id, created: true };
 }
 
-async function findContactEmail(adminClient: ReturnType<typeof createClient>, role: string, authId: string) {
+async function findContactEmail(
+  adminClient: ReturnType<typeof createClient>,
+  role: string,
+  authId: string,
+) {
   const table = ROLE_TABLE[role];
   const { data, error } = await adminClient
     .from(table)
@@ -436,8 +516,13 @@ async function findContactEmail(adminClient: ReturnType<typeof createClient>, ro
 // (Driver/Helper only, Admin or Supervisor) — merges `users` rows with
 // their matching *_records row by auth_id, since the client can't read
 // the *_records tables directly (service_role only, see DATABASE.md).
-async function listUsersWithProfiles(adminClient: ReturnType<typeof createClient>, roles?: string[]) {
-  let usersQuery = adminClient.from("users").select("id, role, login_email, created_at, deactivated_at");
+async function listUsersWithProfiles(
+  adminClient: ReturnType<typeof createClient>,
+  roles?: string[],
+) {
+  let usersQuery = adminClient
+    .from("users")
+    .select("id, role, login_email, created_at, deactivated_at");
   if (roles) {
     usersQuery = usersQuery.in("role", roles);
   }
@@ -447,11 +532,15 @@ async function listUsersWithProfiles(adminClient: ReturnType<typeof createClient
     throw new Error(usersError.message);
   }
 
-  const tables = roles ? roles.map((role) => ROLE_TABLE[role]) : Object.values(ROLE_TABLE);
+  const tables = roles
+    ? roles.map((role) => ROLE_TABLE[role])
+    : Object.values(ROLE_TABLE);
   const profilesByAuthId = new Map<string, Record<string, unknown>>();
 
   for (const table of tables) {
-    const { data: rows, error: rowsError } = await adminClient.from(table).select("*");
+    const { data: rows, error: rowsError } = await adminClient
+      .from(table)
+      .select("*");
     if (rowsError) {
       throw new Error(rowsError.message);
     }
@@ -493,7 +582,10 @@ async function attachClientSpecialties(
 ) {
   const crewIds = crew.map((member) => member.id as string);
   if (crewIds.length === 0) {
-    return crew.map((member) => ({ ...member, client_specialties: [] as string[] }));
+    return crew.map((member) => ({
+      ...member,
+      client_specialties: [] as string[],
+    }));
   }
 
   const { data: links, error: linksError } = await adminClient
@@ -505,7 +597,9 @@ async function attachClientSpecialties(
     throw new Error(linksError.message);
   }
 
-  const clientIds = Array.from(new Set((links || []).map((link) => link.client_auth_id as string)));
+  const clientIds = Array.from(
+    new Set((links || []).map((link) => link.client_auth_id as string)),
+  );
   const clientNameById = new Map<string, string>();
 
   if (clientIds.length > 0) {
@@ -520,7 +614,10 @@ async function attachClientSpecialties(
 
     for (const record of records || []) {
       if (record.client_name) {
-        clientNameById.set(record.auth_id as string, record.client_name as string);
+        clientNameById.set(
+          record.auth_id as string,
+          record.client_name as string,
+        );
       }
     }
   }
@@ -644,7 +741,11 @@ Deno.serve(async (req) => {
     }
 
     const { data: recordRow, error: recordError } = table
-      ? await adminClient.from(table).select("*").eq("auth_id", authId).maybeSingle()
+      ? await adminClient
+          .from(table)
+          .select("*")
+          .eq("auth_id", authId)
+          .maybeSingle()
       : { data: null, error: null };
 
     if (recordError) {
@@ -679,12 +780,22 @@ Deno.serve(async (req) => {
     }
 
     try {
-      const crew = await listUsersWithProfiles(adminClient, ["Driver", "Helper"]);
-      const crewWithSpecialties = await attachClientSpecialties(adminClient, crew);
-      const crewWithAvailability = await attachWorkingDays(adminClient, crewWithSpecialties);
+      const crew = await listUsersWithProfiles(adminClient, [
+        "Driver",
+        "Helper",
+      ]);
+      const crewWithSpecialties = await attachClientSpecialties(
+        adminClient,
+        crew,
+      );
+      const crewWithAvailability = await attachWorkingDays(
+        adminClient,
+        crewWithSpecialties,
+      );
       return json({ ok: true, crew: crewWithAvailability });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to list crew";
+      const message =
+        error instanceof Error ? error.message : "Unable to list crew";
       return json({ error: message }, 400);
     }
   }
@@ -695,7 +806,13 @@ Deno.serve(async (req) => {
   // customer_records.client_name — see DATABASE.md "crew_client_specialties".
   // Same Admin-or-Supervisor gate as list-crew, since Supervisors manage
   // this from the crew profile page.
-  const CLIENT_SPECIALTY_ACTIONS = ["list-clients", "list-crew-clients", "add-crew-client", "remove-crew-client", "list-specialized-clients"];
+  const CLIENT_SPECIALTY_ACTIONS = [
+    "list-clients",
+    "list-crew-clients",
+    "add-crew-client",
+    "remove-crew-client",
+    "list-specialized-clients",
+  ];
   if (CLIENT_SPECIALTY_ACTIONS.includes(action)) {
     if (!CREW_VIEW_ROLES.includes(callerRow.role)) {
       return json({ error: "Forbidden" }, 403);
@@ -712,7 +829,10 @@ Deno.serve(async (req) => {
         return json({ error: error.message }, 400);
       }
 
-      const clients = (data || []).map((row) => ({ id: row.auth_id, name: row.client_name }));
+      const clients = (data || []).map((row) => ({
+        id: row.auth_id,
+        name: row.client_name,
+      }));
       return json({ ok: true, clients });
     }
 
@@ -749,7 +869,9 @@ Deno.serve(async (req) => {
         return json({ error: linksError.message }, 400);
       }
 
-      const clientIds = (links || []).map((row) => row.client_auth_id as string);
+      const clientIds = (links || []).map(
+        (row) => row.client_auth_id as string,
+      );
       if (clientIds.length === 0) {
         return json({ ok: true, clients: [] });
       }
@@ -763,7 +885,10 @@ Deno.serve(async (req) => {
         return json({ error: recordsError.message }, 400);
       }
 
-      const clients = (records || []).map((row) => ({ id: row.auth_id, name: row.client_name }));
+      const clients = (records || []).map((row) => ({
+        id: row.auth_id,
+        name: row.client_name,
+      }));
       return json({ ok: true, clients });
     }
 
@@ -835,7 +960,10 @@ Deno.serve(async (req) => {
     };
 
     const formatCrewName = (rec: Record<string, unknown>) =>
-      [rec.first_name, rec.middle_name, rec.last_name].filter(Boolean).join(" ").trim();
+      [rec.first_name, rec.middle_name, rec.last_name]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
 
     if (action === "get-driver-deliveries") {
       const { data: rows, error: rowsError } = await adminClient
@@ -851,7 +979,9 @@ Deno.serve(async (req) => {
       const deliveries: Array<Record<string, unknown>> = [];
       const rowsList = rows || [];
 
-      const customerAuthIds = Array.from(new Set(rowsList.map((r) => r.customer_auth_id as string)));
+      const customerAuthIds = Array.from(
+        new Set(rowsList.map((r) => r.customer_auth_id as string)),
+      );
       const customerNameById = new Map<string, string>();
       if (customerAuthIds.length > 0) {
         const { data: customers } = await adminClient
@@ -860,12 +990,21 @@ Deno.serve(async (req) => {
           .in("auth_id", customerAuthIds);
         for (const c of customers || []) {
           const clientName = c.client_name as string | null;
-          const personalName = [c.first_name, c.last_name].filter(Boolean).join(" ");
-          customerNameById.set(c.auth_id as string, clientName || personalName || "Client");
+          const personalName = [c.first_name, c.last_name]
+            .filter(Boolean)
+            .join(" ");
+          customerNameById.set(
+            c.auth_id as string,
+            clientName || personalName || "Client",
+          );
         }
       }
 
-      const helperIds = Array.from(new Set(rowsList.flatMap((r) => (r.assigned_helper_ids as string[]) || [])));
+      const helperIds = Array.from(
+        new Set(
+          rowsList.flatMap((r) => (r.assigned_helper_ids as string[]) || []),
+        ),
+      );
       const helperById = new Map<string, Record<string, unknown>>();
       if (helperIds.length > 0) {
         const { data: helpers } = await adminClient
@@ -875,14 +1014,19 @@ Deno.serve(async (req) => {
         for (const h of helpers || []) helperById.set(h.id as string, h);
       }
 
-      const plateNumbers = Array.from(new Set(rowsList.map((r) => r.assigned_truck_plate as string).filter(Boolean)));
+      const plateNumbers = Array.from(
+        new Set(
+          rowsList.map((r) => r.assigned_truck_plate as string).filter(Boolean),
+        ),
+      );
       const truckByPlate = new Map<string, Record<string, unknown>>();
       if (plateNumbers.length > 0) {
         const { data: trucks } = await adminClient
           .from("trucks")
           .select("plate_number, truck_type, max_capacity, brand, model")
           .in("plate_number", plateNumbers);
-        for (const t of trucks || []) truckByPlate.set(t.plate_number as string, t);
+        for (const t of trucks || [])
+          truckByPlate.set(t.plate_number as string, t);
       }
 
       const deliveryIds = rowsList.map((r) => r.id as string);
@@ -895,7 +1039,9 @@ Deno.serve(async (req) => {
           .in("delivery_id", deliveryIds)
           .order("created_at", { ascending: true });
         for (const q of quotations || []) {
-          quotationByDelivery.set(q.delivery_id as string, { amount: Number(q.amount) });
+          quotationByDelivery.set(q.delivery_id as string, {
+            amount: Number(q.amount),
+          });
         }
       }
 
@@ -916,27 +1062,48 @@ Deno.serve(async (req) => {
           .eq("status", "Active");
         for (const s of openSessions || []) {
           openSessionDeliveryIds.add(s.delivery_request_id as string);
-          sessionIdByDelivery.set(s.delivery_request_id as string, s.session_id as string);
+          sessionIdByDelivery.set(
+            s.delivery_request_id as string,
+            s.session_id as string,
+          );
         }
       }
 
       for (const r of rowsList) {
-        const helpers = ((r.assigned_helper_ids as string[]) || []).map((id) => {
-          const h = helperById.get(id);
-          return h ? { id, name: formatCrewName(h) || "Helper", position: h.position ?? "" } : { id, name: "Helper", position: "" };
-        });
-        const truck = r.assigned_truck_plate ? truckByPlate.get(r.assigned_truck_plate as string) : null;
-        const customerName = customerNameById.get(r.customer_auth_id as string) || "Client";
+        const helpers = ((r.assigned_helper_ids as string[]) || []).map(
+          (id) => {
+            const h = helperById.get(id);
+            return h
+              ? {
+                  id,
+                  name: formatCrewName(h) || "Helper",
+                  position: h.position ?? "",
+                }
+              : { id, name: "Helper", position: "" };
+          },
+        );
+        const truck = r.assigned_truck_plate
+          ? truckByPlate.get(r.assigned_truck_plate as string)
+          : null;
+        const customerName =
+          customerNameById.get(r.customer_auth_id as string) || "Client";
         deliveries.push({
           id: r.id,
           customerName,
           companyName: customerName,
-          itemType: r.item_type ? String(r.item_type).charAt(0).toUpperCase() + String(r.item_type).slice(1) : r.item_type,
+          itemType: r.item_type
+            ? String(r.item_type).charAt(0).toUpperCase() +
+              String(r.item_type).slice(1)
+            : r.item_type,
           pickupDate: r.pickup_date,
           pickupTime: r.pickup_time ? String(r.pickup_time).slice(0, 5) : null,
-          pickupTimeEnd: r.pickup_time_end ? String(r.pickup_time_end).slice(0, 5) : null,
+          pickupTimeEnd: r.pickup_time_end
+            ? String(r.pickup_time_end).slice(0, 5)
+            : null,
           dropoffDate: r.dropoff_date,
-          dropoffTime: r.dropoff_time ? String(r.dropoff_time).slice(0, 5) : null,
+          dropoffTime: r.dropoff_time
+            ? String(r.dropoff_time).slice(0, 5)
+            : null,
           pickupAddress: r.pickup_location,
           pickupLat: r.pickup_lat,
           pickupLng: r.pickup_lng,
@@ -979,7 +1146,10 @@ Deno.serve(async (req) => {
             ? {
                 plateNumber: truck.plate_number,
                 truckType: truck.truck_type,
-                capacity: truck.max_capacity != null ? `${Number(truck.max_capacity).toLocaleString()} kg` : null,
+                capacity:
+                  truck.max_capacity != null
+                    ? `${Number(truck.max_capacity).toLocaleString()} kg`
+                    : null,
               }
             : null,
           quotation: quotationByDelivery.get(r.id as string) || null,
@@ -990,7 +1160,8 @@ Deno.serve(async (req) => {
     }
 
     if (action === "update-driver-delivery") {
-      const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
+      const deliveryId =
+        typeof body.deliveryId === "string" ? body.deliveryId : "";
       const nextStatus = typeof body.status === "string" ? body.status : "";
 
       if (!deliveryId || !nextStatus) {
@@ -1013,7 +1184,12 @@ Deno.serve(async (req) => {
 
       const allowed = DRIVER_STATUS_TRANSITIONS[row.status as string] || [];
       if (!allowed.includes(nextStatus)) {
-        return json({ error: `Cannot move a delivery from ${row.status} to ${nextStatus}` }, 400);
+        return json(
+          {
+            error: `Cannot move a delivery from ${row.status} to ${nextStatus}`,
+          },
+          400,
+        );
       }
 
       const { error: updateError } = await adminClient
@@ -1060,9 +1236,14 @@ Deno.serve(async (req) => {
 
       const rowsList = rows || [];
       const formatCrewName = (rec: Record<string, unknown>) =>
-        [rec.first_name, rec.middle_name, rec.last_name].filter(Boolean).join(" ").trim();
+        [rec.first_name, rec.middle_name, rec.last_name]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
 
-      const customerAuthIds = Array.from(new Set(rowsList.map((r) => r.customer_auth_id as string)));
+      const customerAuthIds = Array.from(
+        new Set(rowsList.map((r) => r.customer_auth_id as string)),
+      );
       const customerNameById = new Map<string, string>();
       if (customerAuthIds.length > 0) {
         const { data: customers } = await adminClient
@@ -1071,12 +1252,21 @@ Deno.serve(async (req) => {
           .in("auth_id", customerAuthIds);
         for (const c of customers || []) {
           const clientName = c.client_name as string | null;
-          const personalName = [c.first_name, c.last_name].filter(Boolean).join(" ");
-          customerNameById.set(c.auth_id as string, clientName || personalName || "Client");
+          const personalName = [c.first_name, c.last_name]
+            .filter(Boolean)
+            .join(" ");
+          customerNameById.set(
+            c.auth_id as string,
+            clientName || personalName || "Client",
+          );
         }
       }
 
-      const driverIds = Array.from(new Set(rowsList.map((r) => r.assigned_driver_id as string).filter(Boolean)));
+      const driverIds = Array.from(
+        new Set(
+          rowsList.map((r) => r.assigned_driver_id as string).filter(Boolean),
+        ),
+      );
       const driverById = new Map<string, Record<string, unknown>>();
       if (driverIds.length > 0) {
         const { data: drivers } = await adminClient
@@ -1086,7 +1276,11 @@ Deno.serve(async (req) => {
         for (const d of drivers || []) driverById.set(d.id as string, d);
       }
 
-      const helperIds = Array.from(new Set(rowsList.flatMap((r) => (r.assigned_helper_ids as string[]) || [])));
+      const helperIds = Array.from(
+        new Set(
+          rowsList.flatMap((r) => (r.assigned_helper_ids as string[]) || []),
+        ),
+      );
       const helperById = new Map<string, Record<string, unknown>>();
       if (helperIds.length > 0) {
         const { data: helpers } = await adminClient
@@ -1096,14 +1290,19 @@ Deno.serve(async (req) => {
         for (const h of helpers || []) helperById.set(h.id as string, h);
       }
 
-      const plateNumbers = Array.from(new Set(rowsList.map((r) => r.assigned_truck_plate as string).filter(Boolean)));
+      const plateNumbers = Array.from(
+        new Set(
+          rowsList.map((r) => r.assigned_truck_plate as string).filter(Boolean),
+        ),
+      );
       const truckByPlate = new Map<string, Record<string, unknown>>();
       if (plateNumbers.length > 0) {
         const { data: trucks } = await adminClient
           .from("trucks")
           .select("plate_number, truck_type, max_capacity")
           .in("plate_number", plateNumbers);
-        for (const t of trucks || []) truckByPlate.set(t.plate_number as string, t);
+        for (const t of trucks || [])
+          truckByPlate.set(t.plate_number as string, t);
       }
 
       const deliveryIds = rowsList.map((r) => r.id as string);
@@ -1115,7 +1314,9 @@ Deno.serve(async (req) => {
           .in("delivery_id", deliveryIds)
           .order("created_at", { ascending: true });
         for (const q of quotations || []) {
-          quotationByDelivery.set(q.delivery_id as string, { amount: Number(q.amount) });
+          quotationByDelivery.set(q.delivery_id as string, {
+            amount: Number(q.amount),
+          });
         }
       }
 
@@ -1134,23 +1335,38 @@ Deno.serve(async (req) => {
           .eq("status", "Active");
         for (const s of openSessions || []) {
           openSessionDeliveryIds.add(s.delivery_request_id as string);
-          sessionIdByDelivery.set(s.delivery_request_id as string, s.session_id as string);
+          sessionIdByDelivery.set(
+            s.delivery_request_id as string,
+            s.session_id as string,
+          );
         }
       }
 
       const deliveries = rowsList.map((r) => {
-        const driver = r.assigned_driver_id ? driverById.get(r.assigned_driver_id as string) : null;
-        const helpers = ((r.assigned_helper_ids as string[]) || []).map((id) => {
-          const h = helperById.get(id);
-          return h ? { id, name: formatCrewName(h) || "Helper" } : { id, name: "Helper" };
-        });
-        const truck = r.assigned_truck_plate ? truckByPlate.get(r.assigned_truck_plate as string) : null;
-        const customerName = customerNameById.get(r.customer_auth_id as string) || "Client";
+        const driver = r.assigned_driver_id
+          ? driverById.get(r.assigned_driver_id as string)
+          : null;
+        const helpers = ((r.assigned_helper_ids as string[]) || []).map(
+          (id) => {
+            const h = helperById.get(id);
+            return h
+              ? { id, name: formatCrewName(h) || "Helper" }
+              : { id, name: "Helper" };
+          },
+        );
+        const truck = r.assigned_truck_plate
+          ? truckByPlate.get(r.assigned_truck_plate as string)
+          : null;
+        const customerName =
+          customerNameById.get(r.customer_auth_id as string) || "Client";
         return {
           id: r.id,
           customerName,
           companyName: customerName,
-          itemType: r.item_type ? String(r.item_type).charAt(0).toUpperCase() + String(r.item_type).slice(1) : r.item_type,
+          itemType: r.item_type
+            ? String(r.item_type).charAt(0).toUpperCase() +
+              String(r.item_type).slice(1)
+            : r.item_type,
           pickupDate: r.pickup_date,
           pickupTime: r.pickup_time ? String(r.pickup_time).slice(0, 5) : null,
           pickupAddress: r.pickup_location,
@@ -1178,14 +1394,21 @@ Deno.serve(async (req) => {
           sessionId: sessionIdByDelivery.get(r.id as string) || null,
           assignedAt: r.assigned_at,
           driver: driver
-            ? { id: r.assigned_driver_id, name: formatCrewName(driver) || "Driver", phone: driver.contact_number ?? "" }
+            ? {
+                id: r.assigned_driver_id,
+                name: formatCrewName(driver) || "Driver",
+                phone: driver.contact_number ?? "",
+              }
             : null,
           helpers,
           truck: truck
             ? {
                 plateNumber: truck.plate_number,
                 truckType: truck.truck_type,
-                capacity: truck.max_capacity != null ? `${Number(truck.max_capacity).toLocaleString()} kg` : null,
+                capacity:
+                  truck.max_capacity != null
+                    ? `${Number(truck.max_capacity).toLocaleString()} kg`
+                    : null,
               }
             : null,
           quotation: quotationByDelivery.get(r.id as string) || null,
@@ -1206,10 +1429,13 @@ Deno.serve(async (req) => {
 
     // Confirm Pickup (item 1 -> item 2 of the chain). Never final by itself.
     if (action === "update-driver-delivery") {
-      const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
+      const deliveryId =
+        typeof body.deliveryId === "string" ? body.deliveryId : "";
       const nextStatus = typeof body.status === "string" ? body.status : "";
-      const fileBase64 = typeof body.fileBase64 === "string" ? body.fileBase64 : "";
-      const contentType = typeof body.contentType === "string" ? body.contentType : "";
+      const fileBase64 =
+        typeof body.fileBase64 === "string" ? body.fileBase64 : "";
+      const contentType =
+        typeof body.contentType === "string" ? body.contentType : "";
 
       if (!deliveryId || !nextStatus) {
         return json({ error: "deliveryId and status are required" }, 400);
@@ -1226,7 +1452,9 @@ Deno.serve(async (req) => {
 
       const { data: row, error: rowError } = await adminClient
         .from("delivery_requests")
-        .select("id, status, assigned_helper_ids, pickup_location, pickup_lat, pickup_lng")
+        .select(
+          "id, status, assigned_helper_ids, pickup_location, pickup_lat, pickup_lng",
+        )
         .eq("id", deliveryId)
         .maybeSingle();
 
@@ -1234,24 +1462,43 @@ Deno.serve(async (req) => {
         return json({ error: "Delivery not found" }, 400);
       }
 
-      if (!((row.assigned_helper_ids as string[]) || []).includes(helperRecord.id as string)) {
+      if (
+        !((row.assigned_helper_ids as string[]) || []).includes(
+          helperRecord.id as string,
+        )
+      ) {
         return json({ error: "Forbidden" }, 403);
       }
 
       const allowed = HELPER_STATUS_TRANSITIONS[row.status as string] || [];
       if (!allowed.includes(nextStatus)) {
-        return json({ error: `Cannot move a delivery from ${row.status} to ${nextStatus}` }, 400);
+        return json(
+          {
+            error: `Cannot move a delivery from ${row.status} to ${nextStatus}`,
+          },
+          400,
+        );
       }
 
-      const locationError = await checkProofLocation(adminClient, deliveryId, row.pickup_location as string, {
-        lat: row.pickup_lat as number | null,
-        lng: row.pickup_lng as number | null,
-      });
+      const locationError = await checkProofLocation(
+        adminClient,
+        deliveryId,
+        row.pickup_location as string,
+        {
+          lat: row.pickup_lat as number | null,
+          lng: row.pickup_lng as number | null,
+        },
+      );
       if (locationError) {
         return json({ error: locationError }, 400);
       }
 
-      const upload = await uploadProofPhoto(adminClient, `${deliveryId}/pickup`, fileBase64, contentType);
+      const upload = await uploadProofPhoto(
+        adminClient,
+        `${deliveryId}/pickup`,
+        fileBase64,
+        contentType,
+      );
       if ("error" in upload) {
         return json({ error: upload.error }, 400);
       }
@@ -1271,15 +1518,45 @@ Deno.serve(async (req) => {
         return json({ error: updateError.message }, 400);
       }
 
-      return json({ ok: true, status: nextStatus, pickupPhotoUrl: upload.url, pickupCompletedAt });
+      return json({
+        ok: true,
+        status: nextStatus,
+        pickupPhotoUrl: upload.url,
+        pickupCompletedAt,
+      });
     }
 
     // The customer's dropoff (item 2 of the chain) — final only when there
     // are no stops after it.
     if (action === "complete-dropoff") {
-      const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
-      const fileBase64 = typeof body.fileBase64 === "string" ? body.fileBase64 : "";
-      const contentType = typeof body.contentType === "string" ? body.contentType : "";
+      const deliveryId =
+        typeof body.deliveryId === "string" ? body.deliveryId : "";
+      const fileBase64 =
+        typeof body.fileBase64 === "string" ? body.fileBase64 : "";
+      const contentType =
+        typeof body.contentType === "string" ? body.contentType : "";
+      const photoVerification =
+        body.photoVerification && typeof body.photoVerification === "object"
+          ? {
+              status:
+                body.photoVerification.status === "verified"
+                  ? "verified"
+                  : "uncertain",
+              personDetected: body.photoVerification.personDetected === true,
+              confidence: Number.isFinite(body.photoVerification.confidence)
+                ? Math.max(0, Math.min(1, body.photoVerification.confidence))
+                : 0,
+              reviewRequired: body.photoVerification.status !== "verified",
+              checkedAt:
+                typeof body.photoVerification.checkedAt === "string"
+                  ? body.photoVerification.checkedAt
+                  : new Date().toISOString(),
+              method:
+                typeof body.photoVerification.method === "string"
+                  ? body.photoVerification.method
+                  : "unknown",
+            }
+          : null;
 
       if (!deliveryId) {
         return json({ error: "deliveryId is required" }, 400);
@@ -1291,7 +1568,9 @@ Deno.serve(async (req) => {
 
       const { data: row, error: rowError } = await adminClient
         .from("delivery_requests")
-        .select("id, status, assigned_helper_ids, stops, dropoff_location, dropoff_lat, dropoff_lng")
+        .select(
+          "id, status, assigned_helper_ids, stops, dropoff_location, dropoff_lat, dropoff_lng",
+        )
         .eq("id", deliveryId)
         .maybeSingle();
 
@@ -1299,23 +1578,43 @@ Deno.serve(async (req) => {
         return json({ error: "Delivery not found" }, 400);
       }
 
-      if (!((row.assigned_helper_ids as string[]) || []).includes(helperRecord.id as string)) {
+      if (
+        !((row.assigned_helper_ids as string[]) || []).includes(
+          helperRecord.id as string,
+        )
+      ) {
         return json({ error: "Forbidden" }, 403);
       }
 
-      if (row.status !== "OUT_FOR_DROPOFF" && row.status !== "ARRIVED_DROPOFF") {
-        return json({ error: `Cannot complete the dropoff from status ${row.status}` }, 400);
+      if (
+        row.status !== "OUT_FOR_DROPOFF" &&
+        row.status !== "ARRIVED_DROPOFF"
+      ) {
+        return json(
+          { error: `Cannot complete the dropoff from status ${row.status}` },
+          400,
+        );
       }
 
-      const locationError = await checkProofLocation(adminClient, deliveryId, row.dropoff_location as string, {
-        lat: row.dropoff_lat as number | null,
-        lng: row.dropoff_lng as number | null,
-      });
+      const locationError = await checkProofLocation(
+        adminClient,
+        deliveryId,
+        row.dropoff_location as string,
+        {
+          lat: row.dropoff_lat as number | null,
+          lng: row.dropoff_lng as number | null,
+        },
+      );
       if (locationError) {
         return json({ error: locationError }, 400);
       }
 
-      const upload = await uploadProofPhoto(adminClient, `${deliveryId}/dropoff`, fileBase64, contentType);
+      const upload = await uploadProofPhoto(
+        adminClient,
+        `${deliveryId}/dropoff`,
+        fileBase64,
+        contentType,
+      );
       if ("error" in upload) {
         return json({ error: upload.error }, 400);
       }
@@ -1332,6 +1631,7 @@ Deno.serve(async (req) => {
       const updates: Record<string, unknown> = {
         dropoff_photo_url: upload.url,
         dropoff_completed_at: new Date().toISOString(),
+        dropoff_photo_verification: photoVerification,
       };
       if (isFinal) {
         updates.status = "DELIVERED";
@@ -1347,7 +1647,12 @@ Deno.serve(async (req) => {
         return json({ error: updateError.message }, 400);
       }
 
-      return json({ ok: true, isFinal, dropoffPhotoUrl: upload.url });
+      return json({
+        ok: true,
+        isFinal,
+        dropoffPhotoUrl: upload.url,
+        photoVerification,
+      });
     }
 
     // A customer-added stop (item 3+ of the chain) — final only when every
@@ -1357,10 +1662,14 @@ Deno.serve(async (req) => {
     // 2026-08-14 — the driver's nav no longer visits stops in array order,
     // so array position no longer implies completion order either).
     if (action === "complete-stop") {
-      const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
-      const stopIndex = typeof body.stopIndex === "number" ? body.stopIndex : -1;
-      const fileBase64 = typeof body.fileBase64 === "string" ? body.fileBase64 : "";
-      const contentType = typeof body.contentType === "string" ? body.contentType : "";
+      const deliveryId =
+        typeof body.deliveryId === "string" ? body.deliveryId : "";
+      const stopIndex =
+        typeof body.stopIndex === "number" ? body.stopIndex : -1;
+      const fileBase64 =
+        typeof body.fileBase64 === "string" ? body.fileBase64 : "";
+      const contentType =
+        typeof body.contentType === "string" ? body.contentType : "";
 
       if (!deliveryId || stopIndex < 0) {
         return json({ error: "deliveryId and stopIndex are required" }, 400);
@@ -1380,12 +1689,22 @@ Deno.serve(async (req) => {
         return json({ error: "Delivery not found" }, 400);
       }
 
-      if (!((row.assigned_helper_ids as string[]) || []).includes(helperRecord.id as string)) {
+      if (
+        !((row.assigned_helper_ids as string[]) || []).includes(
+          helperRecord.id as string,
+        )
+      ) {
         return json({ error: "Forbidden" }, 403);
       }
 
-      if (row.status !== "OUT_FOR_DROPOFF" && row.status !== "ARRIVED_DROPOFF") {
-        return json({ error: `Cannot complete a stop from status ${row.status}` }, 400);
+      if (
+        row.status !== "OUT_FOR_DROPOFF" &&
+        row.status !== "ARRIVED_DROPOFF"
+      ) {
+        return json(
+          { error: `Cannot complete a stop from status ${row.status}` },
+          400,
+        );
       }
 
       const stops = Array.isArray(row.stops) ? [...row.stops] : [];
@@ -1393,12 +1712,21 @@ Deno.serve(async (req) => {
         return json({ error: "stopIndex out of range" }, 400);
       }
 
-      const locationError = await checkProofLocation(adminClient, deliveryId, stops[stopIndex]?.location as string);
+      const locationError = await checkProofLocation(
+        adminClient,
+        deliveryId,
+        stops[stopIndex]?.location as string,
+      );
       if (locationError) {
         return json({ error: locationError }, 400);
       }
 
-      const upload = await uploadProofPhoto(adminClient, `${deliveryId}/stop-${stopIndex}`, fileBase64, contentType);
+      const upload = await uploadProofPhoto(
+        adminClient,
+        `${deliveryId}/stop-${stopIndex}`,
+        fileBase64,
+        contentType,
+      );
       if ("error" in upload) {
         return json({ error: upload.error }, 400);
       }
@@ -1413,8 +1741,12 @@ Deno.serve(async (req) => {
       // Final only when dropoff and every OTHER stop are already completed —
       // see the note above `complete-stop` for why this is no longer a
       // fixed list-position check.
-      const isFinal = Boolean(row.dropoff_completed_at) &&
-        stops.every((s: { completed?: boolean }, i: number) => i === stopIndex || s?.completed);
+      const isFinal =
+        Boolean(row.dropoff_completed_at) &&
+        stops.every(
+          (s: { completed?: boolean }, i: number) =>
+            i === stopIndex || s?.completed,
+        );
 
       const updates: Record<string, unknown> = { stops };
       if (isFinal) {
@@ -1442,29 +1774,40 @@ Deno.serve(async (req) => {
   // — so the names are resolved here and returned keyed by delivery id. Only
   // rows owned by the caller are ever read or returned.
   if (action === "get-delivery-crew") {
-    const requestedIds: string[] = Array.isArray(body.deliveryIds) ? body.deliveryIds : [];
+    const requestedIds: string[] = Array.isArray(body.deliveryIds)
+      ? body.deliveryIds
+      : [];
     if (requestedIds.length === 0) {
       return json({ ok: true, crewByDelivery: {} });
     }
 
     const { data: rows, error: rowsError } = await adminClient
       .from("delivery_requests")
-      .select("id, customer_auth_id, assigned_driver_id, assigned_helper_ids, assigned_truck_plate")
+      .select(
+        "id, customer_auth_id, assigned_driver_id, assigned_helper_ids, assigned_truck_plate",
+      )
       .in("id", requestedIds);
 
     if (rowsError) {
       return json({ error: rowsError.message }, 400);
     }
 
-    const owned = (rows || []).filter((r) => r.customer_auth_id === callerData.user.id);
+    const owned = (rows || []).filter(
+      (r) => r.customer_auth_id === callerData.user.id,
+    );
     if (owned.length === 0) {
       return json({ ok: true, crewByDelivery: {} });
     }
 
     const formatCrewName = (rec: Record<string, unknown>) =>
-      [rec.first_name, rec.middle_name, rec.last_name].filter(Boolean).join(" ").trim();
+      [rec.first_name, rec.middle_name, rec.last_name]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
 
-    const driverIds = Array.from(new Set(owned.map((r) => r.assigned_driver_id as string).filter(Boolean)));
+    const driverIds = Array.from(
+      new Set(owned.map((r) => r.assigned_driver_id as string).filter(Boolean)),
+    );
     const driverById = new Map<string, Record<string, unknown>>();
     if (driverIds.length > 0) {
       const { data: drivers } = await adminClient
@@ -1474,7 +1817,9 @@ Deno.serve(async (req) => {
       for (const d of drivers || []) driverById.set(d.id as string, d);
     }
 
-    const helperIds = Array.from(new Set(owned.flatMap((r) => (r.assigned_helper_ids as string[]) || [])));
+    const helperIds = Array.from(
+      new Set(owned.flatMap((r) => (r.assigned_helper_ids as string[]) || [])),
+    );
     const helperById = new Map<string, Record<string, unknown>>();
     if (helperIds.length > 0) {
       const { data: helpers } = await adminClient
@@ -1484,14 +1829,19 @@ Deno.serve(async (req) => {
       for (const h of helpers || []) helperById.set(h.id as string, h);
     }
 
-    const plateNumbers = Array.from(new Set(owned.map((r) => r.assigned_truck_plate as string).filter(Boolean)));
+    const plateNumbers = Array.from(
+      new Set(
+        owned.map((r) => r.assigned_truck_plate as string).filter(Boolean),
+      ),
+    );
     const truckByPlate = new Map<string, Record<string, unknown>>();
     if (plateNumbers.length > 0) {
       const { data: trucks } = await adminClient
         .from("trucks")
         .select("plate_number, truck_type, max_capacity")
         .in("plate_number", plateNumbers);
-      for (const t of trucks || []) truckByPlate.set(t.plate_number as string, t);
+      for (const t of trucks || [])
+        truckByPlate.set(t.plate_number as string, t);
     }
 
     const crewByDelivery: Record<string, unknown> = {};
@@ -1503,21 +1853,37 @@ Deno.serve(async (req) => {
       const driver = driverById.get(r.assigned_driver_id as string);
       const helpers = ((r.assigned_helper_ids as string[]) || []).map((id) => {
         const h = helperById.get(id);
-        return h ? { id, name: formatCrewName(h) || "Helper" } : { id, name: "Helper" };
+        return h
+          ? { id, name: formatCrewName(h) || "Helper" }
+          : { id, name: "Helper" };
       });
-      const truck = r.assigned_truck_plate ? truckByPlate.get(r.assigned_truck_plate as string) : null;
+      const truck = r.assigned_truck_plate
+        ? truckByPlate.get(r.assigned_truck_plate as string)
+        : null;
 
       crewByDelivery[r.id as string] = {
-        driver: driver ? { id: r.assigned_driver_id, name: formatCrewName(driver) || "Driver" } : null,
+        driver: driver
+          ? {
+              id: r.assigned_driver_id,
+              name: formatCrewName(driver) || "Driver",
+            }
+          : null,
         helpers,
         truck: truck
           ? {
               plateNumber: truck.plate_number,
               truckType: truck.truck_type,
-              capacity: truck.max_capacity != null ? `${Number(truck.max_capacity).toLocaleString()} kg` : null,
+              capacity:
+                truck.max_capacity != null
+                  ? `${Number(truck.max_capacity).toLocaleString()} kg`
+                  : null,
             }
           : r.assigned_truck_plate
-            ? { plateNumber: r.assigned_truck_plate, truckType: null, capacity: null }
+            ? {
+                plateNumber: r.assigned_truck_plate,
+                truckType: null,
+                capacity: null,
+              }
             : null,
       };
     }
@@ -1531,7 +1897,10 @@ Deno.serve(async (req) => {
   // UI. An Admin may additionally manage any user's picture. Checked here,
   // before the blanket Admin-only gate below, since non-Admin self-service is
   // otherwise indistinguishable from the Admin-managing-another-user case.
-  const PROFILE_PICTURE_ACTIONS = ["upload-profile-picture", "remove-profile-picture"];
+  const PROFILE_PICTURE_ACTIONS = [
+    "upload-profile-picture",
+    "remove-profile-picture",
+  ];
   if (PROFILE_PICTURE_ACTIONS.includes(action)) {
     const userId = typeof body.userId === "string" ? body.userId : "";
 
@@ -1539,13 +1908,18 @@ Deno.serve(async (req) => {
       return json({ error: "userId is required" }, 400);
     }
 
-    if (userId !== callerData.user.id && !ADMIN_ROLES.includes(callerRow.role)) {
+    if (
+      userId !== callerData.user.id &&
+      !ADMIN_ROLES.includes(callerRow.role)
+    ) {
       return json({ error: "Forbidden" }, 403);
     }
 
     if (action === "upload-profile-picture") {
-      const fileBase64 = typeof body.fileBase64 === "string" ? body.fileBase64 : "";
-      const contentType = typeof body.contentType === "string" ? body.contentType : "";
+      const fileBase64 =
+        typeof body.fileBase64 === "string" ? body.fileBase64 : "";
+      const contentType =
+        typeof body.contentType === "string" ? body.contentType : "";
 
       if (!fileBase64) {
         return json({ error: "fileBase64 is required" }, 400);
@@ -1553,7 +1927,10 @@ Deno.serve(async (req) => {
 
       const extension = EXTENSION_BY_CONTENT_TYPE[contentType];
       if (!extension) {
-        return json({ error: "contentType must be image/jpeg, image/png, or image/webp" }, 400);
+        return json(
+          { error: "contentType must be image/jpeg, image/png, or image/webp" },
+          400,
+        );
       }
 
       const { data: targetUserRow, error: targetUserError } = await adminClient
@@ -1563,14 +1940,20 @@ Deno.serve(async (req) => {
         .single();
 
       if (targetUserError || !targetUserRow) {
-        return json({ error: targetUserError?.message || "User not found" }, 400);
+        return json(
+          { error: targetUserError?.message || "User not found" },
+          400,
+        );
       }
 
       const table = ROLE_TABLE[targetUserRow.role];
       const bytes = decodeBase64(fileBase64);
 
       if (bytes.byteLength > MAX_PROFILE_PICTURE_BYTES) {
-        return json({ error: "Image is too large (max 512KB after processing)" }, 400);
+        return json(
+          { error: "Image is too large (max 512KB after processing)" },
+          400,
+        );
       }
 
       const path = `${userId}.${extension}`;
@@ -1620,7 +2003,9 @@ Deno.serve(async (req) => {
     }
 
     const table = ROLE_TABLE[targetUserRow.role];
-    const paths = Object.values(EXTENSION_BY_CONTENT_TYPE).map((ext) => `${userId}.${ext}`);
+    const paths = Object.values(EXTENSION_BY_CONTENT_TYPE).map(
+      (ext) => `${userId}.${ext}`,
+    );
 
     const { error: removeError } = await adminClient.storage
       .from(PROFILE_PICTURE_BUCKET)
@@ -1653,8 +2038,14 @@ Deno.serve(async (req) => {
   // tempPassword once — the Admin copies it and manually configures the
   // physical Pi with it; it is never retrievable again after this response.
   if (action === "register-device") {
-    const deviceId = typeof body.deviceId === "string" ? body.deviceId.trim().toUpperCase() : "";
-    const plateNumber = typeof body.plateNumber === "string" ? body.plateNumber.trim().toUpperCase() || null : null;
+    const deviceId =
+      typeof body.deviceId === "string"
+        ? body.deviceId.trim().toUpperCase()
+        : "";
+    const plateNumber =
+      typeof body.plateNumber === "string"
+        ? body.plateNumber.trim().toUpperCase() || null
+        : null;
     const status = typeof body.status === "string" ? body.status : "Active";
 
     if (!deviceId) {
@@ -1682,23 +2073,41 @@ Deno.serve(async (req) => {
     const profile = normalizeProfile(body);
     const role = typeof body.role === "string" ? body.role.trim() : "";
 
-    if (!profile.firstName || !profile.lastName || !profile.email || !ASSIGNABLE_ROLES.includes(role)) {
-      return json({ error: "First name, last name, personal email, and role are required" }, 400);
+    if (
+      !profile.firstName ||
+      !profile.lastName ||
+      !profile.email ||
+      !ASSIGNABLE_ROLES.includes(role)
+    ) {
+      return json(
+        {
+          error: "First name, last name, personal email, and role are required",
+        },
+        400,
+      );
     }
 
     if (role === "Customer" && !profile.clientName) {
-      return json({ error: "Client name is required for the Customer role" }, 400);
+      return json(
+        { error: "Client name is required for the Customer role" },
+        400,
+      );
     }
 
     const tempPassword = generateTempPassword();
-    const localPrefix = loginEmailLocalPart(profile.firstName, profile.middleName, profile.lastName);
+    const localPrefix = loginEmailLocalPart(
+      profile.firstName,
+      profile.middleName,
+      profile.lastName,
+    );
     const loginEmail = await nextLoginEmail(adminClient, localPrefix);
 
-    const { data: created, error: createError } = await adminClient.auth.admin.createUser({
-      email: loginEmail,
-      password: tempPassword,
-      email_confirm: true,
-    });
+    const { data: created, error: createError } =
+      await adminClient.auth.admin.createUser({
+        email: loginEmail,
+        password: tempPassword,
+        email_confirm: true,
+      });
 
     if (createError) {
       return json({ error: createError.message }, 400);
@@ -1722,7 +2131,10 @@ Deno.serve(async (req) => {
       // Roll back the users row and auth user so we don't leave an account with no profile row.
       await adminClient.from("users").delete().eq("id", created.user.id);
       await adminClient.auth.admin.deleteUser(created.user.id);
-      const message = profileError instanceof Error ? profileError.message : "Unable to create profile record";
+      const message =
+        profileError instanceof Error
+          ? profileError.message
+          : "Unable to create profile record";
       return json({ error: message }, 400);
     }
 
@@ -1755,7 +2167,8 @@ Deno.serve(async (req) => {
       const users = await listUsersWithProfiles(adminClient);
       return json({ ok: true, users });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to list users";
+      const message =
+        error instanceof Error ? error.message : "Unable to list users";
       return json({ error: message }, 400);
     }
   }
@@ -1770,11 +2183,17 @@ Deno.serve(async (req) => {
     }
 
     if (!profile.firstName || !profile.lastName || !profile.email) {
-      return json({ error: "First name, last name, and personal email are required" }, 400);
+      return json(
+        { error: "First name, last name, and personal email are required" },
+        400,
+      );
     }
 
     if (role === "Customer" && !profile.clientName) {
-      return json({ error: "Client name is required for the Customer role" }, 400);
+      return json(
+        { error: "Client name is required for the Customer role" },
+        400,
+      );
     }
 
     const { data: currentRow, error: currentRowError } = await adminClient
@@ -1802,7 +2221,10 @@ Deno.serve(async (req) => {
       const result = await upsertRoleRecord(adminClient, role, userId, profile);
       return json({ ok: true, role, ...result });
     } catch (profileError) {
-      const message = profileError instanceof Error ? profileError.message : "Unable to save profile record";
+      const message =
+        profileError instanceof Error
+          ? profileError.message
+          : "Unable to save profile record";
       return json({ error: message }, 400);
     }
   }
@@ -1856,7 +2278,11 @@ Deno.serve(async (req) => {
       return json({ error: userRowError?.message || "User not found" }, 400);
     }
 
-    const contactEmail = await findContactEmail(adminClient, userRow.role, userId);
+    const contactEmail = await findContactEmail(
+      adminClient,
+      userRow.role,
+      userId,
+    );
 
     if (!contactEmail) {
       return json({ error: "No contact email on file for this user" }, 400);

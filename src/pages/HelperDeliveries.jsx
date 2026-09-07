@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  ClipboardList,
   Clock,
   EyeOff,
   Loader2,
@@ -29,9 +30,14 @@ import {
   X,
 } from "lucide-react";
 import HelperLayout from "../layout/HelperLayout.jsx";
-import ConfirmationModal from "../components/common/ConfirmationModal.jsx";
+import {
+  buildRealDriverTripReport,
+  COMPLETED_REPORT_DATA,
+  CompletedDeliveryReport,
+} from "./DriverDeliveries.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { resizeProofPhotoToBase64 } from "../lib/proofPhoto.js";
+import { verifyProofPhotoHasPerson } from "../lib/proofPhotoVerification.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
 import { useResolvedStopCoords } from "../lib/forwardGeocode.js";
 import {
@@ -373,6 +379,7 @@ function mapDelivery(d) {
     // computed+saved one -- read-only here, see RouteOverviewMap below.
     suggestedRoute: Array.isArray(d.suggestedRoute) ? d.suggestedRoute : null,
     pickupPhotoUrl: d.pickupPhotoUrl || null,
+    pickupCompletedAt: d.pickupCompletedAt || null,
     dropoffPhotoUrl: d.dropoffPhotoUrl || null,
     dropoffCompletedAt: d.dropoffCompletedAt || null,
     status: DB_TO_HELPER_STATUS[d.status] || str(d.status),
@@ -786,7 +793,7 @@ function ProofOfDeliverySection({ delivery }) {
     delivery.pickupPhotoUrl && {
       label: "Pickup",
       photoUrl: delivery.pickupPhotoUrl,
-      completedAt: null,
+      completedAt: delivery.pickupCompletedAt,
     },
     delivery.dropoffPhotoUrl && {
       label: "Drop-off",
@@ -848,10 +855,78 @@ function ProofOfDeliverySection({ delivery }) {
 // Detail screen for a delivery — same layout as the driver's, minus the
 // Delivery Report section (driver behavior/route analysis is not part of the
 // helper module).
-function DeliveryDetailView({ delivery, onBack, currentHelperName }) {
+function DeliveryDetailView({
+  delivery,
+  onBack,
+  currentHelperName,
+  isReportExpanded,
+  onToggleReport,
+}) {
+  const isArchived =
+    delivery.status === "COMPLETED" || delivery.status === "DELIVERED";
+  const [realReport, setRealReport] = useState(null);
   const isCurrentHelper = (member) =>
     Boolean(currentHelperName) &&
     member.name.trim().toLowerCase() === currentHelperName.trim().toLowerCase();
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadReport() {
+      if (!isArchived) {
+        setRealReport(null);
+        return;
+      }
+
+      const { data: sessionRows } = await supabase
+        .from("sessions")
+        .select(
+          "session_id, start_time, end_time, total_alerts, session_duration",
+        )
+        .eq("delivery_request_id", delivery.id)
+        .order("start_time", { ascending: true });
+      if (!isMounted) return;
+
+      const sessions = sessionRows || [];
+      if (sessions.length === 0) {
+        setRealReport(null);
+        return;
+      }
+
+      const sessionIds = sessions.map((session) => session.session_id);
+      const [{ data: alertRows }, { data: gpsRows }] = await Promise.all([
+        supabase
+          .from("alerts")
+          .select("id, created_at, event_type, duration, session_id")
+          .in("session_id", sessionIds)
+          .order("created_at", { ascending: true }),
+        supabase
+          .from("gps_logs")
+          .select("session_id, latitude, longitude, timestamp")
+          .in("session_id", sessionIds)
+          .order("timestamp", { ascending: true }),
+      ]);
+      if (!isMounted) return;
+
+      setRealReport(
+        buildRealDriverTripReport(
+          delivery,
+          sessions,
+          alertRows || [],
+          gpsRows || [],
+        ),
+      );
+    }
+
+    loadReport();
+    return () => {
+      isMounted = false;
+    };
+  }, [delivery, delivery.id, isArchived]);
+
+  const report =
+    realReport || (isArchived ? COMPLETED_REPORT_DATA[delivery.id] : null);
+
   return (
     <div className="flex flex-col gap-3">
       <button
@@ -1031,23 +1106,49 @@ function DeliveryDetailView({ delivery, onBack, currentHelperName }) {
             </div>
           </section>
 
-          {/* Route Overview — same whole-trip guide DriverDeliveries.jsx's
-              pre-trip screen shows (Warehouse -> Pickup -> Dropoff -> Stops,
-              one colored polyline per leg), read-only here: renders whatever
-              the Driver's own PlannedRouteMap has already computed and
-              saved, falling back to the original static single-point embed
-              until one exists. */}
-          <section className="overflow-hidden rounded-xl border border-teal-200/70">
-            <div className="border-b border-teal-200/70 bg-teal-50 px-3 py-2">
-              <h3 className="text-xs font-bold text-slate-900">
-                Route Overview
-              </h3>
-            </div>
-            <RouteOverviewMap
-              suggestedRoute={delivery.suggestedRoute}
-              dropoffCoords={delivery.destinationCoords}
-            />
-          </section>
+          {isArchived ? (
+            <section className="rounded-xl border border-teal-200/70 bg-white p-3 sm:p-4">
+              <button
+                onClick={onToggleReport}
+                className="flex w-full items-center justify-between"
+              >
+                <h3 className="flex items-center gap-2 text-xs font-bold text-slate-900">
+                  <ClipboardList className="h-4 w-4 text-teal-700" />
+                  Delivery Report
+                </h3>
+                {isReportExpanded ? (
+                  <ChevronUp className="h-4 w-4 text-slate-400" />
+                ) : (
+                  <ChevronDown className="h-4 w-4 text-slate-400" />
+                )}
+              </button>
+              <p className="mt-1 text-[11px] text-slate-500">
+                Trip summary, driver behavior, and route analysis.
+              </p>
+              {isReportExpanded && (
+                <div className="mt-3">
+                  <CompletedDeliveryReport
+                    report={report}
+                    delivery={delivery}
+                    hideBehaviorTab
+                    theme="teal"
+                  />
+                </div>
+              )}
+            </section>
+          ) : (
+            <section className="overflow-hidden rounded-xl border border-teal-200/70">
+              <div className="border-b border-teal-200/70 bg-teal-50 px-3 py-2">
+                <h3 className="text-xs font-bold text-slate-900">
+                  Route Overview
+                </h3>
+              </div>
+              <RouteOverviewMap
+                suggestedRoute={delivery.suggestedRoute}
+                dropoffCoords={delivery.destinationCoords}
+              />
+            </section>
+          )}
         </div>
       </div>
     </div>
@@ -1087,6 +1188,7 @@ function HelperDeliveries() {
   const [isLoadingDeliveries, setIsLoadingDeliveries] = useState(true);
   const [deliveriesError, setDeliveriesError] = useState("");
   const [selectedDelivery, setSelectedDelivery] = useState(null);
+  const [isReportExpanded, setIsReportExpanded] = useState(false);
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState("today");
   const [currentHelperName, setCurrentHelperName] = useState("");
@@ -1110,9 +1212,15 @@ function HelperDeliveries() {
   const [confirmingChainItem, setConfirmingChainItem] = useState(null);
   const [chainPhotoBase64, setChainPhotoBase64] = useState(null);
   const [chainPhotoPreviewUrl, setChainPhotoPreviewUrl] = useState(null);
+  const [chainPhotoVerification, setChainPhotoVerification] = useState(null);
+  const [isVerifyingChainPhoto, setIsVerifyingChainPhoto] = useState(false);
   const [chainPhotoError, setChainPhotoError] = useState("");
   const [isSubmittingChainAction, setIsSubmittingChainAction] = useState(false);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState("");
   const chainPreviewUrlRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const cameraVideoRef = useRef(null);
 
   const active = data.active;
   // Resolves a "lat, lng"-shaped pickup/dropoff (e.g. DR-0020's fixture data)
@@ -1258,17 +1366,125 @@ function HelperDeliveries() {
   const openChainModal = (item) => {
     setConfirmingChainItem(item);
     setChainPhotoBase64(null);
+    setChainPhotoVerification(null);
+    setIsVerifyingChainPhoto(false);
     setChainPhotoError("");
     if (chainPreviewUrlRef.current)
       URL.revokeObjectURL(chainPreviewUrlRef.current);
     chainPreviewUrlRef.current = null;
     setChainPhotoPreviewUrl(null);
+    setCameraError("");
+    if (item.type === "dropoff") {
+      void openCamera();
+    }
+  };
+
+  const stopCamera = () => {
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current = null;
+    if (cameraVideoRef.current) cameraVideoRef.current.srcObject = null;
+    setIsCameraOpen(false);
+  };
+
+  const openCamera = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError("Camera access is not available in this browser.");
+      return;
+    }
+
+    setCameraError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
+      });
+      cameraStreamRef.current = stream;
+      setIsCameraOpen(true);
+    } catch (error) {
+      setCameraError(
+        error.name === "NotAllowedError"
+          ? "Camera permission was denied. Please allow camera access and try again."
+          : "Unable to open the camera. You can use Change to select a photo instead.",
+      );
+    }
+  };
+
+  useEffect(() => {
+    if (!isCameraOpen || !cameraStreamRef.current || !cameraVideoRef.current)
+      return;
+    cameraVideoRef.current.srcObject = cameraStreamRef.current;
+    cameraVideoRef.current.play().catch(() => {});
+  }, [isCameraOpen]);
+
+  const processChainPhoto = async (file) => {
+    setChainPhotoError("");
+    setChainPhotoVerification(null);
+    try {
+      const base64 = await resizeProofPhotoToBase64(file);
+      setChainPhotoBase64(base64);
+      if (confirmingChainItem?.type === "dropoff") {
+        setIsVerifyingChainPhoto(true);
+        try {
+          setChainPhotoVerification(await verifyProofPhotoHasPerson(file));
+        } catch (verificationError) {
+          console.warn(
+            "Dropoff photo verification unavailable:",
+            verificationError,
+          );
+          setChainPhotoVerification({
+            status: "unavailable",
+            personDetected: false,
+            confidence: 0,
+            checkedAt: new Date().toISOString(),
+            method: "local-coco-ssd",
+            message: "Automatic person check was unavailable.",
+          });
+        } finally {
+          setIsVerifyingChainPhoto(false);
+        }
+      }
+      if (chainPreviewUrlRef.current)
+        URL.revokeObjectURL(chainPreviewUrlRef.current);
+      const previewUrl = URL.createObjectURL(file);
+      chainPreviewUrlRef.current = previewUrl;
+      setChainPhotoPreviewUrl(previewUrl);
+    } catch (err) {
+      setChainPhotoError(
+        err.message || "Failed to process the photo. Please try another.",
+      );
+    }
+  };
+
+  const captureCameraPhoto = async () => {
+    const video = cameraVideoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      setCameraError("The camera is not ready yet. Please try again.");
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d")?.drawImage(video, 0, 0);
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.9),
+    );
+    if (!blob) {
+      setCameraError("Unable to capture the camera photo. Please try again.");
+      return;
+    }
+    stopCamera();
+    await processChainPhoto(
+      new File([blob], `dropoff-${Date.now()}.jpg`, { type: "image/jpeg" }),
+    );
   };
 
   const closeChainModal = () => {
     if (isSubmittingChainAction) return;
+    stopCamera();
     setConfirmingChainItem(null);
     setChainPhotoBase64(null);
+    setChainPhotoVerification(null);
+    setIsVerifyingChainPhoto(false);
     setChainPhotoError("");
     if (chainPreviewUrlRef.current)
       URL.revokeObjectURL(chainPreviewUrlRef.current);
@@ -1280,20 +1496,7 @@ function HelperDeliveries() {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    setChainPhotoError("");
-    try {
-      const base64 = await resizeProofPhotoToBase64(file);
-      setChainPhotoBase64(base64);
-      if (chainPreviewUrlRef.current)
-        URL.revokeObjectURL(chainPreviewUrlRef.current);
-      const previewUrl = URL.createObjectURL(file);
-      chainPreviewUrlRef.current = previewUrl;
-      setChainPhotoPreviewUrl(previewUrl);
-    } catch (err) {
-      setChainPhotoError(
-        err.message || "Failed to process the photo. Please try another.",
-      );
-    }
+    await processChainPhoto(file);
   };
 
   const submitChainAction = async () => {
@@ -1320,6 +1523,7 @@ function HelperDeliveries() {
             deliveryId: active.id,
             fileBase64: chainPhotoBase64,
             contentType: "image/jpeg",
+            photoVerification: chainPhotoVerification,
           },
         });
       } else {
@@ -1485,7 +1689,7 @@ function HelperDeliveries() {
   useEffect(() => {
     // Initial fetch on mount, same shape as every other data-load effect in
     // this file (see loadOwnProfile above) -- not a derived-state anti-pattern.
-     
+
     loadDeliveries();
   }, [loadDeliveries]);
 
@@ -1665,7 +1869,10 @@ function HelperDeliveries() {
     );
   });
 
-  const closeDeliveryDetail = () => setSelectedDelivery(null);
+  const closeDeliveryDetail = () => {
+    setSelectedDelivery(null);
+    setIsReportExpanded(false);
+  };
 
   const selectTab = (tabId) => {
     setActiveTab(tabId);
@@ -1817,7 +2024,7 @@ function HelperDeliveries() {
                     {isDrivingStage && (
                       <section className="rounded-xl border border-teal-200/70 bg-white p-3 sm:p-4">
                         <h3 className="text-xs font-bold text-slate-900">
-                          Delivery Chain
+                          Proof of Delivery
                         </h3>
                         <div className="mt-2.5 space-y-1.5">
                           {chainItems.map((item, idx) => (
@@ -1857,7 +2064,24 @@ function HelperDeliveries() {
                                   {item.location}
                                 </p>
                               </div>
-                              {item.photoUrl && (
+                              {item.photoUrl &&
+                                (item.type === "pickup" ||
+                                  item.type === "dropoff") && (
+                                  <a
+                                    href={item.photoUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="shrink-0 rounded-md"
+                                  >
+                                    <img
+                                      src={item.photoUrl}
+                                      alt={`${item.label} proof`}
+                                      className="h-10 w-10 rounded-md border border-emerald-200 object-cover transition hover:opacity-80"
+                                    />
+                                  </a>
+                                )}
+                              {item.photoUrl && item.type === "stop" && (
                                 <img
                                   src={item.photoUrl}
                                   alt={`${item.label} proof`}
@@ -2031,6 +2255,8 @@ function HelperDeliveries() {
                   delivery={selectedDelivery}
                   onBack={closeDeliveryDetail}
                   currentHelperName={currentHelperName}
+                  isReportExpanded={isReportExpanded}
+                  onToggleReport={() => setIsReportExpanded((prev) => !prev)}
                 />
               ) : data.upcoming.length === 0 ? (
                 <p className="rounded-xl border border-teal-200/70 bg-white p-5 text-center text-[11px] text-slate-500">
@@ -2058,6 +2284,8 @@ function HelperDeliveries() {
                   delivery={selectedDelivery}
                   onBack={closeDeliveryDetail}
                   currentHelperName={currentHelperName}
+                  isReportExpanded={isReportExpanded}
+                  onToggleReport={() => setIsReportExpanded((prev) => !prev)}
                 />
               ) : (
                 <div>
@@ -2128,13 +2356,15 @@ function HelperDeliveries() {
                     alt="Selected proof"
                     className="h-40 w-full rounded-lg border border-teal-200 object-cover"
                   />
-                  <label
-                    htmlFor="chain-photo-input"
-                    className="absolute bottom-2 right-2 inline-flex cursor-pointer items-center gap-1 rounded-md bg-white/90 px-2 py-1 text-[10px] font-semibold text-teal-800 shadow"
-                  >
-                    <Camera className="h-3 w-3" />
-                    Retake
-                  </label>
+                  {confirmingChainItem.type !== "dropoff" && (
+                    <label
+                      htmlFor="chain-photo-input"
+                      className="absolute bottom-2 right-2 inline-flex cursor-pointer items-center gap-1 rounded-md bg-white/90 px-2 py-1 text-[10px] font-semibold text-teal-800 shadow"
+                    >
+                      <Camera className="h-3 w-3" />
+                      Change
+                    </label>
+                  )}
                 </div>
               ) : (
                 <label
@@ -2143,7 +2373,7 @@ function HelperDeliveries() {
                 >
                   <Camera className="h-5 w-5" />
                   <span className="text-[11px] font-semibold">
-                    Take or choose a photo
+                    Select a photo
                   </span>
                 </label>
               )}
@@ -2157,9 +2387,83 @@ function HelperDeliveries() {
               />
             </div>
 
+            {isCameraOpen && (
+              <div className="mt-2 rounded-lg border border-teal-200 bg-slate-950 p-2">
+                <video
+                  ref={cameraVideoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="h-40 w-full rounded-md object-cover"
+                  aria-label="Live camera preview"
+                />
+                <div className="mt-2 flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={captureCameraPhoto}
+                    className="flex-1 rounded-lg bg-teal-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-teal-400"
+                  >
+                    Take Photo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={stopCamera}
+                    className="rounded-lg border border-white/30 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {confirmingChainItem.type === "dropoff" && !isCameraOpen && (
+              <div className="mt-2 flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={openCamera}
+                  disabled={isSubmittingChainAction || isVerifyingChainPhoto}
+                  className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-teal-300 px-3 py-2 text-[11px] font-semibold text-teal-800 transition hover:bg-teal-50 disabled:opacity-60"
+                >
+                  <Camera className="h-3.5 w-3.5" />
+                  {chainPhotoPreviewUrl ? "Retake" : "Open Camera"}
+                </button>
+                {chainPhotoPreviewUrl && (
+                  <label
+                    htmlFor="chain-photo-input"
+                    className={`inline-flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg border border-slate-300 px-3 py-2 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 ${isSubmittingChainAction || isVerifyingChainPhoto ? "pointer-events-none opacity-60" : ""}`}
+                  >
+                    Change
+                  </label>
+                )}
+              </div>
+            )}
+
+            {cameraError && (
+              <p className="mt-2 text-[11px] text-amber-700">{cameraError}</p>
+            )}
+
             {chainPhotoError && (
               <p className="mt-2 text-[11px] text-red-600">{chainPhotoError}</p>
             )}
+
+            {confirmingChainItem.type === "dropoff" &&
+              chainPhotoVerification && (
+                <div
+                  className={`mt-2 rounded-lg border px-2.5 py-2 text-[11px] ${
+                    chainPhotoVerification.status === "verified"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : "border-amber-200 bg-amber-50 text-amber-800"
+                  }`}
+                >
+                  <p className="font-semibold">
+                    {chainPhotoVerification.status === "verified"
+                      ? "Photo Verification: PASS (Person Detected)"
+                      : chainPhotoVerification.status === "unavailable"
+                        ? "Photo Verification: FAILED (Unable to Verify)"
+                        : "Photo Verification: NEEDS REVIEW (No Person Detected)"}
+                  </p>
+                </div>
+              )}
 
             <div className="mt-4 flex gap-1.5">
               <button
@@ -2172,13 +2476,21 @@ function HelperDeliveries() {
               </button>
               <button
                 onClick={submitChainAction}
-                disabled={isSubmittingChainAction || !chainPhotoBase64}
+                disabled={
+                  isSubmittingChainAction ||
+                  isVerifyingChainPhoto ||
+                  !chainPhotoBase64
+                }
                 className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-teal-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:opacity-70"
               >
                 {isSubmittingChainAction && (
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
                 )}
-                {isSubmittingChainAction ? "Please wait…" : "Complete"}
+                {isSubmittingChainAction
+                  ? "Please wait..."
+                  : isVerifyingChainPhoto
+                    ? "Checking photo..."
+                    : "Submit"}
               </button>
             </div>
           </div>

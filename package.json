@@ -13,6 +13,8 @@
     "@jobuntux/psgc": "^0.2.1",
     "@react-google-maps/api": "^2.20.8",
     "@supabase/supabase-js": "^2.106.2",
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs": "^4.22.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.25.0",
     "react": "^19.2.5",

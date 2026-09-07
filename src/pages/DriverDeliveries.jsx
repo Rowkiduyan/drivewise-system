@@ -1518,7 +1518,9 @@ function LiveNavigationMap({
   );
 }
 
-const COMPLETED_REPORT_DATA = {
+// Shared with HelperDeliveries.jsx so both portals render the same report.
+// eslint-disable-next-line react-refresh/only-export-components
+export const COMPLETED_REPORT_DATA = {
   "DEL-004": {
     routeDeviation: {
       planned: [
@@ -1831,7 +1833,8 @@ function ResolvedText({ value }) {
 // schema (an AI route-deviation narrative, precise pickup-confirmed
 // timestamps) are left out rather than fabricated, same rule that function
 // already established.
-function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
   if (!sessions.length) return null;
 
   const sorted = [...sessions].sort(
@@ -2090,7 +2093,12 @@ function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
   };
 }
 
-function CompletedDeliveryReport({ report, delivery }) {
+export function CompletedDeliveryReport({
+  report,
+  delivery,
+  hideBehaviorTab = false,
+  theme = "amber",
+}) {
   const resolvedPickup = useResolvedAddress(delivery?.pickupAddress || "");
   const resolvedDropoff = useResolvedAddress(delivery?.deliveryAddress || "");
   const [reportTab, setReportTab] = useState("trip");
@@ -2114,11 +2122,33 @@ function CompletedDeliveryReport({ report, delivery }) {
   // deliveries that predate PlannedRouteMap (or never had a parseable
   // pickup/dropoff) simply don't get it, same as the Supervisor's version.
   const tabs = REPORT_TABS.filter(
-    (tab) => tab.id !== "route" || Boolean(report.routeDeviation),
+    (tab) =>
+      (!hideBehaviorTab || tab.id !== "behavior") &&
+      (tab.id !== "route" || Boolean(report.routeDeviation)),
   );
 
+  const themeClass = {
+    amber: {
+      card: "border-amber-200/70 bg-amber-50/50",
+      tabBarBorder: "border-amber-200/70",
+      tabActive: "bg-amber-900 text-white",
+      tabInactive: "text-slate-600 hover:bg-amber-100",
+    },
+    teal: {
+      card: "border-teal-200/70 bg-teal-50/40",
+      tabBarBorder: "border-teal-200/70",
+      tabActive: "bg-teal-900 text-white",
+      tabInactive: "text-slate-600 hover:bg-teal-100",
+    },
+  }[theme] || {
+    card: "border-amber-200/70 bg-amber-50/50",
+    tabBarBorder: "border-amber-200/70",
+    tabActive: "bg-amber-900 text-white",
+    tabInactive: "text-slate-600 hover:bg-amber-100",
+  };
+
   return (
-    <div className="rounded-xl border border-amber-200/70 bg-amber-50/50 p-3 sm:p-4">
+    <div className={`rounded-xl border ${themeClass.card} p-3 sm:p-4`}>
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
           Delivery Report
@@ -2128,7 +2158,7 @@ function CompletedDeliveryReport({ report, delivery }) {
       {/* A 3-up grid, not a horizontally-scrolling row — it always fits the viewport
           instead of requiring a swipe to reach the third tab. */}
       <div
-        className={`mb-4 grid gap-1.5 border-b border-amber-200/70 pb-3 ${tabs.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}
+        className={`mb-4 grid gap-1.5 border-b ${themeClass.tabBarBorder} pb-3 ${tabs.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}
       >
         {tabs.map((tab) => {
           const Icon = tab.icon;
@@ -2138,9 +2168,7 @@ function CompletedDeliveryReport({ report, delivery }) {
               key={tab.id}
               onClick={() => setReportTab(tab.id)}
               className={`flex flex-col items-center gap-1 rounded-lg py-2 text-[11px] font-semibold transition ${
-                isActive
-                  ? "bg-amber-900 text-white"
-                  : "text-slate-600 hover:bg-amber-100"
+                isActive ? themeClass.tabActive : themeClass.tabInactive
               }`}
             >
               <Icon className="h-4 w-4" />
@@ -2234,42 +2262,44 @@ function CompletedDeliveryReport({ report, delivery }) {
             </div>
           </div>
 
-          <div className="rounded-lg bg-white border border-slate-200 p-2.5">
-            <p className="text-xs font-semibold text-slate-500 mb-1.5">
-              Eye Closure Alerts
-            </p>
-            <div className="space-y-1.5">
-              {report.delivery.eyeClosureAlerts.map((alert) => {
-                const Icon = ALERT_TYPE_ICONS[alert.type] || EyeOff;
-                const severityColor =
-                  alert.severity === "High"
-                    ? "text-red-600 bg-red-50"
-                    : "text-amber-600 bg-amber-50";
-                return (
-                  <div
-                    key={alert.id}
-                    className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-slate-100 p-2 text-[11px]"
-                  >
-                    <Icon className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                    <span className="font-medium text-slate-700">
-                      {formatAlertTimestamp(alert.time)}
-                    </span>
-                    <span className="text-slate-500">
-                      {ALERT_TYPE_LABELS[alert.type] || alert.type}
-                    </span>
-                    <span className="text-[10px] text-slate-400">
-                      {alert.duration}s
-                    </span>
-                    <span
-                      className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold ${severityColor}`}
+          {!hideBehaviorTab && (
+            <div className="rounded-lg bg-white border border-slate-200 p-2.5">
+              <p className="text-xs font-semibold text-slate-500 mb-1.5">
+                Eye Closure Alerts
+              </p>
+              <div className="space-y-1.5">
+                {report.delivery.eyeClosureAlerts.map((alert) => {
+                  const Icon = ALERT_TYPE_ICONS[alert.type] || EyeOff;
+                  const severityColor =
+                    alert.severity === "High"
+                      ? "text-red-600 bg-red-50"
+                      : "text-amber-600 bg-amber-50";
+                  return (
+                    <div
+                      key={alert.id}
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-slate-100 p-2 text-[11px]"
                     >
-                      {alert.severity}
-                    </span>
-                  </div>
-                );
-              })}
+                      <Icon className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                      <span className="font-medium text-slate-700">
+                        {formatAlertTimestamp(alert.time)}
+                      </span>
+                      <span className="text-slate-500">
+                        {ALERT_TYPE_LABELS[alert.type] || alert.type}
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        {alert.duration}s
+                      </span>
+                      <span
+                        className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold ${severityColor}`}
+                      >
+                        {alert.severity}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="rounded-lg bg-white border border-slate-200 p-2.5">
             <p className="text-xs font-semibold text-slate-500 mb-1.5">
@@ -2726,6 +2756,7 @@ function mapDelivery(d) {
     // Dropoff) — read-only here, written by the Helper's completion actions
     // (02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
     pickupPhotoUrl: d.pickupPhotoUrl || null,
+    pickupCompletedAt: d.pickupCompletedAt || null,
     dropoffPhotoUrl: d.dropoffPhotoUrl || null,
     dropoffCompletedAt: d.dropoffCompletedAt || null,
     // Frozen planned route (Pickup -> Dropoff -> Stops), if the pre-trip
@@ -2931,7 +2962,7 @@ function ProofOfDeliverySection({ delivery }) {
     delivery.pickupPhotoUrl && {
       label: "Pickup",
       photoUrl: delivery.pickupPhotoUrl,
-      completedAt: null,
+      completedAt: delivery.pickupCompletedAt,
     },
     delivery.dropoffPhotoUrl && {
       label: "Drop-off",

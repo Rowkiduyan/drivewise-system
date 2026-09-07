@@ -295,7 +295,14 @@ function formatTimestamp(iso) {
 // Ordinal word for the Nth drop-off in the chain (1st = the primary
 // dropoff_location, 2nd+ = each of `stops` in order) — capped at 5 stops
 // (DATABASE.md's `stops` limit), so 6 words covers every real case.
-const DROPOFF_ORDINAL_WORDS = ["First", "Second", "Third", "Fourth", "Fifth", "Sixth"];
+const DROPOFF_ORDINAL_WORDS = [
+  "First",
+  "Second",
+  "Third",
+  "Fourth",
+  "Fifth",
+  "Sixth",
+];
 
 // Builds the "Out for Delivery" stage's real, sequential pickup/drop-off
 // progress messages (2026-09-04, per user request — the Customer portal has
@@ -324,7 +331,9 @@ function buildTransitSubsteps(request) {
     },
     {
       kind: "dropoff",
-      ordinalLabel: hasMultipleDropoffs ? `${DROPOFF_ORDINAL_WORDS[0]} Drop-Off Location` : null,
+      ordinalLabel: hasMultipleDropoffs
+        ? `${DROPOFF_ORDINAL_WORDS[0]} Drop-Off Location`
+        : null,
       location: request.dropoffLocation,
       done: Boolean(request.dropoffPhotoUrl),
       completedAt: request.dropoffCompletedAt,
@@ -2130,7 +2139,9 @@ function RequestDetailView({
                               You requested ₱
                               {Number(request.priceRange.min).toLocaleString()}
                               –₱
-                              {Number(request.priceRange.max).toLocaleString()}{" "}
+                              {Number(
+                                request.priceRange.max,
+                              ).toLocaleString()}{" "}
                               instead
                             </p>
                           )}
@@ -3575,6 +3586,20 @@ function CustomerDeliveries() {
     }
   }, [location.state]);
 
+  const toastBanner = toast && (
+    <div className="fixed inset-x-0 top-4 z-50 flex justify-center">
+      <p
+        className={`
+          rounded-md border border-green-300 bg-green-100 px-4 py-2 text-sm font-medium text-green-800 shadow-md
+          transition-transform duration-300 ease-out
+          transform translate-y-0 opacity-100
+        `}
+      >
+        {toast.message}
+      </p>
+    </div>
+  );
+
   if (selectedRequest) {
     return (
       <CustomerLayout
@@ -3582,6 +3607,7 @@ function CustomerDeliveries() {
         background={background}
         bg="bg-white md:bg-[#F6F7FB]"
       >
+        {toastBanner}
         <RequestDetailView
           request={selectedRequest}
           onBack={() => setSelectedRequest(null)}
@@ -3622,19 +3648,7 @@ function CustomerDeliveries() {
         </Link>
       </div>
 
-      {toast && (
-        <div className="fixed inset-x-0 top-4 z-50 flex justify-center">
-          <p
-            className={`
-              rounded-md border border-green-300 bg-green-100 px-4 py-2 text-sm font-medium text-green-800 shadow-md
-              transition-transform duration-300 ease-out
-              transform translate-y-0 opacity-100
-            `}
-          >
-            {toast.message}
-          </p>
-        </div>
-      )}
+      {toastBanner}
 
       <div
         className="flex flex-col gap-4 mb-2 pb-24 sm:gap-6 md:gap-4 md:pb-0"
