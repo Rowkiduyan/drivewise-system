@@ -1127,10 +1127,6 @@ Deno.serve(async (req) => {
           // client skip recomputing/re-saving on a remount
           // (11_ROUTE_COMPARISON.md, `driver-trip`'s save-suggested-route).
           suggestedRoute: r.suggested_route || null,
-          // Set once a Supervisor approves the route during PENDING_REQUEST
-          // review (SupDeliveries.jsx) -- gates whether the Driver's
-          // PlannedRouteMap trusts suggestedRoute as-is or recomputes it.
-          routeApprovedAt: r.route_approved_at || null,
           cargoWeight: r.cargo_weight,
           status: r.status,
           hasOpenSession: openSessionDeliveryIds.has(r.id as string),

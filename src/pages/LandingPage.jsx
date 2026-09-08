@@ -1,4 +1,3 @@
-import marvelLogo from '../layout/images/MarvelLogoNoBG.png'
 import marvelTrucks from '../layout/images/MarvelTrucks.png'
 import marvelMonoLogo from '../layout/images/MLOGO.png'
 

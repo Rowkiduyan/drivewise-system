@@ -1315,14 +1315,15 @@ function CustomerRequestDelivery() {
     // trusting the live-preview state, same "never trust stale client
     // state at the final gate" pattern this check already used before.
     const activeStops = formData.stops.filter((stop) => stop.location.trim());
-    // Warehouse -> Pickup -> Dropoff -> Stops route, generated up front so a
-    // Supervisor can review/adjust it during PENDING_REQUEST, before ever
-    // submitting a quotation (2026-09-06, Supervisor Route Review & Approval
-    // feature) -- see SupDeliveries.jsx's EditableRouteMap and
-    // route_approved_at in DATABASE.md. Non-fatal on failure: unlike
-    // estimateLegDurations below (which blocks submission because a wrong
-    // schedule is a correctness problem), a missing route is just a display/
-    // review convenience the Supervisor can still generate later.
+    // Warehouse -> Pickup -> Dropoff -> Stops route, generated up front so
+    // the Supervisor and Customer have something to view during
+    // PENDING_REQUEST/quotation review (2026-09-06, since simplified
+    // 2026-09-08 to a read-only view only -- see SuggestedRouteMap). Non-
+    // fatal on failure: unlike estimateLegDurations below (which blocks
+    // submission because a wrong schedule is a correctness problem), a
+    // missing route here is just a display convenience -- the Driver's own
+    // pre-trip screen (PlannedRouteMap, DriverDeliveries.jsx) still computes
+    // and saves one fresh if this one never landed.
     let suggestedRoute = null;
     if (pickupLat != null && dropoffLat != null) {
       if (!mapsApiLoaded || !window.google) {

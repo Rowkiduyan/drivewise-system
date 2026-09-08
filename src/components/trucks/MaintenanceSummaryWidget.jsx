@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { useMemo } from "react";
 import { AlertTriangle, Clock, CheckCircle2 } from "lucide-react";
 import { getPmsStatus } from "./utils/pms.js";
 

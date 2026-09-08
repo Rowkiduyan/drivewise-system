@@ -1,15 +1,17 @@
 // Shared route-computation logic, extracted 2026-09-06 (Supervisor Route
 // Review & Approval feature) from what used to live only inline inside
-// DriverDeliveries.jsx's PlannedRouteMap. Now needed identically in three
-// places: CustomerRequestDelivery.jsx (route generated at request-creation
-// time), SupDeliveries.jsx (Supervisor viewing/editing during PENDING_
-// REQUEST review), and DriverDeliveries.jsx's PlannedRouteMap (still the
-// fallback recompute for a request whose route was never Supervisor-
-// approved -- see route_approved_at in DATABASE.md). Extracted rather than
-// duplicated per-portal (the way RouteDeviationMap is) because this is a
-// nontrivial multi-step DirectionsService request builder with a
-// nearest-neighbor ordering algorithm, not a simple read-only renderer --
-// tripling it would triple the bug surface for a future stop-ordering fix.
+// DriverDeliveries.jsx's PlannedRouteMap. Needed in two places:
+// CustomerRequestDelivery.jsx (route generated at request-creation time)
+// and DriverDeliveries.jsx's PlannedRouteMap (fallback recompute for a
+// request whose route never landed at creation time -- see suggestedRoute's
+// presence check there). The Supervisor's own viewing/editing use of this
+// (SupDeliveries.jsx) was removed 2026-09-08 -- it now only views the
+// already-computed route via SuggestedRouteMap, read-only, no recompute.
+// Extracted rather than duplicated per-portal (the way RouteDeviationMap
+// is) because this is a nontrivial multi-step DirectionsService request
+// builder with a nearest-neighbor ordering algorithm, not a simple
+// read-only renderer -- duplicating it would multiply the bug surface for
+// a future stop-ordering fix.
 
 // Fixed depot/warehouse address every Trip starts from, per user
 // instruction -- every whole-trip route leads with this Warehouse -> Pickup

@@ -130,7 +130,7 @@ const supIcons = {
   ),
 };
 
-function SupLayout({ title, background, children, bg = "bg-white" }) {
+function SupLayout({ background, children, bg = "bg-white" }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     if (typeof window === "undefined") {
       return false;

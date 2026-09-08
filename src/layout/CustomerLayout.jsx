@@ -62,7 +62,7 @@ const clientIcons = {
   ),
 };
 
-function CustomerLayout({ title, background, children, bg = "bg-white" }) {
+function CustomerLayout({ background, children, bg = "bg-white" }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     if (typeof window === "undefined") {
       return false;

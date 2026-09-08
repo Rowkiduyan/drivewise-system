@@ -52,7 +52,7 @@ const helperIcons = {
   ),
 };
 
-function HelperLayout({ title, background, children }) {
+function HelperLayout({ background, children }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     if (typeof window === "undefined") {
       return false;

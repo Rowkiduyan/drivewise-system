@@ -209,6 +209,18 @@ const statusConfig = {
     banner: null,
     bannerIcon: null,
   },
+  // Added 2026-09-08, porting the same fix DriverDeliveries.jsx needed --
+  // without this, a CANCELLED delivery has no statusConfig entry, so
+  // statusConfig[status] resolves to undefined and any render path reading
+  // e.g. statusCfg.banner crashes. Previously latent here since CANCELLED
+  // was never excluded from `nonArchived` below either, so a same-day
+  // cancelled delivery could have been picked as the workspace delivery.
+  CANCELLED: {
+    label: "Cancelled",
+    badge: "bg-rose-100 text-rose-700",
+    banner: null,
+    bannerIcon: null,
+  },
 };
 
 // Maps delivery_requests.status (the backend/Driver-driven values) to this
@@ -222,6 +234,7 @@ const DB_TO_HELPER_STATUS = {
   ARRIVED_DROPOFF: "OUT_FOR_DELIVERY",
   DELIVERED: "DELIVERED",
   COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
 };
 
 // Today's date as "YYYY-MM-DD" in Asia/Manila (see lib/manilaTime.js) --
@@ -1155,10 +1168,20 @@ function DeliveryDetailView({
   );
 }
 
+// Genuinely date-based since 2026-09-08 (ported from DriverDeliveries.jsx's
+// same-day restructure, per explicit user request -- scoped to only what
+// Helper actually needs: no live-nav/GPS-watch/rest-stop machinery exists
+// here, so only the bucketing logic and tab shape were ported, not those
+// Driver-only features). `id: "today"` = every non-terminal delivery with
+// pickupDate === today, PLUS workspaceDelivery unconditionally (even off a
+// stale date -- see loadDeliveries) rendered as the read-only chain-progress
+// workspace at the top. `id: "past"` renamed to "History" to match Driver --
+// finished (DELIVERED/COMPLETED) OR pickupDate < today while unfinished, the
+// latter in its own "Overdue" section so it doesn't read as done.
 const DELIVERY_TABS = [
   { id: "today", label: "Today" },
   { id: "upcoming", label: "Upcoming" },
-  { id: "past", label: "Past" },
+  { id: "past", label: "History" },
 ];
 
 function TabButton({ label, count, isActive, onClick }) {
@@ -1181,9 +1204,11 @@ function TabButton({ label, count, isActive, onClick }) {
 
 function HelperDeliveries() {
   const [data, setData] = useState({
-    active: null,
+    workspace: null,
+    today: [],
     upcoming: [],
-    completed: [],
+    overdue: [],
+    history: [],
   });
   const [isLoadingDeliveries, setIsLoadingDeliveries] = useState(true);
   const [deliveriesError, setDeliveriesError] = useState("");
@@ -1222,52 +1247,60 @@ function HelperDeliveries() {
   const cameraStreamRef = useRef(null);
   const cameraVideoRef = useRef(null);
 
-  const active = data.active;
+  // The one delivery this Helper's read-only workspace pins at the top --
+  // renamed from `active` 2026-09-08 when the Today/Upcoming/History tabs
+  // became genuinely date-based (ported from DriverDeliveries.jsx), same as
+  // Driver's own rename. Selection logic (loadDeliveries above) is
+  // unchanged: status priority (open session, then paused, then
+  // pickupDate === today), independent of which tab it's shown under.
+  const workspaceDelivery = data.workspace;
   // Resolves a "lat, lng"-shaped pickup/dropoff (e.g. DR-0020's fixture data)
   // into a human-readable address for the status/Summary card -- a no-op for
   // deliveries that already store a real street address.
-  const resolvedPickupAddress = useResolvedAddress(active?.pickupAddress || "");
+  const resolvedPickupAddress = useResolvedAddress(
+    workspaceDelivery?.pickupAddress || "",
+  );
   const resolvedDeliveryAddress = useResolvedAddress(
-    active?.deliveryAddress || "",
+    workspaceDelivery?.deliveryAddress || "",
   );
   // Stop coordinates for the Summary card's ordered legend below (see
   // statusCardLegend) -- same Photon-based resolution the Driver's own
   // PlannedRouteMap uses for its route computation, needed here too so a
   // 'stop' leg's endpoint can be matched back to its address.
-  const activeStopLocations = (active?.stops || []).map((s) => s.location);
+  const activeStopLocations = (workspaceDelivery?.stops || []).map(
+    (s) => s.location,
+  );
   const { coordsByLocation: activeStopCoords } =
     useResolvedStopCoords(activeStopLocations);
   // Full ordered legend for the Summary card -- Pickup, then every
   // Dropoff/Stop in the same nearest-first order the Driver's Planned
   // Route/Live Navigation actually visit them, not just a fixed
   // Pickup/Dropoff pair.
-  const statusCardLegend = active
+  const statusCardLegend = workspaceDelivery
     ? buildRouteLegend(
-        active.suggestedRoute,
+        workspaceDelivery.suggestedRoute,
         resolvedPickupAddress,
         resolvedDeliveryAddress,
-        active.stops,
+        workspaceDelivery.stops,
         activeStopCoords,
       )
     : [];
-  const statusCfg = active ? statusConfig[active.status] : null;
+  const statusCfg = workspaceDelivery
+    ? statusConfig[workspaceDelivery.status]
+    : null;
   const todayISO = localTodayISO();
-  // Boolean(active), not a pickupDate === today check — a delivery with a
-  // genuinely open Session (see loadDeliveries' activeDelivery selection
-  // above) must still render as the active workspace even if its
-  // pickup_date isn't today. Mirrors DriverDeliveries.jsx's identical fix.
-  const hasActiveDelivery = Boolean(active);
-  const todayCount = hasActiveDelivery ? 1 : 0;
+  const todayCount = data.today.length;
   const upcomingCount = data.upcoming.length;
-  const pastCount = data.completed.length;
+  const pastCount = data.overdue.length + data.history.length;
 
   // Same "Paused isn't a stored value" read as DriverDeliveries.jsx — a delivery
   // past ASSIGNED with no open Session means the driver has paused the trip.
   const isDrivingStage =
-    Boolean(active) &&
-    (active.status === "FOR_PICKUP" || active.status === "OUT_FOR_DELIVERY");
-  const isPausedTrip = isDrivingStage && !active.hasOpenSession;
-  const isMonitoring = isDrivingStage && active?.hasOpenSession;
+    Boolean(workspaceDelivery) &&
+    (workspaceDelivery.status === "FOR_PICKUP" ||
+      workspaceDelivery.status === "OUT_FOR_DELIVERY");
+  const isPausedTrip = isDrivingStage && !workspaceDelivery.hasOpenSession;
+  const isMonitoring = isDrivingStage && workspaceDelivery?.hasOpenSession;
 
   const isCurrentHelper = (member) =>
     Boolean(currentHelperName) &&
@@ -1276,7 +1309,7 @@ function HelperDeliveries() {
   const chainItemKey = (item) =>
     item.type === "stop" ? `stop-${item.index}` : item.type;
 
-  // The full completion chain for the active delivery, in the real order
+  // The full completion chain for the workspace delivery, in the real order
   // (Pickup -> Dropoff -> Stops, not "stops between a fixed pickup/dropoff")
   // — see 02B_MULTI_STOP_DELIVERIES.md. Each item's Complete button is only
   // actionable at the specific stage that item belongs to; once the whole
@@ -1284,28 +1317,28 @@ function HelperDeliveries() {
   // individual items happened to get completed (no ordering is enforced
   // server-side, so dropoff can end up never completed if the last stop
   // was completed directly — that's accepted, not a bug).
-  const chainItems = active
+  const chainItems = workspaceDelivery
     ? (() => {
         const items = [
           {
             type: "pickup",
             label: "Pickup",
-            location: active.pickupAddress,
-            done: active.status !== "FOR_PICKUP",
-            photoUrl: active.pickupPhotoUrl,
-            actionable: active.status === "FOR_PICKUP",
+            location: workspaceDelivery.pickupAddress,
+            done: workspaceDelivery.status !== "FOR_PICKUP",
+            photoUrl: workspaceDelivery.pickupPhotoUrl,
+            actionable: workspaceDelivery.status === "FOR_PICKUP",
           },
           {
             type: "dropoff",
             label: "Dropoff",
-            location: active.deliveryAddress,
-            done: Boolean(active.dropoffCompletedAt),
-            photoUrl: active.dropoffPhotoUrl,
+            location: workspaceDelivery.deliveryAddress,
+            done: Boolean(workspaceDelivery.dropoffCompletedAt),
+            photoUrl: workspaceDelivery.dropoffPhotoUrl,
             actionable:
-              active.status === "OUT_FOR_DELIVERY" &&
-              !active.dropoffCompletedAt,
+              workspaceDelivery.status === "OUT_FOR_DELIVERY" &&
+              !workspaceDelivery.dropoffCompletedAt,
           },
-          ...active.stops.map((stop, index) => ({
+          ...workspaceDelivery.stops.map((stop, index) => ({
             type: "stop",
             index,
             // "Dropoff N" naming, not "Stop N" -- every point after Pickup is
@@ -1316,7 +1349,9 @@ function HelperDeliveries() {
             location: stop.location,
             done: Boolean(stop.completed),
             photoUrl: stop.photoUrl,
-            actionable: active.status === "OUT_FOR_DELIVERY" && !stop.completed,
+            actionable:
+              workspaceDelivery.status === "OUT_FOR_DELIVERY" &&
+              !stop.completed,
           })),
         ];
 
@@ -1510,7 +1545,7 @@ function HelperDeliveries() {
         result = await supabase.functions.invoke("admin-users", {
           body: {
             action: "update-driver-delivery",
-            deliveryId: active.id,
+            deliveryId: workspaceDelivery.id,
             status: "OUT_FOR_DROPOFF",
             fileBase64: chainPhotoBase64,
             contentType: "image/jpeg",
@@ -1520,7 +1555,7 @@ function HelperDeliveries() {
         result = await supabase.functions.invoke("admin-users", {
           body: {
             action: "complete-dropoff",
-            deliveryId: active.id,
+            deliveryId: workspaceDelivery.id,
             fileBase64: chainPhotoBase64,
             contentType: "image/jpeg",
             photoVerification: chainPhotoVerification,
@@ -1530,7 +1565,7 @@ function HelperDeliveries() {
         result = await supabase.functions.invoke("admin-users", {
           body: {
             action: "complete-stop",
-            deliveryId: active.id,
+            deliveryId: workspaceDelivery.id,
             stopIndex: confirmingChainItem.index,
             fileBase64: chainPhotoBase64,
             contentType: "image/jpeg",
@@ -1558,7 +1593,7 @@ function HelperDeliveries() {
         const { error: endTripError } = await supabase.functions.invoke(
           "driver-trip",
           {
-            body: { action: "end-trip", deliveryRequestId: active.id },
+            body: { action: "end-trip", deliveryRequestId: workspaceDelivery.id },
           },
         );
         if (endTripError) {
@@ -1622,8 +1657,16 @@ function HelperDeliveries() {
     if (cached) {
       try {
         const parsed = JSON.parse(cached);
-        setData(parsed);
-        setIsLoadingDeliveries(false);
+        // Guards against a stale cache written before the 2026-09-08
+        // date-based restructure (old shape: {active, upcoming, completed})
+        // -- using it as-is would leave data.today/overdue/history
+        // undefined until the fresh fetch below lands, since this page now
+        // reads that new shape everywhere. A real fetch always overwrites
+        // this within moments regardless.
+        if ("today" in parsed) {
+          setData(parsed);
+          setIsLoadingDeliveries(false);
+        }
         // Continue to fetch fresh data in background (rule 3)
       } catch (e) {
         console.warn("Failed to parse cached deliveries", e);
@@ -1631,13 +1674,13 @@ function HelperDeliveries() {
       }
     }
 
-    // Determine if we already have cached data; if so, keep loading false
+    // Determine if we already have usable (new-shape) cached data; if so,
+    // keep loading false -- see the "today" in parsed guard above.
     const hasCache =
       cached &&
       (() => {
         try {
-          JSON.parse(cached);
-          return true;
+          return "today" in JSON.parse(cached);
         } catch {
           return false;
         }
@@ -1652,29 +1695,65 @@ function HelperDeliveries() {
     );
     if (error) {
       setDeliveriesError("Failed to load your deliveries. Please try again.");
-      setData({ active: null, upcoming: [], completed: [] });
+      setData({ workspace: null, today: [], upcoming: [], overdue: [], history: [] });
       setIsLoadingDeliveries(false);
       return;
     }
     const mapped = (result?.deliveries || []).map(mapDelivery);
     const today = localTodayISO();
-    const nonArchived = mapped
-      .filter((d) => d.status !== "DELIVERED" && d.status !== "COMPLETED")
+    const TERMINAL_STATUSES = new Set(["DELIVERED", "COMPLETED", "CANCELLED"]);
+    const nonTerminal = mapped
+      .filter((d) => !TERMINAL_STATUSES.has(d.status))
       .sort((a, b) =>
         String(a.pickupDate || "").localeCompare(String(b.pickupDate || "")),
       );
-    const activeDelivery =
-      nonArchived.find((d) => d.hasOpenSession) ||
-      nonArchived.find((d) => d.pickupDate === today) ||
+
+    // Ported from DriverDeliveries.jsx's 2026-09-08 restructure -- the one
+    // delivery this Helper's read-only workspace pins at the top, chosen by
+    // the exact same status priority Driver uses (open session, then a
+    // paused trip -- see isPausedTrip below -- then pickupDate === today as
+    // a last resort), independent of which tab it's shown under. A Paused
+    // trip left unresumed past midnight needs this same date-independent
+    // priority Driver's trip has, or it would silently drop out of the
+    // workspace here too.
+    const pausedDelivery = nonTerminal.find(
+      (d) =>
+        !d.hasOpenSession &&
+        (d.status === "FOR_PICKUP" || d.status === "OUT_FOR_DELIVERY"),
+    );
+    const workspaceDelivery =
+      nonTerminal.find((d) => d.hasOpenSession) ||
+      pausedDelivery ||
+      nonTerminal.find((d) => d.pickupDate === today) ||
       null;
+
+    // Date-based buckets, excluding workspaceDelivery's own id so it's never
+    // listed a second time in Upcoming or History's Overdue section.
+    const otherNonTerminal = workspaceDelivery
+      ? nonTerminal.filter((d) => d.id !== workspaceDelivery.id)
+      : nonTerminal;
+    const todaysDeliveries = otherNonTerminal.filter(
+      (d) => d.pickupDate === today,
+    );
+    const upcomingDeliveries = otherNonTerminal.filter(
+      (d) => d.pickupDate > today,
+    );
+    const overdueDeliveries = otherNonTerminal.filter(
+      (d) => d.pickupDate < today,
+    );
+    const historyDeliveries = mapped.filter((d) =>
+      TERMINAL_STATUSES.has(d.status),
+    );
+    const todaysList = workspaceDelivery
+      ? [workspaceDelivery, ...todaysDeliveries]
+      : todaysDeliveries;
+
     const newData = {
-      active: activeDelivery,
-      upcoming: nonArchived.filter(
-        (d) => d.id !== (activeDelivery && activeDelivery.id),
-      ),
-      completed: mapped.filter(
-        (d) => d.status === "DELIVERED" || d.status === "COMPLETED",
-      ),
+      workspace: workspaceDelivery,
+      today: todaysList,
+      upcoming: upcomingDeliveries,
+      overdue: overdueDeliveries,
+      history: historyDeliveries,
     };
     setData(newData);
     setIsLoadingDeliveries(false);
@@ -1716,16 +1795,16 @@ function HelperDeliveries() {
   }, [loadDeliveries]);
 
   useEffect(() => {
-    if (!active?.id) return undefined;
+    if (!workspaceDelivery?.id) return undefined;
     const channel = supabase
-      .channel(`helper-sessions-${active.id}`)
+      .channel(`helper-sessions-${workspaceDelivery.id}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "sessions",
-          filter: `delivery_request_id=eq.${active.id}`,
+          filter: `delivery_request_id=eq.${workspaceDelivery.id}`,
         },
         () => {
           loadDeliveries();
@@ -1735,20 +1814,20 @@ function HelperDeliveries() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [active?.id, loadDeliveries]);
+  }, [workspaceDelivery?.id, loadDeliveries]);
 
   // Read-only alerts feed (06_DROWSINESS_ALERT_PIPELINE.md's Helper visibility
   // note): same seed-fetch + postgres_changes INSERT pattern DriverDeliveries.jsx
   // uses for its own LiveMonitoringCard, minus the audio.
   useEffect(() => {
-    if (!isMonitoring || !active?.sessionId) return undefined;
+    if (!isMonitoring || !workspaceDelivery?.sessionId) return undefined;
     let cancelled = false;
 
     async function loadExistingAlerts() {
       const { data, error } = await supabase
         .from("alerts")
         .select("id, event_type, duration, created_at")
-        .eq("session_id", active.sessionId)
+        .eq("session_id", workspaceDelivery.sessionId)
         .order("created_at", { ascending: false });
       if (cancelled || error || !data) return;
       setLiveAlerts((prev) => {
@@ -1769,14 +1848,14 @@ function HelperDeliveries() {
     loadExistingAlerts();
 
     const channel = supabase
-      .channel(`helper-alerts-session-${active.sessionId}`)
+      .channel(`helper-alerts-session-${workspaceDelivery.sessionId}`)
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
           table: "alerts",
-          filter: `session_id=eq.${active.sessionId}`,
+          filter: `session_id=eq.${workspaceDelivery.sessionId}`,
         },
         (payload) => {
           const row = payload.new;
@@ -1794,7 +1873,7 @@ function HelperDeliveries() {
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [isMonitoring, active?.sessionId]);
+  }, [isMonitoring, workspaceDelivery?.sessionId]);
 
   // Live truck position (05_GPS_PIPELINE.md), added 2026-08-14 to support the
   // Delivery Chain list's "Next" highlight (02B_MULTI_STOP_DELIVERIES.md's
@@ -1810,14 +1889,14 @@ function HelperDeliveries() {
   }, [chainSuccessNotice]);
 
   useEffect(() => {
-    if (!isMonitoring || !active?.sessionId) return undefined;
+    if (!isMonitoring || !workspaceDelivery?.sessionId) return undefined;
     let cancelled = false;
 
     async function loadLatestPosition() {
       const { data, error } = await supabase
         .from("gps_logs")
         .select("latitude, longitude")
-        .eq("session_id", active.sessionId)
+        .eq("session_id", workspaceDelivery.sessionId)
         .order("created_at", { ascending: false })
         .limit(1);
       if (cancelled || error || !data?.length) return;
@@ -1826,14 +1905,14 @@ function HelperDeliveries() {
     loadLatestPosition();
 
     const channel = supabase
-      .channel(`helper-gps-session-${active.sessionId}`)
+      .channel(`helper-gps-session-${workspaceDelivery.sessionId}`)
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
           table: "gps_logs",
-          filter: `session_id=eq.${active.sessionId}`,
+          filter: `session_id=eq.${workspaceDelivery.sessionId}`,
         },
         (payload) => {
           setLivePosition({
@@ -1847,18 +1926,18 @@ function HelperDeliveries() {
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [isMonitoring, active?.sessionId]);
+  }, [isMonitoring, workspaceDelivery?.sessionId]);
 
   useEffect(() => {
-    // Resets local alert state when the active session changes (e.g. a
-    // pause/resume cycle produces a new session_id) -- reacting to an
-    // external-system id change, not a derived-state anti-pattern.
+    // Resets local alert state when the workspace delivery's session changes
+    // (e.g. a pause/resume cycle produces a new session_id) -- reacting to
+    // an external-system id change, not a derived-state anti-pattern.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLiveAlerts([]);
     setIsAlertHistoryExpanded(false);
-  }, [active?.sessionId]);
+  }, [workspaceDelivery?.sessionId]);
 
-  const filteredHistory = data.completed.filter((d) => {
+  const historySearchMatch = (d) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -1867,7 +1946,9 @@ function HelperDeliveries() {
       d.companyName.toLowerCase().includes(q) ||
       d.deliveryAddress.toLowerCase().includes(q)
     );
-  });
+  };
+  const filteredOverdue = data.overdue.filter(historySearchMatch);
+  const filteredTerminalHistory = data.history.filter(historySearchMatch);
 
   const closeDeliveryDetail = () => {
     setSelectedDelivery(null);
@@ -1913,9 +1994,18 @@ function HelperDeliveries() {
               ))}
             </div>
 
-            {/* Today tab */}
-            {activeTab === "today" &&
-              (hasActiveDelivery ? (
+            {/* Today tab -- genuinely date-based since 2026-09-08 (ported
+                from DriverDeliveries.jsx's same-day restructure). The one
+                delivery this Helper should currently be watching
+                (workspaceDelivery -- open session, then paused, then
+                pickupDate === today as a last resort, unchanged priority
+                logic) renders as the full read-only workspace at the top,
+                unconditionally, even if its own date isn't today -- every
+                other pickupDate === today delivery shows as a plain row
+                beneath it instead of disappearing into Upcoming. */}
+            {activeTab === "today" && !selectedDelivery && (
+              <div className="flex flex-col gap-4">
+                {workspaceDelivery && (
                 <>
                   <div className="flex flex-col gap-3">
                     {isPausedTrip ? (
@@ -1944,12 +2034,12 @@ function HelperDeliveries() {
                           </span>
                         </div>
                         <span className="shrink-0 text-[11px] text-slate-400">
-                          {active.id}
+                          {workspaceDelivery.id}
                         </span>
                       </div>
 
                       <div className="mt-2">
-                        <StageProgress status={active.status} />
+                        <StageProgress status={workspaceDelivery.status} />
                       </div>
 
                       <div className="mt-3 flex items-stretch gap-2.5">
@@ -1990,7 +2080,7 @@ function HelperDeliveries() {
                             <p className="text-[9px] text-slate-500">Truck</p>
                           </div>
                           <p className="truncate text-xs font-bold text-slate-900">
-                            {active.crew.truck.plateNumber}
+                            {workspaceDelivery.crew.truck.plateNumber}
                           </p>
                         </div>
                         <div className="rounded-lg bg-teal-50 px-2 py-1.5">
@@ -2000,8 +2090,8 @@ function HelperDeliveries() {
                           </div>
                           <p className="truncate text-xs font-bold text-slate-900">
                             {pickupWindowLabel(
-                              active.pickupTime,
-                              active.pickupTimeEnd,
+                              workspaceDelivery.pickupTime,
+                              workspaceDelivery.pickupTimeEnd,
                             )}
                           </p>
                         </div>
@@ -2011,8 +2101,8 @@ function HelperDeliveries() {
                             <p className="text-[9px] text-slate-500">Fee</p>
                           </div>
                           <p className="truncate text-xs font-bold text-teal-900">
-                            {active.quotation
-                              ? `₱${Number(active.quotation.amount).toLocaleString()}`
+                            {workspaceDelivery.quotation
+                              ? `₱${Number(workspaceDelivery.quotation.amount).toLocaleString()}`
                               : "—"}
                           </p>
                         </div>
@@ -2121,8 +2211,8 @@ function HelperDeliveries() {
                         </h3>
                       </div>
                       <RouteOverviewMap
-                        suggestedRoute={active.suggestedRoute}
-                        dropoffCoords={active.destinationCoords}
+                        suggestedRoute={workspaceDelivery.suggestedRoute}
+                        dropoffCoords={workspaceDelivery.destinationCoords}
                       />
                     </section>
 
@@ -2133,7 +2223,7 @@ function HelperDeliveries() {
                           <h3 className="text-xs font-bold text-slate-900">
                             Delivery Overview
                           </h3>
-                          <StatusBadge status={active.status} />
+                          <StatusBadge status={workspaceDelivery.status} />
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
                           <div>
@@ -2141,7 +2231,7 @@ function HelperDeliveries() {
                               Customer
                             </p>
                             <p className="font-medium text-slate-900">
-                              {active.customerName}
+                              {workspaceDelivery.customerName}
                             </p>
                           </div>
                           <div>
@@ -2149,7 +2239,7 @@ function HelperDeliveries() {
                               Company
                             </p>
                             <p className="font-medium text-slate-900">
-                              {active.companyName}
+                              {workspaceDelivery.companyName}
                             </p>
                           </div>
                           <div>
@@ -2157,7 +2247,7 @@ function HelperDeliveries() {
                               Product Type
                             </p>
                             <p className="font-medium text-slate-900">
-                              {active.itemType}
+                              {workspaceDelivery.itemType}
                             </p>
                           </div>
                           <div>
@@ -2165,10 +2255,10 @@ function HelperDeliveries() {
                               Schedule
                             </p>
                             <p className="font-medium text-slate-900">
-                              {active.pickupDate} at{" "}
+                              {workspaceDelivery.pickupDate} at{" "}
                               {pickupWindowLabel(
-                                active.pickupTime,
-                                active.pickupTimeEnd,
+                                workspaceDelivery.pickupTime,
+                                workspaceDelivery.pickupTimeEnd,
                               )}
                             </p>
                           </div>
@@ -2181,7 +2271,7 @@ function HelperDeliveries() {
                         </h3>
                         <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
                           <CrewMemberCard
-                            member={active.crew.driver}
+                            member={workspaceDelivery.crew.driver}
                             badgeLabel="Driver"
                           />
 
@@ -2192,22 +2282,22 @@ function HelperDeliveries() {
                             <div className="flex items-center gap-2 text-xs">
                               <Truck className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                               <span className="font-semibold text-slate-900">
-                                {active.crew.truck.plateNumber}
+                                {workspaceDelivery.crew.truck.plateNumber}
                               </span>
                               <span className="truncate text-slate-500">
-                                &bull; {active.crew.truck.truckType} &bull;{" "}
-                                {active.crew.truck.capacity}
+                                &bull; {workspaceDelivery.crew.truck.truckType} &bull;{" "}
+                                {workspaceDelivery.crew.truck.capacity}
                               </span>
                             </div>
                           </div>
 
-                          {active.crew.helpers?.length > 0 && (
+                          {workspaceDelivery.crew.helpers?.length > 0 && (
                             <div className="sm:col-span-2">
                               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                                Helpers ({active.crew.helpers.length})
+                                Helpers ({workspaceDelivery.crew.helpers.length})
                               </p>
                               <div className="grid gap-1.5 sm:grid-cols-2">
-                                {active.crew.helpers.map((helper) => (
+                                {workspaceDelivery.crew.helpers.map((helper) => (
                                   <CrewMemberCard
                                     key={helper.id}
                                     member={helper}
@@ -2219,10 +2309,10 @@ function HelperDeliveries() {
                             </div>
                           )}
 
-                          {active.assignedAt && (
+                          {workspaceDelivery.assignedAt && (
                             <div className="flex items-center gap-2 text-[11px] text-slate-500 sm:col-span-2">
                               <Calendar className="h-3.5 w-3.5 shrink-0" />
-                              Assigned: {active.assignedAt}
+                              Assigned: {workspaceDelivery.assignedAt}
                             </div>
                           )}
                         </div>
@@ -2230,23 +2320,63 @@ function HelperDeliveries() {
                     </div>
                   </div>
                 </>
-              ) : (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-center">
-                  <Check className="mx-auto h-8 w-8 text-emerald-500" />
-                  <p className="mt-2 text-xs font-semibold text-emerald-800">
-                    No deliveries for today
-                  </p>
-                  <p className="mt-0.5 text-[11px] text-emerald-600">
-                    You have no deliveries scheduled for today.
-                  </p>
-                  <button
-                    onClick={() => setActiveTab("upcoming")}
-                    className="mt-3 inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-emerald-700"
-                  >
-                    View Upcoming Deliveries
-                  </button>
-                </div>
-              ))}
+                )}
+
+                {/* Every other pickupDate === today delivery, as plain rows --
+                    fixes the actual "hijack" complaint: a genuinely same-day
+                    delivery no longer disappears into Upcoming just because a
+                    different (possibly stale-dated) delivery occupies the
+                    workspace above. */}
+                {data.today.filter((d) => d.id !== workspaceDelivery?.id)
+                  .length > 0 && (
+                  <div className="space-y-1.5">
+                    {workspaceDelivery && (
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                        Also today
+                      </p>
+                    )}
+                    {data.today
+                      .filter((d) => d.id !== workspaceDelivery?.id)
+                      .map((delivery) => (
+                        <DeliveryRow
+                          key={delivery.id}
+                          delivery={delivery}
+                          showTime
+                          todayISO={todayISO}
+                          onSelect={setSelectedDelivery}
+                        />
+                      ))}
+                  </div>
+                )}
+
+                {!workspaceDelivery && data.today.length === 0 && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-center">
+                    <Check className="mx-auto h-8 w-8 text-emerald-500" />
+                    <p className="mt-2 text-xs font-semibold text-emerald-800">
+                      Nothing scheduled for today
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-emerald-600">
+                      No delivery in progress, and nothing scheduled for today.
+                    </p>
+                    <button
+                      onClick={() => setActiveTab("upcoming")}
+                      className="mt-3 inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-emerald-700"
+                    >
+                      View Upcoming Deliveries
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {activeTab === "today" && selectedDelivery && (
+              <DeliveryDetailView
+                delivery={selectedDelivery}
+                onBack={closeDeliveryDetail}
+                currentHelperName={currentHelperName}
+                isReportExpanded={isReportExpanded}
+                onToggleReport={() => setIsReportExpanded((prev) => !prev)}
+              />
+            )}
 
             {/* Upcoming tab */}
             {activeTab === "upcoming" &&
@@ -2289,7 +2419,7 @@ function HelperDeliveries() {
                 />
               ) : (
                 <div>
-                  {data.completed.length > 0 && (
+                  {(data.overdue.length > 0 || data.history.length > 0) && (
                     <div className="relative mb-2">
                       <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
                       <input
@@ -2301,22 +2431,52 @@ function HelperDeliveries() {
                     </div>
                   )}
 
-                  {filteredHistory.length === 0 ? (
+                  {filteredOverdue.length === 0 &&
+                  filteredTerminalHistory.length === 0 ? (
                     <p className="rounded-xl border border-teal-200/70 bg-white p-5 text-center text-[11px] text-slate-500">
-                      {data.completed.length === 0
-                        ? "No past deliveries yet."
+                      {data.overdue.length === 0 && data.history.length === 0
+                        ? "No delivery history yet."
                         : "No results match your search."}
                     </p>
                   ) : (
-                    <div className="space-y-1.5">
-                      {filteredHistory.map((delivery) => (
-                        <DeliveryRow
-                          key={delivery.id}
-                          delivery={delivery}
-                          todayISO={todayISO}
-                          onSelect={setSelectedDelivery}
-                        />
-                      ))}
+                    <div className="space-y-4">
+                      {/* Overdue: pickup_date already passed but status never
+                          reached DELIVERED/COMPLETED -- kept separate from
+                          the finished list below so it doesn't read as
+                          "done." */}
+                      {filteredOverdue.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] font-bold uppercase tracking-wide text-red-600">
+                            Not Started
+                          </p>
+                          {filteredOverdue.map((delivery) => (
+                            <DeliveryRow
+                              key={delivery.id}
+                              delivery={delivery}
+                              showTime
+                              todayISO={todayISO}
+                              onSelect={setSelectedDelivery}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {filteredTerminalHistory.length > 0 && (
+                        <div className="space-y-1.5">
+                          {filteredOverdue.length > 0 && (
+                            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                              Finished
+                            </p>
+                          )}
+                          {filteredTerminalHistory.map((delivery) => (
+                            <DeliveryRow
+                              key={delivery.id}
+                              delivery={delivery}
+                              todayISO={todayISO}
+                              onSelect={setSelectedDelivery}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

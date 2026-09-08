@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
-import { Search, Truck, Users, CircleCheck, ChevronRight } from "lucide-react";
+import { Search, ChevronRight } from "lucide-react";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 import { formatWorkingDays } from "../lib/workingDays.js";
 import { CREW_ACTIVE_STATUSES, CREW_STATUS_META, getCrewAvailability, todayDateKey, formatDateKey } from "../lib/crewStatus.js";
@@ -161,29 +161,6 @@ function FilterSelect({ id, label, value, onChange, options, counts, allLabel })
         ))}
       </select>
     </>
-  );
-}
-
-function StatTile({ icon: Icon, label, value, accent = "blue" }) {
-  const accentClasses = {
-    blue: "bg-blue-50 text-blue-600",
-    emerald: "bg-emerald-50 text-emerald-600",
-    violet: "bg-violet-50 text-violet-600",
-    slate: "bg-slate-100 text-slate-600",
-  }[accent];
-
-  return (
-    <div className="flex items-center gap-2.5 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${accentClasses}`}>
-        <Icon className="h-4 w-4" />
-      </div>
-      <div>
-        <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-slate-500">
-          {label}
-        </p>
-        <p className="text-lg font-semibold text-slate-900">{value}</p>
-      </div>
-    </div>
   );
 }
 
@@ -554,12 +531,6 @@ function SupDeliveryCrew() {
   const pageStart = (safePage - 1) * PAGE_SIZE;
   const pagedCrew = filteredCrew.slice(pageStart, pageStart + PAGE_SIZE);
 
-  const hasActiveFilters =
-    searchTerm.trim() !== "" ||
-    selectedStatus !== "All" ||
-    selectedPosition !== "All" ||
-    selectedClient !== "All";
-
   const updateSearch = (value) => {
     setSearchTerm(value);
     setCurrentPage(1);
@@ -577,14 +548,6 @@ function SupDeliveryCrew() {
 
   const updateClient = (value) => {
     setSelectedClient(value);
-    setCurrentPage(1);
-  };
-
-  const clearFilters = () => {
-    setSearchTerm("");
-    setSelectedStatus("All");
-    setSelectedPosition("All");
-    setSelectedClient("All");
     setCurrentPage(1);
   };
 

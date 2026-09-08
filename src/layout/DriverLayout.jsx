@@ -58,7 +58,7 @@ const driverIcons = {
   Profile: <User className={iconClassName} aria-hidden="true" />,
 };
 
-function DriverLayout({ title, background, children }) {
+function DriverLayout({ background, children }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     if (typeof window === "undefined") {
       return false;

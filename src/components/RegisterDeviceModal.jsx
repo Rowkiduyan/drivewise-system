@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient.js";
-import { X, Plus } from "lucide-react";
+import { X } from "lucide-react";
 
 export default function RegisterDeviceModal({ onClose }) {
   const [deviceId, setDeviceId] = useState("");
   const [plateNumber, setPlateNumber] = useState("");
-  const [availableDevices, setAvailableDevices] = useState([]);
+  const [, setAvailableDevices] = useState([]);
   const [plateOptions, setPlateOptions] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);

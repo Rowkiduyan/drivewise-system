@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 // import AddTruckModal from "../components/AddTruckModal.jsx"; // Disabled for supervisor view
@@ -7,10 +7,6 @@ import SupLayout from "../layout/SupLayout.jsx";
 import {
   ArrowLeft,
   Truck,
-  Pencil,
-  AlertTriangle,
-  CheckCircle2,
-  Clock,
   Calendar,
   Gauge,
   Wrench,
@@ -23,7 +19,6 @@ import {
   Wind,
 } from "lucide-react";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
-import { getPmsStatus } from "../components/trucks/utils/pms.js";
 import {
   getMaintenanceCardStatus,
   getMaintenanceStatusTone,
@@ -54,50 +49,6 @@ const formatMonthYear = (dateStr) => {
 // fleet roster.
 // ---------------------------------------------------------------------------
 
-const CLIENT_SPECIALTIES = [
-  "Jollibee",
-  "McDonald's",
-  "Chowking",
-  "KFC",
-  "Mang Inasal",
-  "Greenwich",
-  "Shakey's",
-  "Red Ribbon",
-  "Goldilocks",
-  "Max's Restaurant",
-];
-
-const TRIP_ROUTES = [
-  "Manila Warehouse → Quezon Ave Branch",
-  "Cavite Depot → Alabang Branch",
-  "Manila Warehouse → Ortigas Branch",
-  "Pasig Hub → BGC Branch",
-  "Cavite Depot → Las Piñas Branch",
-  "Manila Warehouse → Cubao Branch",
-  "Pasig Hub → Marikina Branch",
-  "Cavite Depot → Parañaque Branch",
-];
-
-const TRIP_STATUS_POOL = ["Completed", "Completed", "Completed", "Cancelled"];
-
-const MAINTENANCE_TYPES = [
-  "Oil Change",
-  "Tire Rotation",
-  "Brake Inspection",
-  "Engine Diagnostic",
-  "Battery Check",
-  "Transmission Service",
-  "Air Filter Replacement",
-];
-
-const MAINTENANCE_SHOPS = [
-  "Fleet Care Manila",
-  "AutoWorks Cavite",
-  "Isuzu Service Center QC",
-  "Hino Service Pasig",
-  "TruckFix Alabang",
-];
-
 const MAINTENANCE_TYPE_ICONS = {
   "Oil Change": Droplet,
   "Tire Rotation": RotateCw,
@@ -109,26 +60,6 @@ const MAINTENANCE_TYPE_ICONS = {
   "Tire Replacement": RotateCw,
   "Preventive Maintenance": Droplet,
 };
-
-// Fixed "today" so the mock trip/maintenance data (and every countdown
-// derived from it) stays stable across re-renders instead of drifting
-// with the real clock.
-const NOW = new Date("2026-07-19T08:00:00");
-
-// Small seeded generator so a given truck's mock history stays the same
-// while you're viewing the page, instead of reshuffling on every re-render.
-function createSeededRng(idString) {
-  let state = 0;
-  for (let i = 0; i < idString.length; i += 1)
-    state = (state * 31 + idString.charCodeAt(i)) >>> 0;
-  if (state <= 0) state = 1;
-  return function next() {
-    state = (state * 16807) % 2147483647;
-    return (state - 1) / 2147483646;
-  };
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 function TypeTag({ type }) {
   return (
@@ -160,17 +91,9 @@ function TripStatusBadge({ status }) {
   );
 }
 
-// Shared status-tone palette reused by the maintenance alert banner, urgency
-// chips, and KPI tiles — keeps rose/amber/emerald/blue meaning "critical /
-// due soon / healthy / informational" consistent everywhere on this page.
-const TONE_BADGE_CLASSES = {
-  rose: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
-  amber: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
-  emerald: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  blue: "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
-  slate: "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
-};
-
+// Shared status-tone palette reused by the KPI tiles — keeps rose/amber/
+// emerald/blue meaning "critical / due soon / healthy / informational"
+// consistent everywhere on this page.
 const TONE_ICON_CLASSES = {
   rose: "bg-rose-50 text-rose-600",
   amber: "bg-amber-50 text-amber-600",
@@ -908,33 +831,6 @@ function SupTruckProfile() {
       });
   }, [truck?.status, maintenanceRecords]);
 
-  const upcomingMaintenance = useMemo(
-    () =>
-      maintenanceRecords
-        .filter((record) => record.status !== "Completed")
-        .sort((a, b) => a.date - b.date),
-    [maintenanceRecords],
-  );
-  const completedMaintenance = useMemo(
-    () =>
-      maintenanceRecords
-        .filter((record) => record.status === "Completed")
-        .sort((a, b) => b.date - a.date),
-    [maintenanceRecords],
-  );
-  const overdueMaintenance = useMemo(
-    () => upcomingMaintenance.filter((record) => record.status === "Overdue"),
-    [upcomingMaintenance],
-  );
-  const nextService = upcomingMaintenance[0] || null;
-  const lastService = completedMaintenance[0] || null;
-  const overallCondition =
-    overdueMaintenance.length > 0
-      ? { label: "Needs Attention", tone: "rose", icon: AlertTriangle }
-      : upcomingMaintenance.some((record) => record.daysFromNow <= 7)
-        ? { label: "Service Due Soon", tone: "amber", icon: Clock }
-        : { label: "Up to Date", tone: "emerald", icon: CheckCircle2 };
-
   const filteredTrips =
     tripStatusFilter === "All"
       ? trips
@@ -1015,12 +911,6 @@ function SupTruckProfile() {
     truck?.current_mileage !== null && truck?.current_mileage !== undefined
       ? `${Number(truck.current_mileage).toLocaleString()} km`
       : "0 km";
-
-  const calculateNextMaintMileage = () => {
-    const prev = Number(truck?.previous_mileage || 0);
-    const interval = Number(truck?.maintenance_interval_km || 0);
-    return `${(prev + interval).toLocaleString()} km`;
-  };
 
   if (!truck) {
     return (

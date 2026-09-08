@@ -25,7 +25,7 @@ import CustomerLayout from "../layout/CustomerLayout.jsx";
 import { truckTypes, getItemTypeLabel } from "../lib/deliveryOptions.js";
 import { supabase } from "../lib/supabaseClient.js";
 import { manilaTodayISO, MANILA_TIMEZONE } from "../lib/manilaTime.js";
-import EditableRouteMap from "../components/EditableRouteMap.jsx";
+import SuggestedRouteMap from "../components/SuggestedRouteMap.jsx";
 
 const background = null;
 
@@ -735,26 +735,17 @@ function ExpandableBreakdown({ quotation, label = "View Full Breakdown" }) {
   );
 }
 
-// The Supervisor's reviewed/approved route (2026-09-06, Supervisor Route
-// Review & Approval feature) -- always visible alongside the quotation
-// (not collapsed, per the explicit requirement), read-only, and only once
-// a Supervisor has actually approved it. An auto-generated-but-unreviewed
-// suggested_route must never be presented to the customer as if final.
+// The auto-generated route (CustomerRequestDelivery.jsx computes one at
+// submission time) -- always visible alongside the quotation (not
+// collapsed, per the explicit requirement), read-only. Shown as soon as it
+// exists; the Supervisor no longer reviews/approves it (removed 2026-09-08
+// per explicit decision -- the Supervisor now only views the same route the
+// customer's booking form generated, same as this component).
 function ApprovedRouteMap({ request }) {
-  if (!request.suggestedRoute || !request.routeApprovedAt) return null;
+  if (!request.suggestedRoute) return null;
   return (
     <div className="mt-2 md:mt-3">
-      <EditableRouteMap
-        key={request.id}
-        pickupAddress={request.pickupLocation}
-        pickupCoords={request.pickupCoords}
-        dropoffAddress={request.dropoffLocation}
-        dropoffCoords={request.dropoffCoords}
-        stops={request.stops}
-        suggestedRoute={request.suggestedRoute}
-        editable={false}
-        approvedAt={request.routeApprovedAt}
-      />
+      <SuggestedRouteMap key={request.id} suggestedRoute={request.suggestedRoute} />
     </div>
   );
 }
@@ -3134,15 +3125,13 @@ function mapDeliveryRow(row) {
     pickupCompletedAt: row.pickup_completed_at || null,
     dropoffPhotoUrl: row.dropoff_photo_url || null,
     dropoffCompletedAt: row.dropoff_completed_at || null,
-    // The Supervisor-reviewed/approved route (2026-09-06, Supervisor Route
-    // Review & Approval feature) -- only shown to the customer once
-    // routeApprovedAt is set (see EditableRouteMap usage below); an
-    // auto-generated-but-unreviewed suggested_route must never be presented
-    // as if it were final.
+    // The route CustomerRequestDelivery.jsx auto-generated at submission
+    // time -- shown to the customer as soon as it exists (ApprovedRouteMap
+    // below); the Supervisor no longer reviews/approves it before this
+    // shows (removed 2026-09-08 per explicit decision).
     suggestedRoute: Array.isArray(row.suggested_route)
       ? row.suggested_route
       : null,
-    routeApprovedAt: row.route_approved_at || null,
     status: CUSTOMER_STATUS_MAP[row.status] || row.status,
     dbStatus: row.status,
     customerCounterMin: row.customer_counter_min,

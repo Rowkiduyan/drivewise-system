@@ -16,20 +16,6 @@ import { supabase } from "../lib/supabaseClient.js";
 
 const background = null;
 
-const activeDeliveryStatuses = [
-  "PENDING_REQUEST",
-  "QUOTATION_SUBMITTED",
-  "COUNTER_OFFER_SUBMITTED",
-  "FINAL_QUOTATION_SUBMITTED",
-  "APPROVED",
-  "ASSIGNED",
-  "OUT_FOR_PICKUP",
-  "ARRIVED_PICKUP",
-  "OUT_FOR_DROPOFF",
-  "ARRIVED_DROPOFF",
-  "DELIVERED",
-];
-
 const pendingApprovalStatuses = ["PENDING_REQUEST"];
 
 const inProcessStatuses = [
