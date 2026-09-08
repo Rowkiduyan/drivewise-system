@@ -4827,7 +4827,12 @@ function SupDeliveries() {
   const openedFromNotificationRef = useRef(false);
   useEffect(() => {
     const targetId = location.state?.openRequestId;
-    if (!targetId || openedFromNotificationRef.current || dbRequests.length === 0) return;
+    if (
+      !targetId ||
+      openedFromNotificationRef.current ||
+      dbRequests.length === 0
+    )
+      return;
     const match = dbRequests.find((r) => r.id === targetId);
     if (!match) return;
     openedFromNotificationRef.current = true;
@@ -4942,6 +4947,7 @@ function SupDeliveries() {
     });
     setQuotationSubmitted(true);
     setShowQuotationConfirmDialog(false);
+    showToast("Quotation submitted successfully.", "success");
   };
   const closeQuotationConfirmDialog = () => {
     setShowQuotationConfirmDialog(false);
@@ -4987,6 +4993,7 @@ function SupDeliveries() {
     });
     setShowDeclineDialog(false);
     setSelectedRequest(null);
+    showToast("Request declined successfully.", "success");
   };
 
   // Freezes the (possibly edited) route as the request's suggested_route and
@@ -5100,6 +5107,7 @@ function SupDeliveries() {
     });
     setAdjustingQuotation(false);
     setBidDeclined(false);
+    showToast("Quotation submitted successfully.", "success");
   };
 
   const toggleHelper = (id) => {
@@ -5678,7 +5686,8 @@ function SupDeliveries() {
                       <div className="flex items-center gap-2">
                         {(!selectedRequest.quotation || !quotationSubmitted) &&
                           !adjustingQuotation &&
-                          stageStatus[selectedRequest.status] < stageStatus.ASSIGNED && (
+                          stageStatus[selectedRequest.status] <
+                            stageStatus.ASSIGNED && (
                             <button
                               onClick={submitQuotation}
                               className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-700 transition"
@@ -5810,7 +5819,8 @@ function SupDeliveries() {
                         {/* === CASE 1: Editable form (new quotation — not yet submitted) === */}
                         {(!selectedRequest.quotation || !quotationSubmitted) &&
                           !adjustingQuotation &&
-                          stageStatus[selectedRequest.status] < stageStatus.ASSIGNED && (
+                          stageStatus[selectedRequest.status] <
+                            stageStatus.ASSIGNED && (
                             <QuotationExpenseForm
                               form={quotationForm}
                               onFormChange={setQuotationForm}
@@ -8643,21 +8653,16 @@ function SupDeliveries() {
         </div>
       )}
       {toast && (
-        <div
-          key={toast.id}
-          role="status"
-          className={`fixed bottom-5 right-5 z-[90] flex max-w-sm items-start gap-2.5 rounded-xl px-4 py-3 text-sm font-medium shadow-lg ${
-            toast.tone === "error"
-              ? "border border-red-200 bg-red-50 text-red-800"
-              : "border border-emerald-200 bg-emerald-50 text-emerald-800"
-          }`}
-        >
-          {toast.tone === "error" ? (
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-          ) : (
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-          )}
-          <span>{toast.message}</span>
+        <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+          <p
+            className={`px-4 py-2 rounded-md shadow-md text-sm font-medium transition-transform duration-300 ease-out ${
+              toast.tone === "error"
+                ? "bg-red-100 text-red-800 border border-red-300"
+                : "bg-green-100 text-green-800 border border-green-300"
+            } transform translate-y-0 opacity-100`}
+          >
+            {toast.message}
+          </p>
         </div>
       )}
     </SupLayout>
