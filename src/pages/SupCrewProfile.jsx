@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
-import { formatManilaTimestamp, getManilaHour, MANILA_TIMEZONE } from "../lib/manilaTime.js";
+import {
+  formatManilaTimestamp,
+  getManilaHour,
+  MANILA_TIMEZONE,
+} from "../lib/manilaTime.js";
 import { formatWorkingDays } from "../lib/workingDays.js";
 import { CREW_ACTIVE_STATUSES } from "../lib/crewStatus.js";
 import {
@@ -13,6 +17,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   AlertTriangle,
+  CheckCircle2,
   EyeOff,
   Repeat,
   Activity,
@@ -34,8 +39,16 @@ import {
 // ---------------------------------------------------------------------------
 
 const CLIENT_SPECIALTIES = [
-  "Jollibee", "McDonald's", "Chowking", "KFC", "Mang Inasal", "Greenwich",
-  "Shakey's", "Red Ribbon", "Goldilocks", "Max's Restaurant",
+  "Jollibee",
+  "McDonald's",
+  "Chowking",
+  "KFC",
+  "Mang Inasal",
+  "Greenwich",
+  "Shakey's",
+  "Red Ribbon",
+  "Goldilocks",
+  "Max's Restaurant",
 ];
 
 const TRIP_ROUTES = [
@@ -55,7 +68,8 @@ const TRIP_STATUS_POOL = ["Completed", "Completed", "Completed", "Cancelled"];
 // you're viewing the page, instead of reshuffling on every re-render.
 function buildMockTrips(crew) {
   let state = 0;
-  for (let i = 0; i < crew.id.length; i += 1) state = (state * 31 + crew.id.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < crew.id.length; i += 1)
+    state = (state * 31 + crew.id.charCodeAt(i)) >>> 0;
   if (state <= 0) state = 1;
   const rng = () => {
     state = (state * 16807) % 2147483647;
@@ -69,14 +83,21 @@ function buildMockTrips(crew) {
   return Array.from({ length: tripCount }, (_, i) => {
     const isOngoing = i === 0 && crew.status === "On Delivery";
     const status = isOngoing ? "Ongoing" : pick(TRIP_STATUS_POOL);
-    const date = new Date(now.getTime() - i * (18 + rng() * 20) * 60 * 60 * 1000);
+    const date = new Date(
+      now.getTime() - i * (18 + rng() * 20) * 60 * 60 * 1000,
+    );
     const client = crew.clientSpecialties?.length
       ? pick(crew.clientSpecialties)
       : pick(CLIENT_SPECIALTIES);
 
     return {
       id: `TRIP-${2100 - i}`,
-      dateLabel: date.toLocaleDateString("en-US", { timeZone: MANILA_TIMEZONE, month: "short", day: "numeric", year: "numeric" }),
+      dateLabel: date.toLocaleDateString("en-US", {
+        timeZone: MANILA_TIMEZONE,
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
       client,
       route: pick(TRIP_ROUTES),
       status,
@@ -87,7 +108,7 @@ function buildMockTrips(crew) {
 function getInitials(fullName) {
   const [last = "", rest = ""] = fullName.split(",").map((part) => part.trim());
   const first = rest.split(" ")[0] || "";
-  return (`${last.charAt(0)}${first.charAt(0)}`.toUpperCase()) || "?";
+  return `${last.charAt(0)}${first.charAt(0)}`.toUpperCase() || "?";
 }
 
 function buildHelperName(row) {
@@ -108,7 +129,8 @@ function buildHelperName(row) {
 const MAX_DEFAULT_HELPERS = 2;
 
 const STATUS_BADGE_CLASSES = {
-  Available: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+  Available:
+    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
   "On Delivery": "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
   "Off Duty": "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
 };
@@ -139,7 +161,8 @@ function PositionTag({ position }) {
 }
 
 const TRIP_STATUS_BADGE_CLASSES = {
-  Completed: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+  Completed:
+    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
   Ongoing: "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
   Cancelled: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
 };
@@ -178,7 +201,10 @@ const ALERT_TYPE_ICONS = {
 // Alert rows carry the human-readable label (see ALERT_TYPE_LABELS), not the
 // raw event_type key, so icons are looked up by label rather than key.
 const ALERT_TYPE_ICON_BY_LABEL = Object.fromEntries(
-  Object.entries(ALERT_TYPE_LABELS).map(([key, label]) => [label, ALERT_TYPE_ICONS[key]]),
+  Object.entries(ALERT_TYPE_LABELS).map(([key, label]) => [
+    label,
+    ALERT_TYPE_ICONS[key],
+  ]),
 );
 
 const HERO_TONE_CLASSES = {
@@ -202,7 +228,11 @@ const RISK_BADGE_CLASSES = {
   emerald: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
 };
 
-const RISK_ICONS = { red: ShieldAlert, amber: AlertTriangle, emerald: ShieldCheck };
+const RISK_ICONS = {
+  red: ShieldAlert,
+  amber: AlertTriangle,
+  emerald: ShieldCheck,
+};
 
 function RiskBadge({ tone, label }) {
   const Icon = RISK_ICONS[tone] || ShieldCheck;
@@ -245,7 +275,9 @@ function PerformancePanel({ title, icon: Icon, children, right }) {
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-2">
           {Icon && <Icon className="h-4 w-4 text-blue-600" />}
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            {title}
+          </p>
         </div>
         {right ? <div className="text-xs text-slate-500">{right}</div> : null}
       </div>
@@ -266,10 +298,14 @@ function MetricTile({ label, value, hint, icon: Icon, tone = "slate" }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-center gap-2">
-        <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${METRIC_TILE_ICON_CLASSES[tone]}`}>
+        <div
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${METRIC_TILE_ICON_CLASSES[tone]}`}
+        >
           {Icon && <Icon className="h-3.5 w-3.5" />}
         </div>
-        <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</span>
+        <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">
+          {label}
+        </span>
       </div>
       <p className="mt-2.5 text-xl font-bold text-slate-900">{value}</p>
       {hint ? <p className="mt-0.5 text-xs text-slate-500">{hint}</p> : null}
@@ -299,8 +335,8 @@ function InfoRow({ icon: Icon, label, value, strong = false }) {
   const valueClasses = isMuted
     ? "font-normal text-slate-400"
     : strong
-    ? "font-semibold text-slate-900"
-    : "font-medium text-slate-700";
+      ? "font-semibold text-slate-900"
+      : "font-medium text-slate-700";
 
   return (
     <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-2.5 last:border-0">
@@ -315,7 +351,9 @@ function InfoRow({ icon: Icon, label, value, strong = false }) {
 
 function SectionCard({ title, icon: Icon, children, className = "" }) {
   return (
-    <section className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 ${className}`}>
+    <section
+      className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 ${className}`}
+    >
       <div className="flex items-center gap-2">
         {Icon && <Icon className="h-4 w-4 text-blue-600" />}
         <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -361,14 +399,38 @@ function PaginationBar({ page, setPage, totalPages }) {
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
           title="First page"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
+            />
+          </svg>
         </button>
         <button
           onClick={() => setPage((p) => Math.max(1, p - 1))}
           disabled={page === 1}
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M15 19l-7-7 7-7"
+            />
+          </svg>
         </button>
         <div className="flex items-center gap-1 px-1">
           {(() => {
@@ -377,27 +439,37 @@ function PaginationBar({ page, setPage, totalPages }) {
               for (let i = 1; i <= totalPages; i++) pages.push(i);
             } else {
               pages.push(1);
-              if (page > 3) pages.push('...');
-              for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i);
-              if (page < totalPages - 2) pages.push('...');
+              if (page > 3) pages.push("...");
+              for (
+                let i = Math.max(2, page - 1);
+                i <= Math.min(totalPages - 1, page + 1);
+                i++
+              )
+                pages.push(i);
+              if (page < totalPages - 2) pages.push("...");
               pages.push(totalPages);
             }
             return pages.map((num, idx) =>
-              num === '...' ? (
-                <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
+              num === "..." ? (
+                <span
+                  key={`ellipsis-${idx}`}
+                  className="flex h-8 w-8 items-center justify-center text-sm text-slate-400"
+                >
+                  ...
+                </span>
               ) : (
                 <button
                   key={num}
                   onClick={() => setPage(num)}
                   className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
                     num === page
-                      ? 'bg-slate-900 text-white shadow-sm'
-                      : 'text-slate-600 hover:bg-slate-100'
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-600 hover:bg-slate-100"
                   }`}
                 >
                   {num}
                 </button>
-              )
+              ),
             );
           })()}
         </div>
@@ -406,7 +478,19 @@ function PaginationBar({ page, setPage, totalPages }) {
           disabled={page === totalPages}
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 5l7 7-7 7"
+            />
+          </svg>
         </button>
         <button
           onClick={() => setPage(totalPages)}
@@ -414,7 +498,19 @@ function PaginationBar({ page, setPage, totalPages }) {
           className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
           title="Last page"
         >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M13 5l7 7-7 7M5 5l7 7-7 7"
+            />
+          </svg>
         </button>
       </div>
     </div>
@@ -426,7 +522,9 @@ function SupCrewProfile() {
   const crew = location.state?.crew;
 
   const [activeTab, setActiveTab] = useState("overview");
-  const [clientSpecialties, setClientSpecialties] = useState(crew?.clientSpecialties || []);
+  const [clientSpecialties, setClientSpecialties] = useState(
+    crew?.clientSpecialties || [],
+  );
   const [availableClients, setAvailableClients] = useState([]);
   const [isSpecialtyModalOpen, setIsSpecialtyModalOpen] = useState(false);
   const [specialtyDraft, setSpecialtyDraft] = useState([]);
@@ -439,6 +537,20 @@ function SupCrewProfile() {
   const [sessions, setSessions] = useState([]);
   const [isPerformanceLoading, setIsPerformanceLoading] = useState(true);
   const [performanceError, setPerformanceError] = useState("");
+
+  // Toast notification
+  const [toast, setToast] = useState(null);
+  const toastTimerRef = useRef(null);
+  const showToast = (message, tone = "success") => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ id: Date.now(), message, tone });
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  };
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   // Truck & Crew Assignment — this driver's default truck/helpers.
   // Trucks load from the real `trucks` table; the driver→truck/helpers link
@@ -532,16 +644,22 @@ function SupCrewProfile() {
       }
 
       // Resolve the driver's name via the same list-crew action the roster uses.
-      const { data: crewData } = await supabase.functions.invoke("admin-users", {
-        body: { action: "list-crew" },
-      });
+      const { data: crewData } = await supabase.functions.invoke(
+        "admin-users",
+        {
+          body: { action: "list-crew" },
+        },
+      );
       if (!isMounted) return;
 
       const driver = (crewData?.crew || []).find(
         (row) => row.record_id === trip.assigned_driver_id,
       );
       const driverName = driver
-        ? [driver.first_name, driver.middle_name, driver.last_name].filter(Boolean).join(" ").trim()
+        ? [driver.first_name, driver.middle_name, driver.last_name]
+            .filter(Boolean)
+            .join(" ")
+            .trim()
         : trip.assigned_driver_id;
 
       setTeamAssignment({ driverName, requestId: trip.id });
@@ -570,7 +688,10 @@ function SupCrewProfile() {
             // Key by the helper's record id (H001…) — the same convention
             // delivery_requests.assigned_helper_ids and
             // driver_default_assignments.helper_record_ids persist.
-            .map((row) => ({ id: row.record_id || row.id, fullName: buildHelperName(row) })),
+            .map((row) => ({
+              id: row.record_id || row.id,
+              fullName: buildHelperName(row),
+            })),
         );
       }
     }
@@ -679,7 +800,9 @@ function SupCrewProfile() {
 
       const sessionsRes = await supabase
         .from("sessions")
-        .select("session_id, created_at, start_time, end_time, total_alerts, session_duration")
+        .select(
+          "session_id, created_at, start_time, end_time, total_alerts, session_duration",
+        )
         .eq("driver_id", driverId)
         .gte("created_at", since)
         .order("created_at", { ascending: false });
@@ -689,7 +812,9 @@ function SupCrewProfile() {
       }
 
       if (sessionsRes.error) {
-        setPerformanceError(sessionsRes.error.message || "Unable to load data.");
+        setPerformanceError(
+          sessionsRes.error.message || "Unable to load data.",
+        );
         setAlerts([]);
         setSessions([]);
         setIsPerformanceLoading(false);
@@ -737,11 +862,18 @@ function SupCrewProfile() {
   } = useMemo(() => {
     const totalAlerts = alerts.length;
     const sessionCount = sessions.length;
-    const totalSessionAlerts = sessions.reduce((sum, session) => sum + (session.total_alerts || 0), 0);
-    const avgAlertsPerTrip = sessionCount ? (totalSessionAlerts / sessionCount).toFixed(1) : "0.0";
+    const totalSessionAlerts = sessions.reduce(
+      (sum, session) => sum + (session.total_alerts || 0),
+      0,
+    );
+    const avgAlertsPerTrip = sessionCount
+      ? (totalSessionAlerts / sessionCount).toFixed(1)
+      : "0.0";
     const latestSession = sessions[0];
     const hasOngoingTrip = latestSession && !latestSession.end_time;
-    const tripStatusLabel = hasOngoingTrip ? "Ongoing Trip" : "Last Completed Trip";
+    const tripStatusLabel = hasOngoingTrip
+      ? "Ongoing Trip"
+      : "Last Completed Trip";
     const latestSessionId = latestSession?.session_id;
     const latestSessionAlerts = latestSessionId
       ? alerts.filter((item) => item.session_id === latestSessionId)
@@ -755,14 +887,20 @@ function SupCrewProfile() {
           .map((eventType) => ALERT_TYPE_LABELS[eventType] || eventType),
       ),
     );
-    const tripAlertCount = hasOngoingTrip ? latestSessionAlerts.length : latestSession?.total_alerts ?? 0;
+    const tripAlertCount = hasOngoingTrip
+      ? latestSessionAlerts.length
+      : (latestSession?.total_alerts ?? 0);
     let tripStatusValue = "--";
     let tripStatusTone = "";
     let tripStatusBadge = "";
     let tripStatusBadgeClass = "";
     if (latestSession) {
-      const startLabel = latestSession.start_time ? formatAlertTimestamp(latestSession.start_time) : "--";
-      const endLabel = latestSession.end_time ? formatAlertTimestamp(latestSession.end_time) : "--";
+      const startLabel = latestSession.start_time
+        ? formatAlertTimestamp(latestSession.start_time)
+        : "--";
+      const endLabel = latestSession.end_time
+        ? formatAlertTimestamp(latestSession.end_time)
+        : "--";
       if (tripAlertCount >= 4) {
         tripStatusTone = "red";
         tripStatusBadge = "High Risk";
@@ -776,7 +914,9 @@ function SupCrewProfile() {
         tripStatusBadge = "Safe";
         tripStatusBadgeClass = "text-emerald-700";
       }
-      const detectionLabel = latestDetection ? ALERT_TYPE_LABELS[latestDetection] || latestDetection : "--";
+      const detectionLabel = latestDetection
+        ? ALERT_TYPE_LABELS[latestDetection] || latestDetection
+        : "--";
       const detectedList = detectedLabels.length ? (
         <ul className="list-disc pl-4 text-sm text-slate-700">
           {detectedLabels.map((entry) => (
@@ -804,7 +944,9 @@ function SupCrewProfile() {
         <div className="grid gap-3 text-sm text-slate-700 sm:grid-cols-2">
           {details.map((item) => (
             <div key={item.label} className="space-y-1">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{item.label}</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                {item.label}
+              </p>
               <p className="text-sm text-slate-700">{item.value}</p>
             </div>
           ))}
@@ -813,21 +955,30 @@ function SupCrewProfile() {
     }
 
     const alertsByType = {};
-    const hourlyCounts = Array.from({ length: 24 }, (_, hour) => ({ hour, alerts: 0 }));
+    const hourlyCounts = Array.from({ length: 24 }, (_, hour) => ({
+      hour,
+      alerts: 0,
+    }));
     alerts.forEach((item) => {
       // Manila-pinned (see lib/manilaTime.js) -- .getHours() reads the
       // browser's own local timezone, not necessarily Manila's.
       const hour = getManilaHour(item.created_at);
       hourlyCounts[hour].alerts += 1;
       if (item.event_type) {
-        alertsByType[item.event_type] = (alertsByType[item.event_type] || 0) + 1;
+        alertsByType[item.event_type] =
+          (alertsByType[item.event_type] || 0) + 1;
       }
     });
 
     const typesRows = Object.keys(ALERT_TYPE_LABELS).map((key) => {
       const count = alertsByType[key] || 0;
       const percent = totalAlerts ? Math.round((count / totalAlerts) * 100) : 0;
-      return { type: ALERT_TYPE_LABELS[key], count, share: `${percent}%`, percent };
+      return {
+        type: ALERT_TYPE_LABELS[key],
+        count,
+        share: `${percent}%`,
+        percent,
+      };
     });
 
     const recentRows = sessions.slice(0, 6).map((session) => ({
@@ -865,10 +1016,22 @@ function SupCrewProfile() {
           statusLabel: tripStatusBadge,
           statusClassName: tripStatusBadgeClass,
         },
-        { label: "Total alerts (7d)", value: String(totalAlerts), hint: "Using current data only" },
-        { label: "Avg alerts / trip", value: avgAlertsPerTrip, hint: "From trip totals" },
+        {
+          label: "Total alerts (7d)",
+          value: String(totalAlerts),
+          hint: "Using current data only",
+        },
+        {
+          label: "Avg alerts / trip",
+          value: avgAlertsPerTrip,
+          hint: "From trip totals",
+        },
         { label: "Peak drowsiness time", value: peakHourRow.hour, hint: "" },
-        { label: "Total Trips", value: String(sessionCount), hint: "Captured tracking Trips" },
+        {
+          label: "Total Trips",
+          value: String(sessionCount),
+          hint: "Captured tracking Trips",
+        },
       ],
       alertTypes: typesRows,
       recentSessions: recentRows,
@@ -880,7 +1043,8 @@ function SupCrewProfile() {
 
   // Fixed order from the performanceKpis array built above: current/last
   // trip status first, then the four 7-day summary numbers.
-  const [heroKpi, totalAlertsKpi, avgAlertsKpi, peakHourKpi, totalTripsKpi] = performanceKpis;
+  const [heroKpi, totalAlertsKpi, avgAlertsKpi, peakHourKpi, totalTripsKpi] =
+    performanceKpis;
 
   // Display-only ordering (most frequent alert type first) and peak-hour
   // lookup for the heatmap strip — derived from data the KPI memo above
@@ -908,8 +1072,8 @@ function SupCrewProfile() {
     weeklyRiskCounts["High Risk"] > 0
       ? { tone: "red", label: "High Risk" }
       : weeklyRiskCounts.Moderate > 0
-      ? { tone: "amber", label: "Moderate" }
-      : { tone: "emerald", label: "Safe" };
+        ? { tone: "amber", label: "Moderate" }
+        : { tone: "emerald", label: "Safe" };
 
   const availableClientsToAdd = availableClients
     .map((client) => client.name)
@@ -937,7 +1101,9 @@ function SupCrewProfile() {
   const addDraftHelper = (helperId) => {
     if (!helperId) return;
     setDraftHelperIds((prev) =>
-      prev.includes(helperId) || prev.length >= MAX_DEFAULT_HELPERS ? prev : [...prev, helperId],
+      prev.includes(helperId) || prev.length >= MAX_DEFAULT_HELPERS
+        ? prev
+        : [...prev, helperId],
     );
   };
 
@@ -963,6 +1129,7 @@ function SupCrewProfile() {
     setAssignedTruckId(draftTruckId || null);
     setAssignedHelperIds(draftHelperIds);
     closeAssignModal();
+    showToast("Assignment saved successfully.", "success");
   };
 
   const removeAssignment = async () => {
@@ -981,6 +1148,7 @@ function SupCrewProfile() {
     setAssignedTruckId(null);
     setAssignedHelperIds([]);
     closeAssignModal();
+    showToast("Assignment removed successfully.", "success");
   };
 
   // Client Specialties — single Edit/Add entry point (same interaction
@@ -997,7 +1165,9 @@ function SupCrewProfile() {
 
   const addDraftSpecialty = (client) => {
     if (!client) return;
-    setSpecialtyDraft((prev) => (prev.includes(client) ? prev : [...prev, client]));
+    setSpecialtyDraft((prev) =>
+      prev.includes(client) ? prev : [...prev, client],
+    );
   };
 
   const removeDraftSpecialty = (client) => {
@@ -1009,8 +1179,12 @@ function SupCrewProfile() {
       return;
     }
 
-    const added = specialtyDraft.filter((name) => !clientSpecialties.includes(name));
-    const removed = clientSpecialties.filter((name) => !specialtyDraft.includes(name));
+    const added = specialtyDraft.filter(
+      (name) => !clientSpecialties.includes(name),
+    );
+    const removed = clientSpecialties.filter(
+      (name) => !specialtyDraft.includes(name),
+    );
 
     if (added.length === 0 && removed.length === 0) {
       closeSpecialtyModal();
@@ -1027,7 +1201,11 @@ function SupCrewProfile() {
           return { error: { message: `Unknown client: ${name}` } };
         }
         return supabase.functions.invoke("admin-users", {
-          body: { action: "add-crew-client", authId: crew.id, clientId: client.id },
+          body: {
+            action: "add-crew-client",
+            authId: crew.id,
+            clientId: client.id,
+          },
         });
       }),
       ...removed.map((name) => {
@@ -1036,7 +1214,11 @@ function SupCrewProfile() {
           return { error: { message: `Unknown client: ${name}` } };
         }
         return supabase.functions.invoke("admin-users", {
-          body: { action: "remove-crew-client", authId: crew.id, clientId: client.id },
+          body: {
+            action: "remove-crew-client",
+            authId: crew.id,
+            clientId: client.id,
+          },
         });
       }),
     ]);
@@ -1045,7 +1227,9 @@ function SupCrewProfile() {
 
     const failed = results.find((result) => result.error);
     if (failed) {
-      setSpecialtyError(failed.error.message || "Unable to save client specialties.");
+      setSpecialtyError(
+        failed.error.message || "Unable to save client specialties.",
+      );
       return;
     }
 
@@ -1054,10 +1238,15 @@ function SupCrewProfile() {
   };
 
   const filteredTrips = trips.filter((trip) => {
-    const matchesStatus = tripStatusFilter === "All" || trip.status === tripStatusFilter;
+    const matchesStatus =
+      tripStatusFilter === "All" || trip.status === tripStatusFilter;
     const query = tripSearchTerm.trim().toLowerCase();
     const matchesSearch =
-      !query || [trip.id, trip.client, trip.route, trip.dateLabel].join(" ").toLowerCase().includes(query);
+      !query ||
+      [trip.id, trip.client, trip.route, trip.dateLabel]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
     return matchesStatus && matchesSearch;
   });
 
@@ -1070,10 +1259,16 @@ function SupCrewProfile() {
 
   // Same list-pagination pattern used on the Trucks and Delivery Crew lists
   // (fixed page size, clamp current page, slice for the visible rows).
-  const totalTripPages = Math.max(1, Math.ceil(filteredTrips.length / TRIPS_PAGE_SIZE));
+  const totalTripPages = Math.max(
+    1,
+    Math.ceil(filteredTrips.length / TRIPS_PAGE_SIZE),
+  );
   const safeTripPage = Math.min(tripPage, totalTripPages);
   const tripPageStart = (safeTripPage - 1) * TRIPS_PAGE_SIZE;
-  const pagedTrips = filteredTrips.slice(tripPageStart, tripPageStart + TRIPS_PAGE_SIZE);
+  const pagedTrips = filteredTrips.slice(
+    tripPageStart,
+    tripPageStart + TRIPS_PAGE_SIZE,
+  );
 
   const updateTripSearch = (value) => {
     setTripSearchTerm(value);
@@ -1089,9 +1284,12 @@ function SupCrewProfile() {
     return (
       <SupLayout title="Crew Profile" background={null} bg="bg-[#F6F7FB]">
         <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
-          <p className="text-lg font-semibold text-slate-900">No crew member selected</p>
+          <p className="text-lg font-semibold text-slate-900">
+            No crew member selected
+          </p>
           <p className="max-w-sm text-sm text-slate-500">
-            Open a profile by selecting a crew member from the Delivery Crew list.
+            Open a profile by selecting a crew member from the Delivery Crew
+            list.
           </p>
           <Link
             to="/supervisor/delivery-crew"
@@ -1184,7 +1382,10 @@ function SupCrewProfile() {
               <InfoRow label="Full Name" value={crew.fullName} />
               <InfoRow label="Position" value={crew.position} />
               <InfoRow label="Contact Number" value={crew.contactNumber} />
-              <InfoRow label="Personal Email" value={crew.personalEmail || "N/A"} />
+              <InfoRow
+                label="Personal Email"
+                value={crew.personalEmail || "N/A"}
+              />
               <InfoRow label="Work Email" value={crew.workEmail || "N/A"} />
               <InfoRow label="Birthday" value={crew.birthday || "N/A"} />
               <InfoRow label="Age" value={crew.age ?? "N/A"} />
@@ -1233,7 +1434,8 @@ function SupCrewProfile() {
                   </h2>
                 </div>
                 <p className="mt-2 text-sm font-normal text-slate-700">
-                  {formatWorkingDays(crew?.workingDays) || "No working days set yet."}
+                  {formatWorkingDays(crew?.workingDays) ||
+                    "No working days set yet."}
                 </p>
                 {crew?.workingDays?.length > 0 && (
                   <p className="mt-1 text-xs font-normal text-slate-400">
@@ -1267,7 +1469,9 @@ function SupCrewProfile() {
 
                 <div className="mt-2 divide-y divide-slate-100">
                   {clientSpecialties.length === 0 ? (
-                    <p className="py-2 text-sm font-normal text-slate-400">No clients assigned yet.</p>
+                    <p className="py-2 text-sm font-normal text-slate-400">
+                      No clients assigned yet.
+                    </p>
                   ) : (
                     clientSpecialties.map((client) => (
                       <SpecialtyListItem key={client} client={client} />
@@ -1310,8 +1514,12 @@ function SupCrewProfile() {
                       value={
                         assignedTruckId
                           ? (() => {
-                              const truck = assignableTrucks.find((entry) => entry.id === assignedTruckId);
-                              return truck ? `${truck.plateNumber} · ${truck.truckType}` : "Unknown truck";
+                              const truck = assignableTrucks.find(
+                                (entry) => entry.id === assignedTruckId,
+                              );
+                              return truck
+                                ? `${truck.plateNumber} · ${truck.truckType}`
+                                : "Unknown truck";
                             })()
                           : "No truck assigned"
                       }
@@ -1320,12 +1528,22 @@ function SupCrewProfile() {
                     <InfoRow
                       icon={Users}
                       label="Default Helper 1"
-                      value={assignedHelperIds[0] ? helperNameById[assignedHelperIds[0]] || "Unknown helper" : "Not assigned"}
+                      value={
+                        assignedHelperIds[0]
+                          ? helperNameById[assignedHelperIds[0]] ||
+                            "Unknown helper"
+                          : "Not assigned"
+                      }
                     />
                     <InfoRow
                       icon={Users}
                       label="Default Helper 2"
-                      value={assignedHelperIds[1] ? helperNameById[assignedHelperIds[1]] || "Unknown helper" : "Not assigned"}
+                      value={
+                        assignedHelperIds[1]
+                          ? helperNameById[assignedHelperIds[1]] ||
+                            "Unknown helper"
+                          : "Not assigned"
+                      }
                     />
                   </div>
 
@@ -1373,14 +1591,21 @@ function SupCrewProfile() {
                     {heroKpi.label}
                   </span>
                   {!isPerformanceLoading && heroKpi.statusLabel ? (
-                    <RiskBadge tone={heroKpi.tone} label={heroKpi.statusLabel} />
+                    <RiskBadge
+                      tone={heroKpi.tone}
+                      label={heroKpi.statusLabel}
+                    />
                   ) : null}
                 </div>
                 <div className="mt-4">
                   {isPerformanceLoading ? (
-                    <p className="text-sm text-slate-500">Loading trip status…</p>
+                    <p className="text-sm text-slate-500">
+                      Loading trip status…
+                    </p>
                   ) : typeof heroKpi.value === "string" ? (
-                    <p className="text-sm text-slate-500">No trip data in the last 7 days.</p>
+                    <p className="text-sm text-slate-500">
+                      No trip data in the last 7 days.
+                    </p>
                   ) : (
                     heroKpi.value
                   )}
@@ -1389,7 +1614,8 @@ function SupCrewProfile() {
 
               <section
                 className={`rounded-2xl border p-5 shadow-sm sm:p-6 ${
-                  HERO_TONE_CLASSES[weeklyRisk.tone] || "border-slate-200 bg-white"
+                  HERO_TONE_CLASSES[weeklyRisk.tone] ||
+                  "border-slate-200 bg-white"
                 }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1397,14 +1623,21 @@ function SupCrewProfile() {
                     This Week (7 Days)
                   </span>
                   {!isPerformanceLoading && sessions.length > 0 ? (
-                    <RiskBadge tone={weeklyRisk.tone} label={weeklyRisk.label} />
+                    <RiskBadge
+                      tone={weeklyRisk.tone}
+                      label={weeklyRisk.label}
+                    />
                   ) : null}
                 </div>
                 <div className="mt-4">
                   {isPerformanceLoading ? (
-                    <p className="text-sm text-slate-500">Loading weekly summary…</p>
+                    <p className="text-sm text-slate-500">
+                      Loading weekly summary…
+                    </p>
                   ) : sessions.length === 0 ? (
-                    <p className="text-sm text-slate-500">No trips recorded in the last 7 days.</p>
+                    <p className="text-sm text-slate-500">
+                      No trips recorded in the last 7 days.
+                    </p>
                   ) : (
                     <>
                       <div
@@ -1415,33 +1648,45 @@ function SupCrewProfile() {
                         {weeklyRiskCounts.Safe > 0 && (
                           <div
                             className="h-full rounded-full bg-emerald-400"
-                            style={{ width: `${(weeklyRiskCounts.Safe / sessions.length) * 100}%` }}
+                            style={{
+                              width: `${(weeklyRiskCounts.Safe / sessions.length) * 100}%`,
+                            }}
                           />
                         )}
                         {weeklyRiskCounts.Moderate > 0 && (
                           <div
                             className="h-full rounded-full bg-amber-400"
-                            style={{ width: `${(weeklyRiskCounts.Moderate / sessions.length) * 100}%` }}
+                            style={{
+                              width: `${(weeklyRiskCounts.Moderate / sessions.length) * 100}%`,
+                            }}
                           />
                         )}
                         {weeklyRiskCounts["High Risk"] > 0 && (
                           <div
                             className="h-full rounded-full bg-red-400"
-                            style={{ width: `${(weeklyRiskCounts["High Risk"] / sessions.length) * 100}%` }}
+                            style={{
+                              width: `${(weeklyRiskCounts["High Risk"] / sessions.length) * 100}%`,
+                            }}
                           />
                         )}
                       </div>
                       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                         <div>
-                          <p className="text-base font-bold text-emerald-700">{weeklyRiskCounts.Safe}</p>
+                          <p className="text-base font-bold text-emerald-700">
+                            {weeklyRiskCounts.Safe}
+                          </p>
                           <p className="text-xs text-slate-500">Safe</p>
                         </div>
                         <div>
-                          <p className="text-base font-bold text-amber-700">{weeklyRiskCounts.Moderate}</p>
+                          <p className="text-base font-bold text-amber-700">
+                            {weeklyRiskCounts.Moderate}
+                          </p>
                           <p className="text-xs text-slate-500">Moderate</p>
                         </div>
                         <div>
-                          <p className="text-base font-bold text-red-700">{weeklyRiskCounts["High Risk"]}</p>
+                          <p className="text-base font-bold text-red-700">
+                            {weeklyRiskCounts["High Risk"]}
+                          </p>
                           <p className="text-xs text-slate-500">High Risk</p>
                         </div>
                       </div>
@@ -1492,13 +1737,14 @@ function SupCrewProfile() {
                     {isPerformanceLoading
                       ? "…"
                       : sortedAlertTypes[0]?.count
-                      ? sortedAlertTypes[0].type
-                      : "No alerts"}
+                        ? sortedAlertTypes[0].type
+                        : "No alerts"}
                   </span>
                 </p>
                 <div className="mt-3 space-y-3">
                   {sortedAlertTypes.map((row) => {
-                    const TypeIcon = ALERT_TYPE_ICON_BY_LABEL[row.type] || Activity;
+                    const TypeIcon =
+                      ALERT_TYPE_ICON_BY_LABEL[row.type] || Activity;
                     return (
                       <div key={row.type} className="space-y-1">
                         <div className="flex items-center justify-between text-xs text-slate-600">
@@ -1506,7 +1752,11 @@ function SupCrewProfile() {
                             <TypeIcon className="h-3.5 w-3.5 text-slate-400" />
                             {row.type}
                           </span>
-                          <span>{isPerformanceLoading ? "…" : `${row.count} · ${row.share}`}</span>
+                          <span>
+                            {isPerformanceLoading
+                              ? "…"
+                              : `${row.count} · ${row.share}`}
+                          </span>
                         </div>
                         <div className="h-2 w-full rounded-full bg-slate-100">
                           <div
@@ -1524,18 +1774,28 @@ function SupCrewProfile() {
               <PerformancePanel
                 title="24-Hour Alert Pattern"
                 icon={Clock}
-                right={!isPerformanceLoading && peakHour.alerts > 0 ? `Peak: ${peakHour.hour}` : null}
+                right={
+                  !isPerformanceLoading && peakHour.alerts > 0
+                    ? `Peak: ${peakHour.hour}`
+                    : null
+                }
               >
                 {isPerformanceLoading ? (
                   <p className="text-sm text-slate-500">Loading…</p>
                 ) : maxAlerts === 0 ? (
-                  <p className="text-sm text-slate-500">No alerts recorded in the last 7 days.</p>
+                  <p className="text-sm text-slate-500">
+                    No alerts recorded in the last 7 days.
+                  </p>
                 ) : (
                   <div className="overflow-x-auto">
                     <div className="flex min-w-[480px] items-end gap-1.5">
                       {hourly.map((row, idx) => {
-                        const isPeak = row.hour === peakHour.hour && row.alerts > 0;
-                        const heightPct = row.alerts > 0 ? Math.max((row.alerts / maxAlerts) * 100, 12) : 0;
+                        const isPeak =
+                          row.hour === peakHour.hour && row.alerts > 0;
+                        const heightPct =
+                          row.alerts > 0
+                            ? Math.max((row.alerts / maxAlerts) * 100, 12)
+                            : 0;
                         const showLabel = isPeak || idx % 3 === 0;
                         return (
                           <div
@@ -1552,7 +1812,9 @@ function SupCrewProfile() {
                             </div>
                             <span
                               className={`text-[10px] ${
-                                isPeak ? "font-semibold text-blue-700" : "text-slate-400"
+                                isPeak
+                                  ? "font-semibold text-blue-700"
+                                  : "text-slate-400"
                               }`}
                             >
                               {showLabel ? row.hour.slice(0, 2) : ""}
@@ -1570,13 +1832,19 @@ function SupCrewProfile() {
               <PerformancePanel
                 title="Recent Alerts"
                 icon={AlertTriangle}
-                right={!isPerformanceLoading ? `${latestAlerts.length} in 7 days` : null}
+                right={
+                  !isPerformanceLoading
+                    ? `${latestAlerts.length} in 7 days`
+                    : null
+                }
               >
                 <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
                   {(isPerformanceLoading ? [] : latestAlerts).map((alert) => {
-                    const TypeIcon = ALERT_TYPE_ICON_BY_LABEL[alert.type] || Activity;
+                    const TypeIcon =
+                      ALERT_TYPE_ICON_BY_LABEL[alert.type] || Activity;
                     const displayDuration = formatAlertDuration(alert.duration);
-                    const hasDuration = displayDuration !== "--" && displayDuration !== "0m";
+                    const hasDuration =
+                      displayDuration !== "--" && displayDuration !== "0m";
                     return (
                       <div
                         key={alert.id}
@@ -1586,8 +1854,12 @@ function SupCrewProfile() {
                           <TypeIcon className="h-4 w-4" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-slate-900">{alert.type}</p>
-                          <p className="truncate text-xs text-slate-500">{formatAlertTimestamp(alert.createdAt)}</p>
+                          <p className="truncate text-sm font-semibold text-slate-900">
+                            {alert.type}
+                          </p>
+                          <p className="truncate text-xs text-slate-500">
+                            {formatAlertTimestamp(alert.createdAt)}
+                          </p>
                         </div>
                         {hasDuration ? (
                           <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
@@ -1598,12 +1870,18 @@ function SupCrewProfile() {
                     );
                   })}
                   {!isPerformanceLoading && latestAlerts.length === 0 ? (
-                    <p className="text-sm text-slate-500">No alerts found in the last 7 days.</p>
+                    <p className="text-sm text-slate-500">
+                      No alerts found in the last 7 days.
+                    </p>
                   ) : null}
                 </div>
               </PerformancePanel>
 
-              <PerformancePanel title="Trip Log" icon={ClipboardList} right="Last 7 days">
+              <PerformancePanel
+                title="Trip Log"
+                icon={ClipboardList}
+                right="Last 7 days"
+              >
                 <div className="overflow-hidden rounded-2xl border border-slate-200">
                   <table className="w-full text-left text-sm">
                     <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
@@ -1616,25 +1894,43 @@ function SupCrewProfile() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {(isPerformanceLoading ? [] : recentSessions).map((session) => {
-                        const risk = getRiskLevel(session.alerts);
-                        return (
-                          <tr key={session.sessionId} className="bg-white transition hover:bg-slate-50">
-                            <td className="px-4 py-3 text-slate-700">{formatAlertTimestamp(session.start)}</td>
-                            <td className="px-4 py-3 text-slate-700">{formatAlertTimestamp(session.end)}</td>
-                            <td className="px-4 py-3 text-slate-700">{formatAlertDuration(session.duration)}</td>
-                            <td className="px-4 py-3 text-slate-700">{session.alerts}</td>
-                            <td className="px-4 py-3">
-                              <RiskBadge tone={risk.tone} label={risk.label} />
-                            </td>
-                          </tr>
-                        );
-                      })}
+                      {(isPerformanceLoading ? [] : recentSessions).map(
+                        (session) => {
+                          const risk = getRiskLevel(session.alerts);
+                          return (
+                            <tr
+                              key={session.sessionId}
+                              className="bg-white transition hover:bg-slate-50"
+                            >
+                              <td className="px-4 py-3 text-slate-700">
+                                {formatAlertTimestamp(session.start)}
+                              </td>
+                              <td className="px-4 py-3 text-slate-700">
+                                {formatAlertTimestamp(session.end)}
+                              </td>
+                              <td className="px-4 py-3 text-slate-700">
+                                {formatAlertDuration(session.duration)}
+                              </td>
+                              <td className="px-4 py-3 text-slate-700">
+                                {session.alerts}
+                              </td>
+                              <td className="px-4 py-3">
+                                <RiskBadge
+                                  tone={risk.tone}
+                                  label={risk.label}
+                                />
+                              </td>
+                            </tr>
+                          );
+                        },
+                      )}
                     </tbody>
                   </table>
                 </div>
                 {!isPerformanceLoading && recentSessions.length === 0 ? (
-                  <p className="mt-3 text-sm text-slate-500">No sessions found in the last 7 days.</p>
+                  <p className="mt-3 text-sm text-slate-500">
+                    No sessions found in the last 7 days.
+                  </p>
                 ) : null}
               </PerformancePanel>
             </div>
@@ -1657,7 +1953,10 @@ function SupCrewProfile() {
               className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
               onClick={(event) => event.stopPropagation()}
             >
-              <h3 id="edit-specialty-title" className="text-base font-semibold text-slate-900">
+              <h3
+                id="edit-specialty-title"
+                className="text-base font-semibold text-slate-900"
+              >
                 Edit Client Specialties
               </h3>
               <p className="mt-1 text-sm text-slate-500">
@@ -1665,7 +1964,10 @@ function SupCrewProfile() {
               </p>
 
               <div className="mt-4">
-                <label className="block text-sm font-medium text-slate-700" htmlFor="client-to-add">
+                <label
+                  className="block text-sm font-medium text-slate-700"
+                  htmlFor="client-to-add"
+                >
                   Client
                 </label>
                 <select
@@ -1683,20 +1985,31 @@ function SupCrewProfile() {
                 </select>
 
                 <p className="mt-4 text-sm font-medium text-slate-700">
-                  Selected{specialtyDraft.length > 0 ? ` (${specialtyDraft.length})` : ""}:
+                  Selected
+                  {specialtyDraft.length > 0
+                    ? ` (${specialtyDraft.length})`
+                    : ""}
+                  :
                 </p>
                 {/* Fixed height (~5 rows) so the modal doesn't grow with every
                     pick — beyond 5 selections the list scrolls in place. */}
                 <div className="mt-1.5 h-[190px] overflow-y-auto rounded-xl border border-slate-200">
                   {specialtyDraft.length === 0 ? (
                     <div className="flex h-full items-center justify-center px-3">
-                      <p className="text-sm text-slate-400">No clients picked yet.</p>
+                      <p className="text-sm text-slate-400">
+                        No clients picked yet.
+                      </p>
                     </div>
                   ) : (
                     <div className="divide-y divide-slate-100">
                       {specialtyDraft.map((client) => (
-                        <div key={client} className="flex items-center justify-between gap-3 px-3 py-2">
-                          <span className="text-sm text-slate-900">{client}</span>
+                        <div
+                          key={client}
+                          className="flex items-center justify-between gap-3 px-3 py-2"
+                        >
+                          <span className="text-sm text-slate-900">
+                            {client}
+                          </span>
                           <button
                             type="button"
                             onClick={() => removeDraftSpecialty(client)}
@@ -1751,16 +2064,23 @@ function SupCrewProfile() {
               className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
               onClick={(event) => event.stopPropagation()}
             >
-              <h3 id="assign-crew-title" className="text-base font-semibold text-slate-900">
+              <h3
+                id="assign-crew-title"
+                className="text-base font-semibold text-slate-900"
+              >
                 Assign Truck &amp; Helpers
               </h3>
               <p className="mt-1 text-sm text-slate-500">
-                Set {crew.fullName}&apos;s default truck and helpers for new deliveries.
+                Set {crew.fullName}&apos;s default truck and helpers for new
+                deliveries.
               </p>
 
               {/* Default truck */}
               <div className="mt-4">
-                <label className="block text-sm font-medium text-slate-700" htmlFor="assign-truck">
+                <label
+                  className="block text-sm font-medium text-slate-700"
+                  htmlFor="assign-truck"
+                >
                   Default Truck
                 </label>
                 <select
@@ -1783,14 +2103,18 @@ function SupCrewProfile() {
               {/* Default helpers — same "select to add" pattern as the
                   Client Specialties modal, capped at MAX_DEFAULT_HELPERS. */}
               <div className="mt-4">
-                <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700" htmlFor="assign-helper">
+                <label
+                  className="flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                  htmlFor="assign-helper"
+                >
                   <Users className="h-3.5 w-3.5 text-slate-400" />
                   Default Helpers (up to {MAX_DEFAULT_HELPERS})
                 </label>
 
                 {draftHelperIds.length >= MAX_DEFAULT_HELPERS ? (
                   <p className="mt-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                    Maximum of {MAX_DEFAULT_HELPERS} helpers selected. Remove one to add another.
+                    Maximum of {MAX_DEFAULT_HELPERS} helpers selected. Remove
+                    one to add another.
                   </p>
                 ) : (
                   <select
@@ -1812,10 +2136,15 @@ function SupCrewProfile() {
 
                 <div className="mt-2 divide-y divide-slate-100 rounded-xl border border-slate-200">
                   {draftHelperIds.length === 0 ? (
-                    <p className="px-3 py-2.5 text-sm text-slate-400">No helpers picked yet.</p>
+                    <p className="px-3 py-2.5 text-sm text-slate-400">
+                      No helpers picked yet.
+                    </p>
                   ) : (
                     draftHelperIds.map((helperId) => (
-                      <div key={helperId} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <div
+                        key={helperId}
+                        className="flex items-center justify-between gap-3 px-3 py-2"
+                      >
                         <span className="text-sm text-slate-900">
                           {helperNameById[helperId] || "Unknown helper"}
                         </span>
@@ -1867,7 +2196,9 @@ function SupCrewProfile() {
               </div>
 
               {assignError && (
-                <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700">{assignError}</p>
+                <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700">
+                  {assignError}
+                </p>
               )}
             </div>
           </div>
@@ -1903,10 +2234,14 @@ function SupCrewProfile() {
                 <select
                   id="trip-status-filter"
                   value={tripStatusFilter}
-                  onChange={(event) => updateTripStatusFilter(event.target.value)}
+                  onChange={(event) =>
+                    updateTripStatusFilter(event.target.value)
+                  }
                   className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:bg-white"
                 >
-                  <option value="All">All Statuses ({tripStatusCounts.All})</option>
+                  <option value="All">
+                    All Statuses ({tripStatusCounts.All})
+                  </option>
                   {TRIP_STATUS_OPTIONS.map((status) => (
                     <option key={status} value={status}>
                       {status} ({tripStatusCounts[status]})
@@ -1929,12 +2264,21 @@ function SupCrewProfile() {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {pagedTrips.map((trip) => (
-                      <tr key={trip.id} className="transition hover:bg-slate-50">
+                      <tr
+                        key={trip.id}
+                        className="transition hover:bg-slate-50"
+                      >
                         <td className="px-5 py-3.5">
-                          <p className="font-medium text-slate-900">{trip.id}</p>
-                          <p className="text-xs text-slate-500">{trip.dateLabel}</p>
+                          <p className="font-medium text-slate-900">
+                            {trip.id}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {trip.dateLabel}
+                          </p>
                         </td>
-                        <td className="px-5 py-3.5 text-slate-700">{trip.client}</td>
+                        <td className="px-5 py-3.5 text-slate-700">
+                          {trip.client}
+                        </td>
                         <td className="px-5 py-3.5 text-slate-700">
                           <span className="inline-flex items-center gap-1.5">
                             <Route className="h-3.5 w-3.5 text-slate-400" />
@@ -1949,7 +2293,10 @@ function SupCrewProfile() {
 
                     {filteredTrips.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="px-5 py-8 text-center text-sm text-slate-500">
+                        <td
+                          colSpan={4}
+                          className="px-5 py-8 text-center text-sm text-slate-500"
+                        >
                           No trips match your search or filter.
                         </td>
                       </tr>
@@ -1958,11 +2305,28 @@ function SupCrewProfile() {
                 </table>
               </div>
 
-              <PaginationBar page={safeTripPage} setPage={setTripPage} totalPages={totalTripPages} />
+              <PaginationBar
+                page={safeTripPage}
+                setPage={setTripPage}
+                totalPages={totalTripPages}
+              />
             </section>
           </div>
         )}
       </div>
+      {toast && (
+        <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+          <p
+            className={`px-4 py-2 rounded-md shadow-md text-sm font-medium transition-transform duration-300 ease-out ${
+              toast.tone === "error"
+                ? "bg-red-100 text-red-800 border border-red-300"
+                : "bg-green-100 text-green-800 border border-green-300"
+            } transform translate-y-0 opacity-100`}
+          >
+            {toast.message}
+          </p>
+        </div>
+      )}
     </SupLayout>
   );
 }

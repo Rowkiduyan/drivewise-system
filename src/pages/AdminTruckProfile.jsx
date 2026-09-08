@@ -179,12 +179,12 @@ function StatTile({ label, icon: Icon, tone = "slate", children }) {
 
 const TABS = [
   { id: "overview", label: "Overview" },
-  { id: "trips", label: "Delivery Requests" },
+  { id: "trips", label: "Deliveries" },
   { id: "maintenance", label: "Maintenance" },
 ];
 
 // Order matches the required UI: All, For Pickup, Out for Delivery, Delivered, Completed, Cancelled
-// Status tabs shown in the Delivery Requests view for trucks.
+// Status tabs shown in the Deliveries view for trucks.
 // "Cancelled" is omitted because it is not needed in this context.
 const TRIP_STATUS_FILTERS = [
   "All",
@@ -1034,22 +1034,22 @@ function AdminTruckProfile() {
               />
               {/* Additional truck details fetched from Supabase */}
               {truck.brand && <InfoRow label="Brand" value={truck.brand} />}
-              {truck.max_capacity && (
+              {truck.max_capacity > 0 && (
                 <InfoRow label="Max Capacity (kg)" value={truck.max_capacity} />
               )}
-              {truck.current_mileage && (
+              {truck.current_mileage > 0 && (
                 <InfoRow
                   label="Current Mileage (km)"
                   value={truck.current_mileage}
                 />
               )}
-              {truck.maintenance_interval_km && (
+              {truck.maintenance_interval_km > 0 && (
                 <InfoRow
                   label="Maintenance Mileage Interval (km)"
                   value={truck.maintenance_interval_km}
                 />
               )}
-              {truck.maintenance_interval_months && (
+              {truck.maintenance_interval_months > 0 && (
                 <InfoRow
                   label="Maintenance Interval (months)"
                   value={truck.maintenance_interval_months}
@@ -1092,12 +1092,12 @@ function AdminTruckProfile() {
               <table className="w-full min-w-[640px] text-left text-sm">
                 <thead>
                   <tr className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    <th className="px-5 py-3 font-semibold">Request ID</th>
-                    <th className="px-5 py-3 font-semibold">Date</th>
-                    <th className="px-5 py-3 font-semibold">Driver</th>
-                    <th className="px-5 py-3 font-semibold">Helper/s</th>
-                    <th className="px-5 py-3 font-semibold">Status</th>
-                    <th className="px-5 py-3 font-semibold">Action</th>
+                    <th className="px-5 py-3 text-center font-semibold">ID</th>
+                    <th className="px-5 py-3 text-center font-semibold">Date</th>
+                    <th className="px-5 py-3 text-center font-semibold">Driver</th>
+                    <th className="px-5 py-3 text-center font-semibold">Helper/s</th>
+                    <th className="px-5 py-3 text-center font-semibold">Status</th>
+                    <th className="px-5 py-3 text-center font-semibold">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
