@@ -131,7 +131,13 @@ function HelperLayout({ background, children }) {
 
   return (
     <main
-      className="relative flex h-screen w-screen overflow-hidden bg-white text-slate-900"
+      // h-dvh, not h-screen -- matches DriverLayout.jsx's own fix: h-screen
+      // (static 100vh) sizes to the largest possible mobile viewport
+      // (address bar collapsed), not the currently visible one, which
+      // pushed this drawer's bottom-most content (LogoutButton, see the
+      // <aside> below) past the real visible screen edge whenever the
+      // browser chrome was showing.
+      className="relative flex h-dvh w-screen overflow-hidden bg-white text-slate-900"
       style={{ fontFamily: "Inter, system-ui, sans-serif" }}
     >
       {background}
@@ -189,7 +195,7 @@ function HelperLayout({ background, children }) {
       />
 
       <aside
-        className={`fixed left-0 top-0 z-40 flex h-screen w-56 flex-col gap-3 border-r border-teal-900/80 bg-teal-950 py-3 backdrop-blur transition-transform duration-300 md:hidden ${
+        className={`fixed left-0 top-0 z-40 flex h-dvh w-56 flex-col gap-3 border-r border-teal-900/80 bg-teal-950 py-3 backdrop-blur transition-transform duration-300 md:hidden ${
           isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
         }`}
         role="navigation"
