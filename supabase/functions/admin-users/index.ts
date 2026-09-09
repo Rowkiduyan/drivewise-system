@@ -954,9 +954,16 @@ Deno.serve(async (req) => {
 
     // Confirm Pickup (->OUT_FOR_DROPOFF) and Complete Delivery (->DELIVERED)
     // moved to the Helper block below (photo-required chain completion, see
-    // 02B_MULTI_STOP_DELIVERIES.md) — Driver only ever starts the trip now.
+    // 02B_MULTI_STOP_DELIVERIES.md) — Driver starts the trip and (2026-09-08)
+    // optionally announces arrival at pickup/dropoff, stamping
+    // pickup_arrived_at/dropoff_arrived_at for the Supervisor's Trip Details
+    // report. Skippable — Helper's Confirm Pickup/Complete Dropoff already
+    // accept both the old and new precursor statuses, see HELPER_STATUS_TRANSITIONS
+    // and the complete-dropoff/complete-stop guards below.
     const DRIVER_STATUS_TRANSITIONS: Record<string, string[]> = {
       ASSIGNED: ["OUT_FOR_PICKUP"],
+      OUT_FOR_PICKUP: ["ARRIVED_PICKUP"],
+      OUT_FOR_DROPOFF: ["ARRIVED_DROPOFF"],
     };
 
     const formatCrewName = (rec: Record<string, unknown>) =>
@@ -1122,6 +1129,11 @@ Deno.serve(async (req) => {
           pickupCompletedAt: r.pickup_completed_at || null,
           dropoffPhotoUrl: r.dropoff_photo_url || null,
           dropoffCompletedAt: r.dropoff_completed_at || null,
+          // Optional "Arrived" announcements (2026-09-08) — Driver-set,
+          // read-only here; lets the UI know whether the button was already
+          // tapped for this leg.
+          pickupArrivedAt: r.pickup_arrived_at || null,
+          dropoffArrivedAt: r.dropoff_arrived_at || null,
           // Frozen planned-route (Pickup -> Dropoff -> Stops), if the
           // pre-trip screen has already computed+saved it -- lets the
           // client skip recomputing/re-saving on a remount
@@ -1188,16 +1200,36 @@ Deno.serve(async (req) => {
         );
       }
 
+      const nowIso = new Date().toISOString();
+      const updatePayload: Record<string, unknown> = {
+        status: nextStatus,
+        updated_at: nowIso,
+      };
+      if (nextStatus === "ARRIVED_PICKUP") {
+        updatePayload.pickup_arrived_at = nowIso;
+      } else if (nextStatus === "ARRIVED_DROPOFF") {
+        updatePayload.dropoff_arrived_at = nowIso;
+      }
+
       const { error: updateError } = await adminClient
         .from("delivery_requests")
-        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .update(updatePayload)
         .eq("id", deliveryId);
 
       if (updateError) {
         return json({ error: updateError.message }, 400);
       }
 
-      return json({ ok: true, status: nextStatus });
+      return json({
+        ok: true,
+        status: nextStatus,
+        ...(nextStatus === "ARRIVED_PICKUP"
+          ? { pickupArrivedAt: nowIso }
+          : {}),
+        ...(nextStatus === "ARRIVED_DROPOFF"
+          ? { dropoffArrivedAt: nowIso }
+          : {}),
+      });
     }
   }
 
@@ -1385,6 +1417,11 @@ Deno.serve(async (req) => {
           pickupCompletedAt: r.pickup_completed_at || null,
           dropoffPhotoUrl: r.dropoff_photo_url || null,
           dropoffCompletedAt: r.dropoff_completed_at || null,
+          // Optional "Arrived" announcements (2026-09-08) — Driver-set,
+          // read-only here; lets the UI know whether the button was already
+          // tapped for this leg.
+          pickupArrivedAt: r.pickup_arrived_at || null,
+          dropoffArrivedAt: r.dropoff_arrived_at || null,
           status: r.status,
           hasOpenSession: openSessionDeliveryIds.has(r.id as string),
           sessionId: sessionIdByDelivery.get(r.id as string) || null,

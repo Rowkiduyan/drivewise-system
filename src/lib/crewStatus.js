@@ -9,11 +9,22 @@
 // (assignment pickers), SupCrewProfile.jsx.
 
 // Trip statuses where the assigned driver/helpers are actively committed.
+// Real delivery_requests.status values only (DATABASE.md's documented
+// milestone flow) -- 'OUT_FOR_DELIVERY' is never one of them, it's only
+// ever the Driver/Helper UI's own internal collapsed label
+// (DriverDeliveries.jsx/HelperDeliveries.jsx's DB_TO_*_STATUS maps); using
+// it here as a real DB filter value was a bug (found 2026-09-09) -- it
+// never matched any row, and ARRIVED_DROPOFF was missing outright, so a
+// crew member actively out on the drop-off leg of a real delivery was
+// silently treated as "Available" by every consumer of this list
+// (SupCrewProfile.jsx, SupDeliveries.jsx, SupDeliveryCrew.jsx), risking a
+// real double-booking.
 export const CREW_ACTIVE_STATUSES = [
   'ASSIGNED',
   'OUT_FOR_PICKUP',
   'ARRIVED_PICKUP',
-  'OUT_FOR_DELIVERY',
+  'OUT_FOR_DROPOFF',
+  'ARRIVED_DROPOFF',
 ]
 
 export const CREW_STATUS_META = {

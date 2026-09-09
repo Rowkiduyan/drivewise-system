@@ -8,7 +8,11 @@ import {
 import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
 
 const MAP_CONTAINER_STYLE = { width: "100%", height: "100%" };
-const LEG_COLORS = ["#DC2626", "#2563EB", "#059669", "#7C3AED", "#EA580C", "#DB2777"];
+// Index 0 was red until 2026-09-09 -- changed to teal per explicit user
+// request (red reserved for real alerts, not routine navigation), kept in
+// sync with the same palette in DriverDeliveries.jsx/HelperDeliveries.jsx/
+// SupDeliveries.jsx.
+const LEG_COLORS = ["#0D9488", "#2563EB", "#059669", "#7C3AED", "#EA580C", "#DB2777"];
 
 // Whole-trip route viewer, read-only -- shared between the Supervisor's
 // PENDING_REQUEST review and the Customer's quotation review. Replaces

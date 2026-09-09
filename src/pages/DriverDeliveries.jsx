@@ -417,10 +417,13 @@ const NAV_ZOOM = 21;
 // if a chain somehow has more legs than colors), per 02C_ROUTE_STYLING's
 // per-leg design -- index 0 is reserved for the to-pickup leg specifically
 // (its own separate DirectionsService call, always exactly one leg), so the
-// post-pickup chain's legs start at index 1 (pickup->dropoff = blue, not red,
-// so it's visually distinct from the to-pickup leg that preceded it).
+// post-pickup chain's legs start at index 1 (pickup->dropoff = blue, so it's
+// visually distinct from the to-pickup leg that preceded it). Index 0 was
+// red until 2026-09-09 -- changed to teal per explicit user request (red is
+// reserved for real alerts/warnings elsewhere in the app, not routine
+// navigation).
 const NAV_LEG_COLORS = [
-  "#DC2626",
+  "#0D9488",
   "#2563EB",
   "#059669",
   "#7C3AED",
@@ -2601,10 +2604,21 @@ export function CompletedDeliveryReport({
 // (ASSIGNED -> FOR_PICKUP -> OUT_FOR_DELIVERY -> DELIVERED) and the
 // delivery_requests.status values the supervisor timeline uses.
 
+// ARRIVED_PICKUP maps to FOR_PICKUP (not OUT_FOR_DELIVERY) -- this is the
+// optional "Arrived at Pickup" announcement (2026-09-08), which only stamps
+// a timestamp and must NOT visibly advance the driver's own stage
+// banner/stepper (still "Heading to Pickup" / "Waiting for the helper to
+// confirm pickup") until the Helper actually confirms pickup. Found live
+// 2026-09-08: mapping it to OUT_FOR_DELIVERY (matching OUT_FOR_DROPOFF/
+// ARRIVED_DROPOFF) made the page jump straight to "Out for Delivery" /
+// "Waiting for the helper to complete the delivery chain" the instant
+// Arrived was tapped, before pickup was ever confirmed -- same class of
+// premature-advance bug as activeNeedsPickup's fix above, just in the
+// stage-display layer instead of the nav-target layer.
 const DB_TO_DRIVER_STATUS = {
   ASSIGNED: "ASSIGNED",
   OUT_FOR_PICKUP: "FOR_PICKUP",
-  ARRIVED_PICKUP: "OUT_FOR_DELIVERY",
+  ARRIVED_PICKUP: "FOR_PICKUP",
   OUT_FOR_DROPOFF: "OUT_FOR_DELIVERY",
   ARRIVED_DROPOFF: "OUT_FOR_DELIVERY",
   DELIVERED: "DELIVERED",
@@ -2777,6 +2791,10 @@ function mapDelivery(d) {
     pickupCompletedAt: d.pickupCompletedAt || null,
     dropoffPhotoUrl: d.dropoffPhotoUrl || null,
     dropoffCompletedAt: d.dropoffCompletedAt || null,
+    // Optional "Arrived" announcements (2026-09-08) — Driver-set, read here
+    // to know whether the Arrived button was already tapped for this leg.
+    pickupArrivedAt: d.pickupArrivedAt || null,
+    dropoffArrivedAt: d.dropoffArrivedAt || null,
     // Frozen planned route (Pickup -> Dropoff -> Stops), if the pre-trip
     // screen already computed+saved it -- see PlannedRouteMap below and
     // 11_ROUTE_COMPARISON.md. Null until the first successful save.
@@ -3522,6 +3540,7 @@ function DriverDeliveries() {
   const [confirmingStageAdvance, setConfirmingStageAdvance] = useState(false);
   const [confirmingPause, setConfirmingPause] = useState(false);
   const [confirmingResume, setConfirmingResume] = useState(false);
+  const [confirmingArrival, setConfirmingArrival] = useState(false);
   const [toast, setToast] = useState(null);
   // Shared across every confirm-modal action below since only one can ever be
   // open at a time — see the "Loading States" convention in DESIGNS.md for
@@ -3553,6 +3572,14 @@ function DriverDeliveries() {
   // a genuine position *change* (a real phone jitters enough to retrigger it
   // naturally, but this closes the gap for a near-stationary reading too).
   const latestPhonePositionRef = useRef(null);
+  // Throttles how often phone GPS gets persisted to gps_logs (2026-09-09,
+  // "GPS source split" extended -- phone is now the primary persisted
+  // source, Pi the fallback) -- watchPosition can tick far more often than
+  // once a second, but the rest of the pipeline (mileage summation, Route
+  // Comparison) already assumes roughly Pi's own upload cadence
+  // (GPS_UPLOAD_INTERVAL, 1s, PROJECT_CONSTRAINTS.md), so this matches that
+  // instead of writing every single tick.
+  const lastPersistedPositionAtRef = useRef(0);
   // Rest-stop recommendation (12_REST_STOP_RECOMMENDATIONS.md): ephemeral,
   // client-side only, Trip-start-only, one-shot -- never persisted, never
   // resets once shown, ordinary dismiss just clears the banner. Refs (not
@@ -3623,10 +3650,18 @@ function DriverDeliveries() {
       )
     : [];
 
-  // Before pickup, the relevant leg is "get to the pickup point"; after pickup, it's "get to drop-off."
+  // Before pickup, the relevant leg is "get to the pickup point"; after
+  // pickup, it's "get to drop-off." Keyed on pickupCompletedAt (ground
+  // truth), not the mapped status -- the optional "Arrived at Pickup"
+  // announcement (2026-09-08, ARRIVED_PICKUP) maps into the same
+  // "OUT_FOR_DELIVERY" bucket as an actually-departed pickup (see
+  // DB_TO_DRIVER_STATUS above), so a status-only check would reroute the
+  // live-nav map to the drop-off the instant "Arrived" is tapped, before the
+  // Helper has actually confirmed pickup/loaded cargo. By design, tapping
+  // Arrived only stamps a timestamp -- it must not change what the driver is
+  // navigating toward.
   const activeNeedsPickup = workspaceDelivery
-    ? workspaceDelivery.status === "ASSIGNED" ||
-      workspaceDelivery.status === "FOR_PICKUP"
+    ? !workspaceDelivery.pickupCompletedAt
     : true;
   // Reconciled 2026-08-14 with WAREHOUSE_COORDS (PlannedRouteMap's own
   // warehouse-origin constant) -- previously a second, different hardcoded
@@ -4260,21 +4295,73 @@ function DriverDeliveries() {
   // freezing on a stale phone reading.
   useEffect(() => {
     if (!isMonitoring || !navigator.geolocation) return undefined;
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setPhonePosition(next);
-        latestPhonePositionRef.current = next;
-        phoneBroadcastChannelRef.current?.send({
-          type: "broadcast",
-          event: "phone_position",
-          payload: next,
-        });
-      },
-      () => setPhonePosition(null),
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 },
-    );
-    return () => navigator.geolocation.clearWatch(watchId);
+    let watchId = null;
+    let retryTimeoutId = null;
+    let stopped = false;
+
+    // Found 2026-09-09: this watch was only ever started once, with no
+    // retry -- if that first attempt failed for any reason (most commonly
+    // a permission prompt that was still pending, unanswered, at the exact
+    // moment monitoring started), the driver was stuck on the Warehouse-
+    // origin fallback route for the rest of the trip with no way to
+    // recover short of a full page reload. Now retries every 5s for as
+    // long as monitoring stays on, so answering a late permission prompt
+    // (or a signal coming back after a brief loss) self-corrects live.
+    const startWatch = () => {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          setPhonePosition(next);
+          latestPhonePositionRef.current = next;
+          phoneBroadcastChannelRef.current?.send({
+            type: "broadcast",
+            event: "phone_position",
+            payload: next,
+          });
+          const deliveryId = workspaceDelivery?.id;
+          const now = Date.now();
+          if (deliveryId && now - lastPersistedPositionAtRef.current >= 1000) {
+            lastPersistedPositionAtRef.current = now;
+            supabase.functions
+              .invoke("driver-trip", {
+                body: {
+                  action: "log-position",
+                  deliveryRequestId: deliveryId,
+                  lat: next.lat,
+                  lng: next.lng,
+                },
+              })
+              .then(({ error }) => {
+                if (error) console.warn("Failed to persist phone GPS:", error);
+              })
+              .catch((error) => console.warn("Failed to persist phone GPS:", error));
+          }
+        },
+        () => {
+          setPhonePosition(null);
+          if (!stopped) {
+            retryTimeoutId = setTimeout(() => {
+              if (watchId != null) navigator.geolocation.clearWatch(watchId);
+              startWatch();
+            }, 5000);
+          }
+        },
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 },
+      );
+    };
+    startWatch();
+
+    return () => {
+      stopped = true;
+      if (retryTimeoutId) clearTimeout(retryTimeoutId);
+      if (watchId != null) navigator.geolocation.clearWatch(watchId);
+    };
+    // workspaceDelivery?.id deliberately omitted -- read via closure inside
+    // the tick callback above, same reasoning as the broadcast-channel
+    // effect below: the id doesn't change while isMonitoring stays true for
+    // one ongoing trip, and this watch is only meant to restart on a real
+    // monitoring-state change, not on every data refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMonitoring]);
 
   // Live nav position, fallback source (05_GPS_PIPELINE.md): the Pi uploads
@@ -4458,7 +4545,15 @@ function DriverDeliveries() {
   const pauseTrip = async () => {
     if (!workspaceDelivery) return;
     const { error } = await supabase.functions.invoke("driver-trip", {
-      body: { action: "pause-trip", deliveryRequestId: workspaceDelivery.id },
+      body: {
+        action: "pause-trip",
+        deliveryRequestId: workspaceDelivery.id,
+        // Whether the rest-stop banner was showing right at this moment —
+        // recorded on the session being closed so the Supervisor's Trip
+        // Details report can flag this pause as rest-stop-recommended
+        // (2026-09-08). Purely additive; the banner itself is unaffected.
+        restStopRecommended,
+      },
     });
     if (error) {
       setToast({
@@ -4498,6 +4593,45 @@ function DriverDeliveries() {
       workspace: { ...prev.workspace, hasOpenSession: true, sessionId: newSessionId },
     }));
     setToast({ message: "Trip resumed successfully.", type: "success" });
+  };
+
+  // Optional "Arrived at Pickup/Drop-off" announcement (2026-09-08) — stamps
+  // pickup_arrived_at/dropoff_arrived_at for the Supervisor's Trip Details
+  // report. Skippable, and deliberately does NOT change activeNeedsPickup or
+  // the live-nav target (see that variable's own comment) — this only
+  // records a timestamp, nothing about navigation/monitoring changes.
+  const markArrived = async () => {
+    if (!workspaceDelivery) return;
+    const nextDbStatus = activeNeedsPickup ? "ARRIVED_PICKUP" : "ARRIVED_DROPOFF";
+    const { data: result, error } = await supabase.functions.invoke(
+      "admin-users",
+      {
+        body: {
+          action: "update-driver-delivery",
+          deliveryId: workspaceDelivery.id,
+          status: nextDbStatus,
+        },
+      },
+    );
+    if (error) {
+      setToast({
+        message: error.message || "Failed to record arrival. Please try again.",
+        type: "error",
+      });
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    setData((prev) => ({
+      ...prev,
+      workspace: {
+        ...prev.workspace,
+        status: DB_TO_DRIVER_STATUS[nextDbStatus],
+        ...(activeNeedsPickup
+          ? { pickupArrivedAt: result?.pickupArrivedAt || nowIso }
+          : { dropoffArrivedAt: result?.dropoffArrivedAt || nowIso }),
+      },
+    }));
+    setToast({ message: "Arrival recorded.", type: "success" });
   };
 
   const historySearchMatch = (d) => {
@@ -5089,6 +5223,20 @@ function DriverDeliveries() {
                             Pause Trip
                           </button>
                         )}
+                        {isMonitoring &&
+                          (activeNeedsPickup
+                            ? !workspaceDelivery.pickupArrivedAt
+                            : !workspaceDelivery.dropoffArrivedAt) && (
+                            <button
+                              onClick={() => setConfirmingArrival(true)}
+                              className="inline-flex items-center justify-center gap-2 rounded-lg border border-sky-300 bg-white px-4 py-2.5 text-xs font-bold text-sky-900 transition hover:bg-sky-50"
+                            >
+                              <MapPin className="h-4 w-4" />
+                              {activeNeedsPickup
+                                ? "Arrived at Pickup"
+                                : "Arrived at Drop-off"}
+                            </button>
+                          )}
                         {statusCfg.nextLabel && (
                           <button
                             onClick={() => setConfirmingStageAdvance(true)}
@@ -5443,6 +5591,55 @@ function DriverDeliveries() {
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
                 )}
                 {isSubmittingTripAction ? "Please wait…" : "Resume Trip"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmingArrival && (
+        <div
+          // z-[60] -- see confirmingStageAdvance's modal above for why.
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-arrival-title"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-sky-200/70 bg-white p-4 shadow-xl">
+            <h2
+              id="confirm-arrival-title"
+              className="text-sm font-bold text-slate-900"
+            >
+              {activeNeedsPickup
+                ? "Record arrival at pickup?"
+                : "Record arrival at drop-off?"}
+            </h2>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
+              This just notes the time you arrived — it doesn't change your
+              route or pause monitoring.{" "}
+              {activeNeedsPickup
+                ? "The Helper still confirms pickup separately."
+                : "The Helper still confirms the dropoff separately."}
+            </p>
+            <div className="mt-4 flex gap-1.5">
+              <button
+                onClick={() => setConfirmingArrival(false)}
+                disabled={isSubmittingTripAction}
+                className="flex-1 whitespace-nowrap rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() =>
+                  runTripAction(markArrived, () => setConfirmingArrival(false))
+                }
+                disabled={isSubmittingTripAction}
+                className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-sky-700 px-2.5 py-2 text-[11px] font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSubmittingTripAction && (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                )}
+                {isSubmittingTripAction ? "Please wait…" : "Confirm Arrival"}
               </button>
             </div>
           </div>

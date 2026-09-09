@@ -19,7 +19,7 @@
 //   grant select on public.driver_records to service_role;
 //   grant select on public.helper_records to service_role;  -- added 2026-08-12, end-trip is now also Helper-callable
 //   grant select on public.users to service_role;
-//   grant select on public.gps_logs to service_role;  -- added 2026-08-08 for Pause Trip's mileage sum
+//   grant select, insert on public.gps_logs to service_role;  -- select added 2026-08-08 for Pause Trip's mileage sum; insert already present (shared with gps-upload's own service_role client, grants are per-table not per-function) -- used by log-position (2026-09-09) to persist phone GPS
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -133,6 +133,65 @@ Deno.serve(async (req) => {
     }
 
     driverId = driverRow.id as string;
+  }
+
+  // Persists a phone-GPS reading into gps_logs -- the phone's browser
+  // geolocation was previously live-display-only (LiveNavigationMap's own
+  // marker, plus an ephemeral Realtime broadcast to the Supervisor
+  // Dashboard, see the "GPS source split" memory/05_GPS_PIPELINE.md), never
+  // written to the database. Changed 2026-09-09 per explicit user request:
+  // phone GPS is now the PRIMARY persisted source (mileage, Route
+  // Comparison, and the proof-of-location check all read gps_logs, so they
+  // only ever saw Pi data before this) -- the Pi's own gps-upload path is
+  // unchanged and still writes here too, now acting as the fallback for
+  // whenever a phone isn't actively broadcasting (no permission, tab
+  // closed, etc.), not the primary source it used to be.
+  if (action === "log-position") {
+    const deliveryRequestId = typeof body.deliveryRequestId === "string" ? body.deliveryRequestId : "";
+    const lat = Number(body.lat);
+    const lng = Number(body.lng);
+
+    if (!deliveryRequestId || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return json({ error: "deliveryRequestId, lat, and lng are required" }, 400);
+    }
+
+    const { data: delivery, error: deliveryError } = await adminClient
+      .from("delivery_requests")
+      .select("id, assigned_driver_id")
+      .eq("id", deliveryRequestId)
+      .maybeSingle();
+
+    if (deliveryError || !delivery) {
+      return json({ error: "Delivery request not found" }, 400);
+    }
+
+    if (delivery.assigned_driver_id !== driverId) {
+      return json({ error: "This delivery is not assigned to you" }, 403);
+    }
+
+    // Mirrors gps-upload's own GPS-during-Pause rule (05_GPS_PIPELINE.md):
+    // session_id set only while a Session is genuinely Active, null while
+    // Paused -- attributed via delivery_request_id either way.
+    const { data: activeSession } = await adminClient
+      .from("sessions")
+      .select("session_id")
+      .eq("delivery_request_id", deliveryRequestId)
+      .eq("status", "Active")
+      .maybeSingle();
+
+    const { error: insertError } = await adminClient.from("gps_logs").insert({
+      delivery_request_id: deliveryRequestId,
+      session_id: activeSession?.session_id ?? null,
+      latitude: lat,
+      longitude: lng,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (insertError) {
+      return json({ error: insertError.message }, 400);
+    }
+
+    return json({ ok: true });
   }
 
   if (action === "start-trip") {
@@ -396,12 +455,20 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Whether the rest-stop-recommendation banner (12_REST_STOP_RECOMMENDATIONS.md,
+    // ephemeral client-side state) was showing at the moment this Pause was
+    // pressed -- recorded here (2026-09-08) so the Supervisor's Trip Details
+    // report can show it per-pause. Optional; defaults false if the client
+    // doesn't send it (older app builds, or the banner wasn't showing).
+    const restStopRecommended = body.restStopRecommended === true;
+
     const { data: updatedSession, error: updateError } = await adminClient
       .from("sessions")
       .update({
         end_time: endTime.toISOString(),
         session_duration: sessionDuration,
         status: "Completed",
+        rest_stop_recommended: restStopRecommended,
       })
       .eq("session_id", session.session_id)
       .select()

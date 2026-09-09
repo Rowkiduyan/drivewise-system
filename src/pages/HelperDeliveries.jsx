@@ -226,10 +226,17 @@ const statusConfig = {
 // Maps delivery_requests.status (the backend/Driver-driven values) to this
 // page's simplified stage labels — same mapping DriverDeliveries.jsx uses,
 // since both UIs describe the same underlying status.
+// ARRIVED_PICKUP maps to FOR_PICKUP (not OUT_FOR_DELIVERY) -- matches
+// DriverDeliveries.jsx's own DB_TO_DRIVER_STATUS fix (2026-09-08). The
+// optional "Arrived at Pickup" announcement only stamps a timestamp; it
+// must not flip this page's banner from "The driver is heading to the
+// pickup location." to "The driver is delivering to the drop-off
+// location." before pickup is actually confirmed -- same premature-advance
+// bug as the chainItems fix just above, just in the banner-text layer.
 const DB_TO_HELPER_STATUS = {
   ASSIGNED: "ASSIGNED",
   OUT_FOR_PICKUP: "FOR_PICKUP",
-  ARRIVED_PICKUP: "OUT_FOR_DELIVERY",
+  ARRIVED_PICKUP: "FOR_PICKUP",
   OUT_FOR_DROPOFF: "OUT_FOR_DELIVERY",
   ARRIVED_DROPOFF: "OUT_FOR_DELIVERY",
   DELIVERED: "DELIVERED",
@@ -438,9 +445,11 @@ const GOOGLE_MAP_CONTAINER_STYLE = { width: "100%", height: "100%" };
 // Mirrors DriverDeliveries.jsx's own NAV_LEG_COLORS exactly (not shared, per
 // this codebase's existing per-portal convention) -- one color per leg of
 // the Warehouse -> Pickup -> Dropoff -> Stop 1 -> ... chain, index 0
-// reserved for the to-pickup leg.
+// reserved for the to-pickup leg. Index 0 was red until 2026-09-09 --
+// changed to teal per explicit user request (red reserved for real
+// alerts, not routine navigation).
 const NAV_LEG_COLORS = [
-  "#DC2626",
+  "#0D9488",
   "#2563EB",
   "#059669",
   "#7C3AED",
@@ -1323,10 +1332,20 @@ function HelperDeliveries() {
           {
             type: "pickup",
             label: "Pickup",
+            // Keyed on pickupCompletedAt (ground truth, same as the
+            // dropoff/stop items below), not the mapped status -- the mapped
+            // status collapses OUT_FOR_PICKUP/ARRIVED_PICKUP/OUT_FOR_DROPOFF/
+            // ARRIVED_DROPOFF into fewer buckets (see DB_TO_HELPER_STATUS),
+            // so a delivery sitting in ARRIVED_PICKUP (Driver's optional
+            // "Arrived" announcement, 2026-09-08) would otherwise read as
+            // "OUT_FOR_DELIVERY" here too and wrongly mark Pickup done while
+            // offering Confirm Dropoff before pickup was ever confirmed.
             location: workspaceDelivery.pickupAddress,
-            done: workspaceDelivery.status !== "FOR_PICKUP",
+            done: Boolean(workspaceDelivery.pickupCompletedAt),
             photoUrl: workspaceDelivery.pickupPhotoUrl,
-            actionable: workspaceDelivery.status === "FOR_PICKUP",
+            actionable:
+              workspaceDelivery.status !== "ASSIGNED" &&
+              !workspaceDelivery.pickupCompletedAt,
           },
           {
             type: "dropoff",
@@ -1334,8 +1353,14 @@ function HelperDeliveries() {
             location: workspaceDelivery.deliveryAddress,
             done: Boolean(workspaceDelivery.dropoffCompletedAt),
             photoUrl: workspaceDelivery.dropoffPhotoUrl,
+            // Also requires pickup to actually be confirmed first (not just
+            // the mapped status reading "OUT_FOR_DELIVERY", which
+            // ARRIVED_PICKUP collapses into as well -- see the pickup item's
+            // comment above) so Confirm Dropoff can't appear before Confirm
+            // Pickup ever ran.
             actionable:
               workspaceDelivery.status === "OUT_FOR_DELIVERY" &&
+              Boolean(workspaceDelivery.pickupCompletedAt) &&
               !workspaceDelivery.dropoffCompletedAt,
           },
           ...workspaceDelivery.stops.map((stop, index) => ({
@@ -1351,6 +1376,7 @@ function HelperDeliveries() {
             photoUrl: stop.photoUrl,
             actionable:
               workspaceDelivery.status === "OUT_FOR_DELIVERY" &&
+              Boolean(workspaceDelivery.pickupCompletedAt) &&
               !stop.completed,
           })),
         ];

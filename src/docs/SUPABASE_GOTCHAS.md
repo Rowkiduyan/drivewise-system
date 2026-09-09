@@ -210,7 +210,9 @@ supabase.from('devices').select('id, device_id, plate_number, device_status, cre
 
 **Takeaway:** A missing grant can hide indefinitely if nothing in the existing codebase happens to exercise that specific verb — `insert`/`update`/`select` all being granted on a table is no guarantee `delete` is too. If a future feature genuinely needs to delete a `sessions` row (not just test cleanup), `grant delete on public.sessions to service_role;` needs to be proposed and approved first, per this table's precedent above.
 
-**Recurred 2026-09-08**, same error verbatim, in a different disposable script (`scripts/tmp-verify-start-pickup.mjs`, built to live-browser-verify the `trucks_status_check` fix below) — confirms the grant is still genuinely missing, not a one-off. Same workaround as before: `UPDATE ... set status = 'Completed', end_time = now()` instead of deleting the leftover session row. Still not fixed for the same reason (needs explicit approval, not ad hoc).
+**Recurred 2026-09-08**, same error verbatim, in a different disposable script (`scripts/tmp-verify-start-pickup.mjs`, built to live-browser-verify the `trucks_status_check` fix below) — confirms the grant is still genuinely missing, not a one-off. Same workaround as before: `UPDATE ... set status = 'Completed', end_time = now()` instead of deleting the leftover session row.
+
+**Fixed 2026-09-08**, later the same day, with explicit approval: `grant delete on public.sessions to service_role;` (`supabase/migrations/20260908110000_grant_sessions_delete_service_role.sql`). Recurring twice as the identical test-cleanup friction was the trigger for finally proposing it rather than working around it a third time.
 
 ---
 

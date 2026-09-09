@@ -32,9 +32,9 @@ import {
   Vibrate,
   Volume2,
   Coffee,
+  Pause,
   Timer,
   Fuel,
-  AlertCircle,
   Lock,
   CameraOff,
 } from "lucide-react";
@@ -62,6 +62,7 @@ import {
   formatManilaTimestamp,
   formatManilaDateTime,
   MANILA_TIMEZONE,
+  getManilaFields,
 } from "../lib/manilaTime.js";
 import {
   customer_deliveries,
@@ -1464,9 +1465,11 @@ function buildRealAlertSummary(deliveryId, rows, sessionStartTime) {
 // this codebase's existing per-portal duplication convention (see
 // parseCoords above). Used by RouteDeviationMap's planned-route legs so a
 // Supervisor sees the same leg->color language the Driver's own nav view
-// already uses.
+// already uses. Index 0 was red until 2026-09-09 -- changed to teal per
+// explicit user request (red reserved for real alerts, not routine
+// navigation), kept in sync with the Driver/Helper copies of this palette.
 const NAV_LEG_COLORS = [
-  "#DC2626",
+  "#0D9488",
   "#2563EB",
   "#059669",
   "#7C3AED",
@@ -1484,6 +1487,57 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
       Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Shared by the Route section's per-location pauses and the DriveWise
+// Report's per-alert location (2026-09-08) -- both need to know which chain
+// location (Pickup / Drop-off / Drop-off N) was "current" at a given
+// moment. There's no direct pause-to-leg or alert-to-leg link in the
+// schema, so this is a best-effort bucket: `boundaries` is the delivery's
+// own completion events in chain order, and `ts` is attributed to the first
+// boundary it occurred at-or-before (i.e. the leg that was still open when
+// it happened). Falls back to the last boundary if `ts` is after every
+// completion (e.g. a pause logged after the trip's own last event).
+function legForTimestamp(ts, boundaries) {
+  const t = new Date(ts).getTime();
+  for (const b of boundaries) {
+    if (b.endsAt && t <= new Date(b.endsAt).getTime()) return b.label;
+  }
+  return boundaries.length ? boundaries[boundaries.length - 1].label : null;
+}
+
+const PAUSE_FLAG_HOURS = 3;
+// Meal windows (Asia/Manila) a long pause is NOT flagged against -- pure
+// display-layer heuristic, no persistence, per the literal ask ("does not
+// reasonably correspond to a lunch, dinner, or scheduled break"). Doesn't
+// account for a pause crossing midnight -- an accepted simplification for
+// an approximate review flag, not a precise audit tool.
+const MEAL_WINDOWS_MIN = [
+  { start: 11 * 60 + 30, end: 13 * 60 + 30 }, // lunch
+  { start: 18 * 60, end: 20 * 60 }, // dinner
+];
+
+function minutesOfDayManila(iso) {
+  const fields = getManilaFields(iso);
+  return fields ? fields.hour * 60 + fields.minute : null;
+}
+
+function overlapsMealWindow(pausedAt, resumedAt) {
+  const startMin = minutesOfDayManila(pausedAt);
+  const endMin = minutesOfDayManila(resumedAt);
+  if (startMin == null || endMin == null) return false;
+  return MEAL_WINDOWS_MIN.some(({ start, end }) => {
+    const inWindow = (m) => m >= start && m <= end;
+    return inWindow(startMin) || inWindow(endMin) || (startMin <= start && endMin >= end);
+  });
+}
+
+// "Unreasonably long pause" indicator -- flags a pause for possible
+// Supervisor review when it's genuinely long AND doesn't line up with a
+// normal meal/break window. Not an accusation -- just a prompt to ask.
+function isUnreasonablyLongPause(pausedAt, resumedAt, durationSec) {
+  if (durationSec <= PAUSE_FLAG_HOURS * 3600) return false;
+  return !overlapsMealWindow(pausedAt, resumedAt);
 }
 
 // Real Trip Details / DriveWise Report data for CompletedDeliveryReport
@@ -1575,7 +1629,10 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
     },
     delivery.pickupPhotoUrl && {
       label: "Pickup Confirmed",
-      time: "—",
+      // Was hardcoded to "—" regardless of any real data -- delivery.pickupCompletedAt
+      // exists and is populated (same field the location cards/POD caption use),
+      // just never read here. Found alongside the missing-mapper-field bug above.
+      time: formatAlertTimestamp(delivery.pickupCompletedAt),
       completed: true,
     },
     ...dropoffEvents.map((e) => ({
@@ -1590,18 +1647,124 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
     },
   ].filter(Boolean);
 
-  const stops = [
-    {
-      location: delivery.pickupAddress,
-      time: formatAlertTimestamp(firstSession.start_time),
-      action: "Pickup / Departure",
-    },
+  // Chain-order location boundaries (Pickup, then each completed dropoff/
+  // stop in ACTUAL completion order, matching dropoffEvents above) -- used
+  // by legForTimestamp to bucket a pause or an alert into whichever
+  // location was "current" when it happened.
+  const legBoundaries = [
+    { label: "Pickup", endsAt: delivery.pickupCompletedAt },
     ...dropoffEvents.map((e) => ({
-      location: e.location,
-      time: formatAlertTimestamp(e.at),
-      action: e.label,
+      label: e.label.replace(" Completed", ""),
+      endsAt: e.at,
     })),
   ];
+
+  // Trip pauses -- derived, not stored: every gap between adjacent Sessions
+  // is one pause (03B_PAUSE_AND_RESUME_TRIP.md -- "Paused" has no stored
+  // status of its own; Resume always opens a fresh Session rather than
+  // reopening the old one, so N pause/resume cycles show up as N+1 rows in
+  // `sorted`).
+  const pauses = [];
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const pausedAt = sorted[i].end_time;
+    const resumedAt = sorted[i + 1].start_time;
+    if (!pausedAt || !resumedAt) continue;
+    const durationSec = Math.max(
+      0,
+      (new Date(resumedAt) - new Date(pausedAt)) / 1000,
+    );
+    pauses.push({
+      legLabel: legForTimestamp(pausedAt, legBoundaries),
+      pausedAt,
+      resumedAt,
+      durationSec,
+      // Session being closed by this Pause -- rest_stop_recommended is only
+      // ever populated going forward (2026-09-08); older sessions default
+      // false, correctly (the flag genuinely didn't exist yet).
+      restStopRecommended: Boolean(sorted[i].rest_stop_recommended),
+      isUnreasonablyLong: isUnreasonablyLongPause(
+        pausedAt,
+        resumedAt,
+        durationSec,
+      ),
+    });
+  }
+
+  // Route section, grouped by location in customer/display chain order
+  // (Pickup, Drop-off, Drop-off 2, ...) -- distinct from legBoundaries'
+  // chronological-completion order above, which is only used for bucketing
+  // pauses/alerts. Replaces the old flat `stops` list (now redundant with
+  // this, see CompletedDeliveryReport's removed "Trip Stops" section).
+  const locations = [
+    {
+      key: "Pickup",
+      label: "Pickup",
+      address: delivery.pickupAddress,
+      scheduledTime:
+        delivery.pickupDate && delivery.pickupTime
+          ? `${delivery.pickupDate} ${delivery.pickupTime}`
+          : null,
+      // Real Arrival only exists going forward (2026-09-08's optional
+      // Driver "Arrived" announcement) -- null on older/skipped trips,
+      // rendered as "not recorded," never fabricated.
+      arrivedAt: delivery.pickupArrivedAt || null,
+      departedAt: delivery.pickupCompletedAt || null,
+      completedAt: delivery.pickupCompletedAt || null,
+      photoUrl: delivery.pickupPhotoUrl || null,
+      photoAt: delivery.pickupCompletedAt || null,
+    },
+    {
+      key: "Dropoff",
+      label: "Drop-off",
+      address: delivery.deliveryAddress,
+      scheduledTime:
+        delivery.dropoffDate && delivery.dropoffTime
+          ? `${delivery.dropoffDate} ${delivery.dropoffTime}`
+          : null,
+      arrivedAt: delivery.dropoffArrivedAt || null,
+      // No separate "departure" event exists beyond completion for a
+      // final/only dropoff -- not shown, rather than implying precision
+      // that doesn't exist (see B.2 in the plan).
+      departedAt: null,
+      completedAt: delivery.dropoffCompletedAt || null,
+      photoUrl: delivery.dropoffPhotoUrl || null,
+      photoAt: delivery.dropoffCompletedAt || null,
+    },
+    ...(delivery.stops || []).map((s, i) => ({
+      key: `Dropoff ${i + 2}`,
+      label: `Drop-off ${i + 2}`,
+      address: s.location,
+      scheduledTime:
+        s.dropoffTime && s.dropoffTimeEnd
+          ? `${s.dropoffTime} - ${s.dropoffTimeEnd}`
+          : s.dropoffTime || null,
+      // Per-stop Arrival isn't tracked (2026-09-08 decision: Pickup +
+      // primary Drop-off only) -- same "not recorded" fallback.
+      arrivedAt: null,
+      departedAt: null,
+      completedAt: s.completedAt || null,
+      photoUrl: s.photoUrl || null,
+      photoAt: s.completedAt || null,
+    })),
+  ].map((loc) => ({
+    ...loc,
+    pauses: pauses.filter((p) => p.legLabel === loc.key),
+  }));
+
+  // "Total Trip Duration" (B.1) -- wall-clock elapsed from the actual trip
+  // start until the moment status genuinely reached DELIVERED (the last
+  // real completion event), INCLUDING pause time -- unlike totalDurationSec
+  // below (sum of session_duration only), which deliberately excludes
+  // pauses and stays as the DriveWise Report's own "time actually
+  // monitored" figure.
+  const deliveredAt =
+    dropoffEvents.length > 0
+      ? dropoffEvents[dropoffEvents.length - 1].at
+      : delivery.completedAt || lastSession.end_time;
+  const totalTripDurationSec = Math.max(
+    0,
+    (new Date(deliveredAt) - new Date(firstSession.start_time)) / 1000,
+  );
 
   const closureAlerts = alerts.filter(
     (a) =>
@@ -1632,10 +1795,35 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
     else if (sev === "WARNING" && worst !== "HIGH") worst = "MODERATE";
   });
 
+  // Per-alert location (2026-09-08): nearest-timestamp match against the
+  // same session's gps_logs, already grouped into bySessionId above for the
+  // Route Deviation tab -- a client-side computation over data already in
+  // memory, not a new query. Null when that session has no GPS rows at all
+  // (e.g. an alert fired before the first GPS fix landed).
+  function nearestGpsPoint(sessionId, ts) {
+    const points = bySessionId[sessionId];
+    if (!points || !points.length) return null;
+    const target = new Date(ts).getTime();
+    let best = points[0];
+    let bestDiff = Math.abs(new Date(best.timestamp).getTime() - target);
+    for (let i = 1; i < points.length; i += 1) {
+      const diff = Math.abs(new Date(points[i].timestamp).getTime() - target);
+      if (diff < bestDiff) {
+        best = points[i];
+        bestDiff = diff;
+      }
+    }
+    return { lat: best.latitude, lng: best.longitude };
+  }
+
   const alertHistory = alerts.map((a) => ({
     type: DB_ALERT_TYPE_LABELS[a.event_type] || a.event_type,
     time: formatAlertTimestamp(a.created_at),
     severity: DB_ALERT_TYPE_SEVERITY[a.event_type] || "INFO",
+    // Which trip this belongs to is implicit (one report per delivery);
+    // "which part of the route" is the same leg-bucketing pauses use.
+    legLabel: legForTimestamp(a.created_at, legBoundaries),
+    coords: a.session_id ? nearestGpsPoint(a.session_id, a.created_at) : null,
   }));
 
   const totalAlerts = alerts.length;
@@ -1754,9 +1942,9 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
       pickupLocation: delivery.pickupAddress,
       dropoffLocation: delivery.deliveryAddress,
       distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "—",
-      duration: formatAlertDuration(totalDurationSec),
+      duration: formatAlertDuration(totalTripDurationSec),
       startTime: firstSession.start_time,
-      endTime: delivery.completedAt || lastSession.end_time,
+      endTime: deliveredAt,
       scheduledStart:
         delivery.pickupDate && delivery.pickupTime
           ? `${delivery.pickupDate} ${delivery.pickupTime}`
@@ -1765,7 +1953,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
         delivery.dropoffDate && delivery.dropoffTime
           ? `${delivery.dropoffDate} ${delivery.dropoffTime}`
           : null,
-      stops,
+      locations,
       timeline,
     },
     behavior: {
@@ -2163,7 +2351,7 @@ function ProofOfDeliverySection({ request }) {
   );
 }
 
-function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
+function DeliveryRequestDetails({ request, realDistanceKm }) {
   return (
     <div>
       <div className="grid grid-cols-2 gap-3">
@@ -2183,6 +2371,7 @@ function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
             Schedule
           </h4>
           <div className="space-y-1.5">
+            <Row label="Submitted" value={formatIsoDateTime(request.createdAt)} />
             <Row
               label="Pickup"
               value={formatDateTime(
@@ -2306,20 +2495,18 @@ function DeliveryRequestDetails({ request, timeline, realDistanceKm }) {
         </div>
         <LocationSwitcher request={request} />
       </div>
-
-      {timeline?.length > 0 && (
-        <div className="mt-3">
-          <TripTimelineList timeline={timeline} />
-        </div>
-      )}
-
-      <ProofOfDeliverySection request={request} />
     </div>
   );
 }
 
 function BreakdownRow({ label, value, indent = false }) {
-  const num = typeof value === "number" ? value : Number(value || 0);
+  // Saved breakdown values are strings the quotation form wrote verbatim
+  // (e.g. "1,000.00") -- plain Number() chokes on the thousands separator
+  // and renders "₱NaN" for any expense >= 1000 (found 2026-09-09, live on
+  // DR-0057's real Quotation tab). parseMoney (used elsewhere in this file
+  // for the same fields while editing) already strips non-numeric
+  // characters correctly.
+  const num = typeof value === "number" ? value : parseMoney(value);
   return (
     <div
       className={`flex items-center justify-between py-1.5 ${indent ? "pl-4" : ""}`}
@@ -2609,12 +2796,12 @@ function TripDetailsTab({ delivery, report }) {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
           <Route className="mx-auto h-4 w-4 text-slate-400" />
-          <p className="mt-1 text-xs text-slate-500">Distance</p>
+          <p className="mt-1 text-xs text-slate-500">Total Distance</p>
           <p className="text-sm font-bold text-slate-900">{t.distance}</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
           <Clock className="mx-auto h-4 w-4 text-slate-400" />
-          <p className="mt-1 text-xs text-slate-500">Duration</p>
+          <p className="mt-1 text-xs text-slate-500">Total Trip Duration</p>
           <p className="text-sm font-bold text-slate-900">{t.duration}</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
@@ -2633,63 +2820,129 @@ function TripDetailsTab({ delivery, report }) {
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
-            Route
-          </p>
-          {/* No real "scheduled vs actual, late by N minutes" comparison is
-              computed (see buildRealTripAndBehaviorReport's comment) --
-              t.arrivedOnTime is left undefined for real reports, so this
-              badge only ever shows for the legacy mock ones that set it. */}
-          {t.arrivedOnTime !== undefined && (
-            <span
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold ${
-                t.arrivedOnTime
-                  ? "bg-emerald-100 text-emerald-700"
-                  : "bg-rose-100 text-rose-700"
-              }`}
-            >
-              {t.arrivedOnTime ? (
-                <Check className="h-3 w-3" />
-              ) : (
-                <AlertCircle className="h-3 w-3" />
-              )}
-              {t.arrivedOnTime ? "On time" : `Late by ${t.lateMinutes} min`}
-            </span>
-          )}
-        </div>
-        <p className="text-sm font-semibold text-slate-900">
-          {t.route ? (
-            t.route
-          ) : (
-            <>
-              <ResolvedText value={t.pickupLocation} /> →{" "}
-              <ResolvedText value={t.dropoffLocation} />
-            </>
-          )}
+      <div className="space-y-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+          Route
         </p>
-        <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-          <Row
-            label="Scheduled Pickup"
-            value={formatAlertTimestamp(t.scheduledStart)}
-          />
-          <Row
-            label="Actual Departure"
-            value={formatAlertTimestamp(t.startTime)}
-          />
-          <Row
-            label="Scheduled Drop-off"
-            value={formatAlertTimestamp(t.scheduledEnd)}
-          />
-          <Row label="Actual Arrival" value={formatAlertTimestamp(t.endTime)} />
-          {/* No real per-leg waiting/idle tracking exists -- omitted for
-              real reports rather than shown as an unavailable placeholder. */}
-          {t.waitingTime && (
-            <Row label="Waiting at Pickup" value={t.waitingTime} />
-          )}
-          {t.idleTime && <Row label="Idle at Drop-off" value={t.idleTime} />}
-        </div>
+        {(t.locations || []).map((loc, i) => (
+          <div
+            key={loc.key}
+            className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+          >
+            <div className="mb-2 flex items-center gap-2">
+              <span
+                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                  i === 0
+                    ? "bg-sky-100 text-sky-700"
+                    : "bg-emerald-100 text-emerald-700"
+                }`}
+              >
+                <MapPin className="h-3 w-3" />
+              </span>
+              <p className="text-sm font-semibold text-slate-900">
+                {loc.label}
+                {loc.address && (
+                  <span className="ml-1 font-normal text-slate-500">
+                    — <ResolvedText value={loc.address} />
+                  </span>
+                )}
+              </p>
+            </div>
+            <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+              <Row
+                label="Scheduled"
+                value={
+                  loc.scheduledTime
+                    ? formatAlertTimestamp(loc.scheduledTime)
+                    : "—"
+                }
+              />
+              <Row
+                label="Arrival"
+                value={
+                  loc.arrivedAt
+                    ? formatAlertTimestamp(loc.arrivedAt)
+                    : "Not recorded for this trip"
+                }
+              />
+              {loc.departedAt && (
+                <Row
+                  label="Departure"
+                  value={formatAlertTimestamp(loc.departedAt)}
+                />
+              )}
+            </div>
+
+            {loc.pauses.length > 0 && (
+              <div className="mt-3 space-y-2 border-t border-slate-200 pt-3">
+                <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                  <Pause className="h-3 w-3" />
+                  Pauses at this location
+                </p>
+                {loc.pauses.map((p, pi) => (
+                  <div
+                    key={pi}
+                    className={`rounded-lg border p-2.5 text-xs ${
+                      p.isUnreasonablyLong
+                        ? "border-rose-200 bg-rose-50"
+                        : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <span className="font-semibold text-slate-700">
+                        {formatAlertTimestamp(p.pausedAt)} →{" "}
+                        {formatAlertTimestamp(p.resumedAt)}
+                      </span>
+                      <span className="font-mono text-slate-500">
+                        {formatAlertDuration(p.durationSec)}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {p.restStopRecommended && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          <Coffee className="h-2.5 w-2.5" />
+                          Rest stop recommended
+                        </span>
+                      )}
+                      {p.isUnreasonablyLong && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                          <AlertTriangle className="h-2.5 w-2.5" />
+                          Unusually long — may warrant review
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {loc.photoUrl && (
+              <div className="mt-3 border-t border-slate-200 pt-3">
+                <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                  <Camera className="h-3 w-3" />
+                  Proof of Delivery
+                </p>
+                <a
+                  href={loc.photoUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group inline-block w-28 overflow-hidden rounded-lg border border-slate-200 bg-white"
+                >
+                  <img
+                    src={loc.photoUrl}
+                    alt={`${loc.label} proof of delivery`}
+                    className="h-20 w-full object-cover transition group-hover:opacity-90"
+                  />
+                  {loc.photoAt && (
+                    <p className="truncate px-1.5 py-1 text-[9px] text-slate-500">
+                      {formatIsoDateTime(loc.photoAt)}
+                    </p>
+                  )}
+                </a>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
 
       {crew?.driver && (
@@ -2697,39 +2950,49 @@ function TripDetailsTab({ delivery, report }) {
           <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
             Delivery Crew
           </p>
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-sm font-bold text-white">
-              {getInitials(crew.driver.name)}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-slate-900">
-                {crew.driver.name}
-              </p>
-              <p className="flex items-center gap-2 text-xs text-slate-500">
-                <Truck className="h-3.5 w-3.5" />
-                {crew.truck?.plateNumber} • {crew.truck?.truckType}
-              </p>
-            </div>
-            {crew.driver.rating && (
-              <div className="shrink-0 text-right">
-                <p className="text-xs text-slate-500">Rating</p>
-                <p className="text-sm font-bold text-amber-600">
-                  ★ {crew.driver.rating}
+          <div>
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+              Driver
+            </p>
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-sm font-bold text-white">
+                {getInitials(crew.driver.name)}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-slate-900">
+                  {crew.driver.name}
+                </p>
+                <p className="flex items-center gap-2 text-xs text-slate-500">
+                  <Truck className="h-3.5 w-3.5" />
+                  {crew.truck?.plateNumber} • {crew.truck?.truckType}
                 </p>
               </div>
-            )}
+              {crew.driver.rating && (
+                <div className="shrink-0 text-right">
+                  <p className="text-xs text-slate-500">Rating</p>
+                  <p className="text-sm font-bold text-amber-600">
+                    ★ {crew.driver.rating}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
           {crew.helpers?.length > 0 && (
-            <div className="mt-3 flex flex-wrap items-center gap-1.5">
-              {crew.helpers.map((h) => (
-                <span
-                  key={h.id}
-                  className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200"
-                >
-                  <Users className="h-3 w-3 text-slate-400" />
-                  {h.name}
-                </span>
-              ))}
+            <div className="mt-3">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                {crew.helpers.length > 1 ? "Helper/s" : "Helper"}
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {crew.helpers.map((h) => (
+                  <span
+                    key={h.id}
+                    className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200"
+                  >
+                    <Users className="h-3 w-3 text-slate-400" />
+                    {h.name}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -2761,60 +3024,21 @@ function TripDetailsTab({ delivery, report }) {
         </div>
       )}
 
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
-          Trip Stops
-        </p>
-        <div className="space-y-1.5">
-          {t.stops.map((stop, i) => (
-            <div key={i} className="flex items-start gap-2 text-sm">
-              <div className="flex flex-col items-center">
-                <span
-                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
-                    i === 0
-                      ? "bg-sky-100 text-sky-700"
-                      : i === t.stops.length - 1
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-slate-100 text-slate-400"
-                  }`}
-                >
-                  <MapPin className="h-2.5 w-2.5" />
-                </span>
-                {i < t.stops.length - 1 && (
-                  <div className="mt-0.5 h-3 w-px bg-slate-200" />
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="font-medium text-slate-700">
-                  <ResolvedText value={stop.location} />
-                </p>
-                <p className="text-xs text-slate-400">
-                  {stop.time} — {stop.action}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
       <TripTimelineList timeline={t.timeline} />
     </div>
   );
 }
 
-// Shared by TripDetailsTab and DeliveryRequestDetails (2026-08-14) -- a
-// Supervisor asked for the same real completion timestamps (driver's Start
-// Pickup click, each Helper dropoff/stop completion) to show directly on
-// the Delivery Request Details tab, not just buried in the separate Trip
-// Details tab. Same real, per-event-sorted data either way (see
-// buildRealTripAndBehaviorReport's timeline construction) -- just rendered
-// in two places now instead of one.
+// Only used by TripDetailsTab now (2026-09-08) -- previously also rendered
+// on the Delivery Request Details tab, but that tab is request-form data
+// only; trip-generated info like this belongs solely here. Labeled
+// "Progress Timeline" so there's exactly one timeline in the whole report.
 function TripTimelineList({ timeline }) {
   if (!timeline?.length) return null;
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
       <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
-        Trip Timeline
+        Progress Timeline
       </p>
       <div className="space-y-2">
         {timeline.map((step, i) => (
@@ -3014,15 +3238,19 @@ function DriveWiseAnalysisTab({ report }) {
           {historyOpen && (
             <div className="max-h-56 space-y-1 overflow-y-auto border-t border-slate-200 px-3 py-2">
               {b.alertHistory.map((h, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between gap-2 py-1"
-                >
-                  <span className="flex min-w-0 items-center gap-2 text-xs text-slate-700">
+                <div key={i} className="flex items-start justify-between gap-2 py-1">
+                  <span className="flex min-w-0 items-start gap-2 text-xs text-slate-700">
                     <span
-                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${ALERT_SEVERITY_DOTS[h.severity] || ALERT_SEVERITY_DOTS.INFO}`}
+                      className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${ALERT_SEVERITY_DOTS[h.severity] || ALERT_SEVERITY_DOTS.INFO}`}
                     />
-                    <span className="truncate">{h.type}</span>
+                    <span className="min-w-0">
+                      <span className="block truncate">{h.type}</span>
+                      {h.legLabel && (
+                        <span className="block text-[10px] text-slate-400">
+                          En route to / at {h.legLabel.replace("Dropoff", "Drop-off")}
+                        </span>
+                      )}
+                    </span>
                   </span>
                   <span className="shrink-0 text-xs text-slate-500">
                     {h.time}
@@ -3244,22 +3472,36 @@ function CompletedDeliveryReport({ delivery }) {
         return;
       }
       const sessionIds = sessions.map((s) => s.session_id);
-      const [{ data: alertRows }, { data: gpsRows }] = await Promise.all([
-        supabase
-          .from("alerts")
-          .select("id, created_at, event_type, duration, session_id")
-          .in("session_id", sessionIds)
-          .order("created_at", { ascending: true }),
-        supabase
-          .from("gps_logs")
-          .select("session_id, latitude, longitude, timestamp")
-          .in("session_id", sessionIds)
-          .order("timestamp", { ascending: true }),
-      ]);
+      const [{ data: alertRows }, { data: gpsRows }, { data: routeRow }] =
+        await Promise.all([
+          supabase
+            .from("alerts")
+            .select("id, created_at, event_type, duration, session_id")
+            .in("session_id", sessionIds)
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("gps_logs")
+            .select("session_id, latitude, longitude, timestamp")
+            .in("session_id", sessionIds)
+            .order("timestamp", { ascending: true }),
+          // Lazy-loaded here instead of in the bulk list query (2026-09-09
+          // perf fix, see loadInbox) -- this is the one place that actually
+          // needs it, for this one delivery only.
+          supabase
+            .from("delivery_requests")
+            .select("suggested_route")
+            .eq("id", delivery.id)
+            .maybeSingle(),
+        ]);
       if (!isMounted) return;
       setRealReport(
         buildRealTripAndBehaviorReport(
-          delivery,
+          {
+            ...delivery,
+            suggestedRoute: Array.isArray(routeRow?.suggested_route)
+              ? routeRow.suggested_route
+              : null,
+          },
           sessions,
           alertRows || [],
           gpsRows || [],
@@ -3341,7 +3583,6 @@ function CompletedDeliveryReport({ delivery }) {
         {reportTab === "details" && (
           <DeliveryRequestDetails
             request={delivery}
-            timeline={report?.trip?.timeline}
             realDistanceKm={report?.trip?.distance}
           />
         )}
@@ -3726,10 +3967,27 @@ function mapDbRequest(row, clientName, fleet) {
     // (02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
     pickupPhotoUrl: row.pickup_photo_url || null,
     dropoffPhotoUrl: row.dropoff_photo_url || null,
+    // pickupCompletedAt/pickupArrivedAt/dropoffArrivedAt were all missing
+    // from this mapper (found 2026-09-09, live end-to-end test): Progress
+    // Timeline's "Pickup Confirmed" row always showed "—" with no
+    // timestamp, and Trip Details' per-location Arrival always showed "Not
+    // recorded for this trip" even on trips where the Driver genuinely
+    // tapped Arrived and the Helper genuinely confirmed Pickup — the real
+    // columns existed and were populated, buildRealTripAndBehaviorReport
+    // already read delivery.pickupCompletedAt/pickupArrivedAt/
+    // dropoffArrivedAt correctly, this mapper just never carried them
+    // through from the raw row in the first place.
+    pickupCompletedAt: row.pickup_completed_at || null,
     dropoffCompletedAt: row.dropoff_completed_at || null,
+    pickupArrivedAt: row.pickup_arrived_at || null,
+    dropoffArrivedAt: row.dropoff_arrived_at || null,
     // Frozen planned route (Pickup -> Dropoff -> Stops), if the Driver
     // app's pre-trip screen already saved one — feeds the real Route
     // Deviation Report (buildRealTripAndBehaviorReport, 11_ROUTE_COMPARISON.md).
+    // Deliberately null here (2026-09-09) -- the bulk list query no longer
+    // fetches suggested_route at all (perf fix, see loadInbox's query
+    // comment); this field is overwritten locally once loaded lazily, by
+    // whichever of the two loadSuggestedRoute effects applies to this row.
     suggestedRoute: Array.isArray(row.suggested_route)
       ? row.suggested_route
       : null,
@@ -3851,6 +4109,33 @@ function SupDeliveries() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [selectedRequest, setSelectedRequest] = useState(null);
+  // suggested_route is lazy-loaded here too (2026-09-09 perf fix, see
+  // loadInbox's query comment) -- fetched only for whichever one request
+  // is currently open in this detail view, not for the whole list.
+  const [selectedRequestSuggestedRoute, setSelectedRequestSuggestedRoute] =
+    useState(null);
+  useEffect(() => {
+    if (!selectedRequest?.id) {
+      setSelectedRequestSuggestedRoute(null);
+      return;
+    }
+    let isMounted = true;
+    setSelectedRequestSuggestedRoute(null);
+    supabase
+      .from("delivery_requests")
+      .select("suggested_route")
+      .eq("id", selectedRequest.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!isMounted) return;
+        setSelectedRequestSuggestedRoute(
+          Array.isArray(data?.suggested_route) ? data.suggested_route : null,
+        );
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedRequest?.id]);
   const defaultQuotationForm = {
     directExpenses: {
       depreciation: "",
@@ -3936,72 +4221,139 @@ function SupDeliveries() {
     setIsLoading(true);
     setLoadError("");
     try {
-      const clientNameById = {};
-      const { data: clientsData, error: clientsError } =
-        await supabase.functions.invoke("admin-users", {
+      // All 8 of the reads below are independent of each other -- none
+      // needs another's result first -- but were previously each `await`ed
+      // one after another, turning every load (and every Realtime-triggered
+      // reload, see the subscription below) into an 8-hop sequential
+      // waterfall. Found 2026-09-09 (user-reported: "deliveries still take
+      // some time... it seems slow"), after the suggested_route payload-size
+      // fix alone didn't account for it -- this was the real dominant cost,
+      // since Edge Function invokes in particular each carry real
+      // network+execution latency that was being paid 4 times in a row.
+      // Running them together as one Promise.all cuts total wait to
+      // roughly the single slowest call instead of the sum of all of them.
+      // The one genuinely dependent step (the quotations fetch, which needs
+      // this batch's delivery ids) still runs afterward, unchanged.
+      const [
+        clientsResult,
+        specializedResult,
+        settingsResult,
+        trucksResult,
+        crewResult,
+        activeTripsResult,
+        defaultAssignmentsResult,
+        deliveryResult,
+      ] = await Promise.all([
+        supabase.functions.invoke("admin-users", {
           body: { action: "list-clients" },
-        });
-      if (!clientsError && Array.isArray(clientsData?.clients)) {
-        for (const client of clientsData.clients) {
+        }),
+        // Customers with at least one crew_client_specialties row — requests
+        // from these clients get the "Requires Specialized Crew" flag so the
+        // Supervisor assigns a crew that actually specializes in them.
+        supabase.functions.invoke("admin-users", {
+          body: { action: "list-specialized-clients" },
+        }),
+        // Supervisor's saved pricing rules for the quotation default
+        // generator. Fail open to the built-in defaults on any error —
+        // wrapped in .then's rejection handler (not .catch -- the
+        // Postgrest builder here doesn't reliably expose .catch as its own
+        // method, confirmed live: 2026-09-09) so a broken settings table
+        // can't abort the rest of this batch, matching its original
+        // isolated try/catch.
+        supabase
+          .from("quotation_settings")
+          .select("rules")
+          .eq("id", 1)
+          .maybeSingle()
+          .then(
+            (r) => r,
+            () => ({ data: null, error: true }),
+          ),
+        // Real fleet for the Assign Vehicle pickers: trucks from the
+        // `trucks` table (RLS-open, so the supervisor can query directly).
+        supabase.from("trucks").select("*"),
+        // ...and crew from the admin-users list-crew action (drivers/helpers
+        // + *_records rows).
+        supabase.functions.invoke("admin-users", {
+          body: { action: "list-crew" },
+        }),
+        // Live crew status for the assignment pickers: record ids currently
+        // committed to an active trip. Also feeds which crew currently
+        // rides which truck and which helpers usually ride with which
+        // driver. Wrapped in its own .catch, matching its original isolated
+        // try/catch — a failure here must never abort the whole inbox load.
+        supabase
+          .from("delivery_requests")
+          .select(
+            "assigned_driver_id, assigned_helper_ids, assigned_truck_plate, pickup_date, dropoff_date",
+          )
+          .in("status", CREW_ACTIVE_STATUSES)
+          .then(
+            (r) => r,
+            () => ({ data: null, error: true }),
+          ),
+        // Supervisor-saved default crew per truck (Delivery Crew profile's
+        // "Truck & Crew Assignment"). Same isolated-failure treatment.
+        supabase
+          .from("driver_default_assignments")
+          .select("driver_record_id, helper_record_ids, trucks ( plate_number )")
+          .then(
+            (r) => r,
+            () => ({ data: null, error: true }),
+          ),
+        // suggested_route deliberately excluded (2026-09-09, perf fix) -- see
+        // that entry in STATUS.md. Only ever needed for whichever ONE
+        // delivery is currently open, never for the whole list, and this
+        // query re-runs on every Realtime change to delivery_requests from
+        // anyone in the app (see the subscription below), so pulling it for
+        // all ~40+ rows every time was real, measured waste (~400KB total
+        // across just the rows that have one). Fetched lazily instead,
+        // per-delivery, right where it's actually used — see the two
+        // loadSuggestedRoute effects elsewhere in this component.
+        supabase
+          .from("delivery_requests")
+          .select(
+            "id, customer_auth_id, item_type, other_item_type, truck_type, cargo_weight, pickup_date, pickup_time, pickup_time_end, dropoff_date, dropoff_time, pickup_location, pickup_lat, pickup_lng, dropoff_location, dropoff_lat, dropoff_lng, stops, pickup_photo_url, dropoff_photo_url, pickup_completed_at, dropoff_completed_at, pickup_arrived_at, dropoff_arrived_at, budget_min, budget_max, notes, status, created_at, customer_counter_min, customer_counter_max, cancelled_by, cancel_reason, cancelled_at, cancelled_from_status, received_confirmed, received_confirmed_at, completed_at, assigned_driver_id, assigned_helper_ids, assigned_truck_plate, assigned_at",
+          )
+          .order("created_at", { ascending: false }),
+      ]);
+
+      const clientNameById = {};
+      if (
+        !clientsResult.error &&
+        Array.isArray(clientsResult.data?.clients)
+      ) {
+        for (const client of clientsResult.data.clients) {
           clientNameById[client.id] = client.name;
         }
       }
 
-      // Customers with at least one crew_client_specialties row — requests
-      // from these clients get the "Requires Specialized Crew" flag so the
-      // Supervisor assigns a crew that actually specializes in them.
-      const { data: specializedData } = await supabase.functions.invoke(
-        "admin-users",
-        {
-          body: { action: "list-specialized-clients" },
-        },
-      );
       if (
         mountedRef.current &&
-        Array.isArray(specializedData?.specializedClientIds)
+        Array.isArray(specializedResult.data?.specializedClientIds)
       ) {
-        setSpecializedClientIds(new Set(specializedData.specializedClientIds));
+        setSpecializedClientIds(
+          new Set(specializedResult.data.specializedClientIds),
+        );
       }
 
-      // Supervisor's saved pricing rules for the quotation default generator.
-      // Fail open to the built-in defaults when nothing is saved yet or the
-      // read errors — a broken settings table must never block quotations.
-      try {
-        const { data: settingsRow } = await supabase
-          .from("quotation_settings")
-          .select("rules")
-          .eq("id", 1)
-          .maybeSingle();
-        if (
-          mountedRef.current &&
-          settingsRow?.rules &&
-          typeof settingsRow.rules === "object"
-        ) {
-          setQuotationRules({
-            ...DEFAULT_QUOTATION_RULES,
-            ...settingsRow.rules,
-          });
-        }
-      } catch {
-        // Keep built-in defaults.
-      }
-
-      // Real fleet for the Assign Vehicle pickers: trucks from the `trucks`
-      // table (RLS-open, so the supervisor can query directly) and crew from
-      // the admin-users list-crew action (drivers/helpers + *_records rows).
-      const fleet = { drivers: [], helpers: [], trucks: [] };
-      const { data: trucksData, error: trucksError } = await supabase
-        .from("trucks")
-        .select("*");
-      if (!trucksError) {
-        fleet.trucks = (trucksData || []).map(mapFleetTruck);
-      }
-      const { data: crewData, error: crewError } =
-        await supabase.functions.invoke("admin-users", {
-          body: { action: "list-crew" },
+      if (
+        mountedRef.current &&
+        settingsResult.data?.rules &&
+        typeof settingsResult.data.rules === "object"
+      ) {
+        setQuotationRules({
+          ...DEFAULT_QUOTATION_RULES,
+          ...settingsResult.data.rules,
         });
-      if (!crewError && Array.isArray(crewData?.crew)) {
-        for (const m of crewData.crew) {
+      }
+
+      const fleet = { drivers: [], helpers: [], trucks: [] };
+      if (!trucksResult.error) {
+        fleet.trucks = (trucksResult.data || []).map(mapFleetTruck);
+      }
+      if (!crewResult.error && Array.isArray(crewResult.data?.crew)) {
+        for (const m of crewResult.data.crew) {
           if (m.deactivated_at || !m.record_id) continue;
           const mapped = mapFleetCrewMember(m);
           if (m.role === "Driver") fleet.drivers.push(mapped);
@@ -4013,20 +4365,8 @@ function SupDeliveries() {
         setFleetLoading(false);
       }
 
-      // Live crew status for the assignment pickers: record ids currently
-      // committed to an active trip. Refreshed by the same Realtime channel
-      // that keeps the inbox current. Also rebuilds which crew currently
-      // rides which truck (plate → crew) and which helpers usually ride with
-      // which driver, so picking a plate/driver pre-fills its current crew.
-      // Isolated in its own try/catch: a failure here must never abort the
-      // whole inbox load (it only feeds the assignment picker availability).
       try {
-        const { data: activeTrips, error: activeError } = await supabase
-          .from("delivery_requests")
-          .select(
-            "assigned_driver_id, assigned_helper_ids, assigned_truck_plate, pickup_date, dropoff_date",
-          )
-          .in("status", CREW_ACTIVE_STATUSES);
+        const { data: activeTrips, error: activeError } = activeTripsResult;
         if (!activeError && mountedRef.current) {
           // Date-aware busy map (plain object — Map is shadowed by a lucide icon
           // in this file): recordId -> active trip date ranges. Lets a crew
@@ -4086,11 +4426,7 @@ function SupDeliveries() {
       // "Truck & Crew Assignment"). Joined through the truck FK for the plate
       // number the assignment pickers key on.
       try {
-        const { data: defaultAssignments } = await supabase
-          .from("driver_default_assignments")
-          .select(
-            "driver_record_id, helper_record_ids, trucks ( plate_number )",
-          );
+        const { data: defaultAssignments } = defaultAssignmentsResult;
         if (mountedRef.current) {
           const defaults = {};
           for (const row of defaultAssignments || []) {
@@ -4108,10 +4444,7 @@ function SupDeliveries() {
         // Default crew pre-fill degraded, but the inbox itself still loads.
       }
 
-      const { data, error } = await supabase
-        .from("delivery_requests")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const { data, error } = deliveryResult;
       if (!mountedRef.current) return;
       if (error) {
         setLoadError(
@@ -5587,7 +5920,7 @@ function SupDeliveries() {
                           <div className="mt-3">
                             <SuggestedRouteMap
                               key={selectedRequest.id}
-                              suggestedRoute={selectedRequest.suggestedRoute}
+                              suggestedRoute={selectedRequestSuggestedRoute}
                             />
                           </div>
                         )}
