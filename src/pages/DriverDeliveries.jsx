@@ -60,6 +60,7 @@ import {
   distanceMeters,
   nearestDropoffOrder,
   computeSuggestedRoute,
+  classifyRouteDeviation,
 } from "../lib/suggestedRoute.js";
 import {
   formatManilaTimestamp,
@@ -2053,6 +2054,55 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
     const dropoffPoint = dropoffLeg
       ? dropoffLeg.path[dropoffLeg.path.length - 1]
       : null;
+    const deviationPercent =
+      plannedMeters > 0
+        ? Math.round((deviationMeters / plannedMeters) * 100)
+        : 0;
+
+    // Rule-based route-deviation verdict (11_ROUTE_COMPARISON.md Part D) --
+    // no LLM/API call, pure geometry over data already in memory. Shared
+    // with SupDeliveries.jsx's identical routeDeviation build via
+    // classifyRouteDeviation (lib/suggestedRoute.js).
+    const actualPointsWithTime = sorted.flatMap(
+      (s) => bySessionId[s.session_id] || [],
+    );
+    const classification = classifyRouteDeviation({
+      plannedPoints: plannedLegs.flatMap((leg) => leg.path),
+      actualPoints: actualPointsWithTime,
+      plannedMeters,
+      totalMeters,
+    });
+
+    let aiVerdict = null;
+    let aiVerdictTone = null;
+    let aiSummary = null;
+    let deviationSegments = [];
+    if (classification) {
+      aiVerdict = classification.verdict;
+      aiVerdictTone = classification.tone;
+      const roundedOffset = Math.round(classification.maxOffsetMeters);
+      const distanceSavedKm = ((plannedMeters - totalMeters) / 1000).toFixed(1);
+      if (classification.verdict === "Beneficial") {
+        aiSummary = `Actual distance was ${distanceSavedKm}km shorter than the planned route — likely a more efficient path.`;
+      } else if (classification.verdict === "Reasonable") {
+        aiSummary = `Truck stayed within ${roundedOffset}m of the planned route throughout — normal route variation, no extended stop detected.`;
+      } else if (classification.dwells.length > 0) {
+        const longest = [...classification.dwells].sort(
+          (a, b) => b.durationMinutes - a.durationMinutes,
+        )[0];
+        aiSummary = `Truck was off-route for about ${longest.durationMinutes} minutes near ${longest.lat.toFixed(5)}, ${longest.lng.toFixed(5)} starting ${formatAlertTimestamp(longest.startedAt)} — no scheduled stop accounts for this.`;
+      } else {
+        const p = classification.maxOffsetPoint;
+        aiSummary = `Truck deviated up to ${roundedOffset}m from the planned route${p ? ` near ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)} at ${formatAlertTimestamp(p.timestamp)}` : ""}, without a corresponding stop.`;
+      }
+      deviationSegments = classification.dwells.map((d) => ({
+        location: `${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}`,
+        extraDistance: `${roundedOffset}m off-route`,
+        reason: `Off-route for ${d.durationMinutes} min, ${formatAlertTimestamp(d.startedAt)} – ${formatAlertTimestamp(d.resumedAt)}`,
+        severity: d.durationMinutes >= 15 ? "Significant" : "Minor",
+      }));
+    }
+
     routeDeviation = {
       plannedLegs,
       actualRoute: sorted.flatMap((s) =>
@@ -2069,10 +2119,11 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
       actualDistance:
         totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "—",
       deviationDistance: `${(deviationMeters / 1000).toFixed(1)} km`,
-      deviationPercent:
-        plannedMeters > 0
-          ? Math.round((deviationMeters / plannedMeters) * 100)
-          : 0,
+      deviationPercent,
+      aiVerdict,
+      aiVerdictTone,
+      aiSummary,
+      deviationSegments,
     };
   }
 
@@ -2108,6 +2159,43 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
     routeDeviation,
   };
 }
+
+// 3-way tone lookup for the rule-based route-deviation verdict (11_ROUTE_
+// COMPARISON.md Part D) -- "green" is new (the classifier's own
+// "Beneficial" case), "amber"/"red" match the legacy mock fixtures' two
+// existing tones. Same tones as SupDeliveries.jsx's TONE_STYLES, kept as a
+// separate copy here since this tab renders with inline hex colors rather
+// than that file's Tailwind border/bg classes.
+const DRIVER_ROUTE_TONE_STYLES = {
+  green: {
+    borderColor: "#a7f3d0",
+    backgroundColor: "#ecfdf5",
+    badge: "bg-emerald-500",
+    heading: "text-emerald-800",
+    body: "text-emerald-700",
+    Icon: CheckCircle2,
+  },
+  amber: {
+    borderColor: "#fde68a",
+    backgroundColor: "#fffbeb",
+    badge: "bg-amber-500",
+    heading: "text-amber-800",
+    body: "text-amber-700",
+    Icon: Navigation,
+  },
+  red: {
+    borderColor: "#fecaca",
+    backgroundColor: "#fef2f2",
+    badge: "bg-red-500",
+    heading: "text-red-800",
+    body: "text-red-700",
+    Icon: Navigation,
+  },
+};
+// A legacy mock fixture (mockDeliveriesData.js's "DEL-073") uses "emerald"
+// for the same positive case classifyRouteDeviation calls "green" -- alias
+// it so that fixture doesn't fall through to the amber default.
+DRIVER_ROUTE_TONE_STYLES.emerald = DRIVER_ROUTE_TONE_STYLES.green;
 
 export function CompletedDeliveryReport({
   report,
@@ -2477,7 +2565,9 @@ export function CompletedDeliveryReport({
             // analysis pipeline produces one, so this stays absent rather
             // than showing "AI Route Analysis: undefined" for a real trip.
             const hasAiAnalysis = Boolean(r.aiVerdict);
-            const red = r.aiVerdictTone === "red";
+            const toneStyle =
+              DRIVER_ROUTE_TONE_STYLES[r.aiVerdictTone] ||
+              DRIVER_ROUTE_TONE_STYLES.amber;
             return (
               <>
                 <RouteDeviationMap
@@ -2522,23 +2612,21 @@ export function CompletedDeliveryReport({
                   <div
                     className="flex items-center gap-2.5 rounded-lg border p-2.5"
                     style={{
-                      borderColor: red ? "#fecaca" : "#fde68a",
-                      backgroundColor: red ? "#fef2f2" : "#fffbeb",
+                      borderColor: toneStyle.borderColor,
+                      backgroundColor: toneStyle.backgroundColor,
                     }}
                   >
                     <div
-                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white ${red ? "bg-red-500" : "bg-amber-500"}`}
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white ${toneStyle.badge}`}
                     >
-                      <Navigation className="h-3.5 w-3.5" />
+                      <toneStyle.Icon className="h-3.5 w-3.5" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p
-                        className={`text-xs font-semibold ${red ? "text-red-800" : "text-amber-800"}`}
-                      >
-                        AI Route Analysis: {r.aiVerdict}
+                      <p className={`text-xs font-semibold ${toneStyle.heading}`}>
+                        Route Analysis: {r.aiVerdict}
                       </p>
                       <p
-                        className={`mt-1 text-[11px] leading-relaxed ${red ? "text-red-700" : "text-amber-700"}`}
+                        className={`mt-1 text-[11px] leading-relaxed ${toneStyle.body}`}
                       >
                         {r.aiSummary}
                       </p>

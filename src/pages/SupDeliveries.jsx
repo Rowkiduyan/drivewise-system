@@ -58,6 +58,7 @@ import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
 import SuggestedRouteMap from "../components/SuggestedRouteMap.jsx";
+import { classifyRouteDeviation } from "../lib/suggestedRoute.js";
 import {
   formatManilaTimestamp,
   formatManilaDateTime,
@@ -1914,6 +1915,57 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
     const dropoffPoint = dropoffLeg
       ? dropoffLeg.path[dropoffLeg.path.length - 1]
       : null;
+    const deviationPercent =
+      plannedMeters > 0
+        ? Math.round((deviationMeters / plannedMeters) * 100)
+        : 0;
+
+    // Rule-based route-deviation verdict (11_ROUTE_COMPARISON.md Part D) --
+    // no LLM/API call, pure geometry over data already in memory (same
+    // "derive from real data, never fabricate" convention as the rest of
+    // this function). `actualPointsWithTime` mirrors `actualRoute` below but
+    // keeps timestamps, which the classifier needs for dwell detection and
+    // `RouteDeviationMap`'s flattened-array shape doesn't carry.
+    const actualPointsWithTime = sorted.flatMap(
+      (s) => bySessionId[s.session_id] || [],
+    );
+    const classification = classifyRouteDeviation({
+      plannedPoints: plannedLegs.flatMap((leg) => leg.path),
+      actualPoints: actualPointsWithTime,
+      plannedMeters,
+      totalMeters,
+    });
+
+    let aiVerdict = null;
+    let aiVerdictTone = null;
+    let aiSummary = null;
+    let deviationSegments = [];
+    if (classification) {
+      aiVerdict = classification.verdict;
+      aiVerdictTone = classification.tone;
+      const roundedOffset = Math.round(classification.maxOffsetMeters);
+      const distanceSavedKm = ((plannedMeters - totalMeters) / 1000).toFixed(1);
+      if (classification.verdict === "Beneficial") {
+        aiSummary = `Actual distance was ${distanceSavedKm}km shorter than the planned route — likely a more efficient path.`;
+      } else if (classification.verdict === "Reasonable") {
+        aiSummary = `Truck stayed within ${roundedOffset}m of the planned route throughout — normal route variation, no extended stop detected.`;
+      } else if (classification.dwells.length > 0) {
+        const longest = [...classification.dwells].sort(
+          (a, b) => b.durationMinutes - a.durationMinutes,
+        )[0];
+        aiSummary = `Truck was off-route for about ${longest.durationMinutes} minutes near ${longest.lat.toFixed(5)}, ${longest.lng.toFixed(5)} starting ${formatAlertTimestamp(longest.startedAt)} — no scheduled stop accounts for this.`;
+      } else {
+        const p = classification.maxOffsetPoint;
+        aiSummary = `Truck deviated up to ${roundedOffset}m from the planned route${p ? ` near ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)} at ${formatAlertTimestamp(p.timestamp)}` : ""}, without a corresponding stop.`;
+      }
+      deviationSegments = classification.dwells.map((d) => ({
+        location: `${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}`,
+        extraDistance: `${roundedOffset}m off-route`,
+        reason: `Off-route for ${d.durationMinutes} min, ${formatAlertTimestamp(d.startedAt)} – ${formatAlertTimestamp(d.resumedAt)}`,
+        severity: d.durationMinutes >= 15 ? "Significant" : "Minor",
+      }));
+    }
+
     routeDeviation = {
       plannedLegs,
       actualRoute: sorted.flatMap((s) =>
@@ -1930,10 +1982,11 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
       actualDistance:
         totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "—",
       deviationDistance: `${(deviationMeters / 1000).toFixed(1)} km`,
-      deviationPercent:
-        plannedMeters > 0
-          ? Math.round((deviationMeters / plannedMeters) * 100)
-          : 0,
+      deviationPercent,
+      aiVerdict,
+      aiVerdictTone,
+      aiSummary,
+      deviationSegments,
     };
   }
 
@@ -3275,6 +3328,39 @@ function DriveWiseAnalysisTab({ report }) {
   );
 }
 
+// 3-way tone lookup for the rule-based route-deviation verdict (11_ROUTE_
+// COMPARISON.md Part D) -- "green" is new (the classifier's own "Beneficial"
+// case, a shorter-than-planned actual route), "amber"/"red" match the
+// legacy mock fixtures' existing two tones.
+const TONE_STYLES = {
+  green: {
+    container: "border-emerald-200 bg-emerald-50",
+    badge: "bg-emerald-500",
+    heading: "text-emerald-800",
+    body: "text-emerald-700",
+    Icon: CheckCircle2,
+  },
+  amber: {
+    container: "border-amber-200 bg-amber-50",
+    badge: "bg-amber-500",
+    heading: "text-amber-800",
+    body: "text-amber-700",
+    Icon: AlertTriangle,
+  },
+  red: {
+    container: "border-red-200 bg-red-50",
+    badge: "bg-red-500",
+    heading: "text-red-800",
+    body: "text-red-700",
+    Icon: ShieldAlert,
+  },
+};
+// A legacy mock fixture (mockDeliveriesData.js's "DEL-073") uses "emerald"
+// for the same positive case classifyRouteDeviation calls "green" -- alias
+// it so that fixture (currently unreachable by any real delivery.id, but
+// cheap to keep correct) doesn't fall through to the amber default.
+TONE_STYLES.emerald = TONE_STYLES.green;
+
 function RouteDeviationTab({ report }) {
   const r = report.routeDeviation;
   // Two shapes feed this tab: the legacy mock fixtures (`planned`/`actual`,
@@ -3290,7 +3376,7 @@ function RouteDeviationTab({ report }) {
   // pipeline produces one, so this stays unguarded-absent rather than
   // showing a fabricated "AI Route Analysis: undefined" for real deliveries.
   const hasAiAnalysis = Boolean(r.aiVerdict);
-  const red = r.aiVerdictTone === "red";
+  const toneStyle = TONE_STYLES[r.aiVerdictTone] || TONE_STYLES.amber;
   return (
     <div className="space-y-4">
       <RouteDeviationMap
@@ -3309,26 +3395,18 @@ function RouteDeviationTab({ report }) {
 
       {hasAiAnalysis && (
         <div
-          className={`flex items-start gap-3 rounded-xl border p-4 ${red ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}
+          className={`flex items-start gap-3 rounded-xl border p-4 ${toneStyle.container}`}
         >
           <div
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white ${red ? "bg-red-500" : "bg-amber-500"}`}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white ${toneStyle.badge}`}
           >
-            {red ? (
-              <ShieldAlert className="h-4 w-4" />
-            ) : (
-              <AlertTriangle className="h-4 w-4" />
-            )}
+            <toneStyle.Icon className="h-4 w-4" />
           </div>
           <div className="min-w-0 flex-1">
-            <p
-              className={`font-semibold ${red ? "text-red-800" : "text-amber-800"}`}
-            >
-              AI Route Analysis: {r.aiVerdict}
+            <p className={`font-semibold ${toneStyle.heading}`}>
+              Route Analysis: {r.aiVerdict}
             </p>
-            <p
-              className={`mt-1 text-sm leading-relaxed ${red ? "text-red-700" : "text-amber-700"}`}
-            >
+            <p className={`mt-1 text-sm leading-relaxed ${toneStyle.body}`}>
               {r.aiSummary}
             </p>
           </div>

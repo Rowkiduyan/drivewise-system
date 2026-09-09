@@ -43,6 +43,174 @@ export function distanceMeters(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// Rule-based route-deviation classifier (11_ROUTE_COMPARISON.md Part D),
+// shared by SupDeliveries.jsx and DriverDeliveries.jsx -- both build an
+// identical `routeDeviation` shape from the same suggested_route/gps_logs
+// inputs, so this lives here rather than being duplicated per-portal, same
+// reasoning as computeSuggestedRoute above. Deliberately not an LLM call:
+// the inputs are pure geometry (planned polyline vs. actual GPS trace), and
+// a review report needs a reproducible, explainable verdict, not a
+// paraphrased one that can vary between runs.
+
+// Perpendicular distance from `point` to the segment [segStart, segEnd],
+// all as [lat, lng] pairs. Projects into a local equirectangular meters
+// plane (flat-earth approximation centered on segStart) rather than true
+// great-circle projection -- accurate enough at city-block segment lengths,
+// consistent with distanceMeters' own haversine approximation.
+export function pointToSegmentMeters(point, segStart, segEnd) {
+  const latRef = segStart[0];
+  const mPerDegLat = 111320;
+  const mPerDegLon = 111320 * Math.cos((latRef * Math.PI) / 180);
+  const toXY = ([lat, lon]) => [
+    (lon - segStart[1]) * mPerDegLon,
+    (lat - segStart[0]) * mPerDegLat,
+  ];
+  const p = toXY(point);
+  const b = toXY(segEnd);
+  const lenSq = b[0] * b[0] + b[1] * b[1];
+  const t = lenSq > 0 ? Math.max(0, Math.min(1, (p[0] * b[0] + p[1] * b[1]) / lenSq)) : 0;
+  const dx = p[0] - t * b[0];
+  const dy = p[1] - t * b[1];
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+// Consecutive points within this distance of the run's first point still
+// count as "stayed in the same spot" (GPS jitter, idling at a light).
+const DWELL_RADIUS_METERS = 50;
+// A point must be at least this far off the planned polyline to count as
+// "off-route" at all -- normal adjacent-street lane/route choice in a dense
+// grid is usually under this.
+const DWELL_OFFROUTE_THRESHOLD_METERS = 200;
+// A real stop (lunch, personal errand), not just a red light.
+const DWELL_MIN_MINUTES = 5;
+// Separates "took a nearby alternate street" from "went somewhere
+// genuinely different," when the actual distance is longer than planned.
+const REASONABLE_MAX_OFFSET_METERS = 300;
+
+// `plannedPoints`: flattened [[lat,lng],...] planned polyline (all legs
+// concatenated). `actualPoints`: chronological [{latitude,longitude,
+// timestamp}] GPS trace. `plannedMeters`/`totalMeters`: already-computed
+// trip distances (meters). Returns null when there's nothing to classify.
+export function classifyRouteDeviation({
+  plannedPoints,
+  actualPoints,
+  plannedMeters,
+  totalMeters,
+}) {
+  if (!plannedPoints.length || !actualPoints.length) return null;
+
+  let maxOffset = 0;
+  let maxOffsetPoint = null;
+  const offsets = actualPoints.map((pt) => {
+    let min = Infinity;
+    if (plannedPoints.length === 1) {
+      min = distanceMeters(
+        pt.latitude,
+        pt.longitude,
+        plannedPoints[0][0],
+        plannedPoints[0][1],
+      );
+    } else {
+      for (let i = 1; i < plannedPoints.length; i += 1) {
+        const d = pointToSegmentMeters(
+          [pt.latitude, pt.longitude],
+          plannedPoints[i - 1],
+          plannedPoints[i],
+        );
+        if (d < min) min = d;
+      }
+    }
+    if (min > maxOffset) {
+      maxOffset = min;
+      maxOffsetPoint = pt;
+    }
+    return min;
+  });
+
+  // Off-route dwell detection: a run of consecutive points that are all
+  // off-route AND stay near each other AND span enough time to be a real
+  // stop, not a red light.
+  const dwells = [];
+  const closeRun = (startIdx, endIdx) => {
+    if (endIdx <= startIdx) return;
+    const startPt = actualPoints[startIdx];
+    const endPt = actualPoints[endIdx];
+    const durationMinutes =
+      (new Date(endPt.timestamp).getTime() -
+        new Date(startPt.timestamp).getTime()) /
+      60000;
+    if (durationMinutes < DWELL_MIN_MINUTES) return;
+    let sumLat = 0;
+    let sumLng = 0;
+    let n = 0;
+    for (let j = startIdx; j <= endIdx; j += 1) {
+      sumLat += actualPoints[j].latitude;
+      sumLng += actualPoints[j].longitude;
+      n += 1;
+    }
+    dwells.push({
+      lat: sumLat / n,
+      lng: sumLng / n,
+      startedAt: startPt.timestamp,
+      resumedAt: endPt.timestamp,
+      durationMinutes: Math.round(durationMinutes),
+    });
+  };
+
+  let runStart = null;
+  for (let i = 0; i < actualPoints.length; i += 1) {
+    const offRoute = offsets[i] > DWELL_OFFROUTE_THRESHOLD_METERS;
+    if (offRoute && runStart === null) {
+      runStart = i;
+    } else if (offRoute && runStart !== null) {
+      const first = actualPoints[runStart];
+      const cur = actualPoints[i];
+      const strayed =
+        distanceMeters(
+          first.latitude,
+          first.longitude,
+          cur.latitude,
+          cur.longitude,
+        ) > DWELL_RADIUS_METERS;
+      if (strayed) {
+        closeRun(runStart, i - 1);
+        runStart = i;
+      }
+    } else if (!offRoute && runStart !== null) {
+      closeRun(runStart, i - 1);
+      runStart = null;
+    }
+  }
+  if (runStart !== null) closeRun(runStart, actualPoints.length - 1);
+
+  let verdict;
+  let tone;
+  if (totalMeters <= plannedMeters) {
+    verdict = "Beneficial";
+    tone = "green";
+  } else if (maxOffset < REASONABLE_MAX_OFFSET_METERS && dwells.length === 0) {
+    verdict = "Reasonable";
+    tone = "amber";
+  } else {
+    verdict = "Potentially Problematic";
+    tone = "red";
+  }
+
+  return {
+    verdict,
+    tone,
+    maxOffsetMeters: maxOffset,
+    maxOffsetPoint: maxOffsetPoint
+      ? {
+          lat: maxOffsetPoint.latitude,
+          lng: maxOffsetPoint.longitude,
+          timestamp: maxOffsetPoint.timestamp,
+        }
+      : null,
+    dwells,
+  };
+}
+
 // Greedy nearest-neighbor ordering for dropoff-type candidates (02B_MULTI_
 // STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering"). Each candidate is
 // `{ location, coords }`; `coords` may be null for a candidate whose address
