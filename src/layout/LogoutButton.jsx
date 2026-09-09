@@ -78,7 +78,14 @@ function LogoutButton({
       {isConfirmOpen
         ? createPortal(
             <div
-              className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 px-4"
+              // z-[1000], not z-[60] -- Leaflet's own panes/controls (react-
+              // leaflet maps like RouteDeviationMap/SuggestedRouteMap in
+              // SupDeliveries.jsx) go up to z-index 1000 by default, so a
+              // lower value here let a live map paint over this backdrop
+              // instead of being dimmed beneath it (same reasoning
+              // CustomerRequestDelivery.jsx's own modals already use z-[1000]
+              // for, on its own map-bearing page).
+              className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/45 px-4"
               onClick={(event) => event.stopPropagation()}
             >
               <div

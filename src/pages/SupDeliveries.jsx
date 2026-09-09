@@ -2135,7 +2135,15 @@ function RouteDeviationMap({
   return (
     <div
       className="rounded-lg border border-slate-200 overflow-hidden"
-      style={{ height: 480 }}
+      // isolation: "isolate" walls off Leaflet's internal panes/controls
+      // (z-index up to 1000 by default) into their own stacking context, so
+      // they can never paint over sibling/ancestor UI outside this div
+      // regardless of its z-index -- same fix applied to DriverDeliveries.
+      // jsx's identical RouteDeviationMap, where this map was confirmed
+      // bleeding over the fixed mobile header. Same underlying mechanism as
+      // LogoutButton.jsx's z-[1000] fix, contained at the source here
+      // instead of escalating every competing z-index.
+      style={{ height: 480, isolation: "isolate" }}
     >
       <MapContainer
         center={center}
