@@ -2,17 +2,12 @@ import { useMemo } from "react";
 import { AlertTriangle, Clock, CheckCircle2 } from "lucide-react";
 import { getPmsStatus } from "./utils/pms.js";
 
-export default function MaintenanceSummaryWidget({ trucks, onSelect }) {
-  const counts = useMemo(() => {
-    const c = { overdue: 0, scheduled: 0, completed: 0 };
-    trucks.forEach((t) => {
-      const status = getPmsStatus(t);
-      c[status]++;
-    });
-    return c;
-  }, [trucks]);
-
-  const Card = ({ accent, icon: Icon, title, subtext, status }) => (
+// Hoisted to module scope (was previously redefined inline on every render,
+// which resets any DOM/state React associates with it each time the parent
+// re-renders) -- takes `count`/`onSelect` as plain props instead of closing
+// over the parent's `counts`/`onSelect`.
+function Card({ accent, icon: Icon, title, subtext, count, onSelect, status }) {
+  return (
     <button
       type="button"
       onClick={() => onSelect(status)}
@@ -26,12 +21,23 @@ export default function MaintenanceSummaryWidget({ trucks, onSelect }) {
       <div className="flex-1 text-left">
         <div className="text-sm font-medium text-slate-600">{title}</div>
         <div className="mt-1 text-2xl font-bold text-slate-900">
-          {counts[status]} Trucks
+          {count} Trucks
         </div>
         <div className="text-xs text-slate-500">{subtext}</div>
       </div>
     </button>
   );
+}
+
+export default function MaintenanceSummaryWidget({ trucks, onSelect }) {
+  const counts = useMemo(() => {
+    const c = { overdue: 0, scheduled: 0, completed: 0 };
+    trucks.forEach((t) => {
+      const status = getPmsStatus(t);
+      c[status]++;
+    });
+    return c;
+  }, [trucks]);
 
   return (
     <section className="mb-6">
@@ -52,6 +58,8 @@ export default function MaintenanceSummaryWidget({ trucks, onSelect }) {
           icon={AlertTriangle}
           title="Overdue"
           subtext="Exceeded mileage or 6‑month threshold"
+          count={counts.overdue}
+          onSelect={onSelect}
           status="overdue"
         />
         <Card
@@ -59,6 +67,8 @@ export default function MaintenanceSummaryWidget({ trucks, onSelect }) {
           icon={Clock}
           title="Scheduled"
           subtext="Remaining 1,000 km or 30 days"
+          count={counts.scheduled}
+          onSelect={onSelect}
           status="scheduled"
         />
         <Card
@@ -66,6 +76,8 @@ export default function MaintenanceSummaryWidget({ trucks, onSelect }) {
           icon={CheckCircle2}
           title="Completed"
           subtext="Operating within safe limits"
+          count={counts.completed}
+          onSelect={onSelect}
           status="completed"
         />
       </div>

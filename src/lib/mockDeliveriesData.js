@@ -2640,7 +2640,7 @@ export const completed_delivery_reports = {
       totalAlerts: 0,
       totalSessions: 1,
       avgAlertDuration: "0s",
-      peakAlertTime: "—",
+      peakAlertTime: "",
       eyeClosureAlerts: [],
     },
   },

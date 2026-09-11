@@ -1928,7 +1928,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
     },
     delivery.pickupPhotoUrl && {
       label: "Pickup Confirmed",
-      time: "—",
+      time: "",
       completed: true,
     },
     ...dropoffEvents.map((e) => ({
@@ -2123,9 +2123,9 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
         ? { lat: dropoffPoint[0], lng: dropoffPoint[1] }
         : null,
       plannedDistance:
-        plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : "—",
+        plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : "",
       actualDistance:
-        totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "—",
+        totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "",
       deviationDistance: `${(deviationMeters / 1000).toFixed(1)} km`,
       deviationPercent,
       aiVerdict,
@@ -2137,7 +2137,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
 
   return {
     trip: {
-      distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "—",
+      distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "",
       duration: formatAlertDuration(totalDurationSec),
       stops,
       timeline,
@@ -2145,9 +2145,9 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
     delivery: {
       totalAlerts: alerts.length,
       avgAlertDuration:
-        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "—",
+        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "",
       peakAlertTime:
-        peakHour != null ? `${String(peakHour).padStart(2, "0")}:00` : "—",
+        peakHour != null ? `${String(peakHour).padStart(2, "0")}:00` : "",
       eyeClosureAlerts,
       history,
     },
@@ -2917,7 +2917,7 @@ function mapDelivery(d) {
             truckType: str(d.truck.truckType),
             capacity: str(d.truck.capacity || ""),
           }
-        : { plateNumber: "—", truckType: "", capacity: "" },
+        : { plateNumber: "", truckType: "", capacity: "" },
     },
     pickupCoords:
       d.pickupLat != null && d.pickupLng != null
@@ -4949,7 +4949,7 @@ function DriverDeliveries() {
                           <p className="truncate text-xs font-bold text-amber-900">
                             {workspaceDelivery.quotation
                               ? `₱${Number(workspaceDelivery.quotation.amount).toLocaleString()}`
-                              : "—"}
+                              : ""}
                           </p>
                         </div>
                       </div>

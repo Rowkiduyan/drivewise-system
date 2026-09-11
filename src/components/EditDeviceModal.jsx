@@ -13,15 +13,14 @@ export default function EditDeviceModal({ device, onClose, onSave }) {
   const [status, setStatus] = useState(device.device_status ?? "Active");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [plateOptions, setPlateOptions] = useState([]);
+  // Lazy initializer, not an effect -- the modal fully remounts per device
+  // (see AdminDevices.jsx's conditional render), so this only ever needs to
+  // seed once: the currently assigned plate appears in the dropdown
+  // immediately, before fetchAvailablePlates' async fetch below completes.
+  const [plateOptions, setPlateOptions] = useState(() =>
+    device.plate_number ? [device.plate_number] : [],
+  );
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
-
-  // Ensure the currently assigned plate (if any) appears in the dropdown immediately.
-  useEffect(() => {
-    if (device.plate_number) {
-      setPlateOptions([device.plate_number]);
-    }
-  }, [device.plate_number]);
 
   // Fetch plate numbers from trucks that are not already assigned in devices
   useEffect(() => {
@@ -54,7 +53,10 @@ export default function EditDeviceModal({ device, onClose, onSave }) {
       }
     };
     fetchAvailablePlates();
-  }, []);
+    // device.plate_number: the modal remounts per device (never changes
+    // without a full remount, see AdminDevices.jsx), so this never
+    // re-triggers the fetch in practice -- included for correctness only.
+  }, [device.plate_number]);
 
   const performUpdate = async () => {
     setLoading(true);

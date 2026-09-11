@@ -140,12 +140,22 @@ function AdminLayout({ title, background, children, bg = "bg-white" }) {
     window.localStorage.setItem(adminSidebarStorageKey, String(isExpanded));
   }, [isExpanded]);
 
-  // Collapse sidebar when navigating to a truck profile page
-  useEffect(() => {
-    if (location.pathname.startsWith("/admin/trucks/profile")) {
-      setIsExpanded(false);
-    }
-  }, [location.pathname]);
+  // Collapse sidebar when navigating to a truck profile page -- adjusted
+  // during render (React's own recommended pattern for "reset state when a
+  // value changes") instead of in an effect, so it takes effect in the same
+  // render pass rather than commit -> effect -> re-render. `collapsedFor`
+  // tracks which pathname this has already fired for, so it still only
+  // forces a collapse once per navigation (a manual re-expand while
+  // remaining on the same route isn't immediately re-collapsed), matching
+  // the original effect's `[location.pathname]` dependency exactly.
+  const [collapsedForPathname, setCollapsedForPathname] = useState(null);
+  if (
+    location.pathname.startsWith("/admin/trucks/profile") &&
+    collapsedForPathname !== location.pathname
+  ) {
+    setCollapsedForPathname(location.pathname);
+    setIsExpanded(false);
+  }
 
   return (
     <main

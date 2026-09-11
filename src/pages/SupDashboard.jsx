@@ -657,7 +657,7 @@ function useFleetOps() {
         return {
           id: d.id,
           driver: driverNameById[d.assigned_driver_id] || d.assigned_driver_id || "Unassigned",
-          truckPlate: d.assigned_truck_plate || "—",
+          truckPlate: d.assigned_truck_plate || "",
           truckLabel: truck ? `${truck.brand} ${truck.model}` : "",
           client: clientNameById[d.customer_auth_id] || "Client",
           milestone: d.status,
@@ -711,7 +711,7 @@ function useFleetOps() {
       return {
         id: a.id,
         name: driverNameById[session?.driver_id] || session?.driver_id || "Unknown driver",
-        truck: truck?.plate_number || session?.truck_plate || "—",
+        truck: truck?.plate_number || session?.truck_plate || "",
         alertType: ALERT_TYPE_LABELS[a.event_type] || a.event_type,
         time: new Date(a.created_at).toLocaleTimeString("en-US", { timeZone: MANILA_TIMEZONE, hour: "2-digit", minute: "2-digit" }),
         severity: ALERT_SEVERITY[a.event_type] || "Medium",
@@ -991,7 +991,7 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
             <GoogleMapMarker
               key={row.id}
               position={row.position}
-              title={`${row.truckPlate} — ${row.driver} (${row.positionSource === "phone" ? "Phone GPS" : "Pi GPS"})`}
+              title={`${row.truckPlate ? `${row.truckPlate} — ` : ""}${row.driver} (${row.positionSource === "phone" ? "Phone GPS" : "Pi GPS"})`}
               icon={{
                 path: window.google.maps.SymbolPath.CIRCLE,
                 scale: 7,
@@ -1044,7 +1044,8 @@ function LiveFleetMap({ data, isLoading, focusedTruckId, focusToken }) {
                       }`}
                     />
                     <span className="truncate">
-                      {row.truckPlate} — {row.driver}
+                      {row.truckPlate ? `${row.truckPlate} — ` : ""}
+                      {row.driver}
                     </span>
                   </button>
                 ))}

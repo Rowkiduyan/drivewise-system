@@ -336,19 +336,23 @@ function LocationPickerModal({
   }, [isOpen, initialValue, initialLat, initialLng]);
 
   useEffect(() => {
-    if (searchQuery.length > 2) {
-      const timer = setTimeout(() => {
-        photonSearch(searchQuery)
-          .then((data) =>
-            setSuggestions(data.filter((s) => isInsideLuzon(s.lat, s.lon))),
-          )
-          .catch(() => setSuggestions([]));
-      }, 300);
-      return () => clearTimeout(timer);
-    } else {
-      setSuggestions([]);
-    }
+    if (searchQuery.length <= 2) return;
+    const timer = setTimeout(() => {
+      photonSearch(searchQuery)
+        .then((data) =>
+          setSuggestions(data.filter((s) => isInsideLuzon(s.lat, s.lon))),
+        )
+        .catch(() => setSuggestions([]));
+    }, 300);
+    return () => clearTimeout(timer);
   }, [searchQuery]);
+  // Clear suggestions once the query gets too short to search, adjusted
+  // during render instead of in the effect above -- `suggestions.length >
+  // 0` doubles as its own guard (no extra tracking state needed), since
+  // once cleared, further renders with a still-short query are no-ops.
+  if (searchQuery.length <= 2 && suggestions.length > 0) {
+    setSuggestions([]);
+  }
 
   const handleSuggestionClick = (suggestion) => {
     if (!isInsideLuzon(suggestion.lat, suggestion.lon)) {

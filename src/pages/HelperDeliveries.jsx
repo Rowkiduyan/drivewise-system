@@ -422,7 +422,7 @@ function mapDelivery(d) {
             truckType: str(d.truck.truckType),
             capacity: str(d.truck.capacity || ""),
           }
-        : { plateNumber: "—", truckType: "", capacity: "" },
+        : { plateNumber: "", truckType: "", capacity: "" },
     },
     pickupCoords:
       d.pickupLat != null && d.pickupLng != null
@@ -2129,7 +2129,7 @@ function HelperDeliveries() {
                           <p className="truncate text-xs font-bold text-teal-900">
                             {workspaceDelivery.quotation
                               ? `₱${Number(workspaceDelivery.quotation.amount).toLocaleString()}`
-                              : "—"}
+                              : ""}
                           </p>
                         </div>
                       </div>

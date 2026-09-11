@@ -17,7 +17,6 @@ import {
   ShieldCheck,
   ShieldAlert,
   AlertTriangle,
-  CheckCircle2,
   EyeOff,
   Repeat,
   Activity,
@@ -314,14 +313,13 @@ function MetricTile({ label, value, hint, icon: Icon, tone = "slate" }) {
 }
 
 // Placeholder strings rendered by InfoRow across Personal Information and
-// Truck & Crew Assignment ("N/A", "—", "No truck assigned", "Not assigned",
+// Truck & Crew Assignment ("N/A", "No truck assigned", "Not assigned",
 // "Unknown helper") read as muted secondary text rather than bold black —
 // there's nothing there to draw the eye to. Takes priority over `strong` so
 // a field like Assigned Truck can always pass strong and still mute itself
 // automatically when unassigned.
 const MUTED_INFO_VALUES = new Set([
   "N/A",
-  "—",
   "No truck assigned",
   "Not assigned",
   "Unknown helper",

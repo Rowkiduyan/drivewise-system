@@ -35,12 +35,12 @@ function calculateAge(birthdate) {
 
 function formatBirthdate(birthdate) {
   if (!birthdate) {
-    return "—";
+    return "";
   }
 
   const date = new Date(`${birthdate}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) {
-    return "—";
+    return "";
   }
 
   return date.toLocaleDateString("en-US", {
@@ -53,10 +53,10 @@ function formatBirthdate(birthdate) {
 
 function formatAddress(address) {
   if (!address) {
-    return "—";
+    return "";
   }
 
-  return [address.street, address.city, address.province].filter(Boolean).join(", ") || "—";
+  return [address.street, address.city, address.province].filter(Boolean).join(", ");
 }
 
 // Mirrors AdminHome.jsx's mapListedUser shape — both read the same
@@ -66,13 +66,13 @@ function mapProfile(row) {
 
   return {
     id: row.id,
-    fullName: fullName || "—",
+    fullName: fullName || "",
     role: row.role,
     age: calculateAge(row.birthdate),
     birthdate: formatBirthdate(row.birthdate),
     address: formatAddress(row.address),
-    personalEmail: row.email || "—",
-    workEmail: row.login_email || "—",
+    personalEmail: row.email || "",
+    workEmail: row.login_email || "",
     profilePicture: row.profile_picture || "",
   };
 }
@@ -334,7 +334,7 @@ function SupProfile() {
                 <InfoField label="Role" value={supervisor.role} />
                 <InfoField label="Personal Email" value={supervisor.personalEmail} />
                 <InfoField label="Work Email" value={supervisor.workEmail} />
-                <InfoField label="Age" value={supervisor.age ?? "—"} />
+                <InfoField label="Age" value={supervisor.age ?? ""} />
                 <InfoField label="Birthdate" value={supervisor.birthdate} />
                 <InfoField label="Address" value={supervisor.address} wide />
               </dl>

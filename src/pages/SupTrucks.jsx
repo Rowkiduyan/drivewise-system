@@ -297,7 +297,21 @@ function SupTrucks() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [truckToEdit, setTruckToEdit] = useState(null);
   // Load trucks from Supabase on component mount. Fallback to empty array if fetch fails.
-  const [trucks, setTrucks] = useState([]);
+  // Lazy initializer, not an effect -- reading the localStorage fallback is
+  // a synchronous, mount-time-only read, so it seeds initial state directly
+  // (an immediate fallback before the async fetch below completes) rather
+  // than via a setState call in an effect.
+  const getStoredTrucks = () => {
+    try {
+      const stored = localStorage.getItem("adminTrucks");
+      const parsed = stored ? JSON.parse(stored) : null;
+      return Array.isArray(parsed) ? parsed : null;
+    } catch (e) {
+      console.error("Failed to parse stored trucks", e);
+      return null;
+    }
+  };
+  const [trucks, setTrucks] = useState(() => getStoredTrucks() || []);
   // Toast state: message and type ('success' | 'error')
   const [toast, setToast] = useState(null);
 
@@ -306,7 +320,7 @@ function SupTrucks() {
   // const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
   // Loading state for initial data fetch
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => getStoredTrucks() == null);
   const userRole = useUserRole();
   const isSupervisor = userRole?.toLowerCase() === "supervisor";
   // console.log("DEBUG: userRole =", userRole, "isSupervisor =", isSupervisor);
@@ -320,22 +334,6 @@ function SupTrucks() {
   useEffect(() => {
     localStorage.setItem("adminTrucks", JSON.stringify(trucks));
   }, [trucks]);
-
-  // Load trucks from localStorage on mount as an immediate fallback before the async fetch.
-  useEffect(() => {
-    const stored = localStorage.getItem("adminTrucks");
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          setTrucks(parsed);
-          setLoading(false);
-        }
-      } catch (e) {
-        console.error("Failed to parse stored trucks", e);
-      }
-    }
-  }, []);
 
   // Fetch initial truck data from Supabase
   useEffect(() => {

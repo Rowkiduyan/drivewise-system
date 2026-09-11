@@ -399,7 +399,17 @@ function SupTruckProfile() {
   // - If an end date is provided → Completed
   // - Else if start date is today or earlier → In Progress
   // - Otherwise → Scheduled
-  useEffect(() => {
+  // Adjusted during render (React's own recommended pattern for "reset
+  // state when a value changes") instead of in an effect -- logStatus is
+  // still user-overridable via the Status <select> below, so this must
+  // only re-suggest a value when logDate/logEndDate actually change, not
+  // on every render (which `autoStatusKey` guards, mirroring the effect's
+  // own [logDate, logEndDate] dependency list). Same fix as
+  // AdminTruckProfile.jsx's identical twin.
+  const [autoStatusKey, setAutoStatusKey] = useState(null);
+  const statusKey = `${logDate}|${logEndDate}`;
+  if (autoStatusKey !== statusKey) {
+    setAutoStatusKey(statusKey);
     const today = new Date().toISOString().split("T")[0];
     // New status rules (same as admin view):
     // 1. End date before today → Completed.
@@ -412,13 +422,18 @@ function SupTruckProfile() {
     } else {
       setLogStatus("In Progress");
     }
-  }, [logDate, logEndDate]);
-  // When the maintenance log modal opens, pre‑fill the shop field for supervisors
-  useEffect(() => {
-    if (isLogMaintenanceModalOpen) {
-      setLogShop("In-House");
-    }
-  }, [isLogMaintenanceModalOpen]);
+  }
+  // When the maintenance log modal opens, pre‑fill the shop field for
+  // supervisors. Same render-time-adjust pattern -- logShop is
+  // user-editable once the modal is open, so this must only fire once per
+  // open, not every render.
+  const [shopPrefilledFor, setShopPrefilledFor] = useState(false);
+  if (isLogMaintenanceModalOpen && !shopPrefilledFor) {
+    setShopPrefilledFor(true);
+    setLogShop("In-House");
+  } else if (!isLogMaintenanceModalOpen && shopPrefilledFor) {
+    setShopPrefilledFor(false);
+  }
   // Devices list for mapping assigned device IDs to trucks (similar to AdminTrucks)
   // const [devices, setDevices] = useState([]); // Disabled for supervisor view
   // Fetch the latest truck data after an edit. Uses plate_number as identifier.
@@ -745,7 +760,11 @@ function SupTruckProfile() {
     setMaintenanceLoading(false);
   };
   useEffect(() => {
+    // loadMaintenanceRecords deliberately omitted -- a plain function
+    // redefined every render, not memoized; including it would refire this
+    // effect every render instead of only when `truck` changes.
     loadMaintenanceRecords();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [truck]);
 
   // Reset mileage to 0 after a maintenance record is marked Completed
@@ -780,6 +799,10 @@ function SupTruckProfile() {
           }
         });
     }
+    // truck deliberately omitted -- this effect's own body calls setTruck
+    // (via the refetch above), so including truck would refire this effect
+    // on its own update, risking a loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [maintenanceRecords]);
 
   // Auto‑complete any "In Progress" maintenance record when the truck's status
@@ -829,6 +852,13 @@ function SupTruckProfile() {
             });
         }
       });
+    // truck (the whole object) and loadMaintenanceRecords deliberately
+    // omitted -- this effect's own body calls setTruck/loadMaintenanceRecords,
+    // so including them (a plain function redefined every render, and an
+    // object this same effect updates) would refire this effect on its own
+    // update, risking a loop. truck?.status alone is enough to react to the
+    // one transition this effect cares about.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [truck?.status, maintenanceRecords]);
 
   const filteredTrips =

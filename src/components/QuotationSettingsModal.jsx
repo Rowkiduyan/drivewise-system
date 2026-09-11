@@ -185,7 +185,7 @@ export default function QuotationSettingsModal({ rules, onClose, onSave }) {
                       <td className="py-1.5 text-right font-mono text-slate-500">
                         {dieselPerKm != null
                           ? `₱${(literPrice / kmPerL).toFixed(2)}`
-                          : "—"}
+                          : ""}
                       </td>
                     </tr>
                   )

@@ -1439,7 +1439,7 @@ function buildRealAlertSummary(deliveryId, rows, sessionStartTime) {
   // GPS-route-distance computation, so distance stays mock-only.
   const drivingHoursLabel = sessionStartTime
     ? `${((Date.now() - new Date(sessionStartTime).getTime()) / 3_600_000).toFixed(1)} hrs`
-    : "—";
+    : "";
   return {
     deliveryId,
     deviceOnline: true,
@@ -1448,7 +1448,7 @@ function buildRealAlertSummary(deliveryId, rows, sessionStartTime) {
     drivingHoursLabel,
     avgClosureDurationLabel: closureDurationCount
       ? `${(closureDurationTotal / closureDurationCount).toFixed(1)}s`
-      : "—",
+      : "",
     lastAlert: DB_ALERT_TYPE_LABELS[latest.event_type] || latest.event_type,
     lastAlertAt: formatTime(latest.created_at),
     alertHistory,
@@ -1978,9 +1978,9 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
         ? { lat: dropoffPoint[0], lng: dropoffPoint[1] }
         : null,
       plannedDistance:
-        plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : "—",
+        plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : "",
       actualDistance:
-        totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "—",
+        totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "",
       deviationDistance: `${(deviationMeters / 1000).toFixed(1)} km`,
       deviationPercent,
       aiVerdict,
@@ -1994,7 +1994,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
     trip: {
       pickupLocation: delivery.pickupAddress,
       dropoffLocation: delivery.deliveryAddress,
-      distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "—",
+      distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "",
       duration: formatAlertDuration(totalTripDurationSec),
       startTime: firstSession.start_time,
       endTime: deliveredAt,
@@ -2015,7 +2015,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
       riskLevel,
       drowsinessLevel: worst,
       avgClosureDuration:
-        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "—",
+        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "",
       yawnCount: typeCounts.pattern_eye_closure_yawn || 0,
       eyeDetectionFailures: typeCounts.face_not_detected || 0,
       alertsByType,
@@ -2541,7 +2541,7 @@ function DeliveryRequestDetails({ request, realDistanceKm }) {
         </h4>
         <div className="mb-3">
           {(() => {
-            const hasReal = realDistanceKm && realDistanceKm !== "—";
+            const hasReal = Boolean(realDistanceKm);
             return (
               <Row
                 label={
@@ -2915,7 +2915,7 @@ function TripDetailsTab({ delivery, report }) {
                 value={
                   loc.scheduledTime
                     ? formatAlertTimestamp(loc.scheduledTime)
-                    : "—"
+                    : ""
                 }
               />
               <Row
@@ -3462,7 +3462,7 @@ function RouteDeviationTab({ report }) {
             <p
               className={`mt-1 text-sm font-bold ${r.scheduleImpact && r.scheduleImpact.toLowerCase().includes("delay") ? "text-rose-600" : "text-emerald-600"}`}
             >
-              {r.scheduleImpact || "—"}
+              {r.scheduleImpact || ""}
             </p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -3471,7 +3471,7 @@ function RouteDeviationTab({ report }) {
               Fuel Impact
             </p>
             <p className="mt-1 text-sm font-bold text-slate-900">
-              {r.fuelImpact || "—"}
+              {r.fuelImpact || ""}
             </p>
           </div>
         </div>
@@ -3705,7 +3705,7 @@ function CancelledDeliveryDetails({ delivery }) {
           Cancellation Details
         </p>
         <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-          <Row label="Reason" value={cancellation.cancellationReason || "—"} />
+          <Row label="Reason" value={cancellation.cancellationReason || ""} />
           <Row
             label="Cancelled by"
             value={
@@ -3714,12 +3714,12 @@ function CancelledDeliveryDetails({ delivery }) {
                 : "Supervisor"
             }
           />
-          <Row label="Cancelled at" value={cancellation.cancelledAt || "—"} />
+          <Row label="Cancelled at" value={cancellation.cancelledAt || ""} />
           <Row
             label="Status before cancellation"
             value={
               statusLabel[cancellation.cancelledFromStatus] ??
-              (cancellation.cancelledFromStatus || "—").replaceAll("_", " ")
+              (cancellation.cancelledFromStatus || "").replaceAll("_", " ")
             }
           />
         </div>
@@ -3768,7 +3768,7 @@ function CancelledDeliveryDetails({ delivery }) {
             />
             <Row
               label="Helpers"
-              value={delivery.crew.helpers.map((h) => h.name).join(", ") || "—"}
+              value={delivery.crew.helpers.map((h) => h.name).join(", ")}
             />
           </div>
         </div>
@@ -4201,7 +4201,11 @@ function SupDeliveries() {
   const [selectedRequestSuggestedRoute, setSelectedRequestSuggestedRoute] =
     useState(null);
   useEffect(() => {
+    // Real async fetch from Supabase, reset-then-fetch on selection change
+    // (with an isMounted guard against a stale response) -- the correct,
+    // intentional use of an effect, not derived state.
     if (!selectedRequest?.id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedRequestSuggestedRoute(null);
       return;
     }
@@ -4601,6 +4605,9 @@ function SupDeliveries() {
 
   useEffect(() => {
     mountedRef.current = true;
+    // Real async fetch on mount, not derived state -- the correct,
+    // intentional use of an effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadInbox();
     return () => {
       mountedRef.current = false;
@@ -5248,6 +5255,7 @@ function SupDeliveries() {
     const match = dbRequests.find((r) => r.id === targetId);
     if (!match) return;
     openedFromNotificationRef.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     openDetails(match);
     // openDetails deliberately omitted -- a plain function redefined every
     // render, not memoized; including it would fire this effect every
@@ -8391,7 +8399,7 @@ function SupDeliveries() {
                       <p className="text-sm font-semibold text-emerald-700 text-center">
                         {row.quotation
                           ? `₱${Number(row.quotation.amount).toLocaleString()}`
-                          : "—"}
+                          : ""}
                       </p>
                       <div className="flex justify-center">
                         <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -8990,9 +8998,7 @@ function SupDeliveries() {
                                     delivery.cancelledFromStatus
                                   ).replaceAll("_", " ")}
                               </span>
-                            ) : (
-                              <span className="text-sm text-slate-400">—</span>
-                            )}
+                            ) : null}
                           </div>
                           <div className="flex justify-center">
                             <ChevronRight className="h-4 w-4 text-slate-400" />

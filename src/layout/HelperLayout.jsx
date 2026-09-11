@@ -7,7 +7,7 @@ import { formatCutoff } from "../lib/deactivation.js";
 
 // Profile isn't listed here — it's reached via the sidebar header (avatar)
 // instead of a nav item, see the header buttons below.
-export const helperModules = [
+const helperModules = [
   {
     label: "Deliveries",
     path: "/helper/trips",

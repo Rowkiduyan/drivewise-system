@@ -1585,7 +1585,7 @@ function RequestDetailView({
                     Weight
                   </p>
                   <p className="font-medium text-slate-900">
-                    {request.cargoWeight ? `${request.cargoWeight} kg` : "—"}
+                    {request.cargoWeight ? `${request.cargoWeight} kg` : ""}
                   </p>
                 </div>
                 <div>
@@ -1595,7 +1595,7 @@ function RequestDetailView({
                   <p className="font-medium text-slate-900">
                     {request.budgetMin
                       ? `₱${Number(request.budgetMin).toLocaleString()}`
-                      : "—"}
+                      : ""}
                   </p>
                 </div>
                 <div>
@@ -1605,7 +1605,7 @@ function RequestDetailView({
                   <p className="font-medium text-slate-900">
                     {request.budgetMax
                       ? `₱${Number(request.budgetMax).toLocaleString()}`
-                      : "—"}
+                      : ""}
                   </p>
                 </div>
               </div>
@@ -1680,7 +1680,7 @@ function RequestDetailView({
                       Total Distance
                     </p>
                     <p className="font-medium text-slate-900">
-                      {request.trip.distance || "—"}
+                      {request.trip.distance || ""}
                     </p>
                   </div>
                   <div>
@@ -1688,7 +1688,7 @@ function RequestDetailView({
                       Actual Pickup
                     </p>
                     <p className="font-medium text-slate-900">
-                      {request.trip.actualPickup || "—"}
+                      {request.trip.actualPickup || ""}
                     </p>
                   </div>
                   <div>
@@ -1696,7 +1696,7 @@ function RequestDetailView({
                       Scheduled Drop-off
                     </p>
                     <p className="font-medium text-slate-900">
-                      {request.trip.scheduledDropoff || "—"}
+                      {request.trip.scheduledDropoff || ""}
                     </p>
                   </div>
                   <div>
@@ -1704,7 +1704,7 @@ function RequestDetailView({
                       Actual Drop-off
                     </p>
                     <p className="font-medium text-slate-900">
-                      {request.trip.actualDropoff || "—"}
+                      {request.trip.actualDropoff || ""}
                     </p>
                   </div>
                 </div>
@@ -1890,7 +1890,7 @@ function RequestDetailView({
                         value={
                           request.cargoWeight
                             ? `${request.cargoWeight} kg`
-                            : "—"
+                            : ""
                         }
                       />
                     </div>
@@ -1945,19 +1945,19 @@ function RequestDetailView({
                       <div className="space-y-1.5">
                         <Row
                           label="Total Distance"
-                          value={request.trip.distance || "—"}
+                          value={request.trip.distance || ""}
                         />
                         <Row
                           label="Actual Pickup"
-                          value={request.trip.actualPickup || "—"}
+                          value={request.trip.actualPickup || ""}
                         />
                         <Row
                           label="Scheduled Drop-off"
-                          value={request.trip.scheduledDropoff || "—"}
+                          value={request.trip.scheduledDropoff || ""}
                         />
                         <Row
                           label="Actual Drop-off"
-                          value={request.trip.actualDropoff || "—"}
+                          value={request.trip.actualDropoff || ""}
                         />
                       </div>
                     </div>
@@ -2043,7 +2043,7 @@ function RequestDetailView({
                       value={
                         request.budgetMin && request.budgetMax
                           ? `₱${Number(request.budgetMin).toLocaleString()} – ₱${Number(request.budgetMax).toLocaleString()}`
-                          : "—"
+                          : ""
                       }
                     />
                     <InfoCell
@@ -2051,7 +2051,7 @@ function RequestDetailView({
                       value={
                         request.quotation?.breakdown?.calculated?.distanceKm
                           ? `${request.quotation.breakdown.calculated.distanceKm} km`
-                          : request.trip?.distance || "—"
+                          : request.trip?.distance || ""
                       }
                     />
                     <InfoCell
@@ -2059,7 +2059,7 @@ function RequestDetailView({
                       value={
                         request.quotation?.breakdown?.calculated?.totalDays
                           ? `${request.quotation.breakdown.calculated.totalDays} day(s)`
-                          : "—"
+                          : ""
                       }
                     />
                   </div>
@@ -2068,7 +2068,7 @@ function RequestDetailView({
                     <InfoCell
                       label="Weight"
                       value={
-                        request.cargoWeight ? `${request.cargoWeight} kg` : "—"
+                        request.cargoWeight ? `${request.cargoWeight} kg` : ""
                       }
                     />
                     <InfoCell label="Type of Item" value={itemLabel} />
@@ -3556,7 +3556,15 @@ function CustomerDeliveries() {
     setActiveTab(newTabId);
   };
 
-  useEffect(() => {
+  // Adjusted during render (React's own recommended pattern for "reset
+  // state when a value changes") instead of in an effect. `handledState`
+  // tracks which `location.state` object this has already processed --
+  // React Router gives a new object reference per navigation, so comparing
+  // identity here mirrors the original effect's `[location.state]`
+  // dependency exactly (only fires once per navigation, not every render).
+  const [handledLocationState, setHandledLocationState] = useState(null);
+  if (location.state && location.state !== handledLocationState) {
+    setHandledLocationState(location.state);
     const defaultTab = location.state?.defaultTab;
     const toastMessage = location.state?.toastMessage;
 
@@ -3564,16 +3572,17 @@ function CustomerDeliveries() {
       setToast({ message: toastMessage, type: "success" });
     }
 
-    if (!defaultTab) return;
-    const validTabs = tabs.map((tab) => tab.id);
-    if (validTabs.includes(defaultTab)) {
-      const order = tabs.map((t) => t.id);
-      setTabDirection(
-        order.indexOf(defaultTab) >= order.indexOf(activeTab) ? 1 : -1,
-      );
-      setActiveTab(defaultTab);
+    if (defaultTab) {
+      const validTabs = tabs.map((tab) => tab.id);
+      if (validTabs.includes(defaultTab)) {
+        const order = tabs.map((t) => t.id);
+        setTabDirection(
+          order.indexOf(defaultTab) >= order.indexOf(activeTab) ? 1 : -1,
+        );
+        setActiveTab(defaultTab);
+      }
     }
-  }, [location.state]);
+  }
 
   const toastBanner = toast && (
     <div className="fixed inset-x-0 top-4 z-50 flex justify-center">

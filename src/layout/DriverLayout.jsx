@@ -6,7 +6,7 @@ import { useUserProfile } from "../lib/useUserInitials.js";
 import { useDeactivationGuard } from "../lib/useDeactivationGuard.js";
 import { formatCutoff } from "../lib/deactivation.js";
 
-export const driverModules = [
+const driverModules = [
   {
     label: "Deliveries",
     path: "/driver/trips",

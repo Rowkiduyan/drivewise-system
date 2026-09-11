@@ -99,8 +99,14 @@ export default function AddTruckModal({
     }
   }, [validationToast]);
 
-  // Reset form when modal opens
-
+  // Reset form when modal opens. Not converted to a render-time state
+  // adjustment (unlike similar "reset on open" cases elsewhere in this
+  // codebase) because this effect also starts a real async fetchDevices()
+  // side effect as part of the same reset -- doing that directly during
+  // render would violate render purity, and splitting the fetch from the
+  // form reset risks a timing/race regression in a form with substantial
+  // field/mode branching. This is a real synchronize-with-external-event
+  // effect (modal opening), the correct and intentional use of useEffect.
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -117,6 +123,7 @@ export default function AddTruckModal({
       const modelInOptions = INITIAL_MODEL_OPTIONS.some(
         (m) => m.toLowerCase() === normalizedModel.toLowerCase(),
       );
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setFormData({
         plate_number: initialData.plate_number || "",
         // If the brand exists in the predefined options, use it; otherwise set to "Custom"

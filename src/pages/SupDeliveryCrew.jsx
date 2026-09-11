@@ -59,15 +59,15 @@ function mapCrewRow(row) {
     position: row.role,
     clientSpecialties: row.client_specialties || [],
     workingDays: row.working_days || [],
-    contactNumber: row.contact_number || "—",
-    employeeId: row.record_id || "—",
+    contactNumber: row.contact_number || "",
+    employeeId: row.record_id || "",
     birthday: birthDate
       ? birthDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" })
       : null,
     age: birthDate ? getAgeFromBirthday(birthDate) : null,
     dateJoined: row.created_at
       ? new Date(row.created_at).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: MANILA_TIMEZONE })
-      : "—",
+      : "",
     personalEmail: row.email || "",
     workEmail: row.login_email || "",
     weeklyPerformance: null,
@@ -121,7 +121,7 @@ function getPerformanceTier(score) {
 
 function PerformanceBadge({ score }) {
   if (score == null) {
-    return <span className="text-xs text-slate-300">—</span>;
+    return null;
   }
 
   const tier = getPerformanceTier(score);
@@ -740,7 +740,7 @@ function SupDeliveryCrew() {
                           )}
                         </td>
                         <td className="px-5 py-2.5 text-slate-700">
-                          {crew.assignedDriver ? crew.assignedDriver.contactNumber : "—"}
+                          {crew.assignedDriver ? crew.assignedDriver.contactNumber : ""}
                         </td>
                         <td className="px-5 py-2.5">
                           <StatusBadge status={crew.status} />
@@ -818,7 +818,7 @@ function SupDeliveryCrew() {
                           {crew.clientSpecialties.join(", ")}
                         </td>
                         <td className="px-5 py-2.5 text-slate-700">
-                          {formatWorkingDays(crew.workingDays) || "—"}
+                          {formatWorkingDays(crew.workingDays) || ""}
                         </td>
                         <td className="px-5 py-2.5 text-slate-700">{crew.contactNumber}</td>
                         <td className="px-5 py-2.5">

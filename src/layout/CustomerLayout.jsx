@@ -5,7 +5,7 @@ import { useUserProfile } from "../lib/useUserInitials.js";
 import { useDeactivationGuard } from "../lib/useDeactivationGuard.js";
 import { formatCutoff } from "../lib/deactivation.js";
 
-export const clientModules = [
+const clientModules = [
   { label: "Home", path: "/customer/home", description: "Customer overview" },
   {
     label: "Deliveries",

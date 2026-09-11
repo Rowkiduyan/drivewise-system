@@ -5,6 +5,16 @@ import { supabase } from "../lib/supabaseClient.js";
 import { cropImageToSquareBase64 } from "../lib/profilePicture.js";
 import WorkingDaysEditor from "../components/WorkingDaysEditor.jsx";
 
+function getCachedHelperProfile() {
+  try {
+    const cached = sessionStorage.getItem("helperProfile");
+    return cached ? JSON.parse(cached) : null;
+  } catch (e) {
+    console.warn("Failed to parse cached helper profile", e);
+    return null;
+  }
+}
+
 function getInitials(fullName) {
   const parts = fullName.trim().split(" ");
   const first = parts[0]?.charAt(0) || "";
@@ -140,9 +150,14 @@ function HelperProfile() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [formError, setFormError] = useState("");
-  const [helper, setHelper] = useState(null);
+  // Lazy initializers, not an effect -- reading the cached profile from
+  // sessionStorage is a synchronous, mount-time-only read, so it seeds
+  // initial state directly rather than via a setState call in an effect.
+  const [helper, setHelper] = useState(() => getCachedHelperProfile());
   const [profileError, setProfileError] = useState("");
-  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(
+    () => getCachedHelperProfile() == null,
+  );
   const [pictureError, setPictureError] = useState("");
   const [isUpdatingPicture, setIsUpdatingPicture] = useState(false);
   // Toast state for success/error messages
@@ -152,20 +167,10 @@ function HelperProfile() {
     useState(false);
 
   useEffect(() => {
-    // Load cached profile if available
-    const cached = sessionStorage.getItem("helperProfile");
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        setHelper(parsed);
-        setIsLoadingProfile(false);
-      } catch (e) {
-        console.warn("Failed to parse cached helper profile", e);
-        setIsLoadingProfile(true);
-      }
-    }
-
-    // Always fetch fresh data in background to keep UI up‑to‑date
+    // Always fetch fresh data in background to keep UI up‑to‑date. The
+    // cached-profile seed above is a synchronous lazy initializer, not part
+    // of this effect -- this is a real async fetch (legitimate use of an
+    // effect), not derived state.
     let isCurrent = true;
     const loadProfile = async () => {
       const { data, error } = await supabase.functions.invoke("admin-users", {

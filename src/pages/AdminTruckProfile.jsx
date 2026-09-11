@@ -403,7 +403,16 @@ function AdminTruckProfile() {
   // - If an end date is provided → Completed
   // - Else if start date is today or earlier → In Progress
   // - Otherwise → Scheduled
-  useEffect(() => {
+  // Adjusted during render (React's own recommended pattern for "reset
+  // state when a value changes") instead of in an effect -- logStatus is
+  // still user-overridable via the Status <select> below (line ~1307), so
+  // this must only re-suggest a value when logDate/logEndDate actually
+  // change, not on every render (which `autoStatusKey` guards, mirroring
+  // the effect's own [logDate, logEndDate] dependency list).
+  const [autoStatusKey, setAutoStatusKey] = useState(null);
+  const statusKey = `${logDate}|${logEndDate}`;
+  if (autoStatusKey !== statusKey) {
+    setAutoStatusKey(statusKey);
     const today = new Date().toISOString().split("T")[0];
     // New status rules:
     // 1. If an end date exists and is **before** today → Completed.
@@ -416,13 +425,18 @@ function AdminTruckProfile() {
     } else {
       setLogStatus("In Progress");
     }
-  }, [logDate, logEndDate]);
-  // When the “Add a Maintenance Log” modal opens, pre‑fill the shop field
-  useEffect(() => {
-    if (isLogMaintenanceModalOpen) {
-      setLogShop("In-House");
-    }
-  }, [isLogMaintenanceModalOpen]);
+  }
+  // When the "Add a Maintenance Log" modal opens, pre‑fill the shop field.
+  // Same render-time-adjust pattern -- logShop is user-editable via its own
+  // input (line ~1295) once the modal is open, so this must only fire once
+  // per open, not every render.
+  const [shopPrefilledFor, setShopPrefilledFor] = useState(false);
+  if (isLogMaintenanceModalOpen && !shopPrefilledFor) {
+    setShopPrefilledFor(true);
+    setLogShop("In-House");
+  } else if (!isLogMaintenanceModalOpen && shopPrefilledFor) {
+    setShopPrefilledFor(false);
+  }
   // Fetch the latest truck data after an edit. Uses plate_number as identifier.
   const fetchTruck = async () => {
     if (!truck?.plate_number) return;
@@ -628,7 +642,16 @@ function AdminTruckProfile() {
     setMaintenanceLoading(false);
   };
   useEffect(() => {
+    // loadMaintenanceRecords is a real async fetch from Supabase, not
+    // derived state -- this is the correct, intentional use of an effect
+    // (synchronizing local state with an external data source when `truck`
+    // changes). `loadMaintenanceRecords` itself is deliberately omitted
+    // from deps -- it's a plain function redefined every render, not
+    // memoized; including it would refire this effect every render instead
+    // of only when `truck` changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadMaintenanceRecords();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [truck]);
 
   // Reset mileage to 0 after a maintenance record is marked Completed
@@ -663,6 +686,10 @@ function AdminTruckProfile() {
           }
         });
     }
+    // truck deliberately omitted -- this effect's own body calls setTruck
+    // (via the refetch above), so including truck would refire this effect
+    // on its own update, risking a loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [maintenanceRecords]);
 
   // Auto‑complete any "In Progress" maintenance record when the truck's overall status changes
@@ -716,6 +743,13 @@ function AdminTruckProfile() {
             });
         }
       });
+    // truck (the whole object) and loadMaintenanceRecords deliberately
+    // omitted -- this effect's own body calls setTruck/loadMaintenanceRecords,
+    // so including them (a plain function redefined every render, and an
+    // object this same effect updates) would refire this effect on its own
+    // update, risking a loop. truck?.status alone is enough to react to the
+    // one transition this effect cares about.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [truck?.status, maintenanceRecords]);
 
   const filteredTrips =
