@@ -37,6 +37,7 @@ import {
 } from "./DriverDeliveries.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { resizeProofPhotoToBase64 } from "../lib/proofPhoto.js";
+import { fetchRerouteEvents } from "../lib/suggestedRoute.js";
 import { verifyProofPhotoHasPerson } from "../lib/proofPhotoVerification.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
 import { useResolvedStopCoords } from "../lib/forwardGeocode.js";
@@ -903,7 +904,7 @@ function DeliveryDetailView({
       const { data: sessionRows } = await supabase
         .from("sessions")
         .select(
-          "session_id, start_time, end_time, total_alerts, session_duration",
+          "session_id, start_time, end_time, total_alerts, session_duration, is_return_trip",
         )
         .eq("delivery_request_id", delivery.id)
         .order("start_time", { ascending: true });
@@ -916,18 +917,28 @@ function DeliveryDetailView({
       }
 
       const sessionIds = sessions.map((session) => session.session_id);
-      const [{ data: alertRows }, { data: gpsRows }] = await Promise.all([
-        supabase
-          .from("alerts")
-          .select("id, created_at, event_type, duration, session_id")
-          .in("session_id", sessionIds)
-          .order("created_at", { ascending: true }),
-        supabase
-          .from("gps_logs")
-          .select("session_id, latitude, longitude, timestamp")
-          .in("session_id", sessionIds)
-          .order("timestamp", { ascending: true }),
-      ]);
+      const [{ data: alertRows }, { data: gpsRows }, rerouteRows] =
+        await Promise.all([
+          supabase
+            .from("alerts")
+            .select("id, created_at, event_type, duration, session_id")
+            .in("session_id", sessionIds)
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("gps_logs")
+            .select("session_id, latitude, longitude, timestamp")
+            .in("session_id", sessionIds)
+            .order("timestamp", { ascending: true }),
+          // Auto-reroutes LiveNavigationMap already computed mid-trip -- see
+          // buildRealDriverTripReport's rerouteSegments/rerouteEvents. Helper
+          // shares the exact same CompletedDeliveryReport/report-building
+          // call as DriverDeliveries.jsx (not a per-portal duplicate like
+          // SupDeliveries.jsx's own copy), so it needs the same fetch or the
+          // Helper's view of this trip would show a different (unfairly
+          // harsher) verdict than the Driver's/Supervisor's for identical
+          // data.
+          fetchRerouteEvents(delivery.id),
+        ]);
       if (!isMounted) return;
 
       setRealReport(
@@ -936,6 +947,7 @@ function DeliveryDetailView({
           sessions,
           alertRows || [],
           gpsRows || [],
+          rerouteRows,
         ),
       );
     }
@@ -1154,6 +1166,7 @@ function DeliveryDetailView({
                     delivery={delivery}
                     hideBehaviorTab
                     theme="teal"
+                    canTagRerouteReason={false}
                   />
                 </div>
               )}

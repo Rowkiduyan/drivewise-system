@@ -58,7 +58,11 @@ import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
 import SuggestedRouteMap from "../components/SuggestedRouteMap.jsx";
-import { classifyRouteDeviation } from "../lib/suggestedRoute.js";
+import {
+  classifyRouteDeviation,
+  fetchRerouteEvents,
+} from "../lib/suggestedRoute.js";
+import { REROUTE_REASON_LABELS } from "../lib/rerouteReasons.js";
 import {
   formatManilaTimestamp,
   formatManilaDateTime,
@@ -1557,14 +1561,25 @@ function isUnreasonablyLongPause(pausedAt, resumedAt, durationSec) {
 // components below for exactly which UI blocks that gates. `analysis` is
 // still a real paragraph, just computed/templated from the actual numbers
 // here rather than an invented narrative.
-function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
+function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs, rerouteEvents = []) {
   if (!sessions.length) return null;
 
   const sorted = [...sessions].sort(
     (a, b) => new Date(a.start_time) - new Date(b.start_time),
   );
   const firstSession = sorted[0];
-  const lastSession = sorted[sorted.length - 1];
+  // 14_RETURN_TRIP_MONITORING.md's automatic return-to-base Session always
+  // sorts last -- using the plain last-by-start-time Session for "when was
+  // this delivery actually completed" (below and in the timeline) would
+  // show when the driver got back to the warehouse instead, once one
+  // exists. Falls back to `sorted`'s own last entry for a delivery with no
+  // return-trip Session at all, so this only changes behavior once a
+  // return leg genuinely exists. totalDurationSec below intentionally
+  // keeps summing every Session, return leg included -- see its own
+  // "keeps including unfiltered" precedent in DriverDeliveries.jsx's
+  // identical buildRealDriverTripReport.
+  const mainSessions = sorted.filter((s) => !s.is_return_trip);
+  const lastMainSession = mainSessions[mainSessions.length - 1] || sorted[sorted.length - 1];
   const totalDurationSec = sorted.reduce(
     (sum, s) => sum + (s.session_duration || 0),
     0,
@@ -1643,7 +1658,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
     })),
     {
       label: "Delivery Completed",
-      time: formatAlertTimestamp(delivery.completedAt || lastSession.end_time),
+      time: formatAlertTimestamp(delivery.completedAt || lastMainSession.end_time),
       completed: true,
     },
   ].filter(Boolean);
@@ -1761,7 +1776,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
   const deliveredAt =
     dropoffEvents.length > 0
       ? dropoffEvents[dropoffEvents.length - 1].at
-      : delivery.completedAt || lastSession.end_time;
+      : delivery.completedAt || lastMainSession.end_time;
   const totalTripDurationSec = Math.max(
     0,
     (new Date(deliveredAt) - new Date(firstSession.start_time)) / 1000,
@@ -1867,6 +1882,16 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
   const suggestedRoute = Array.isArray(delivery.suggestedRoute)
     ? delivery.suggestedRoute
     : null;
+  // Computed unconditionally (unlike routeDeviation below) -- a reroute can
+  // get logged and stays visible even for the rare delivery with no saved
+  // suggested_route to compare against -- LiveNavigationMap still navigates
+  // and reroutes on deviation either way. Mirrors DriverDeliveries.jsx's
+  // identical fix, per-portal convention.
+  const rerouteEventsForDisplay = rerouteEvents.map((r) => ({
+    id: r.id,
+    occurredAt: r.occurred_at,
+    reason: r.reason,
+  }));
   let routeDeviation = null;
   if (suggestedRoute && suggestedRoute.length > 0) {
     // Leg 0 is Warehouse -> Pickup, matching NAV_LEG_COLORS' own documented
@@ -1896,7 +1921,26 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
       }
       return sum + legMeters;
     }, 0);
-    const deviationMeters = Math.abs(totalMeters - plannedMeters);
+    // Route Deviation compares against suggested_route, which only ever
+    // covers the one-way Warehouse -> Pickup -> Dropoff/Stops trip -- the
+    // return-to-base leg's GPS must be excluded here specifically (unlike
+    // totalMeters above, which stays unfiltered for the Trip tab's own
+    // "distance driven today" figure), or every delivery with a return-trip
+    // Session would show a huge fake deviation (14_RETURN_TRIP_MONITORING.md).
+    const mainTotalMeters = mainSessions.reduce((sum, s) => {
+      const points = bySessionId[s.session_id] || [];
+      let legMeters = 0;
+      for (let i = 1; i < points.length; i += 1) {
+        legMeters += distanceMeters(
+          points[i - 1].latitude,
+          points[i - 1].longitude,
+          points[i].latitude,
+          points[i].longitude,
+        );
+      }
+      return sum + legMeters;
+    }, 0);
+    const deviationMeters = Math.abs(mainTotalMeters - plannedMeters);
     // Derived from the legs' own real (geocoded) path points, not
     // getPickupCoords/getDropoffCoords -- those only resolve a "lat, lng"-
     // shaped fixture value via parseCoords and return null for a real,
@@ -1926,14 +1970,18 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
     // this function). `actualPointsWithTime` mirrors `actualRoute` below but
     // keeps timestamps, which the classifier needs for dwell detection and
     // `RouteDeviationMap`'s flattened-array shape doesn't carry.
-    const actualPointsWithTime = sorted.flatMap(
+    const actualPointsWithTime = mainSessions.flatMap(
       (s) => bySessionId[s.session_id] || [],
     );
     const classification = classifyRouteDeviation({
       plannedPoints: plannedLegs.flatMap((leg) => leg.path),
       actualPoints: actualPointsWithTime,
       plannedMeters,
-      totalMeters,
+      totalMeters: mainTotalMeters,
+      rerouteSegments: rerouteEvents.map((r) => ({
+        path: r.new_path,
+        occurredAt: r.occurred_at,
+      })),
     });
 
     let aiVerdict = null;
@@ -1944,7 +1992,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
       aiVerdict = classification.verdict;
       aiVerdictTone = classification.tone;
       const roundedOffset = Math.round(classification.maxOffsetMeters);
-      const distanceSavedKm = ((plannedMeters - totalMeters) / 1000).toFixed(1);
+      const distanceSavedKm = ((plannedMeters - mainTotalMeters) / 1000).toFixed(1);
       if (classification.verdict === "Beneficial") {
         aiSummary = `Actual distance was ${distanceSavedKm}km shorter than the planned route — likely a more efficient path.`;
       } else if (classification.verdict === "Reasonable") {
@@ -1968,7 +2016,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
 
     routeDeviation = {
       plannedLegs,
-      actualRoute: sorted.flatMap((s) =>
+      actualRoute: mainSessions.flatMap((s) =>
         (bySessionId[s.session_id] || []).map((p) => [p.latitude, p.longitude]),
       ),
       pickupCoords: pickupPoint
@@ -1980,7 +2028,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
       plannedDistance:
         plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : "",
       actualDistance:
-        totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "",
+        mainTotalMeters > 0 ? `${(mainTotalMeters / 1000).toFixed(1)} km` : "",
       deviationDistance: `${(deviationMeters / 1000).toFixed(1)} km`,
       deviationPercent,
       aiVerdict,
@@ -2027,11 +2075,19 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs) {
           s.total_alerts ??
           alerts.filter((a) => a.session_id === s.session_id).length,
         duration: s.session_duration,
+        // 14_RETURN_TRIP_MONITORING.md: labeled distinctly in this
+        // per-session breakdown so it doesn't read as another delivery leg.
+        label: s.is_return_trip ? "Return to Base" : null,
       })),
       analysis,
     },
     delivery: { totalAlerts },
     routeDeviation,
+    // Top-level, not nested under routeDeviation -- see
+    // rerouteEventsForDisplay's own comment above for why this stays
+    // visible even when there's no suggested_route to build a
+    // routeDeviation from.
+    rerouteEvents: rerouteEventsForDisplay,
   };
 }
 
@@ -3241,6 +3297,11 @@ function DriveWiseAnalysisTab({ report }) {
           {b.sessions.map((session, i) => (
             <div key={i} className="flex items-center justify-between text-sm">
               <span className="text-slate-600">
+                {session.label && (
+                  <span className="mr-1.5 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700">
+                    {session.label}
+                  </span>
+                )}
                 {formatAlertTimestamp(session.start)} —{" "}
                 {formatAlertTimestamp(session.end)}
               </span>
@@ -3371,6 +3432,19 @@ TONE_STYLES.emerald = TONE_STYLES.green;
 
 function RouteDeviationTab({ report }) {
   const r = report.routeDeviation;
+  // `r` is null for a delivery with no saved suggested_route to compare
+  // against -- can still happen alongside real, logged `report.rerouteEvents`
+  // (LiveNavigationMap navigates/reroutes regardless of whether a
+  // suggested_route was ever saved), so this tab renders just that list
+  // below rather than nothing at all. Mirrors DriverDeliveries.jsx's
+  // identical fix.
+  if (!r) {
+    return (
+      <div className="space-y-4">
+        <RerouteEventsSection rerouteEvents={report.rerouteEvents} />
+      </div>
+    );
+  }
   // Two shapes feed this tab: the legacy mock fixtures (`planned`/`actual`,
   // flat single-leg arrays), and the real one built by
   // buildRealTripAndBehaviorReport (`plannedLegs`/`actualRoute`/
@@ -3504,7 +3578,7 @@ function RouteDeviationTab({ report }) {
                 className="inline-block h-3 w-6 rounded-sm"
                 style={{ background: leg.color }}
               />
-              <span className="text-slate-600">Planned — Leg {i + 1}</span>
+              <span className="text-slate-600">Planned — Route {i + 1}</span>
             </div>
           ))
         ) : (
@@ -3527,6 +3601,46 @@ function RouteDeviationTab({ report }) {
           <MapPin className="h-3 w-3" />S = Start, E = End
         </span>
       </div>
+
+      <RerouteEventsSection rerouteEvents={report.rerouteEvents} />
+    </div>
+  );
+}
+
+// Read-only list of auto-reroutes for this trip -- only the Driver can
+// actually tag a reason (DriverDeliveries.jsx's own widget); this shows
+// whatever's there. Renders nothing when there are none. Factored out of
+// RouteDeviationTab so it can render both when a suggested_route comparison
+// exists and when it doesn't (see RouteDeviationTab's own early-return).
+function RerouteEventsSection({ rerouteEvents }) {
+  if (!rerouteEvents?.length) return null;
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+        Route Changes On This Trip
+      </p>
+      <p className="mb-3 text-xs text-slate-500">
+        The app automatically recalculated the driver's route at these
+        points — already excluded from the analysis above. Read-only; the
+        reason (if any) is optionally added by the driver themselves.
+      </p>
+      <div className="space-y-2">
+        {rerouteEvents.map((event) => (
+          <div
+            key={event.id}
+            className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white p-3"
+          >
+            <p className="text-xs text-slate-500">
+              Recalculated at {formatAlertTimestamp(event.occurredAt)}
+            </p>
+            <p className="text-xs font-semibold text-slate-700">
+              {event.reason
+                ? REROUTE_REASON_LABELS[event.reason] || event.reason
+                : "No reason given"}
+            </p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -3547,7 +3661,7 @@ function CompletedDeliveryReport({ delivery }) {
       const { data: sessionRows } = await supabase
         .from("sessions")
         .select(
-          "session_id, start_time, end_time, total_alerts, session_duration",
+          "session_id, start_time, end_time, total_alerts, session_duration, is_return_trip",
         )
         .eq("delivery_request_id", delivery.id)
         .order("start_time", { ascending: true });
@@ -3558,27 +3672,34 @@ function CompletedDeliveryReport({ delivery }) {
         return;
       }
       const sessionIds = sessions.map((s) => s.session_id);
-      const [{ data: alertRows }, { data: gpsRows }, { data: routeRow }] =
-        await Promise.all([
-          supabase
-            .from("alerts")
-            .select("id, created_at, event_type, duration, session_id")
-            .in("session_id", sessionIds)
-            .order("created_at", { ascending: true }),
-          supabase
-            .from("gps_logs")
-            .select("session_id, latitude, longitude, timestamp")
-            .in("session_id", sessionIds)
-            .order("timestamp", { ascending: true }),
-          // Lazy-loaded here instead of in the bulk list query (2026-09-09
-          // perf fix, see loadInbox) -- this is the one place that actually
-          // needs it, for this one delivery only.
-          supabase
-            .from("delivery_requests")
-            .select("suggested_route")
-            .eq("id", delivery.id)
-            .maybeSingle(),
-        ]);
+      const [
+        { data: alertRows },
+        { data: gpsRows },
+        { data: routeRow },
+        rerouteRows,
+      ] = await Promise.all([
+        supabase
+          .from("alerts")
+          .select("id, created_at, event_type, duration, session_id")
+          .in("session_id", sessionIds)
+          .order("created_at", { ascending: true }),
+        supabase
+          .from("gps_logs")
+          .select("session_id, latitude, longitude, timestamp")
+          .in("session_id", sessionIds)
+          .order("timestamp", { ascending: true }),
+        // Lazy-loaded here instead of in the bulk list query (2026-09-09
+        // perf fix, see loadInbox) -- this is the one place that actually
+        // needs it, for this one delivery only.
+        supabase
+          .from("delivery_requests")
+          .select("suggested_route")
+          .eq("id", delivery.id)
+          .maybeSingle(),
+        // Auto-reroutes LiveNavigationMap already computed mid-trip -- see
+        // buildRealTripAndBehaviorReport's rerouteSegments/rerouteEvents.
+        fetchRerouteEvents(delivery.id),
+      ]);
       if (!isMounted) return;
       setRealReport(
         buildRealTripAndBehaviorReport(
@@ -3591,6 +3712,7 @@ function CompletedDeliveryReport({ delivery }) {
           sessions,
           alertRows || [],
           gpsRows || [],
+          rerouteRows,
         ),
       );
     }
@@ -3609,16 +3731,18 @@ function CompletedDeliveryReport({ delivery }) {
   const mockReport = completed_delivery_reports[delivery.id];
   const report = realReport || mockReport;
   // Telemetry tabs (trip/behavior) apply whenever a report (real or mock)
-  // exists. Route Deviation Report needs a persisted planned route
+  // exists. Route Deviation Report needs either a persisted planned route
   // (11_ROUTE_COMPARISON.md, built 2026-08-14) -- shows for a real delivery
   // once its Driver-side pre-trip screen has saved one (see
   // buildRealTripAndBehaviorReport's routeDeviation), and still shows for
-  // the legacy mock reports that carry their own routeDeviation field.
-  // Either way, gated on the same `Boolean(report.routeDeviation)` check.
+  // the legacy mock reports that carry their own routeDeviation field -- OR
+  // at least a logged reroute to show read-only, which can exist even
+  // without a saved suggested_route (mirrors DriverDeliveries.jsx's
+  // identical fix).
+  const hasRouteTabContent =
+    Boolean(report?.routeDeviation) || report?.rerouteEvents?.length > 0;
   const tabs = report
-    ? REPORT_TABS.filter(
-        (t) => t.id !== "route" || Boolean(report.routeDeviation),
-      )
+    ? REPORT_TABS.filter((t) => t.id !== "route" || hasRouteTabContent)
     : REPORT_TABS.filter((t) => t.id === "details" || t.id === "quotation");
 
   return (
@@ -3679,7 +3803,7 @@ function CompletedDeliveryReport({ delivery }) {
         {report && reportTab === "behavior" && (
           <DriveWiseAnalysisTab report={report} />
         )}
-        {report?.routeDeviation && reportTab === "route" && (
+        {hasRouteTabContent && reportTab === "route" && (
           <RouteDeviationTab report={report} />
         )}
       </div>

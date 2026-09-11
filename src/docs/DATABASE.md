@@ -149,6 +149,7 @@
     - device_id (text, nullable) — references `devices.device_id`. Added 2026-08-08.
     - status (text, nullable) — e.g. `Active`/`Completed`. Added 2026-08-08.
     - rest_stop_recommended (boolean, not null, default false) — **deployed 2026-09-08** (`supabase/migrations/20260908120100_sessions_rest_stop_recommended.sql`). Whether the rest-stop-recommendation banner (`DriverDeliveries.jsx`, `IMPLEMENTATION/12_REST_STOP_RECOMMENDATIONS.md` — previously ephemeral, client-side-only, deliberately never persisted) was showing at the moment this session was closed by Pause Trip. Written by `driver-trip`'s `pause-trip` action from an optional `restStopRecommended` field in the request body; defaults `false` for every session closed before this date or by `end-trip` (only `pause-trip` sets it). Backs the Supervisor's Trip Details "Rest stop recommended" badge per pause.
+    - is_return_trip (boolean, not null, default false) — **deployed 2026-09-11** (`supabase/migrations/20260911150000_sessions_is_return_trip.sql`, `IMPLEMENTATION/14_RETURN_TRIP_MONITORING.md`). Marks the automatic "drive back to the Marvel warehouse" Session `driver-trip`'s `end-trip` opens the instant a delivery is marked DELIVERED, on the same `delivery_request_id`/`driver_id`/`truck_plate`/`device_id` as the Session that just closed — keeps the Pi's heartbeat-gated drowsiness detection and both GPS ingestion paths alive for the return leg with zero Raspberry Pi changes (`device-heartbeat` only ever checks for *any* Active session on the device). Auto-closed by `log-position`/`gps-upload` once GPS lands within ~150m of the fixed warehouse coordinates, or after a 3-hour safety-net timeout, whichever comes first; also force-closed by `start-trip` if the driver starts a genuinely new trip first. A manual `end-return-trip` action exists as a driver-facing fallback for the rare case the geofence never fires. Distance driven is summed into `trucks.current_mileage` the same way End Trip/Pause Trip already do. Excluded from the Route Deviation comparison (`11_ROUTE_COMPARISON.md`'s `classifyRouteDeviation`), which only ever covers the one-way Warehouse → Pickup → Dropoff/Stops `suggested_route` — everywhere else that aggregates a delivery's Sessions (Trip/Behavior tabs, total alerts/distance, drowsiness history) keeps including it unfiltered, labeled "Return to Base" in the per-session breakdown.
 
     A partial unique index (`sessions_one_active_per_device`) enforces at most one `status = 'Active'` session per `device_id` — the "one active session per device" rule from `PROJECT_CONSTRAINTS.md` is now DB-enforced, not just an application-level rule.
 
@@ -240,6 +241,36 @@
 
     ### Relationships
 
+    - `session_id` references `sessions.session_id`, nullable.
+
+    ---
+
+    ## reroute_events
+
+    ### Purpose
+
+    Persists every automatic mid-trip reroute `LiveNavigationMap` (`DriverDeliveries.jsx`) already computes on its own the moment a driver's live GPS position reads more than ~100m off the planned `suggested_route` polyline (`NAV_REROUTE_TOLERANCE_DEGREES` — the reroute itself is unchanged, automatic, no driver interaction; this table only records that it happened). **Added 2026-09-11**, per explicit user decision: the customer-booked `suggested_route` stays the trip's authoritative plan, but the post-trip "Route Deviation" verdict (`classifyRouteDeviation`, `lib/suggestedRoute.js`) needs a way to tell "the app itself sent the driver on this path" apart from unexplained deviation — without this table, a driver who followed every instruction the app gave them could be unfairly flagged "Potentially Problematic" purely because the app's own recomputed route ended up far from the original polyline.
+
+    ### Key Fields
+
+    - id (bigint, Primary Key, identity)
+    - delivery_request_id (text, not null) — references `delivery_requests.id`. Always set, same "attributable to the Trip regardless of Session state" reasoning as `gps_logs.delivery_request_id`.
+    - session_id (text, nullable) — references `sessions.session_id`. Resolved the same way `log-position` does (Active session, or null).
+    - occurred_at (timestamptz, not null, default `now()`) — server-stamped when `driver-trip`'s `log-reroute` action inserts the row, not client-supplied.
+    - reason (text, nullable) — one of `road_closed`/`accident`/`wrong_turn`/`other`, enforced at the `driver-trip` application layer (no DB check constraint, matching `alerts.event_type`'s existing precedent). Null until the driver, optionally, tags it later while reviewing their own completed trip's report (`CompletedDeliveryReport`'s reroute-reason widget, `tag-reroute-reason` action) — **deliberately never asked mid-drive**, per explicit user decision that nothing about a route deviation should require driver interaction while actually driving.
+    - new_path (jsonb, not null) — `[[lat,lng], ...]`, the same shape as one `suggested_route` leg's `path`, built via the shared `flattenLegPath` helper (`lib/suggestedRoute.js`) also used by `computeSuggestedRoute`.
+    - created_at (timestamptz, not null, default `now()`).
+
+    ### Grants
+
+    - `service_role`: `select`, `insert`, `update` — `log-reroute` inserts, `tag-reroute-reason` updates. Deliberately no `delete` — nothing in the app ever needs to remove a row here.
+    - `authenticated`: `select` — lets `DriverDeliveries.jsx`, `HelperDeliveries.jsx` (via its shared reuse of `DriverDeliveries.jsx`'s report-building/rendering, not a per-portal duplicate), and `SupDeliveries.jsx` all read these rows via the shared `fetchRerouteEvents(deliveryRequestId)` helper (`lib/suggestedRoute.js`) straight into their own report builders, same pattern as `gps_logs`/`alerts`.
+    - RLS enabled, with a permissive `using (true)` select policy for `authenticated`, matching `gps_logs`'s own policy.
+    - **Follow-up 2026-09-11** (`20260911130000_reroute_events_revoke_defaults.sql`): explicit `revoke all on public.reroute_events from anon, authenticated` added before re-granting the above — `SUPABASE_GOTCHAS.md` #8's "new tables auto-inherit anon/authenticated baseline privileges" gap, this time caught in code review rather than a later Advisor audit. RLS had already been denying anything not covered by its one policy in the interim, so this wasn't a live hole, just an explicit-vs-implicit hardening matching this project's own established convention.
+
+    ### Relationships
+
+    - `delivery_request_id` references `delivery_requests.id`, not null.
     - `session_id` references `sessions.session_id`, nullable.
 
     ---

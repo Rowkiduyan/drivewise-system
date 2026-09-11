@@ -13,6 +13,8 @@
 // read-only renderer -- duplicating it would multiply the bug surface for
 // a future stop-ordering fix.
 
+import { supabase } from "./supabaseClient.js";
+
 // Fixed depot/warehouse address every Trip starts from, per user
 // instruction -- every whole-trip route leads with this Warehouse -> Pickup
 // leg, matching the real GPS trace a Trip actually produces. Kept as a plain
@@ -25,6 +27,15 @@ export const WAREHOUSE_ADDRESS =
 // a DirectionsService-geocodable string) should use this instead of a
 // second magic-number literal.
 export const WAREHOUSE_COORDS = { lat: 14.57147, lng: 121.08762 };
+
+// Flattens one DirectionsResult leg's per-step paths into [[lat,lng],...] --
+// denser than `overview_path`. Shared by computeSuggestedRoute (per-leg,
+// below) and LiveNavigationMap's reroute logging (DriverDeliveries.jsx,
+// concatenated across all legs of a fresh reroute) -- both need the exact
+// same Google Maps JS API step-path unwrapping.
+export function flattenLegPath(leg) {
+  return leg.steps.flatMap((step) => step.path.map((p) => [p.lat(), p.lng()]));
+}
 
 // Plain-JS haversine, no google.maps dependency -- mirrors SupDashboard.jsx's
 // own distanceMeters helper (kept as a separate small copy there, same
@@ -87,38 +98,61 @@ const DWELL_MIN_MINUTES = 5;
 // genuinely different," when the actual distance is longer than planned.
 const REASONABLE_MAX_OFFSET_METERS = 300;
 
+// Minimum distance (meters) from `pt` ([lat,lng]) to any segment of
+// `polyline` ([[lat,lng],...]) -- single-point polylines fall back to a
+// direct point-to-point distance, same special case classifyRouteDeviation
+// always had for `plannedPoints`.
+function minOffsetToPolyline(pt, polyline) {
+  if (!polyline || polyline.length === 0) return Infinity;
+  if (polyline.length === 1) {
+    return distanceMeters(pt[0], pt[1], polyline[0][0], polyline[0][1]);
+  }
+  let min = Infinity;
+  for (let i = 1; i < polyline.length; i += 1) {
+    const d = pointToSegmentMeters(pt, polyline[i - 1], polyline[i]);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
 // `plannedPoints`: flattened [[lat,lng],...] planned polyline (all legs
 // concatenated). `actualPoints`: chronological [{latitude,longitude,
 // timestamp}] GPS trace. `plannedMeters`/`totalMeters`: already-computed
-// trip distances (meters). Returns null when there's nothing to classify.
+// trip distances (meters). `rerouteSegments`: optional array of
+// `{ path: [[lat,lng],...], occurredAt }` -- polylines the app itself
+// auto-computed and sent the driver on mid-trip (LiveNavigationMap's
+// reroute-on-deviation). A point close to one of these is just as
+// legitimately "on plan" as one close to the original `plannedPoints`, so
+// it isn't held against the driver as unexplained deviation -- but only for
+// points recorded at or after that reroute's own `occurredAt`: a reroute
+// can't retroactively excuse an excursion the driver made before the app
+// had even computed that path yet (a real, unrelated deviation that happens
+// to pass near a *later* reroute's route shouldn't get laundered as
+// legitimate just because the two polylines are geometrically close).
+// Returns null when there's nothing to classify.
 export function classifyRouteDeviation({
   plannedPoints,
   actualPoints,
   plannedMeters,
   totalMeters,
+  rerouteSegments = [],
 }) {
   if (!plannedPoints.length || !actualPoints.length) return null;
 
   let maxOffset = 0;
   let maxOffsetPoint = null;
   const offsets = actualPoints.map((pt) => {
+    const ptTime = new Date(pt.timestamp).getTime();
+    const applicablePolylines = [
+      plannedPoints,
+      ...rerouteSegments
+        .filter((r) => !r.occurredAt || new Date(r.occurredAt).getTime() <= ptTime)
+        .map((r) => r.path),
+    ];
     let min = Infinity;
-    if (plannedPoints.length === 1) {
-      min = distanceMeters(
-        pt.latitude,
-        pt.longitude,
-        plannedPoints[0][0],
-        plannedPoints[0][1],
-      );
-    } else {
-      for (let i = 1; i < plannedPoints.length; i += 1) {
-        const d = pointToSegmentMeters(
-          [pt.latitude, pt.longitude],
-          plannedPoints[i - 1],
-          plannedPoints[i],
-        );
-        if (d < min) min = d;
-      }
+    for (const polyline of applicablePolylines) {
+      const d = minOffsetToPolyline([pt.latitude, pt.longitude], polyline);
+      if (d < min) min = d;
     }
     if (min > maxOffset) {
       maxOffset = min;
@@ -209,6 +243,25 @@ export function classifyRouteDeviation({
       : null,
     dwells,
   };
+}
+
+// Fetches every auto-reroute LiveNavigationMap logged for a delivery
+// (DriverDeliveries.jsx's log-reroute), shaped for classifyRouteDeviation's
+// `rerouteSegments` (via `.map((r) => r.new_path)`) and for display
+// (`occurred_at`/`reason`). Shared by all three portals that build a
+// completed-trip report from real data (DriverDeliveries.jsx,
+// HelperDeliveries.jsx via its shared buildRealDriverTripReport/
+// CompletedDeliveryReport, and SupDeliveries.jsx) so the query -- and any
+// future fix to it -- lives in one place rather than three copies that could
+// silently drift and produce a different verdict per portal for the same
+// trip.
+export async function fetchRerouteEvents(deliveryRequestId) {
+  const { data } = await supabase
+    .from("reroute_events")
+    .select("id, occurred_at, reason, new_path")
+    .eq("delivery_request_id", deliveryRequestId)
+    .order("occurred_at", { ascending: true });
+  return data || [];
 }
 
 // Greedy nearest-neighbor ordering for dropoff-type candidates (02B_MULTI_
@@ -314,9 +367,7 @@ export function computeSuggestedRoute({
         const payload = result.routes[0].legs.map((leg, i) => ({
           from: fromKeys[i],
           to: toKeys[i],
-          path: leg.steps.flatMap((step) =>
-            step.path.map((p) => [p.lat(), p.lng()]),
-          ),
+          path: flattenLegPath(leg),
         }));
         resolve({ legs: payload, bounds: result.routes[0].bounds });
       },

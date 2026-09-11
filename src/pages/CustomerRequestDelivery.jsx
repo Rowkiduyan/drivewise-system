@@ -43,6 +43,7 @@ import {
 } from "../lib/deliveryOptions.js";
 import { photonGeocode, useResolvedStopCoords } from "../lib/forwardGeocode.js";
 import { computeSuggestedRoute } from "../lib/suggestedRoute.js";
+import SuggestedRouteMap from "../components/SuggestedRouteMap.jsx";
 import {
   simulateSchedule,
   MAX_TOTAL_DELIVERY_HOURS,
@@ -785,6 +786,14 @@ function CustomerRequestDelivery() {
   const [scheduleResult, setScheduleResult] = useState(null);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleError, setScheduleError] = useState("");
+  // Live preview of the planned route (suggestedRoute.js), shown as a
+  // read-only map beneath the Schedule Summary card -- same "not trusted at
+  // submit time" relationship as scheduleResult above: handleSubmit always
+  // recomputes its own suggestedRoute fresh (see computeSuggestedRoute call
+  // there) rather than reusing this preview.
+  const [routePreview, setRoutePreview] = useState(null);
+  const [routePreviewLoading, setRoutePreviewLoading] = useState(false);
+  const [routePreviewError, setRoutePreviewError] = useState("");
   // Weekdays covered by at least one of this customer's specialized crew
   // members (crew_client_specialties -> crew_availability, via the
   // specialized_crew_available_days() RPC). null = still loading; empty =
@@ -982,6 +991,78 @@ function CustomerRequestDelivery() {
     deliveryMode,
     formData.pickupTime,
     formData.dropoffTime,
+    formData.pickupLat,
+    formData.pickupLng,
+    formData.dropoffLat,
+    formData.dropoffLng,
+    stopLocationsKey,
+    stopCoordsReady,
+  ]);
+
+  // Live-preview route map -- same debounce/preconditions as the schedule
+  // preview above (kept as a separate effect/call per explicit user
+  // decision: two independent DirectionsService requests rather than one
+  // merged call, so a failure in one preview never affects the other).
+  useEffect(() => {
+    let cancelled = false;
+
+    const preconditionsMet =
+      mapsApiLoaded &&
+      window.google &&
+      formData.pickupLat != null &&
+      formData.pickupLng != null &&
+      formData.dropoffLat != null &&
+      formData.dropoffLng != null &&
+      stopCoordsReady &&
+      stopCoordsList.every((c) => c != null);
+
+    if (!preconditionsMet) {
+      Promise.resolve().then(() => {
+        if (cancelled) return;
+        setRoutePreview(null);
+        setRoutePreviewError("");
+        setRoutePreviewLoading(false);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const activeStops = formData.stops.filter((stop) => stop.location.trim());
+
+    const timer = setTimeout(() => {
+      setRoutePreviewLoading(true);
+      setRoutePreviewError("");
+      computeSuggestedRoute({
+        pickupCoords: { lat: formData.pickupLat, lng: formData.pickupLng },
+        pickupAddress: formData.pickupLocation,
+        dropoffCoords: { lat: formData.dropoffLat, lng: formData.dropoffLng },
+        dropoffAddress: formData.dropoffLocation,
+        stops: activeStops.map((stop, i) => ({
+          location: stop.location,
+          coords: stopCoordsList[i],
+        })),
+      })
+        .then(({ legs }) => {
+          if (cancelled) return;
+          setRoutePreview(legs);
+          setRoutePreviewLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setRoutePreview(null);
+          setRoutePreviewError("We couldn't preview the route for these locations.");
+          setRoutePreviewLoading(false);
+        });
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mapsApiLoaded,
     formData.pickupLat,
     formData.pickupLng,
     formData.dropoffLat,
@@ -1868,6 +1949,24 @@ function CustomerRequestDelivery() {
                     </p>
                   )}
                 </div>
+              )}
+
+              {/* Route Plan Viewing -- live preview so the customer can see
+                  the planned route before submitting, purely informational
+                  (never blocks Submit, same as the Schedule Summary above). */}
+              {routePreviewLoading && (
+                <p className="text-xs text-slate-500">
+                  Loading route preview…
+                </p>
+              )}
+              {routePreviewError && (
+                <p className="text-xs text-red-600">{routePreviewError}</p>
+              )}
+              {routePreview && !routePreviewLoading && (
+                <SuggestedRouteMap
+                  suggestedRoute={routePreview}
+                  title="Planned Route Preview"
+                />
               )}
             </div>
 

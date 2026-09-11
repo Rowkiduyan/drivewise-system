@@ -11,12 +11,17 @@
 // Secrets:  SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY
 //           are provided automatically to every deployed Edge Function.
 //
-// Required service_role grants (SUPABASE_GOTCHAS.md #2/#7) â€” already
-// confirmed present as of 2026-08-11 (see DATABASE.md), no changes needed:
+// Required service_role grants (SUPABASE_GOTCHAS.md #2/#7) -- confirmed
+// present as of 2026-08-11 (see DATABASE.md) for select on devices/sessions/
+// delivery_requests and select/insert/update/delete on gps_logs; `update` on
+// sessions and select/update on trucks were added 2026-09-11
+// (14_RETURN_TRIP_MONITORING.md's return-trip auto-close + mileage write,
+// mirroring driver-trip's own grants for the same tables):
 //   grant select on public.devices to service_role;
-//   grant select on public.sessions to service_role;
+//   grant select, update on public.sessions to service_role;
 //   grant select on public.delivery_requests to service_role;
 //   grant select, insert, update, delete on public.gps_logs to service_role;
+//   grant select, update on public.trucks to service_role;
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -25,11 +30,35 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const ENDED_STATUSES = ["DELIVERED", "COMPLETED", "CANCELLED"];
 
+// Phase 14 (14_RETURN_TRIP_MONITORING.md) -- same constants/geofence/timeout
+// rule driver-trip's log-position applies to the phone's GPS path, mirrored
+// here for the Pi's independent path. WAREHOUSE_COORDS duplicated from
+// lib/suggestedRoute.js (server code can't import the frontend's lib/ tree)
+// -- same per-Edge-Function duplication convention already used for
+// distanceKm/haversine below.
+const WAREHOUSE_COORDS = { lat: 14.57147, lng: 121.08762 };
+const RETURN_TRIP_GEOFENCE_METERS = 150;
+const RETURN_TRIP_MAX_MS = 3 * 60 * 60 * 1000;
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+// Haversine distance in kilometers -- duplicated from driver-trip/index.ts,
+// same per-Edge-Function convention as every other small pure helper in
+// this codebase (each function is deployed independently, no shared lib/
+// tree across supabase/functions/*).
+function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 // Must match admin-users' register-device hashing exactly â€” plain
@@ -82,7 +111,7 @@ Deno.serve(async (req) => {
   // there's no Trip in progress at all.
   const { data: latestSession, error: sessionError } = await adminClient
     .from("sessions")
-    .select("session_id, status, delivery_request_id")
+    .select("session_id, status, delivery_request_id, is_return_trip, start_time, truck_plate")
     .eq("device_id", deviceId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -130,6 +159,62 @@ Deno.serve(async (req) => {
 
   if (insertError) {
     return json({ error: insertError.message }, 400);
+  }
+
+  // 14_RETURN_TRIP_MONITORING.md: same auto-close rule driver-trip's
+  // log-position applies to the phone's GPS path, mirrored here since
+  // either can be the live GPS source for the return leg. Best-effort --
+  // never turns a successful upload into an error response.
+  if (latestSession.status === "Active" && latestSession.is_return_trip) {
+    const withinGeofence =
+      distanceKm(latitude, longitude, WAREHOUSE_COORDS.lat, WAREHOUSE_COORDS.lng) * 1000 <=
+      RETURN_TRIP_GEOFENCE_METERS;
+    const timedOut =
+      Date.now() - new Date(latestSession.start_time).getTime() > RETURN_TRIP_MAX_MS;
+
+    if (withinGeofence || timedOut) {
+      const endTime = new Date();
+      const sessionDuration = Math.round(
+        (endTime.getTime() - new Date(latestSession.start_time).getTime()) / 1000,
+      );
+
+      const { data: gpsLogs } = await adminClient
+        .from("gps_logs")
+        .select("latitude, longitude")
+        .eq("session_id", latestSession.session_id)
+        .order("timestamp", { ascending: true });
+
+      let distanceKmDriven = 0;
+      for (let i = 1; i < (gpsLogs?.length ?? 0); i++) {
+        const prev = gpsLogs![i - 1];
+        const curr = gpsLogs![i];
+        distanceKmDriven += distanceKm(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+      }
+
+      if (latestSession.truck_plate && distanceKmDriven > 0) {
+        const { data: truck } = await adminClient
+          .from("trucks")
+          .select("current_mileage")
+          .eq("plate_number", latestSession.truck_plate)
+          .maybeSingle();
+
+        if (truck) {
+          await adminClient
+            .from("trucks")
+            .update({ current_mileage: (truck.current_mileage ?? 0) + distanceKmDriven })
+            .eq("plate_number", latestSession.truck_plate);
+        }
+      }
+
+      await adminClient
+        .from("sessions")
+        .update({
+          end_time: endTime.toISOString(),
+          session_duration: sessionDuration,
+          status: "Completed",
+        })
+        .eq("session_id", latestSession.session_id);
+    }
   }
 
   return json({ ok: true });

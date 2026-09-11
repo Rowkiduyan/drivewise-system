@@ -20,12 +20,23 @@
 //   grant select on public.helper_records to service_role;  -- added 2026-08-12, end-trip is now also Helper-callable
 //   grant select on public.users to service_role;
 //   grant select, insert on public.gps_logs to service_role;  -- select added 2026-08-08 for Pause Trip's mileage sum; insert already present (shared with gps-upload's own service_role client, grants are per-table not per-function) -- used by log-position (2026-09-09) to persist phone GPS
+//   grant select, insert, update on public.reroute_events to service_role;  -- log-reroute inserts, tag-reroute-reason updates
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+// Phase 14 (14_RETURN_TRIP_MONITORING.md): once a delivery is DELIVERED, an
+// automatic "return to base" Session keeps drowsiness/GPS monitoring alive
+// for the drive back. WAREHOUSE_COORDS duplicated from
+// lib/suggestedRoute.js's own WAREHOUSE_ADDRESS geocode -- same
+// per-Edge-Function duplication convention this codebase already uses for
+// distanceKm/haversine (server code can't import the frontend's lib/ tree).
+const WAREHOUSE_COORDS = { lat: 14.57147, lng: 121.08762 };
+const RETURN_TRIP_GEOFENCE_METERS = 150;
+const RETURN_TRIP_MAX_MS = 3 * 60 * 60 * 1000;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -49,6 +60,65 @@ function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Closes an Active is_return_trip Session unconditionally -- shared by the
+// geofence/timeout auto-close (log-position), the forced close when the
+// driver starts a genuinely new trip (start-trip), and the manual "I've
+// Arrived at Base" fallback (end-return-trip). Mirrors end-trip/pause-trip's
+// own distance-from-gps_logs -> add-to-truck-mileage logic exactly -- return
+//-trip distance is real distance driven, so it's summed into
+// trucks.current_mileage the same way (14_RETURN_TRIP_MONITORING.md's
+// truck-mileage open question, defaulted to "yes, count it").
+// deno-lint-ignore no-explicit-any -- matches this file's existing style of
+// leaving the Supabase client itself untyped (no Database generic anywhere
+// in this codebase); re-typing it via `ReturnType<typeof createClient>`
+// here collapses every chained .from()/.select() call below to `never`.
+async function closeReturnTripSession(
+  adminClient: any,
+  session: { session_id: string; start_time: string; truck_plate: string | null },
+) {
+  const endTime = new Date();
+  const sessionDuration = Math.round(
+    (endTime.getTime() - new Date(session.start_time).getTime()) / 1000,
+  );
+
+  const { data: gpsLogs } = await adminClient
+    .from("gps_logs")
+    .select("latitude, longitude")
+    .eq("session_id", session.session_id)
+    .order("timestamp", { ascending: true });
+
+  let distanceKmDriven = 0;
+  for (let i = 1; i < (gpsLogs?.length ?? 0); i++) {
+    const prev = gpsLogs![i - 1];
+    const curr = gpsLogs![i];
+    distanceKmDriven += distanceKm(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+  }
+
+  if (session.truck_plate && distanceKmDriven > 0) {
+    const { data: truck } = await adminClient
+      .from("trucks")
+      .select("current_mileage")
+      .eq("plate_number", session.truck_plate)
+      .maybeSingle();
+
+    if (truck) {
+      await adminClient
+        .from("trucks")
+        .update({ current_mileage: (truck.current_mileage ?? 0) + distanceKmDriven })
+        .eq("plate_number", session.truck_plate);
+    }
+  }
+
+  await adminClient
+    .from("sessions")
+    .update({
+      end_time: endTime.toISOString(),
+      session_duration: sessionDuration,
+      status: "Completed",
+    })
+    .eq("session_id", session.session_id);
 }
 
 Deno.serve(async (req) => {
@@ -174,7 +244,7 @@ Deno.serve(async (req) => {
     // Paused -- attributed via delivery_request_id either way.
     const { data: activeSession } = await adminClient
       .from("sessions")
-      .select("session_id")
+      .select("session_id, is_return_trip, start_time, truck_plate")
       .eq("delivery_request_id", deliveryRequestId)
       .eq("status", "Active")
       .maybeSingle();
@@ -189,6 +259,154 @@ Deno.serve(async (req) => {
 
     if (insertError) {
       return json({ error: insertError.message }, 400);
+    }
+
+    // 14_RETURN_TRIP_MONITORING.md: auto-close the return-trip leg once the
+    // phone's GPS shows the driver back near the warehouse, or it's been
+    // open too long regardless of position (safety net for a driver who
+    // takes a different route home / GPS drift). Never blocks the response
+    // either way -- this is best-effort housekeeping riding on a reading
+    // that already succeeded.
+    if (activeSession?.is_return_trip) {
+      const withinGeofence =
+        distanceKm(lat, lng, WAREHOUSE_COORDS.lat, WAREHOUSE_COORDS.lng) * 1000 <=
+        RETURN_TRIP_GEOFENCE_METERS;
+      const timedOut =
+        Date.now() - new Date(activeSession.start_time).getTime() > RETURN_TRIP_MAX_MS;
+      if (withinGeofence || timedOut) {
+        await closeReturnTripSession(adminClient, {
+          session_id: activeSession.session_id,
+          start_time: activeSession.start_time,
+          truck_plate: activeSession.truck_plate,
+        });
+      }
+    }
+
+    return json({ ok: true });
+  }
+
+  // Persists a reroute LiveNavigationMap already computed automatically the
+  // moment the driver's GPS position read as >100m off the planned
+  // suggested_route polyline (DriverDeliveries.jsx, isLocationOnEdge check) --
+  // this action does not decide whether to reroute, it only records that one
+  // already happened, so the post-trip Route Deviation verdict
+  // (classifyRouteDeviation, suggestedRoute.js) can tell "the app itself gave
+  // the driver this new path" apart from unexplained deviation. `reason` is
+  // optional here (null until the driver later, optionally, tags it via
+  // tag-reroute-reason while reviewing their own completed trip) -- capturing
+  // a reason was deliberately kept out of the live-driving moment entirely.
+  if (action === "log-reroute") {
+    const deliveryRequestId = typeof body.deliveryRequestId === "string" ? body.deliveryRequestId : "";
+    const rawPath = Array.isArray(body.newPath) ? body.newPath : null;
+    // Same Number.isFinite guard log-position already applies to its own
+    // lat/lng -- a malformed point (e.g. a transient Maps SDK NaN) would
+    // otherwise insert silently and then just never match anything in
+    // classifyRouteDeviation's distance math, quietly defeating the whole
+    // point of logging it.
+    const newPath =
+      rawPath &&
+      rawPath.every(
+        (p: unknown) =>
+          Array.isArray(p) &&
+          p.length === 2 &&
+          Number.isFinite(p[0]) &&
+          Number.isFinite(p[1]),
+      )
+        ? rawPath
+        : null;
+
+    if (!deliveryRequestId || !newPath || newPath.length === 0) {
+      return json({ error: "deliveryRequestId and a valid newPath are required" }, 400);
+    }
+
+    // Independent lookups (the session query only needs deliveryRequestId,
+    // not the delivery row) -- run concurrently rather than one-after-the-
+    // other.
+    const [
+      { data: delivery, error: deliveryError },
+      { data: activeSession },
+    ] = await Promise.all([
+      adminClient
+        .from("delivery_requests")
+        .select("id, assigned_driver_id")
+        .eq("id", deliveryRequestId)
+        .maybeSingle(),
+      adminClient
+        .from("sessions")
+        .select("session_id")
+        .eq("delivery_request_id", deliveryRequestId)
+        .eq("status", "Active")
+        .maybeSingle(),
+    ]);
+
+    if (deliveryError || !delivery) {
+      return json({ error: "Delivery request not found" }, 400);
+    }
+
+    if (delivery.assigned_driver_id !== driverId) {
+      return json({ error: "This delivery is not assigned to you" }, 403);
+    }
+
+    const { error: insertError } = await adminClient.from("reroute_events").insert({
+      delivery_request_id: deliveryRequestId,
+      session_id: activeSession?.session_id ?? null,
+      occurred_at: new Date().toISOString(),
+      new_path: newPath,
+    });
+
+    if (insertError) {
+      return json({ error: insertError.message }, 400);
+    }
+
+    return json({ ok: true });
+  }
+
+  // Driver-only, optional, after-the-fact annotation: tags an already-logged
+  // reroute_events row with why it happened (Road closed/Accident/Wrong turn/
+  // Other), from the driver reviewing their own completed (or in-progress)
+  // trip's report -- never surfaced as a live-driving prompt. Ownership is
+  // checked via the row's own delivery_request_id, same pattern as every
+  // other action here.
+  const REROUTE_REASONS = ["road_closed", "accident", "wrong_turn", "other"];
+  if (action === "tag-reroute-reason") {
+    const rerouteEventId = body.rerouteEventId;
+    const reason = typeof body.reason === "string" ? body.reason : "";
+
+    if (rerouteEventId == null || !REROUTE_REASONS.includes(reason)) {
+      return json({ error: "rerouteEventId and a valid reason are required" }, 400);
+    }
+
+    // Single embedded-resource query over the existing FK, instead of
+    // fetching the reroute_events row and its parent delivery_requests row
+    // as two sequential round-trips.
+    const { data: rerouteEvent, error: rerouteEventError } = await adminClient
+      .from("reroute_events")
+      .select("id, delivery_requests(assigned_driver_id)")
+      .eq("id", rerouteEventId)
+      .maybeSingle();
+
+    // Cast needed purely for TS -- this codebase has no generated Database
+    // type, so the untyped client infers a to-one embedded resource as an
+    // array; at runtime PostgREST returns a single object for a to-one FK
+    // (confirmed by this exact access already working correctly here).
+    const rerouteDelivery = rerouteEvent?.delivery_requests as
+      | { assigned_driver_id: string }
+      | undefined;
+    if (
+      rerouteEventError ||
+      !rerouteEvent ||
+      rerouteDelivery?.assigned_driver_id !== driverId
+    ) {
+      return json({ error: "This delivery is not assigned to you" }, 403);
+    }
+
+    const { error: updateError } = await adminClient
+      .from("reroute_events")
+      .update({ reason })
+      .eq("id", rerouteEventId);
+
+    if (updateError) {
+      return json({ error: updateError.message }, 400);
     }
 
     return json({ ok: true });
@@ -226,6 +444,23 @@ Deno.serve(async (req) => {
         { error: `Cannot start trip: delivery status is ${delivery.status}, expected ASSIGNED or OUT_FOR_PICKUP` },
         400,
       );
+    }
+
+    // 14_RETURN_TRIP_MONITORING.md: "starting a real trip ends the
+    // return-trip leg" -- close any still-open return-trip Session for this
+    // driver first, so it doesn't collide with the "one Active trip per
+    // driver" check right below (that check can't itself tell a return-trip
+    // Session apart from a real one).
+    const { data: openReturnSession } = await adminClient
+      .from("sessions")
+      .select("session_id, start_time, truck_plate")
+      .eq("driver_id", driverId)
+      .eq("status", "Active")
+      .eq("is_return_trip", true)
+      .maybeSingle();
+
+    if (openReturnSession) {
+      await closeReturnTripSession(adminClient, openReturnSession);
     }
 
     // One Active trip per driver (PROJECT_CONSTRAINTS.md).
@@ -711,7 +946,76 @@ Deno.serve(async (req) => {
       return json({ error: deliveryUpdateError.message }, 400);
     }
 
+    // 14_RETURN_TRIP_MONITORING.md: fully automatic return-trip monitoring
+    // -- the instant the delivery is DELIVERED, open a new Active Session on
+    // the same device so the Pi's heartbeat-gated detection/vibration/alert
+    // upload (04_DEVICE_BOOT_AND_HEARTBEAT.md) and the phone's own GPS
+    // watch (once the frontend follows this Session, see DriverDeliveries.jsx)
+    // both keep running for the drive back. Best-effort: End Trip's core
+    // job (close the real Session, mark DELIVERED) already succeeded above,
+    // so a failure here is logged, not surfaced as an End Trip error -- the
+    // driver's cargo handoff isn't blocked by this monitoring convenience.
+    {
+      const { error: returnSessionError } = await adminClient.from("sessions").insert({
+        session_id: crypto.randomUUID(),
+        delivery_request_id: deliveryRequestId,
+        driver_id: updatedSession?.driver_id ?? null,
+        truck_plate: updatedSession?.truck_plate ?? session.truck_plate ?? null,
+        device_id: updatedSession?.device_id ?? null,
+        start_time: endTime.toISOString(),
+        status: "Active",
+        is_return_trip: true,
+      });
+      if (returnSessionError) {
+        console.error("Failed to open return-trip session:", returnSessionError.message);
+      }
+    }
+
     return json({ ok: true, session: updatedSession, distanceKm: distanceKmDriven });
+  }
+
+  // Manual fallback for 14_RETURN_TRIP_MONITORING.md's automatic return-trip
+  // Session, for the rare case the geofence never fires (driver parks just
+  // outside the ~150m radius, etc.) -- a convenience, not a replacement for
+  // the automatic geofence/timeout close in log-position/gps-upload/
+  // start-trip. Driver-only, ownership-checked the same way as every other
+  // action here.
+  if (action === "end-return-trip") {
+    const deliveryRequestId = typeof body.deliveryRequestId === "string" ? body.deliveryRequestId : "";
+
+    if (!deliveryRequestId) {
+      return json({ error: "deliveryRequestId is required" }, 400);
+    }
+
+    const { data: delivery, error: deliveryError } = await adminClient
+      .from("delivery_requests")
+      .select("id, assigned_driver_id")
+      .eq("id", deliveryRequestId)
+      .maybeSingle();
+
+    if (deliveryError || !delivery || delivery.assigned_driver_id !== driverId) {
+      return json({ error: "This delivery is not assigned to you" }, 403);
+    }
+
+    const { data: returnSession, error: returnSessionFetchError } = await adminClient
+      .from("sessions")
+      .select("session_id, start_time, truck_plate")
+      .eq("delivery_request_id", deliveryRequestId)
+      .eq("status", "Active")
+      .eq("is_return_trip", true)
+      .maybeSingle();
+
+    if (returnSessionFetchError) {
+      return json({ error: returnSessionFetchError.message }, 400);
+    }
+
+    if (!returnSession) {
+      return json({ error: "No active return-trip session found for this delivery" }, 400);
+    }
+
+    await closeReturnTripSession(adminClient, returnSession);
+
+    return json({ ok: true });
   }
 
   return json({ error: "Unknown action" }, 400);

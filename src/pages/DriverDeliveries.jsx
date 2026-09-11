@@ -61,7 +61,13 @@ import {
   nearestDropoffOrder,
   computeSuggestedRoute,
   classifyRouteDeviation,
+  flattenLegPath,
+  fetchRerouteEvents,
 } from "../lib/suggestedRoute.js";
+import {
+  REROUTE_REASON_OPTIONS,
+  REROUTE_REASON_LABELS,
+} from "../lib/rerouteReasons.js";
 import {
   formatManilaTimestamp,
   formatManilaShortTime,
@@ -828,6 +834,7 @@ function LiveNavigationMap({
   onPause,
   onResume,
   onStageAdvance,
+  deliveryRequestId,
 }) {
   const { isLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS);
 
@@ -903,6 +910,7 @@ function LiveNavigationMap({
     routeDestination,
     routeWaypoints,
     legOffset = 0,
+    isReroute = false,
   ) => {
     if (!window.google || !routeOrigin || !routeDestination) return;
     lastRouteRequestRef.current = {
@@ -910,6 +918,7 @@ function LiveNavigationMap({
       routeDestination,
       routeWaypoints,
       legOffset,
+      isReroute,
     };
     const requestId = ++routeRequestIdRef.current;
     const timeoutId = setTimeout(() => {
@@ -951,6 +960,38 @@ function LiveNavigationMap({
           setCurrentLegIndex(0);
           setCompletedLegsOffset(legOffset);
           setRouteError(false);
+          // Best-effort telemetry -- the reroute itself already happened
+          // automatically (no driver interaction, by design); this only
+          // persists what path it landed on, so the post-trip Route
+          // Deviation verdict (classifyRouteDeviation) can recognize it as
+          // app-initiated rather than unexplained deviation. A reason can be
+          // added later, optionally, from the completed trip's own report
+          // (tag-reroute-reason) -- never surfaced mid-drive. One silent
+          // retry on failure (mirrors ROUTE_RETRY_DELAY_MS's reasoning below
+          // for computeRoute itself) -- a dropped log here is exactly the
+          // unfair-verdict bug this feature exists to fix, so it's worth one
+          // more attempt before giving up.
+          if (isReroute && deliveryRequestId) {
+            const newPath = result.routes[0].legs.flatMap(flattenLegPath);
+            const logReroute = () =>
+              supabase.functions
+                .invoke("driver-trip", {
+                  body: { action: "log-reroute", deliveryRequestId, newPath },
+                })
+                // invoke() resolves with `{ error }` set on a non-2xx
+                // response rather than rejecting -- only a thrown/rejected
+                // promise (network failure) needs the catch below; either
+                // shape of failure gets normalized to a truthy `error` here
+                // so the retry below covers both.
+                .then(({ error }) => ({ error }))
+                .catch((error) => ({ error }));
+            logReroute().then(({ error }) => {
+              if (!error) return;
+              setTimeout(() => {
+                logReroute();
+              }, ROUTE_RETRY_DELAY_MS);
+            });
+          }
         } else {
           setRouteError(true);
         }
@@ -965,12 +1006,19 @@ function LiveNavigationMap({
   // every ROUTE_RETRY_DELAY_MS until one succeeds.
   useEffect(() => {
     if (!routeError || !lastRouteRequestRef.current) return undefined;
-    const { routeOrigin, routeDestination, routeWaypoints, legOffset } =
+    const { routeOrigin, routeDestination, routeWaypoints, legOffset, isReroute } =
       lastRouteRequestRef.current;
     const timer = setTimeout(() => {
-      computeRoute(routeOrigin, routeDestination, routeWaypoints, legOffset);
+      computeRoute(
+        routeOrigin,
+        routeDestination,
+        routeWaypoints,
+        legOffset,
+        isReroute,
+      );
     }, ROUTE_RETRY_DELAY_MS);
     return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeError]);
 
   // Stops (reference-only locations between pickup and dropoff) become
@@ -1209,6 +1257,7 @@ function LiveNavigationMap({
       destination,
       waypoints.slice(currentLegIndex),
       completedLegsOffset + currentLegIndex,
+      true,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [livePosition, directions, isPaused, isLoaded, currentLegIndex]);
@@ -1543,6 +1592,366 @@ function LiveNavigationMap({
   );
 }
 
+// Live turn-by-turn navigation for the automatic return-to-base leg
+// (14_RETURN_TRIP_MONITORING.md), built 2026-09-11 per explicit user
+// request after the first pass shipped only a static distance readout.
+// Deliberately a SEPARATE component from LiveNavigationMap above, not a
+// reuse with extra props -- that component's shape (stops/waypoints,
+// pickup/dropoff pins, leg-offset math, and critically its reroute-on-
+// deviation effect logging to `log-reroute`/`reroute_events`) is all about
+// keeping the driver on the customer-booked `suggested_route`, which this
+// leg has nothing to do with (11_ROUTE_COMPARISON.md's Route Deviation
+// comparison explicitly excludes the return leg's GPS entirely). Grafting
+// this onto LiveNavigationMap would mean either logging fake "reroutes"
+// against a planned route that was never involved, or threading a new
+// "skip the logging" flag through code that assumes it always applies --
+// a parallel, single-leg-only component with no waypoints/pickup/dropoff
+// concepts and no log-reroute call is the more honest shape for what's
+// actually a different kind of leg. The live-position tracking, tilted/
+// rotating camera, turn-by-turn voice guidance, and fullscreen mode are
+// otherwise full parity with the outbound nav, same visual language.
+function ReturnTripNavigationMap({ livePosition }) {
+  const { isLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS);
+
+  const [directions, setDirections] = useState(null);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [isMuted, setIsMuted] = useState(
+    () => localStorage.getItem("driverNavMuted") === "true",
+  );
+  const [routeError, setRouteError] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [heading, setHeading] = useState(0);
+  const mapRef = useRef(null);
+  const [isMapReady, setIsMapReady] = useState(false);
+  const lastAnnouncedStepRef = useRef("");
+  const previousPositionRef = useRef(null);
+  const lastRecomputeAtRef = useRef(0);
+  const hasRouteRef = useRef(false);
+  // Same "captured once, camera moves via moveCamera() only after" reasoning
+  // as LiveNavigationMap's initialCenter -- falls back to the warehouse
+  // itself (the one fixed point known before any GPS fix has arrived).
+  const [initialCenter] = useState(() => livePosition || WAREHOUSE_COORDS);
+
+  const routeRequestIdRef = useRef(0);
+  const lastRouteOriginRef = useRef(null);
+
+  // Single origin -> fixed-warehouse leg, no waypoints/legOffset -- and no
+  // log-reroute call on success (see this component's own header comment
+  // for why: this leg was never part of the customer-booked suggested_route,
+  // so there's nothing for that log to correct a verdict against).
+  const computeRoute = (origin) => {
+    if (!window.google || !origin) return;
+    lastRouteOriginRef.current = origin;
+    const requestId = ++routeRequestIdRef.current;
+    const timeoutId = setTimeout(() => {
+      if (routeRequestIdRef.current !== requestId) return;
+      setRouteError(true);
+    }, ROUTE_REQUEST_TIMEOUT_MS);
+    new window.google.maps.DirectionsService().route(
+      {
+        origin,
+        destination: WAREHOUSE_COORDS,
+        travelMode: window.google.maps.TravelMode.DRIVING,
+        drivingOptions: { departureTime: new Date(), trafficModel: "bestguess" },
+      },
+      (result, status) => {
+        if (routeRequestIdRef.current !== requestId) return;
+        clearTimeout(timeoutId);
+        if (status === "OK" && result) {
+          hasRouteRef.current = true;
+          setDirections(result);
+          setCurrentStepIndex(0);
+          setRouteError(false);
+        } else {
+          setRouteError(true);
+        }
+      },
+    );
+  };
+
+  // Retry a failed/timed-out request -- same recovery LiveNavigationMap has,
+  // so a flaky connection doesn't strand the driver on "Couldn't compute a
+  // route" with no way back short of a reload.
+  useEffect(() => {
+    if (!routeError || !lastRouteOriginRef.current) return undefined;
+    const origin = lastRouteOriginRef.current;
+    const timer = setTimeout(() => computeRoute(origin), ROUTE_RETRY_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [routeError]);
+
+  // First route, the moment a real GPS position exists (there's no
+  // Warehouse/pickup-style fallback origin here -- the return leg only ever
+  // starts from wherever the driver actually is).
+  useEffect(() => {
+    if (!isLoaded || !livePosition || hasRouteRef.current) return;
+    computeRoute(livePosition);
+  }, [isLoaded, livePosition]);
+
+  // Recenter/follow + derive heading exactly like LiveNavigationMap's own
+  // effect (see its comment for the full moveCamera()-vs-setCenter()
+  // reasoning) -- no isPaused check, since a return-trip Session is never
+  // paused (14_RETURN_TRIP_MONITORING.md's scope: fully automatic start/end,
+  // no mid-leg pause concept).
+  useEffect(() => {
+    if (!livePosition || !mapRef.current) return;
+    let nextHeading = heading;
+    if (previousPositionRef.current && window.google) {
+      const from = new window.google.maps.LatLng(
+        previousPositionRef.current.lat,
+        previousPositionRef.current.lng,
+      );
+      const to = new window.google.maps.LatLng(
+        livePosition.lat,
+        livePosition.lng,
+      );
+      if (
+        window.google.maps.geometry.spherical.computeDistanceBetween(from, to) >
+        2
+      ) {
+        nextHeading = window.google.maps.geometry.spherical.computeHeading(
+          from,
+          to,
+        );
+        setHeading(nextHeading);
+      }
+    }
+    const isFirstPosition = !previousPositionRef.current;
+    previousPositionRef.current = livePosition;
+    mapRef.current.moveCamera({
+      center: livePosition,
+      zoom: isFirstPosition ? NAV_ZOOM : mapRef.current.getZoom(),
+      tilt: 45,
+      heading: nextHeading,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livePosition, isMapReady]);
+
+  const handleRecenter = () => {
+    if (!livePosition || !mapRef.current) return;
+    mapRef.current.moveCamera({
+      center: livePosition,
+      zoom: NAV_ZOOM,
+      tilt: 45,
+      heading,
+    });
+  };
+
+  // Turn-by-turn step advance -- single leg only (no stops), otherwise
+  // identical to LiveNavigationMap's own step-advance effect.
+  useEffect(() => {
+    if (!isLoaded || !livePosition || !directions) return;
+    const steps = directions.routes[0]?.legs[0]?.steps || [];
+    const step = steps[currentStepIndex];
+    if (!step) return;
+    const distance =
+      window.google.maps.geometry.spherical.computeDistanceBetween(
+        new window.google.maps.LatLng(livePosition.lat, livePosition.lng),
+        step.end_location,
+      );
+    if (distance > NAV_STEP_ADVANCE_METERS) return;
+    if (currentStepIndex < steps.length - 1) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCurrentStepIndex((i) => i + 1);
+    }
+  }, [livePosition, directions, currentStepIndex, isLoaded]);
+
+  // Recompute once the driver has visibly left the current route -- same
+  // isLocationOnEdge/debounce mechanism as LiveNavigationMap's reroute
+  // effect, but this one never calls log-reroute (see header comment): this
+  // leg isn't compared against any planned route, so there's no verdict for
+  // that log to protect.
+  useEffect(() => {
+    if (!isLoaded || !livePosition || !directions) return;
+    const overviewPath = directions.routes[0]?.overview_path;
+    if (!overviewPath) return;
+    const routePolyline = new window.google.maps.Polyline({
+      path: overviewPath,
+    });
+    const onRoute = window.google.maps.geometry.poly.isLocationOnEdge(
+      new window.google.maps.LatLng(livePosition.lat, livePosition.lng),
+      routePolyline,
+      NAV_REROUTE_TOLERANCE_DEGREES,
+    );
+    if (onRoute) return;
+    const now = Date.now();
+    if (now - lastRecomputeAtRef.current < NAV_REROUTE_DEBOUNCE_MS) return;
+    lastRecomputeAtRef.current = now;
+    computeRoute(livePosition);
+  }, [livePosition, directions, isLoaded]);
+
+  useEffect(() => {
+    if (isMuted && typeof window.speechSynthesis !== "undefined") {
+      window.speechSynthesis.cancel();
+    }
+  }, [isMuted]);
+
+  useEffect(() => {
+    if (isMuted || !directions) return;
+    const key = String(currentStepIndex);
+    if (lastAnnouncedStepRef.current === key) return;
+    const steps = directions.routes[0]?.legs[0]?.steps || [];
+    const step = steps[currentStepIndex];
+    if (!step || typeof window.speechSynthesis === "undefined") return;
+    lastAnnouncedStepRef.current = key;
+    window.speechSynthesis.speak(
+      new SpeechSynthesisUtterance(stripHtml(step.instructions)),
+    );
+  }, [currentStepIndex, directions, isMuted]);
+
+  const steps = directions?.routes[0]?.legs[0]?.steps || [];
+  const currentStep = steps[currentStepIndex];
+  const routeLeg = directions?.routes[0]?.legs[0];
+
+  return (
+    <section
+      className={
+        isFullscreen
+          ? "fixed inset-0 z-50 flex h-dvh w-full flex-col overflow-hidden bg-white"
+          : "overflow-hidden rounded-xl border border-amber-200/70 bg-white"
+      }
+    >
+      <div className="flex items-center justify-between border-b border-amber-200/70 bg-amber-50 px-3 py-2">
+        <div className="min-w-0">
+          <h3 className="text-xs font-bold text-slate-900">
+            Live Navigation — Returning to Base
+          </h3>
+          {routeLeg && (
+            <p className="text-[10px] text-slate-500">
+              {routeLeg.distance?.text} · {routeLeg.duration_in_traffic?.text || routeLeg.duration?.text} to base
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            onClick={() => setIsFullscreen((f) => !f)}
+            aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+            className="rounded-md p-1 text-amber-800 hover:bg-amber-100"
+          >
+            {isFullscreen ? (
+              <Minimize2 className="h-3.5 w-3.5" />
+            ) : (
+              <Maximize2 className="h-3.5 w-3.5" />
+            )}
+          </button>
+          <button
+            onClick={() =>
+              setIsMuted((m) => {
+                const next = !m;
+                localStorage.setItem("driverNavMuted", String(next));
+                return next;
+              })
+            }
+            aria-label={
+              isMuted ? "Unmute voice guidance" : "Mute voice guidance"
+            }
+            className="rounded-md p-1 text-amber-800 hover:bg-amber-100"
+          >
+            {isMuted ? (
+              <VolumeX className="h-3.5 w-3.5" />
+            ) : (
+              <Volume2 className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      <div
+        className={`relative ${isFullscreen ? "w-full flex-1" : "h-[28rem] w-full sm:h-[32rem]"}`}
+      >
+        {!isLoaded ? (
+          <div className="flex h-full items-center justify-center text-slate-400">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : (
+          <GoogleMap
+            mapContainerStyle={GOOGLE_MAP_CONTAINER_STYLE}
+            center={initialCenter}
+            zoom={NAV_ZOOM}
+            onLoad={(map) => {
+              mapRef.current = map;
+              map.moveCamera({ tilt: 45 });
+              setIsMapReady(true);
+            }}
+            options={{
+              disableDefaultUI: true,
+              gestureHandling: "greedy",
+              mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID,
+            }}
+          >
+            <TrafficLayer />
+            {/* Fixed color, deliberately not NAV_LEG_COLORS -- that palette's
+                whole point is distinguishing consecutive legs of the planned
+                suggested_route chain, which this leg isn't part of. */}
+            {directions?.routes[0]?.legs[0] && (
+              <GoogleMapPolyline
+                path={(directions.routes[0].legs[0].steps || []).flatMap(
+                  (step) => step.path || [],
+                )}
+                options={{
+                  strokeColor: "#0891b2",
+                  strokeOpacity: 0.9,
+                  strokeWeight: 7,
+                  zIndex: 1,
+                }}
+              />
+            )}
+            <GoogleMapMarker
+              position={WAREHOUSE_COORDS}
+              icon={warehouseMarkerIcon()}
+              zIndex={10}
+            />
+            {livePosition && (
+              <GoogleMapMarker
+                position={livePosition}
+                icon={{
+                  path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                  scale: 6,
+                  fillColor: "#2563eb",
+                  fillOpacity: 1,
+                  strokeColor: "#fff",
+                  strokeWeight: 2,
+                  rotation: 0,
+                }}
+              />
+            )}
+          </GoogleMap>
+        )}
+        {livePosition && (
+          <button
+            onClick={handleRecenter}
+            aria-label="Center on my location"
+            className="absolute bottom-3 right-3 z-10 rounded-full bg-white p-2 text-amber-900 shadow-md hover:bg-amber-50"
+          >
+            <LocateFixed className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      <div className="space-y-1.5 border-t border-amber-200/70 px-3 py-2.5 text-[11px]">
+        {routeError ? (
+          <p className="text-slate-500">
+            Couldn't compute a route right now — retrying shortly.
+          </p>
+        ) : currentStep ? (
+          <div
+            dangerouslySetInnerHTML={{ __html: currentStep.instructions }}
+            className="text-slate-700"
+          />
+        ) : (
+          <p className="text-slate-500">
+            {isLoaded ? "Computing route…" : "Loading map…"}
+          </p>
+        )}
+        {currentStep && (
+          <p className="text-[10px] text-slate-400">
+            {currentStep.distance?.text}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // Shared with HelperDeliveries.jsx so both portals render the same report.
 // eslint-disable-next-line react-refresh/only-export-components
 export const COMPLETED_REPORT_DATA = {
@@ -1859,14 +2268,28 @@ function ResolvedText({ value }) {
 // timestamps) are left out rather than fabricated, same rule that function
 // already established.
 // eslint-disable-next-line react-refresh/only-export-components
-export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
+export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs, rerouteEvents = []) {
   if (!sessions.length) return null;
 
   const sorted = [...sessions].sort(
     (a, b) => new Date(a.start_time) - new Date(b.start_time),
   );
   const firstSession = sorted[0];
-  const lastSession = sorted[sorted.length - 1];
+  // 14_RETURN_TRIP_MONITORING.md's automatic return-to-base Session always
+  // sorts last (it's only ever opened after every other Session for this
+  // delivery has closed) -- using the plain last-by-start-time Session for
+  // "when was this delivery actually completed" would show when the driver
+  // got back to the warehouse instead, once one exists. mainSessions falls
+  // back to `sorted` itself for a delivery with no return-trip Session at
+  // all (predates this feature, or it hasn't opened yet), so this only
+  // changes behavior once a return leg genuinely exists.
+  const mainSessions = sorted.filter((s) => !s.is_return_trip);
+  const lastMainSession = mainSessions[mainSessions.length - 1] || sorted[sorted.length - 1];
+  // Distance/monitored-time totals intentionally still sum every Session,
+  // return leg included -- it's real distance/monitoring time for this
+  // delivery's day, just not part of "when was it delivered" (see
+  // lastMainSession above) or the Route Deviation comparison below (which
+  // has its own separate, planned-route-scoped total further down).
   const totalDurationSec = sorted.reduce(
     (sum, s) => sum + (s.session_duration || 0),
     0,
@@ -1938,7 +2361,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
     })),
     {
       label: "Delivery Completed",
-      time: formatAlertTimestamp(lastSession.end_time),
+      time: formatAlertTimestamp(lastMainSession.end_time),
       completed: true,
     },
   ].filter(Boolean);
@@ -1964,7 +2387,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
   const history = [
     { event: "Pickup Trip Started", at: firstSession.start_time },
     ...dropoffEvents.map((e) => ({ event: e.label, at: e.at })),
-    { event: "Delivery Completed", at: lastSession.end_time },
+    { event: "Delivery Completed", at: lastMainSession.end_time },
   ].map((e) => ({ event: e.event, timestamp: e.at, actor: "You" }));
 
   // "Eye Closure Alerts" -- the three real drowsiness event types, not
@@ -2023,6 +2446,16 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
   const suggestedRoute = Array.isArray(delivery.suggestedRoute)
     ? delivery.suggestedRoute
     : null;
+  // Computed unconditionally (unlike routeDeviation below) -- a reroute can
+  // get logged and needs to stay visible/taggable even for the rare
+  // delivery with no saved suggested_route to compare against (predates
+  // PlannedRouteMap, or its pre-trip computation failed) -- LiveNavigationMap
+  // still navigates and still reroutes on deviation either way.
+  const rerouteEventsForDisplay = rerouteEvents.map((r) => ({
+    id: r.id,
+    occurredAt: r.occurred_at,
+    reason: r.reason,
+  }));
   let routeDeviation = null;
   if (suggestedRoute && suggestedRoute.length > 0) {
     // Leg 0 is Warehouse -> Pickup (PlannedRouteMap's fixed WAREHOUSE_ADDRESS
@@ -2044,7 +2477,27 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
       }
       return sum + legMeters;
     }, 0);
-    const deviationMeters = Math.abs(totalMeters - plannedMeters);
+    // Route Deviation compares against suggested_route, which only ever
+    // covers the one-way Warehouse -> Pickup -> Dropoff/Stops trip -- the
+    // return-to-base leg's GPS must be excluded here specifically (unlike
+    // totalMeters/totalDurationSec above, which stay unfiltered for the
+    // Trip/Behavior tabs' own "distance driven today" figures), or every
+    // delivery with a return-trip Session would show a huge fake deviation
+    // (14_RETURN_TRIP_MONITORING.md).
+    const mainTotalMeters = mainSessions.reduce((sum, s) => {
+      const points = bySessionId[s.session_id] || [];
+      let legMeters = 0;
+      for (let i = 1; i < points.length; i += 1) {
+        legMeters += distanceMeters(
+          points[i - 1].latitude,
+          points[i - 1].longitude,
+          points[i].latitude,
+          points[i].longitude,
+        );
+      }
+      return sum + legMeters;
+    }, 0);
+    const deviationMeters = Math.abs(mainTotalMeters - plannedMeters);
     // Derived from the legs' own real (geocoded) path points, not
     // delivery.pickupCoords/destinationCoords -- those only resolve a
     // "lat, lng"-shaped fixture value via parseCoords and are null for a
@@ -2071,14 +2524,18 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
     // no LLM/API call, pure geometry over data already in memory. Shared
     // with SupDeliveries.jsx's identical routeDeviation build via
     // classifyRouteDeviation (lib/suggestedRoute.js).
-    const actualPointsWithTime = sorted.flatMap(
+    const actualPointsWithTime = mainSessions.flatMap(
       (s) => bySessionId[s.session_id] || [],
     );
     const classification = classifyRouteDeviation({
       plannedPoints: plannedLegs.flatMap((leg) => leg.path),
       actualPoints: actualPointsWithTime,
       plannedMeters,
-      totalMeters,
+      totalMeters: mainTotalMeters,
+      rerouteSegments: rerouteEvents.map((r) => ({
+        path: r.new_path,
+        occurredAt: r.occurred_at,
+      })),
     });
 
     let aiVerdict = null;
@@ -2089,7 +2546,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
       aiVerdict = classification.verdict;
       aiVerdictTone = classification.tone;
       const roundedOffset = Math.round(classification.maxOffsetMeters);
-      const distanceSavedKm = ((plannedMeters - totalMeters) / 1000).toFixed(1);
+      const distanceSavedKm = ((plannedMeters - mainTotalMeters) / 1000).toFixed(1);
       if (classification.verdict === "Beneficial") {
         aiSummary = `Actual distance was ${distanceSavedKm}km shorter than the planned route — likely a more efficient path.`;
       } else if (classification.verdict === "Reasonable") {
@@ -2113,7 +2570,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
 
     routeDeviation = {
       plannedLegs,
-      actualRoute: sorted.flatMap((s) =>
+      actualRoute: mainSessions.flatMap((s) =>
         (bySessionId[s.session_id] || []).map((p) => [p.latitude, p.longitude]),
       ),
       pickupCoords: pickupPoint
@@ -2125,7 +2582,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
       plannedDistance:
         plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : "",
       actualDistance:
-        totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "",
+        mainTotalMeters > 0 ? `${(mainTotalMeters / 1000).toFixed(1)} km` : "",
       deviationDistance: `${(deviationMeters / 1000).toFixed(1)} km`,
       deviationPercent,
       aiVerdict,
@@ -2162,9 +2619,16 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs) {
           s.total_alerts ??
           alerts.filter((a) => a.session_id === s.session_id).length,
         duration: s.session_duration,
+        // 14_RETURN_TRIP_MONITORING.md: labeled distinctly in this
+        // per-session breakdown so it doesn't read as another delivery leg.
+        label: s.is_return_trip ? "Return to Base" : null,
       })),
     },
     routeDeviation,
+    // Top-level, not nested under routeDeviation -- see
+    // rerouteEventsForDisplay's own comment above for why this stays visible
+    // even when there's no suggested_route to build a routeDeviation from.
+    rerouteEvents: rerouteEventsForDisplay,
   };
 }
 
@@ -2210,10 +2674,33 @@ export function CompletedDeliveryReport({
   delivery,
   hideBehaviorTab = false,
   theme = "amber",
+  // Only the Driver can actually tag a reroute reason (driver-trip's
+  // tag-reroute-reason checks assigned_driver_id) -- HelperDeliveries.jsx
+  // reuses this exact component for the same trip's report (not a
+  // per-portal duplicate like SupDeliveries.jsx's own copy) and passes
+  // false here, so the Helper sees the reason read-only instead of tap
+  // targets that would just fail silently against the backend.
+  canTagRerouteReason = true,
 }) {
   const resolvedPickup = useResolvedAddress(delivery?.pickupAddress || "");
   const resolvedDropoff = useResolvedAddress(delivery?.deliveryAddress || "");
   const [reportTab, setReportTab] = useState("trip");
+  // Optimistic local override for a just-tagged reroute reason -- avoids
+  // threading a callback prop back up to whoever owns `report` state just to
+  // reflect one tap; report itself is refetched fresh the next time this
+  // delivery's detail view is opened anyway.
+  const [taggedReasons, setTaggedReasons] = useState({});
+  const [taggingId, setTaggingId] = useState(null);
+  async function tagRerouteReason(rerouteEventId, reason) {
+    setTaggingId(rerouteEventId);
+    const { error } = await supabase.functions.invoke("driver-trip", {
+      body: { action: "tag-reroute-reason", rerouteEventId, reason },
+    });
+    setTaggingId(null);
+    if (!error) {
+      setTaggedReasons((prev) => ({ ...prev, [rerouteEventId]: reason }));
+    }
+  }
 
   if (!report) {
     return (
@@ -2230,13 +2717,19 @@ export function CompletedDeliveryReport({
   // string, so that takes priority when present.
   const routeLabel =
     report.trip.route || `${resolvedPickup} → ${resolvedDropoff}`;
-  // Route tab needs a saved planned route to compare against -- real
-  // deliveries that predate PlannedRouteMap (or never had a parseable
-  // pickup/dropoff) simply don't get it, same as the Supervisor's version.
+  // Route tab needs either a saved planned route to compare against (real
+  // deliveries that predate PlannedRouteMap, or never had a parseable
+  // pickup/dropoff, simply don't get the map/verdict part, same as the
+  // Supervisor's version) OR at least a logged reroute to show/tag -- the
+  // latter can exist even without the former (LiveNavigationMap still
+  // navigates and reroutes on deviation regardless of whether a
+  // suggested_route was ever saved).
+  const hasRouteTabContent =
+    Boolean(report.routeDeviation) || report.rerouteEvents?.length > 0;
   const tabs = REPORT_TABS.filter(
     (tab) =>
       (!hideBehaviorTab || tab.id !== "behavior") &&
-      (tab.id !== "route" || Boolean(report.routeDeviation)),
+      (tab.id !== "route" || hasRouteTabContent),
   );
 
   const themeClass = {
@@ -2533,6 +3026,11 @@ export function CompletedDeliveryReport({
                   className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px]"
                 >
                   <span className="text-slate-600">
+                    {session.label && (
+                      <span className="mr-1.5 rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-sky-700">
+                        {session.label}
+                      </span>
+                    )}
                     {formatAlertTimestamp(session.start)} —{" "}
                     {formatAlertTimestamp(session.end)}
                   </span>
@@ -2551,9 +3049,9 @@ export function CompletedDeliveryReport({
         </div>
       )}
 
-      {reportTab === "route" && report.routeDeviation && (
+      {reportTab === "route" && hasRouteTabContent && (
         <div className="space-y-2.5">
-          {(() => {
+          {report.routeDeviation && (() => {
             // Two shapes feed this tab: the legacy mock fixtures (`planned`/
             // `actual`, flat single-leg arrays) and the real one built by
             // buildRealDriverTripReport (`plannedLegs`/`actualRoute`/
@@ -2657,7 +3155,7 @@ export function CompletedDeliveryReport({
                           style={{ background: leg.color }}
                         />
                         <span className="text-slate-600">
-                          Planned — Leg {i + 1}
+                          Planned — Route {i + 1}
                         </span>
                       </div>
                     ))
@@ -2686,6 +3184,57 @@ export function CompletedDeliveryReport({
               </>
             );
           })()}
+
+          {report.rerouteEvents && report.rerouteEvents.length > 0 && (
+            <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-2.5">
+              <p className="text-[11px] font-semibold text-slate-700">
+                Route changes on this trip
+              </p>
+              <p className="text-[10px] leading-relaxed text-slate-500">
+                The app automatically recalculated your route at these
+                points — already excluded from the analysis above. Optionally
+                tell us why, for your own records.
+              </p>
+              {report.rerouteEvents.map((event) => {
+                const reason = taggedReasons[event.id] ?? event.reason;
+                return (
+                  <div
+                    key={event.id}
+                    className="rounded-md border border-slate-100 bg-slate-50 p-2"
+                  >
+                    <p className="text-[10px] text-slate-500">
+                      Recalculated at {formatAlertTimestamp(event.occurredAt)}
+                    </p>
+                    {reason ? (
+                      <p className="mt-0.5 text-[11px] font-medium text-slate-700">
+                        Reason: {REROUTE_REASON_LABELS[reason] || reason}
+                      </p>
+                    ) : canTagRerouteReason ? (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {REROUTE_REASON_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            disabled={taggingId === event.id}
+                            onClick={() =>
+                              tagRerouteReason(event.id, opt.value)
+                            }
+                            className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        No reason given
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -3173,7 +3722,7 @@ function DeliveryDetailView({
       const { data: sessionRows } = await supabase
         .from("sessions")
         .select(
-          "session_id, start_time, end_time, total_alerts, session_duration",
+          "session_id, start_time, end_time, total_alerts, session_duration, is_return_trip",
         )
         .eq("delivery_request_id", delivery.id)
         .order("start_time", { ascending: true });
@@ -3184,18 +3733,22 @@ function DeliveryDetailView({
         return;
       }
       const sessionIds = sessions.map((s) => s.session_id);
-      const [{ data: alertRows }, { data: gpsRows }] = await Promise.all([
-        supabase
-          .from("alerts")
-          .select("id, created_at, event_type, duration, session_id")
-          .in("session_id", sessionIds)
-          .order("created_at", { ascending: true }),
-        supabase
-          .from("gps_logs")
-          .select("session_id, latitude, longitude, timestamp")
-          .in("session_id", sessionIds)
-          .order("timestamp", { ascending: true }),
-      ]);
+      const [{ data: alertRows }, { data: gpsRows }, rerouteRows] =
+        await Promise.all([
+          supabase
+            .from("alerts")
+            .select("id, created_at, event_type, duration, session_id")
+            .in("session_id", sessionIds)
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("gps_logs")
+            .select("session_id, latitude, longitude, timestamp")
+            .in("session_id", sessionIds)
+            .order("timestamp", { ascending: true }),
+          // Auto-reroutes LiveNavigationMap already computed mid-trip -- see
+          // buildRealDriverTripReport's rerouteSegments/rerouteEvents.
+          fetchRerouteEvents(delivery.id),
+        ]);
       if (!isMounted) return;
       setRealReport(
         buildRealDriverTripReport(
@@ -3203,6 +3756,7 @@ function DeliveryDetailView({
           sessions,
           alertRows || [],
           gpsRows || [],
+          rerouteRows,
         ),
       );
     }
@@ -3859,7 +4413,17 @@ function DriverDeliveries() {
     Boolean(workspaceDelivery) &&
     (workspaceDelivery.status === "FOR_PICKUP" ||
       workspaceDelivery.status === "OUT_FOR_DELIVERY");
-  const isMonitoring = isDrivingStage && workspaceDelivery.hasOpenSession;
+  // 14_RETURN_TRIP_MONITORING.md: the automatic drive-back-to-warehouse leg
+  // -- a DELIVERED workspaceDelivery only ever has hasOpenSession true while
+  // its return-trip Session is open (see loadDeliveries' nonTerminal filter
+  // above for why that inference is safe), so no separate field is needed
+  // from get-driver-deliveries to tell this apart from a normal driving leg.
+  const isReturnTrip =
+    Boolean(workspaceDelivery) &&
+    workspaceDelivery.status === "DELIVERED" &&
+    workspaceDelivery.hasOpenSession;
+  const isMonitoring =
+    (isDrivingStage && workspaceDelivery.hasOpenSession) || isReturnTrip;
   const isPausedTrip = isDrivingStage && !workspaceDelivery.hasOpenSession;
 
   // Keeps the page-scroll slider's thumb in sync with #driver-scroll-
@@ -3985,8 +4549,22 @@ function DriverDeliveries() {
     }
     const mapped = (result?.deliveries || []).map(mapDelivery);
     const today = localTodayISO();
+    // A DELIVERED delivery normally counts as terminal -- except while its
+    // automatic return-trip Session is still open (14_RETURN_TRIP_MONITORING.md).
+    // hasOpenSession can only be true on an already-DELIVERED row because of
+    // that return-trip Session: end-trip closes the real Session and only
+    // *then* flips status to DELIVERED, before it ever opens the return-trip
+    // one, so there's no window where a genuine delivery-in-progress Session
+    // could make this true for a DELIVERED row. That's what lets the rest of
+    // this file infer "is this the return-trip leg" from
+    // `status === "DELIVERED" && hasOpenSession` alone, with no separate
+    // field needed from get-driver-deliveries.
     const nonTerminal = mapped
-      .filter((d) => !TERMINAL_STATUSES.has(d.status))
+      .filter(
+        (d) =>
+          !TERMINAL_STATUSES.has(d.status) ||
+          (d.status === "DELIVERED" && d.hasOpenSession),
+      )
       .sort((a, b) =>
         String(a.pickupDate || "").localeCompare(String(b.pickupDate || "")),
       );
@@ -4730,6 +5308,39 @@ function DriverDeliveries() {
     setToast({ message: "Arrival recorded.", type: "success" });
   };
 
+  // 14_RETURN_TRIP_MONITORING.md's manual "Arrived at Base" fallback --
+  // the automatic geofence/timeout close (driver-trip's log-position,
+  // gps-upload) already handles the normal case; this just lets the driver
+  // close it themselves if they park just outside the ~150m radius. Patches
+  // workspace state directly (same pattern as pauseTrip above) rather than
+  // waiting for the next poll -- isReturnTrip flips false immediately, so
+  // monitoring stops and the sticky footer/map branch revert right away.
+  const endReturnTrip = async () => {
+    if (!workspaceDelivery) return;
+    const { error } = await supabase.functions.invoke("driver-trip", {
+      body: {
+        action: "end-return-trip",
+        deliveryRequestId: workspaceDelivery.id,
+      },
+    });
+    if (error) {
+      setToast({
+        message:
+          error.message || "Failed to close out the return trip. Please try again.",
+        type: "error",
+      });
+      return;
+    }
+    setData((prev) => ({
+      ...prev,
+      workspace: { ...prev.workspace, hasOpenSession: false, sessionId: null },
+    }));
+    setLiveAlerts([]);
+    setIsAlertHistoryExpanded(false);
+    setToast({ message: "Return trip closed out.", type: "success" });
+  };
+  const handleArrivedAtBase = () => runTripAction(endReturnTrip, () => {});
+
   const historySearchMatch = (d) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
@@ -4977,7 +5588,18 @@ function DriverDeliveries() {
                   starts (isDrivingStage): swaps to LiveNavigationMap, the capstone-required live
                   turn-by-turn view built on the Google Maps JavaScript API — see
                   01_SYSTEM_ARCHITECTURE.md's Route Comparison section. */}
-                    {isDrivingStage ? (
+                    {isReturnTrip ? (
+                      // 14_RETURN_TRIP_MONITORING.md, upgraded to full live
+                      // turn-by-turn nav per explicit user request (the first
+                      // pass shipped only a static distance readout) --
+                      // ReturnTripNavigationMap is a deliberately separate
+                      // component from LiveNavigationMap below, not that
+                      // component reused with extra props, since this leg
+                      // isn't part of the planned suggested_route at all (see
+                      // that component's own header comment for the full
+                      // reasoning, especially around log-reroute).
+                      <ReturnTripNavigationMap livePosition={livePosition} />
+                    ) : isDrivingStage ? (
                       <LiveNavigationMap
                         origin={activeNavOrigin}
                         destination={activeNavTarget}
@@ -4996,6 +5618,7 @@ function DriverDeliveries() {
                         onPause={() => setConfirmingPause(true)}
                         onResume={() => setConfirmingResume(true)}
                         onStageAdvance={() => setConfirmingStageAdvance(true)}
+                        deliveryRequestId={workspaceDelivery?.id}
                       />
                     ) : workspaceDelivery.pickupAddress && workspaceDelivery.deliveryAddress ? (
                       // Whole-trip guide (Pickup -> Dropoff -> Stops in one map),
@@ -5300,14 +5923,34 @@ function DriverDeliveries() {
                     </div>
                   )}
 
+                  {/* 14_RETURN_TRIP_MONITORING.md's own footer -- deliberately
+                separate from the Pause/Arrived/Advance bar below, since none
+                of those apply to the return leg (no Pause Trip -- the return
+                leg starts/ends automatically, not something to pause; no
+                pickup/dropoff arrival to confirm). Just the optional manual
+                fallback for the rare case the geofence never fires. */}
+                  {isReturnTrip && (
+                    <div className="sticky bottom-0 z-10 -mx-4 border-t border-amber-200/70 bg-white/95 px-4 py-2.5 backdrop-blur-sm sm:-mx-6 sm:px-6 md:-mx-8 md:px-8 lg:-mx-12 lg:px-12">
+                      <button
+                        onClick={handleArrivedAtBase}
+                        className="mx-auto flex w-full items-center justify-center gap-2 rounded-lg bg-amber-900 px-5 py-2.5 text-xs font-bold text-white transition hover:bg-amber-800 sm:w-auto sm:min-w-[280px]"
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        Arrived at Base
+                      </button>
+                    </div>
+                  )}
+
                   {/* Gated on isMonitoring OR nextLabel, not just nextLabel --
                 FOR_PICKUP/OUT_FOR_DELIVERY (the driving stages, when
                 LiveNavigationMap is on screen) both have nextLabel: null
                 since Confirm Pickup/Complete Delivery moved to the Helper,
                 which previously hid this entire bar including Pause Trip --
                 the only way to pause was LiveNavigationMap's own duplicate
-                fullscreen-footer button. */}
-                  {!isPausedTrip && (isMonitoring || statusCfg.nextLabel) && (
+                fullscreen-footer button. isReturnTrip gets its own dedicated
+                footer above instead -- none of Pause/Arrived/Advance apply
+                to the return leg. */}
+                  {!isPausedTrip && !isReturnTrip && (isMonitoring || statusCfg.nextLabel) && (
                     <div className="sticky bottom-0 z-10 -mx-4 border-t border-amber-200/70 bg-white/95 px-4 py-2.5 backdrop-blur-sm sm:-mx-6 sm:px-6 md:-mx-8 md:px-8 lg:-mx-12 lg:px-12">
                       <div className="mx-auto flex w-full flex-col gap-1.5 sm:w-auto sm:min-w-[280px] sm:flex-row">
                         {isMonitoring && (
