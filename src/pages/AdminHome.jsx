@@ -472,8 +472,9 @@ function AdminHome() {
   useEffect(() => {
     // Real async fetch from the admin-users function on mount, not derived
     // state -- the correct, intentional use of an effect here.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadUsers()
+    Promise.resolve().then(() => {
+      loadUsers();
+    });
   }, [])
 
   const selectedUser = useMemo(

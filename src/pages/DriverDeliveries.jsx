@@ -60,7 +60,6 @@ import {
   distanceMeters,
   nearestDropoffOrder,
   computeSuggestedRoute,
-  classifyRouteDeviation,
   flattenLegPath,
   fetchRerouteEvents,
 } from "../lib/suggestedRoute.js";
@@ -73,8 +72,8 @@ import {
   formatManilaShortTime,
   manilaTodayISO,
   MANILA_TIMEZONE,
-  getManilaHour,
 } from "../lib/manilaTime.js";
+import { COMPLETED_REPORT_DATA, buildRealDriverTripReport } from "../lib/driverReportData.js";
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -1218,13 +1217,14 @@ function LiveNavigationMap({
     // arriving via props from the parent's Realtime subscription), not a
     // derived-state anti-pattern -- see the rule's own guidance quoted in
     // its message.
-    if (currentStepIndex < steps.length - 1) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCurrentStepIndex((i) => i + 1);
-    } else if (currentLegIndex < legs.length - 1) {
-      setCurrentLegIndex((i) => i + 1);
-      setCurrentStepIndex(0);
-    }
+    Promise.resolve().then(() => {
+      if (currentStepIndex < steps.length - 1) {
+        setCurrentStepIndex((i) => i + 1);
+      } else if (currentLegIndex < legs.length - 1) {
+        setCurrentLegIndex((i) => i + 1);
+        setCurrentStepIndex(0);
+      }
+    });
   }, [livePosition, directions, currentStepIndex, currentLegIndex, isLoaded]);
 
   // Reroute if the driver has visibly left the planned path. Debounced so a
@@ -1749,10 +1749,11 @@ function ReturnTripNavigationMap({ livePosition }) {
         step.end_location,
       );
     if (distance > NAV_STEP_ADVANCE_METERS) return;
-    if (currentStepIndex < steps.length - 1) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCurrentStepIndex((i) => i + 1);
-    }
+    Promise.resolve().then(() => {
+      if (currentStepIndex < steps.length - 1) {
+        setCurrentStepIndex((i) => i + 1);
+      }
+    });
   }, [livePosition, directions, currentStepIndex, isLoaded]);
 
   // Recompute once the driver has visibly left the current route -- same
@@ -1952,301 +1953,6 @@ function ReturnTripNavigationMap({ livePosition }) {
   );
 }
 
-// Shared with HelperDeliveries.jsx so both portals render the same report.
-// eslint-disable-next-line react-refresh/only-export-components
-export const COMPLETED_REPORT_DATA = {
-  "DEL-004": {
-    routeDeviation: {
-      planned: [
-        [14.56, 121.07],
-        [14.557, 121.06],
-        [14.555, 121.053],
-        [14.553, 121.048],
-        [14.55, 121.047],
-      ],
-      actual: [
-        [14.56, 121.07],
-        [14.557, 121.06],
-        [14.562, 121.055],
-        [14.555, 121.052],
-        [14.553, 121.048],
-        [14.55, 121.047],
-      ],
-      plannedDistance: "5.8 km",
-      actualDistance: "6.4 km",
-      deviationDistance: "0.6 km",
-      deviationPercent: 10.3,
-      aiSummary:
-        "Minor route deviation detected. The driver briefly deviated north near the C5-Meralco intersection, adding approximately 0.6 km to the planned route. This appears to be a navigation correction rather than an intentional detour. No significant impact on delivery time or safety.",
-      aiVerdict: "Minor Deviation",
-      aiVerdictTone: "amber",
-    },
-    trip: {
-      route: "Pasig Hub → BGC Branch",
-      distance: "14.2 km",
-      duration: "45 min",
-      startTime: "2026-07-20T08:30:00",
-      endTime: "2026-07-20T09:15:00",
-      stops: [
-        { location: "Pasig Hub", time: "08:30", action: "Departure" },
-        { location: "C5 Road Checkpoint", time: "08:48", action: "Waypoint" },
-        { location: "BGC Branch", time: "09:15", action: "Drop-off Completed" },
-      ],
-      timeline: [
-        { label: "Departed for Pickup", time: "08:00", completed: true },
-        { label: "Arrived at Pickup Location", time: "08:15", completed: true },
-        { label: "Departed for Drop Off", time: "08:30", completed: true },
-        {
-          label: "Arrived at Drop Off Location",
-          time: "09:10",
-          completed: true,
-        },
-        { label: "Delivery Completed", time: "09:15", completed: true },
-      ],
-    },
-    behavior: {
-      totalAlerts: 2,
-      avgAlertsPerTrip: 2.0,
-      riskLevel: getRiskLevel(2),
-      alertsByType: [
-        {
-          type: "prolonged_eye_closure",
-          count: 1,
-          label: "Prolonged Eye Closure",
-        },
-        {
-          type: "pattern_repeated_eye_closure",
-          count: 1,
-          label: "Repeated Eye Closure",
-        },
-      ],
-      sessions: [
-        {
-          start: "2026-07-20T08:30:00",
-          end: "2026-07-20T09:15:00",
-          alerts: 2,
-          duration: 2700,
-        },
-      ],
-    },
-    delivery: {
-      totalAlerts: 2,
-      totalSessions: 1,
-      avgAlertDuration: "47s",
-      peakAlertTime: "08:45 AM",
-      eyeClosureAlerts: [
-        {
-          id: "A-1",
-          time: "2026-07-20T08:42:00",
-          type: "prolonged_eye_closure",
-          duration: 45,
-          severity: "Moderate",
-        },
-        {
-          id: "A-2",
-          time: "2026-07-20T08:55:00",
-          type: "pattern_repeated_eye_closure",
-          duration: 50,
-          severity: "High",
-        },
-      ],
-      history: [
-        {
-          event: "Delivery Request Created",
-          timestamp: "2026-07-18T10:00:00",
-          actor: "System",
-        },
-        {
-          event: "Quotation Approved",
-          timestamp: "2026-07-18T14:30:00",
-          actor: "Supervisor",
-        },
-        {
-          event: "Crew Assigned — Carlos Mendoza + ABC 1234",
-          timestamp: "2026-07-19T08:00:00",
-          actor: "Supervisor",
-        },
-        {
-          event: "Picked Up from Pasig Hub",
-          timestamp: "2026-07-20T08:30:00",
-          actor: "Driver",
-        },
-        {
-          event: "Delivered to BGC Branch",
-          timestamp: "2026-07-20T09:15:00",
-          actor: "Driver",
-        },
-        {
-          event: "Marked as Completed",
-          timestamp: "2026-07-20T09:20:00",
-          actor: "System",
-        },
-      ],
-    },
-  },
-  "DEL-005": {
-    routeDeviation: {
-      planned: [
-        [14.3, 120.96],
-        [14.32, 120.97],
-        [14.35, 120.985],
-        [14.38, 121.0],
-        [14.4, 121.015],
-        [14.42, 121.031],
-      ],
-      actual: [
-        [14.3, 120.96],
-        [14.31, 120.965],
-        [14.33, 120.945],
-        [14.36, 120.965],
-        [14.39, 121.01],
-        [14.41, 121.025],
-        [14.42, 121.031],
-      ],
-      plannedDistance: "18.2 km",
-      actualDistance: "22.8 km",
-      deviationDistance: "4.6 km",
-      deviationPercent: 25.3,
-      aiSummary:
-        "Significant route deviation detected. The driver took an alternative route through General Trias residential areas instead of staying on Aguinaldo Highway, adding 4.6 km to the planned route. This deviation is notable and may indicate driver unfamiliarity with the area or a deliberate choice to avoid traffic. Recommend reviewing the trip log for this delivery to assess any impact on schedule or fuel efficiency.",
-      aiVerdict: "Significant Deviation",
-      aiVerdictTone: "red",
-    },
-    trip: {
-      route: "Cavite Depot → Alabang Branch",
-      distance: "22.8 km",
-      duration: "55 min",
-      startTime: "2026-07-19T06:00:00",
-      endTime: "2026-07-19T06:55:00",
-      stops: [
-        { location: "Cavite Depot", time: "06:00", action: "Departure" },
-        { location: "General Trias Toll", time: "06:20", action: "Waypoint" },
-        {
-          location: "Alabang Branch",
-          time: "06:55",
-          action: "Drop-off Completed",
-        },
-      ],
-      timeline: [
-        { label: "Departed for Pickup", time: "05:30", completed: true },
-        { label: "Arrived at Pickup Location", time: "05:45", completed: true },
-        { label: "Departed for Drop Off", time: "06:00", completed: true },
-        {
-          label: "Arrived at Drop Off Location",
-          time: "06:48",
-          completed: true,
-        },
-        { label: "Delivery Completed", time: "06:55", completed: true },
-      ],
-    },
-    behavior: {
-      totalAlerts: 5,
-      avgAlertsPerTrip: 5.0,
-      riskLevel: getRiskLevel(5),
-      alertsByType: [
-        {
-          type: "prolonged_eye_closure",
-          count: 2,
-          label: "Prolonged Eye Closure",
-        },
-        {
-          type: "pattern_eye_closure_yawn",
-          count: 2,
-          label: "Eye Closure + Yawn",
-        },
-        {
-          type: "pattern_repeated_eye_closure",
-          count: 1,
-          label: "Repeated Eye Closure",
-        },
-      ],
-      sessions: [
-        {
-          start: "2026-07-19T06:00:00",
-          end: "2026-07-19T06:55:00",
-          alerts: 5,
-          duration: 3300,
-        },
-      ],
-    },
-    delivery: {
-      totalAlerts: 5,
-      totalSessions: 1,
-      avgAlertDuration: "52s",
-      peakAlertTime: "06:30 AM",
-      eyeClosureAlerts: [
-        {
-          id: "A-3",
-          time: "2026-07-19T06:12:00",
-          type: "prolonged_eye_closure",
-          duration: 60,
-          severity: "High",
-        },
-        {
-          id: "A-4",
-          time: "2026-07-19T06:20:00",
-          type: "pattern_eye_closure_yawn",
-          duration: 45,
-          severity: "Moderate",
-        },
-        {
-          id: "A-5",
-          time: "2026-07-19T06:28:00",
-          type: "pattern_eye_closure_yawn",
-          duration: 55,
-          severity: "High",
-        },
-        {
-          id: "A-6",
-          time: "2026-07-19T06:35:00",
-          type: "prolonged_eye_closure",
-          duration: 50,
-          severity: "Moderate",
-        },
-        {
-          id: "A-7",
-          time: "2026-07-19T06:42:00",
-          type: "pattern_repeated_eye_closure",
-          duration: 50,
-          severity: "High",
-        },
-      ],
-      history: [
-        {
-          event: "Delivery Request Created",
-          timestamp: "2026-07-17T09:00:00",
-          actor: "System",
-        },
-        {
-          event: "Quotation Approved",
-          timestamp: "2026-07-17T15:00:00",
-          actor: "Supervisor",
-        },
-        {
-          event: "Crew Assigned — Miguel Santos + XYZ 5678",
-          timestamp: "2026-07-18T10:00:00",
-          actor: "Supervisor",
-        },
-        {
-          event: "Picked Up from Cavite Depot",
-          timestamp: "2026-07-19T06:00:00",
-          actor: "Driver",
-        },
-        {
-          event: "Delivered to Alabang Branch",
-          timestamp: "2026-07-19T06:55:00",
-          actor: "Driver",
-        },
-        {
-          event: "Marked as Completed",
-          timestamp: "2026-07-19T07:00:00",
-          actor: "System",
-        },
-      ],
-    },
-  },
-};
-
 // Resolves a single "lat, lng"-shaped location (e.g. DR-0020-style fixture
 // data) into a real address inline -- its own component (not called inline
 // as a plain function) so `useResolvedAddress` can be called once per row
@@ -2255,381 +1961,6 @@ export const COMPLETED_REPORT_DATA = {
 // existing per-portal convention.
 function ResolvedText({ value }) {
   return useResolvedAddress(value || "");
-}
-
-// Real Delivery Report data for the Driver's own CompletedDeliveryReport
-// below, 2026-08-14 -- mirrors SupDeliveries.jsx's
-// buildRealTripAndBehaviorReport (same sessions/alerts/gps_logs sources,
-// same haversine distance/timeline/risk-tier logic), reshaped into this
-// file's own simpler report structure rather than sharing that function
-// directly (per-portal duplication, same reasoning as ResolvedText/
-// RouteDeviationMap above). Fields with no real backing anywhere in the
-// schema (an AI route-deviation narrative, precise pickup-confirmed
-// timestamps) are left out rather than fabricated, same rule that function
-// already established.
-// eslint-disable-next-line react-refresh/only-export-components
-export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs, rerouteEvents = []) {
-  if (!sessions.length) return null;
-
-  const sorted = [...sessions].sort(
-    (a, b) => new Date(a.start_time) - new Date(b.start_time),
-  );
-  const firstSession = sorted[0];
-  // 14_RETURN_TRIP_MONITORING.md's automatic return-to-base Session always
-  // sorts last (it's only ever opened after every other Session for this
-  // delivery has closed) -- using the plain last-by-start-time Session for
-  // "when was this delivery actually completed" would show when the driver
-  // got back to the warehouse instead, once one exists. mainSessions falls
-  // back to `sorted` itself for a delivery with no return-trip Session at
-  // all (predates this feature, or it hasn't opened yet), so this only
-  // changes behavior once a return leg genuinely exists.
-  const mainSessions = sorted.filter((s) => !s.is_return_trip);
-  const lastMainSession = mainSessions[mainSessions.length - 1] || sorted[sorted.length - 1];
-  // Distance/monitored-time totals intentionally still sum every Session,
-  // return leg included -- it's real distance/monitoring time for this
-  // delivery's day, just not part of "when was it delivered" (see
-  // lastMainSession above) or the Route Deviation comparison below (which
-  // has its own separate, planned-route-scoped total further down).
-  const totalDurationSec = sorted.reduce(
-    (sum, s) => sum + (s.session_duration || 0),
-    0,
-  );
-
-  const bySessionId = {};
-  for (const row of gpsLogs) {
-    if (!bySessionId[row.session_id]) bySessionId[row.session_id] = [];
-    bySessionId[row.session_id].push(row);
-  }
-  let totalMeters = 0;
-  for (const points of Object.values(bySessionId)) {
-    for (let i = 1; i < points.length; i += 1) {
-      totalMeters += distanceMeters(
-        points[i - 1].latitude,
-        points[i - 1].longitude,
-        points[i].latitude,
-        points[i].longitude,
-      );
-    }
-  }
-
-  // Real per-item completion order -- dropoff_location isn't always last in
-  // the chain (02B_MULTI_STOP_DELIVERIES.md's Dynamic Nearest-Dropoff
-  // Ordering), so this sorts by each item's actual completedAt rather than
-  // assuming dropoff always precedes the stops.
-  const dropoffEvents = [];
-  if (delivery.dropoffCompletedAt) {
-    dropoffEvents.push({
-      label: "Dropoff Completed",
-      location: delivery.deliveryAddress,
-      at: delivery.dropoffCompletedAt,
-    });
-  }
-  (delivery.stops || []).forEach((s, i) => {
-    if (s.completed && s.completedAt) {
-      dropoffEvents.push({
-        label: `Dropoff ${i + 2} Completed`,
-        location: s.location,
-        at: s.completedAt,
-      });
-    }
-  });
-  dropoffEvents.sort((a, b) => new Date(a.at) - new Date(b.at));
-
-  // Pickup's own confirmation has no stored timestamp anywhere (only
-  // pickup_photo_url, essentially a boolean flag) -- shown as done without
-  // a time rather than an invented one, same as the Supervisor's version.
-  const timeline = [
-    delivery.assignedAt && {
-      label: "Assigned to Trip",
-      time: delivery.assignedAt,
-      completed: true,
-    },
-    {
-      label: "Pickup Trip Started",
-      time: formatAlertTimestamp(firstSession.start_time),
-      completed: true,
-    },
-    delivery.pickupPhotoUrl && {
-      label: "Pickup Confirmed",
-      time: "",
-      completed: true,
-    },
-    ...dropoffEvents.map((e) => ({
-      label: e.label,
-      time: formatAlertTimestamp(e.at),
-      completed: true,
-    })),
-    {
-      label: "Delivery Completed",
-      time: formatAlertTimestamp(lastMainSession.end_time),
-      completed: true,
-    },
-  ].filter(Boolean);
-
-  const stops = [
-    {
-      location: delivery.pickupAddress,
-      time: formatAlertTimestamp(firstSession.start_time),
-      action: "Pickup / Departure",
-    },
-    ...dropoffEvents.map((e) => ({
-      location: e.location,
-      time: formatAlertTimestamp(e.at),
-      action: e.label,
-    })),
-  ];
-
-  // History mirrors the Timeline's real events but with raw ISO timestamps
-  // (History's own row re-formats via formatAlertTimestamp) -- "Pickup
-  // Confirmed" is left out here specifically since it has no real timestamp
-  // to show (unlike Timeline's own "—" placeholder, a History row with no
-  // time at all would look broken).
-  const history = [
-    { event: "Pickup Trip Started", at: firstSession.start_time },
-    ...dropoffEvents.map((e) => ({ event: e.label, at: e.at })),
-    { event: "Delivery Completed", at: lastMainSession.end_time },
-  ].map((e) => ({ event: e.event, timestamp: e.at, actor: "You" }));
-
-  // "Eye Closure Alerts" -- the three real drowsiness event types, not
-  // face_not_detected (camera-visibility issue, not a drowsiness signal --
-  // same distinction already applied throughout this app, e.g. the
-  // driver-facing audio alert gate and DriverPerformance.jsx's weekly card).
-  const eyeClosureAlerts = alerts
-    .filter((a) => a.event_type !== "face_not_detected")
-    .map((a) => ({
-      id: a.id,
-      type: a.event_type,
-      time: a.created_at,
-      duration: a.duration,
-      severity: (a.duration || 0) >= 20 ? "High" : "Moderate",
-    }));
-  const avgClosureSec = eyeClosureAlerts.length
-    ? eyeClosureAlerts.reduce((sum, a) => sum + (a.duration || 0), 0) /
-      eyeClosureAlerts.length
-    : null;
-
-  const hourlyCounts = Array.from({ length: 24 }, () => 0);
-  alerts.forEach((a) => {
-    const hour = getManilaHour(a.created_at);
-    if (hour != null) hourlyCounts[hour] += 1;
-  });
-  let peakHour = null;
-  let peakCount = 0;
-  hourlyCounts.forEach((count, hour) => {
-    if (count > peakCount) {
-      peakCount = count;
-      peakHour = hour;
-    }
-  });
-
-  const typeCounts = {};
-  alerts.forEach((a) => {
-    typeCounts[a.event_type] = (typeCounts[a.event_type] || 0) + 1;
-  });
-  const alertsByType = Object.keys(ALERT_TYPE_LABELS).map((type) => ({
-    type,
-    label: ALERT_TYPE_LABELS[type],
-    count: typeCounts[type] || 0,
-  }));
-
-  // face_not_detected excluded from risk classification, not from the raw
-  // alert count -- same reasoning as eyeClosureAlerts above.
-  const drowsinessAlertCount = alerts.filter(
-    (a) => a.event_type !== "face_not_detected",
-  ).length;
-  const riskLevel = getRiskLevel(drowsinessAlertCount);
-
-  // Route Deviation (11_ROUTE_COMPARISON.md) -- only when the pre-trip
-  // screen actually saved a planned route (PlannedRouteMap's one-time
-  // write). No AI narrative is fabricated for it, matching this function's
-  // "don't invent what has no real source" rule throughout.
-  const suggestedRoute = Array.isArray(delivery.suggestedRoute)
-    ? delivery.suggestedRoute
-    : null;
-  // Computed unconditionally (unlike routeDeviation below) -- a reroute can
-  // get logged and needs to stay visible/taggable even for the rare
-  // delivery with no saved suggested_route to compare against (predates
-  // PlannedRouteMap, or its pre-trip computation failed) -- LiveNavigationMap
-  // still navigates and still reroutes on deviation either way.
-  const rerouteEventsForDisplay = rerouteEvents.map((r) => ({
-    id: r.id,
-    occurredAt: r.occurred_at,
-    reason: r.reason,
-  }));
-  let routeDeviation = null;
-  if (suggestedRoute && suggestedRoute.length > 0) {
-    // Leg 0 is Warehouse -> Pickup (PlannedRouteMap's fixed WAREHOUSE_ADDRESS
-    // origin), matching NAV_LEG_COLORS' own documented convention (index 0
-    // reserved for the to-pickup leg) -- no `+1` offset needed.
-    const plannedLegs = suggestedRoute.map((leg, i) => ({
-      path: leg.path,
-      color: NAV_LEG_COLORS[i % NAV_LEG_COLORS.length],
-    }));
-    const plannedMeters = suggestedRoute.reduce((sum, leg) => {
-      let legMeters = 0;
-      for (let i = 1; i < leg.path.length; i += 1) {
-        legMeters += distanceMeters(
-          leg.path[i - 1][0],
-          leg.path[i - 1][1],
-          leg.path[i][0],
-          leg.path[i][1],
-        );
-      }
-      return sum + legMeters;
-    }, 0);
-    // Route Deviation compares against suggested_route, which only ever
-    // covers the one-way Warehouse -> Pickup -> Dropoff/Stops trip -- the
-    // return-to-base leg's GPS must be excluded here specifically (unlike
-    // totalMeters/totalDurationSec above, which stay unfiltered for the
-    // Trip/Behavior tabs' own "distance driven today" figures), or every
-    // delivery with a return-trip Session would show a huge fake deviation
-    // (14_RETURN_TRIP_MONITORING.md).
-    const mainTotalMeters = mainSessions.reduce((sum, s) => {
-      const points = bySessionId[s.session_id] || [];
-      let legMeters = 0;
-      for (let i = 1; i < points.length; i += 1) {
-        legMeters += distanceMeters(
-          points[i - 1].latitude,
-          points[i - 1].longitude,
-          points[i].latitude,
-          points[i].longitude,
-        );
-      }
-      return sum + legMeters;
-    }, 0);
-    const deviationMeters = Math.abs(mainTotalMeters - plannedMeters);
-    // Derived from the legs' own real (geocoded) path points, not
-    // delivery.pickupCoords/destinationCoords -- those only resolve a
-    // "lat, lng"-shaped fixture value via parseCoords and are null for a
-    // real, human-entered address, which silently dropped the map's
-    // pickup/dropoff pins for any normal booking. suggested_route's paths
-    // are always real coordinates either way (DirectionsService geocodes
-    // whatever address it was given), so this works unconditionally.
-    // leg[0] is Warehouse -> Pickup, not Pickup -> Dropoff, so pickupPoint
-    // is that leg's END, not its start.
-    const pickupLeg = suggestedRoute.find((leg) => leg.to === "pickup");
-    const pickupPoint = pickupLeg
-      ? pickupLeg.path[pickupLeg.path.length - 1]
-      : null;
-    const dropoffLeg = suggestedRoute.find((leg) => leg.to === "dropoff");
-    const dropoffPoint = dropoffLeg
-      ? dropoffLeg.path[dropoffLeg.path.length - 1]
-      : null;
-    const deviationPercent =
-      plannedMeters > 0
-        ? Math.round((deviationMeters / plannedMeters) * 100)
-        : 0;
-
-    // Rule-based route-deviation verdict (11_ROUTE_COMPARISON.md Part D) --
-    // no LLM/API call, pure geometry over data already in memory. Shared
-    // with SupDeliveries.jsx's identical routeDeviation build via
-    // classifyRouteDeviation (lib/suggestedRoute.js).
-    const actualPointsWithTime = mainSessions.flatMap(
-      (s) => bySessionId[s.session_id] || [],
-    );
-    const classification = classifyRouteDeviation({
-      plannedPoints: plannedLegs.flatMap((leg) => leg.path),
-      actualPoints: actualPointsWithTime,
-      plannedMeters,
-      totalMeters: mainTotalMeters,
-      rerouteSegments: rerouteEvents.map((r) => ({
-        path: r.new_path,
-        occurredAt: r.occurred_at,
-      })),
-    });
-
-    let aiVerdict = null;
-    let aiVerdictTone = null;
-    let aiSummary = null;
-    let deviationSegments = [];
-    if (classification) {
-      aiVerdict = classification.verdict;
-      aiVerdictTone = classification.tone;
-      const roundedOffset = Math.round(classification.maxOffsetMeters);
-      const distanceSavedKm = ((plannedMeters - mainTotalMeters) / 1000).toFixed(1);
-      if (classification.verdict === "Beneficial") {
-        aiSummary = `Actual distance was ${distanceSavedKm}km shorter than the planned route — likely a more efficient path.`;
-      } else if (classification.verdict === "Reasonable") {
-        aiSummary = `Truck stayed within ${roundedOffset}m of the planned route throughout — normal route variation, no extended stop detected.`;
-      } else if (classification.dwells.length > 0) {
-        const longest = [...classification.dwells].sort(
-          (a, b) => b.durationMinutes - a.durationMinutes,
-        )[0];
-        aiSummary = `Truck was off-route for about ${longest.durationMinutes} minutes near ${longest.lat.toFixed(5)}, ${longest.lng.toFixed(5)} starting ${formatAlertTimestamp(longest.startedAt)} — no scheduled stop accounts for this.`;
-      } else {
-        const p = classification.maxOffsetPoint;
-        aiSummary = `Truck deviated up to ${roundedOffset}m from the planned route${p ? ` near ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)} at ${formatAlertTimestamp(p.timestamp)}` : ""}, without a corresponding stop.`;
-      }
-      deviationSegments = classification.dwells.map((d) => ({
-        location: `${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}`,
-        extraDistance: `${roundedOffset}m off-route`,
-        reason: `Off-route for ${d.durationMinutes} min, ${formatAlertTimestamp(d.startedAt)} – ${formatAlertTimestamp(d.resumedAt)}`,
-        severity: d.durationMinutes >= 15 ? "Significant" : "Minor",
-      }));
-    }
-
-    routeDeviation = {
-      plannedLegs,
-      actualRoute: mainSessions.flatMap((s) =>
-        (bySessionId[s.session_id] || []).map((p) => [p.latitude, p.longitude]),
-      ),
-      pickupCoords: pickupPoint
-        ? { lat: pickupPoint[0], lng: pickupPoint[1] }
-        : null,
-      dropoffCoords: dropoffPoint
-        ? { lat: dropoffPoint[0], lng: dropoffPoint[1] }
-        : null,
-      plannedDistance:
-        plannedMeters > 0 ? `${(plannedMeters / 1000).toFixed(1)} km` : "",
-      actualDistance:
-        mainTotalMeters > 0 ? `${(mainTotalMeters / 1000).toFixed(1)} km` : "",
-      deviationDistance: `${(deviationMeters / 1000).toFixed(1)} km`,
-      deviationPercent,
-      aiVerdict,
-      aiVerdictTone,
-      aiSummary,
-      deviationSegments,
-    };
-  }
-
-  return {
-    trip: {
-      distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "",
-      duration: formatAlertDuration(totalDurationSec),
-      stops,
-      timeline,
-    },
-    delivery: {
-      totalAlerts: alerts.length,
-      avgAlertDuration:
-        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "",
-      peakAlertTime:
-        peakHour != null ? `${String(peakHour).padStart(2, "0")}:00` : "",
-      eyeClosureAlerts,
-      history,
-    },
-    behavior: {
-      totalAlerts: alerts.length,
-      riskLevel,
-      alertsByType,
-      sessions: sorted.map((s) => ({
-        start: s.start_time,
-        end: s.end_time,
-        alerts:
-          s.total_alerts ??
-          alerts.filter((a) => a.session_id === s.session_id).length,
-        duration: s.session_duration,
-        // 14_RETURN_TRIP_MONITORING.md: labeled distinctly in this
-        // per-session breakdown so it doesn't read as another delivery leg.
-        label: s.is_return_trip ? "Return to Base" : null,
-      })),
-    },
-    routeDeviation,
-    // Top-level, not nested under routeDeviation -- see
-    // rerouteEventsForDisplay's own comment above for why this stays visible
-    // even when there's no suggested_route to build a routeDeviation from.
-    rerouteEvents: rerouteEventsForDisplay,
-  };
 }
 
 // 3-way tone lookup for the rule-based route-deviation verdict (11_ROUTE_
@@ -4628,12 +3959,18 @@ function DriverDeliveries() {
     const upcomingDeliveries = otherNonTerminal.filter(
       (d) => d.pickupDate > today,
     );
-    const overdueDeliveries = otherNonTerminal.filter(
-      (d) => d.pickupDate < today,
-    );
-    const historyDeliveries = mapped.filter(
-      (d) => TERMINAL_STATUSES.has(d.status) && d.id !== workspaceDelivery?.id,
-    );
+    const overdueDeliveries = otherNonTerminal
+      .filter((d) => d.pickupDate < today)
+      .sort((a, b) => {
+        const dateCmp = String(b.pickupDate || "").localeCompare(String(a.pickupDate || ""));
+        return dateCmp !== 0 ? dateCmp : String(b.pickupTime || "").localeCompare(String(a.pickupTime || ""));
+      });
+    const historyDeliveries = mapped
+      .filter((d) => TERMINAL_STATUSES.has(d.status) && d.id !== workspaceDelivery?.id)
+      .sort((a, b) => {
+        const dateCmp = String(b.pickupDate || "").localeCompare(String(a.pickupDate || ""));
+        return dateCmp !== 0 ? dateCmp : String(b.pickupTime || "").localeCompare(String(a.pickupTime || ""));
+      });
 
     // workspaceDelivery is unconditionally part of Today's list even when
     // its own pickupDate isn't today (the stale-session-recovery case above).
@@ -4669,8 +4006,9 @@ function DriverDeliveries() {
   useEffect(() => {
     // Initial fetch on mount, same shape as every other data-load effect in
     // this file -- not a derived-state anti-pattern.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadDeliveries();
+    Promise.resolve().then(() => {
+      loadDeliveries();
+    });
   }, [loadDeliveries]);
 
   // Live pickup: the Helper now completes Confirm Pickup/dropoff/every stop

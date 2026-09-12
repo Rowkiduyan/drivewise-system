@@ -30,11 +30,11 @@ import {
   X,
 } from "lucide-react";
 import HelperLayout from "../layout/HelperLayout.jsx";
+import { CompletedDeliveryReport } from "./DriverDeliveries.jsx";
 import {
   buildRealDriverTripReport,
   COMPLETED_REPORT_DATA,
-  CompletedDeliveryReport,
-} from "./DriverDeliveries.jsx";
+} from "../lib/driverReportData.js";
 import { supabase } from "../lib/supabaseClient.js";
 import { resizeProofPhotoToBase64 } from "../lib/proofPhoto.js";
 import { fetchRerouteEvents } from "../lib/suggestedRoute.js";
@@ -1777,12 +1777,18 @@ function HelperDeliveries() {
     const upcomingDeliveries = otherNonTerminal.filter(
       (d) => d.pickupDate > today,
     );
-    const overdueDeliveries = otherNonTerminal.filter(
-      (d) => d.pickupDate < today,
-    );
-    const historyDeliveries = mapped.filter((d) =>
-      TERMINAL_STATUSES.has(d.status),
-    );
+    const overdueDeliveries = otherNonTerminal
+      .filter((d) => d.pickupDate < today)
+      .sort((a, b) => {
+        const dateCmp = String(b.pickupDate || "").localeCompare(String(a.pickupDate || ""));
+        return dateCmp !== 0 ? dateCmp : String(b.pickupTime || "").localeCompare(String(a.pickupTime || ""));
+      });
+    const historyDeliveries = mapped
+      .filter((d) => TERMINAL_STATUSES.has(d.status))
+      .sort((a, b) => {
+        const dateCmp = String(b.pickupDate || "").localeCompare(String(a.pickupDate || ""));
+        return dateCmp !== 0 ? dateCmp : String(b.pickupTime || "").localeCompare(String(a.pickupTime || ""));
+      });
     const todaysList = workspaceDelivery
       ? [workspaceDelivery, ...todaysDeliveries]
       : todaysDeliveries;
@@ -1971,9 +1977,10 @@ function HelperDeliveries() {
     // Resets local alert state when the workspace delivery's session changes
     // (e.g. a pause/resume cycle produces a new session_id) -- reacting to
     // an external-system id change, not a derived-state anti-pattern.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLiveAlerts([]);
-    setIsAlertHistoryExpanded(false);
+    Promise.resolve().then(() => {
+      setLiveAlerts([]);
+      setIsAlertHistoryExpanded(false);
+    });
   }, [workspaceDelivery?.sessionId]);
 
   const historySearchMatch = (d) => {

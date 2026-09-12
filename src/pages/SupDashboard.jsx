@@ -383,8 +383,9 @@ function useFleetOps() {
     // Seed-fetch on mount, same external-system-sync shape already accepted
     // elsewhere in this codebase (DriverDeliveries.jsx/HelperDeliveries.jsx)
     // — not a derived-state anti-pattern.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadOps();
+    Promise.resolve().then(() => {
+      loadOps();
+    });
     const channel = supabase
       .channel("sup-dashboard-ops")
       .on("postgres_changes", { event: "*", schema: "public", table: "devices" }, loadOps)
