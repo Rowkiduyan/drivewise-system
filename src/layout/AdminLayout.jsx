@@ -5,6 +5,7 @@ import LogoutButton from "./LogoutButton.jsx";
 import { useUserProfile } from "../lib/useUserInitials.js";
 import { useDeactivationGuard } from "../lib/useDeactivationGuard.js";
 import { formatCutoff } from "../lib/deactivation.js";
+import { useSidebarBadges } from "../lib/useSidebarBadges.js";
 
 // Order of modules as requested:
 // 1. User Management
@@ -14,14 +15,14 @@ import { formatCutoff } from "../lib/deactivation.js";
 // 5. Profile
 const adminModules = [
   {
-    label: "User Management",
-    path: "/admin/user-management",
-    description: "Users, roles, and accounts",
-  },
-  {
     label: "Dashboard",
     path: "/admin/dashboard",
     description: "Fleet operations overview",
+  },
+  {
+    label: "User Management",
+    path: "/admin/user-management",
+    description: "Users, roles, and accounts",
   },
   {
     label: "Device Management",
@@ -135,6 +136,9 @@ function AdminLayout({ title, background, children, bg = "bg-white" }) {
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
   const deactivationWarning = useDeactivationGuard();
   const location = useLocation();
+  const { overdueTrucks, scheduledTrucks } = useSidebarBadges({
+    includeDeliveries: false,
+  });
 
   useEffect(() => {
     window.localStorage.setItem(adminSidebarStorageKey, String(isExpanded));
@@ -215,7 +219,7 @@ function AdminLayout({ title, background, children, bg = "bg-white" }) {
                 aria-label={module.label}
                 onClick={(event) => event.stopPropagation()}
                 className={({ isActive }) =>
-                  `flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
+                  `relative flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
                     isActive
                       ? `${adminSidebarTheme.activeLink} rounded-lg`
                       : `${adminSidebarTheme.inactiveLink} hover:rounded-lg hover:bg-violet-900/40`
@@ -234,6 +238,43 @@ function AdminLayout({ title, background, children, bg = "bg-white" }) {
                 >
                   {module.label}
                 </span>
+
+                {module.label === "Trucks" &&
+                (overdueTrucks > 0 || scheduledTrucks > 0) ? (
+                  isExpanded ? (
+                    <span className="ml-auto flex items-center gap-1">
+                      {overdueTrucks > 0 ? (
+                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+                          {overdueTrucks > 99 ? "99+" : overdueTrucks}
+                        </span>
+                      ) : null}
+                      {scheduledTrucks > 0 ? (
+                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold text-white">
+                          {scheduledTrucks > 99
+                            ? "99+"
+                            : scheduledTrucks}
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className="absolute -right-0.5 top-0.5 flex flex-col items-center gap-0.5">
+                      {overdueTrucks > 0 ? (
+                        <span className="flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-[8px] font-bold text-white leading-none">
+                          {overdueTrucks > 99
+                            ? "99+"
+                            : overdueTrucks}
+                        </span>
+                      ) : null}
+                      {scheduledTrucks > 0 ? (
+                        <span className="flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-amber-400 px-0.5 text-[8px] font-bold text-white leading-none">
+                          {scheduledTrucks > 99
+                            ? "99+"
+                            : scheduledTrucks}
+                        </span>
+                      ) : null}
+                    </span>
+                  )
+                ) : null}
               </NavLink>
             ))}
           </nav>
