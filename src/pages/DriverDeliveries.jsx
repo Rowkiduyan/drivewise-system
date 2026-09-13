@@ -453,6 +453,12 @@ const NAV_LEG_COLORS = [
 // ({lat: 14.5506, lng: 121.0471}) representing the same real place under a
 // different, never-reconciled guess.
 
+// 14B_ARRIVED_AT_BASE_CONFIRMATION.md: same constant driver-trip/gps-upload
+// use server-side for the automatic geofence auto-close -- duplicated here
+// so the "Arrived at Base" confirm modal can decide client-side whether the
+// driver is genuinely far enough away to warrant the warning copy.
+const RETURN_TRIP_GEOFENCE_METERS = 150;
+
 function stripHtml(html) {
   return String(html || "").replace(/<[^>]+>/g, "");
 }
@@ -2622,6 +2628,11 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs, r
         // 14_RETURN_TRIP_MONITORING.md: labeled distinctly in this
         // per-session breakdown so it doesn't read as another delivery leg.
         label: s.is_return_trip ? "Return to Base" : null,
+        // 14B_ARRIVED_AT_BASE_CONFIRMATION.md: null for every close path
+        // except the manual "Arrived at Base" fallback -- the UI decides
+        // whether to call it out based on this value vs
+        // RETURN_TRIP_GEOFENCE_METERS, not a separate boolean.
+        manualCloseOffsetMeters: s.manual_close_offset_meters ?? null,
       })),
     },
     routeDeviation,
@@ -3031,6 +3042,15 @@ export function CompletedDeliveryReport({
                         {session.label}
                       </span>
                     )}
+                    {/* 14B_ARRIVED_AT_BASE_CONFIRMATION.md: quiet factual note,
+                        not a warning tone -- only shown when the manual close
+                        happened genuinely outside the geofence. */}
+                    {session.manualCloseOffsetMeters != null &&
+                      session.manualCloseOffsetMeters > RETURN_TRIP_GEOFENCE_METERS && (
+                        <span className="mr-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">
+                          Closed {(session.manualCloseOffsetMeters / 1000).toFixed(1)}km from base
+                        </span>
+                      )}
                     {formatAlertTimestamp(session.start)} —{" "}
                     {formatAlertTimestamp(session.end)}
                   </span>
@@ -3722,7 +3742,7 @@ function DeliveryDetailView({
       const { data: sessionRows } = await supabase
         .from("sessions")
         .select(
-          "session_id, start_time, end_time, total_alerts, session_duration, is_return_trip",
+          "session_id, start_time, end_time, total_alerts, session_duration, is_return_trip, manual_close_offset_meters",
         )
         .eq("delivery_request_id", delivery.id)
         .order("start_time", { ascending: true });
@@ -4191,6 +4211,7 @@ function DriverDeliveries() {
   const [confirmingPause, setConfirmingPause] = useState(false);
   const [confirmingResume, setConfirmingResume] = useState(false);
   const [confirmingArrival, setConfirmingArrival] = useState(false);
+  const [confirmingArrivedAtBase, setConfirmingArrivedAtBase] = useState(false);
   const [toast, setToast] = useState(null);
   // Shared across every confirm-modal action below since only one can ever be
   // open at a time — see the "Loading States" convention in DESIGNS.md for
@@ -5321,6 +5342,7 @@ function DriverDeliveries() {
       body: {
         action: "end-return-trip",
         deliveryRequestId: workspaceDelivery.id,
+        ...(livePosition ? { lat: livePosition.lat, lng: livePosition.lng } : {}),
       },
     });
     if (error) {
@@ -5339,7 +5361,22 @@ function DriverDeliveries() {
     setIsAlertHistoryExpanded(false);
     setToast({ message: "Return trip closed out.", type: "success" });
   };
-  const handleArrivedAtBase = () => runTripAction(endReturnTrip, () => {});
+  // 14B_ARRIVED_AT_BASE_CONFIRMATION.md: gains a confirm modal (matching
+  // confirmingArrival's pattern) instead of firing endReturnTrip directly --
+  // the modal itself decides whether to show the "Supervisor will see this"
+  // warning copy based on distance from WAREHOUSE_COORDS at tap time.
+  const handleArrivedAtBase = () => setConfirmingArrivedAtBase(true);
+  const distanceFromBaseMeters = livePosition
+    ? distanceMeters(
+        livePosition.lat,
+        livePosition.lng,
+        WAREHOUSE_COORDS.lat,
+        WAREHOUSE_COORDS.lng,
+      )
+    : null;
+  const isFarFromBase =
+    distanceFromBaseMeters !== null &&
+    distanceFromBaseMeters > RETURN_TRIP_GEOFENCE_METERS;
 
   const historySearchMatch = (d) => {
     const q = search.trim().toLowerCase();
@@ -6374,6 +6411,57 @@ function DriverDeliveries() {
                 }
                 disabled={isSubmittingTripAction}
                 className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-sky-700 px-2.5 py-2 text-[11px] font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSubmittingTripAction && (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                )}
+                {isSubmittingTripAction ? "Please wait…" : "Confirm Arrival"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 14B_ARRIVED_AT_BASE_CONFIRMATION.md -- same confirm-modal shape as
+          confirmingArrival above, but the copy branches on whether livePosition
+          is currently outside RETURN_TRIP_GEOFENCE_METERS of WAREHOUSE_COORDS.
+          No hard block either way -- Confirm always stays available, this is
+          a transparency heads-up, not an enforcement gate. */}
+      {confirmingArrivedAtBase && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-arrived-at-base-title"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-amber-200/70 bg-white p-4 shadow-xl">
+            <h2
+              id="confirm-arrived-at-base-title"
+              className="text-sm font-bold text-slate-900"
+            >
+              {isFarFromBase
+                ? "You're not at the warehouse yet"
+                : "Confirm you've arrived at the warehouse?"}
+            </h2>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
+              {isFarFromBase
+                ? `You're still about ${(distanceFromBaseMeters / 1000).toFixed(1)}km from the warehouse. If you close this now, your Supervisor will be able to see that you marked this trip complete before actually arriving — visible on this trip's report, not as an alert. Continue anyway?`
+                : "This closes out monitoring for the drive back."}
+            </p>
+            <div className="mt-4 flex gap-1.5">
+              <button
+                onClick={() => setConfirmingArrivedAtBase(false)}
+                disabled={isSubmittingTripAction}
+                className="flex-1 whitespace-nowrap rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() =>
+                  runTripAction(endReturnTrip, () => setConfirmingArrivedAtBase(false))
+                }
+                disabled={isSubmittingTripAction}
+                className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-amber-900 px-2.5 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-70"
               >
                 {isSubmittingTripAction && (
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />

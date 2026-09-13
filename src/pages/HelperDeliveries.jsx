@@ -904,7 +904,7 @@ function DeliveryDetailView({
       const { data: sessionRows } = await supabase
         .from("sessions")
         .select(
-          "session_id, start_time, end_time, total_alerts, session_duration, is_return_trip",
+          "session_id, start_time, end_time, total_alerts, session_duration, is_return_trip, manual_close_offset_meters",
         )
         .eq("delivery_request_id", delivery.id)
         .order("start_time", { ascending: true });

@@ -433,6 +433,7 @@ Planned
 - Reports
 - Analytics Dashboard
 - ~~Distinguishable pickup vs. dropoff markers/route color on `LiveNavigationMap`~~ — done, see Completed 2026-08-13 (`Phase 2C`). Shipped as a per-leg color palette plus Pickup/Dropoff/Stop pins, a scoped-up version of option (1) discussed here.
+- ~~Phase 14B (`14B_ARRIVED_AT_BASE_CONFIRMATION.md`)~~ — done, implemented 2026-09-13. The manual "Arrived at Base" fallback (`14_RETURN_TRIP_MONITORING.md`) now shows a confirm modal (matching the existing `confirmingArrival` pattern) that warns the driver when their `livePosition` is genuinely outside the ~150m geofence at tap time, with no hard block either way. `driver-trip`'s `end-return-trip` accepts optional `lat`/`lng`, computes distance from `WAREHOUSE_COORDS` (falling back to the session's last `gps_logs` row, or `null` if neither is available), and persists it on the new `sessions.manual_close_offset_meters` column via `closeReturnTripSession`. Surfaced passively — no live notification — as a quiet "Closed {X}km from base" badge next to the existing "RETURN TO BASE" label in both the Driver/Helper and Supervisor per-session report breakdowns, only when the stored offset exceeds the geofence constant. Verified live end-to-end (far/near/no-position cases all store the expected value).
 
 ---
 

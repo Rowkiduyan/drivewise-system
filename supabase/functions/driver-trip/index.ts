@@ -77,6 +77,7 @@ function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
 async function closeReturnTripSession(
   adminClient: any,
   session: { session_id: string; start_time: string; truck_plate: string | null },
+  manualCloseOffsetMeters?: number,
 ) {
   const endTime = new Date();
   const sessionDuration = Math.round(
@@ -117,6 +118,7 @@ async function closeReturnTripSession(
       end_time: endTime.toISOString(),
       session_duration: sessionDuration,
       status: "Completed",
+      ...(manualCloseOffsetMeters !== undefined ? { manual_close_offset_meters: manualCloseOffsetMeters } : {}),
     })
     .eq("session_id", session.session_id);
 }
@@ -1013,7 +1015,33 @@ Deno.serve(async (req) => {
       return json({ error: "No active return-trip session found for this delivery" }, 400);
     }
 
-    await closeReturnTripSession(adminClient, returnSession);
+    // 14B_ARRIVED_AT_BASE_CONFIRMATION.md: record how far from the warehouse
+    // this manual close happened. Prefer the driver's current livePosition
+    // (freshest, sent by the frontend at tap time); fall back to this
+    // session's most recent gps_logs row if the client couldn't supply one;
+    // leave it null if neither is available rather than fabricating a number.
+    let manualCloseOffsetMeters: number | undefined;
+    const bodyLat = typeof body.lat === "number" && Number.isFinite(body.lat) ? body.lat : null;
+    const bodyLng = typeof body.lng === "number" && Number.isFinite(body.lng) ? body.lng : null;
+
+    if (bodyLat !== null && bodyLng !== null) {
+      manualCloseOffsetMeters = distanceKm(bodyLat, bodyLng, WAREHOUSE_COORDS.lat, WAREHOUSE_COORDS.lng) * 1000;
+    } else {
+      const { data: lastGpsLog } = await adminClient
+        .from("gps_logs")
+        .select("latitude, longitude")
+        .eq("session_id", returnSession.session_id)
+        .order("timestamp", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastGpsLog) {
+        manualCloseOffsetMeters =
+          distanceKm(lastGpsLog.latitude, lastGpsLog.longitude, WAREHOUSE_COORDS.lat, WAREHOUSE_COORDS.lng) * 1000;
+      }
+    }
+
+    await closeReturnTripSession(adminClient, returnSession, manualCloseOffsetMeters);
 
     return json({ ok: true });
   }

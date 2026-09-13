@@ -96,6 +96,12 @@ L.Icon.Default.mergeOptions({
 // own font stack instead of relying solely on inherited font-family.
 const interFontStyle = { fontFamily: "Inter, system-ui, sans-serif" };
 
+// 14B_ARRIVED_AT_BASE_CONFIRMATION.md: same constant driver-trip/gps-upload
+// use server-side for the automatic geofence auto-close -- used here only
+// to decide whether a manual close's stored offset is worth calling out in
+// the Supervisor's per-session breakdown.
+const RETURN_TRIP_GEOFENCE_METERS = 150;
+
 const startIcon = L.divIcon({
   className: "",
   html: '<div style="background:#2563eb;color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.3)">S</div>',
@@ -2078,6 +2084,9 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs, rer
         // 14_RETURN_TRIP_MONITORING.md: labeled distinctly in this
         // per-session breakdown so it doesn't read as another delivery leg.
         label: s.is_return_trip ? "Return to Base" : null,
+        // 14B_ARRIVED_AT_BASE_CONFIRMATION.md: null for every close path
+        // except the manual "Arrived at Base" fallback.
+        manualCloseOffsetMeters: s.manual_close_offset_meters ?? null,
       })),
       analysis,
     },
@@ -3302,6 +3311,15 @@ function DriveWiseAnalysisTab({ report }) {
                     {session.label}
                   </span>
                 )}
+                {/* 14B_ARRIVED_AT_BASE_CONFIRMATION.md: quiet factual note,
+                    not a warning tone -- only shown when the manual close
+                    happened genuinely outside the geofence. */}
+                {session.manualCloseOffsetMeters != null &&
+                  session.manualCloseOffsetMeters > RETURN_TRIP_GEOFENCE_METERS && (
+                    <span className="mr-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+                      Closed {(session.manualCloseOffsetMeters / 1000).toFixed(1)}km from base
+                    </span>
+                  )}
                 {formatAlertTimestamp(session.start)} —{" "}
                 {formatAlertTimestamp(session.end)}
               </span>
@@ -3661,7 +3679,7 @@ function CompletedDeliveryReport({ delivery }) {
       const { data: sessionRows } = await supabase
         .from("sessions")
         .select(
-          "session_id, start_time, end_time, total_alerts, session_duration, is_return_trip",
+          "session_id, start_time, end_time, total_alerts, session_duration, is_return_trip, manual_close_offset_meters",
         )
         .eq("delivery_request_id", delivery.id)
         .order("start_time", { ascending: true });
