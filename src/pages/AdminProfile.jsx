@@ -35,12 +35,12 @@ function calculateAge(birthdate) {
 
 function formatBirthdate(birthdate) {
   if (!birthdate) {
-    return "";
+    return "N/A";
   }
 
   const date = new Date(`${birthdate}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) {
-    return "";
+    return "N/A";
   }
 
   return date.toLocaleDateString("en-US", {
@@ -53,10 +53,13 @@ function formatBirthdate(birthdate) {
 
 function formatAddress(address) {
   if (!address) {
-    return "";
+    return "N/A";
   }
 
-  return [address.street, address.city, address.province].filter(Boolean).join(", ");
+  return (
+    [address.street, address.city, address.province].filter(Boolean).join(", ") ||
+    "N/A"
+  );
 }
 
 // list-users flattens each *_records row this same way (see AdminHome.jsx's
@@ -335,7 +338,7 @@ function AdminProfile() {
                 <InfoField label="Role" value={admin.role} />
                 <InfoField label="Personal Email" value={admin.personalEmail} />
                 <InfoField label="Work Email" value={admin.workEmail} />
-                <InfoField label="Age" value={admin.age ?? ""} />
+                <InfoField label="Age" value={admin.age ?? "N/A"} />
                 <InfoField label="Birthdate" value={admin.birthdate} />
                 <InfoField label="Address" value={admin.address} wide />
               </dl>

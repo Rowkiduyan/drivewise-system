@@ -21,7 +21,7 @@ function Card({ accent, icon: Icon, title, subtext, count, onSelect, status }) {
       <div className="flex-1 text-left">
         <div className="text-sm font-medium text-slate-600">{title}</div>
         <div className="mt-1 text-2xl font-bold text-slate-900">
-          {count} Trucks
+          {count} {count === 1 ? "Truck" : "Trucks"}
         </div>
         <div className="text-xs text-slate-500">{subtext}</div>
       </div>

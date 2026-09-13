@@ -8454,10 +8454,10 @@ function SupDeliveries() {
                         </p>
                       </div>
                       <p className="text-sm text-slate-700 line-clamp-2">
-                        {row.pickupAddress}
+                        <ResolvedText value={row.pickupAddress} />
                       </p>
                       <p className="text-sm text-slate-700 line-clamp-2">
-                        {row.deliveryAddress}
+                        <ResolvedText value={row.deliveryAddress} />
                       </p>
                       <p className="text-sm font-medium text-slate-800 text-center">
                         {row.itemType}
@@ -8539,10 +8539,10 @@ function SupDeliveries() {
                         </p>
                       </div>
                       <p className="text-sm text-slate-700 line-clamp-2">
-                        {row.pickupAddress}
+                        <ResolvedText value={row.pickupAddress} />
                       </p>
                       <p className="text-sm text-slate-700 line-clamp-2">
-                        {row.deliveryAddress}
+                        <ResolvedText value={row.deliveryAddress} />
                       </p>
                       <p className="text-sm font-semibold text-emerald-700 text-center">
                         {row.quotation
@@ -9020,10 +9020,10 @@ function SupDeliveries() {
                             </p>
                           </div>
                           <p className="text-sm text-slate-700 line-clamp-2">
-                            {delivery.pickupAddress}
+                            <ResolvedText value={delivery.pickupAddress} />
                           </p>
                           <p className="text-sm text-slate-700 line-clamp-2">
-                            {delivery.deliveryAddress}
+                            <ResolvedText value={delivery.deliveryAddress} />
                           </p>
                           <div className="min-w-0 text-xs text-slate-500">
                             {delivery.crew?.truck && (
@@ -9127,10 +9127,10 @@ function SupDeliveries() {
                             </p>
                           </div>
                           <p className="text-sm text-slate-700 line-clamp-2">
-                            {delivery.pickupAddress}
+                            <ResolvedText value={delivery.pickupAddress} />
                           </p>
                           <p className="text-sm text-slate-700 line-clamp-2">
-                            {delivery.deliveryAddress}
+                            <ResolvedText value={delivery.deliveryAddress} />
                           </p>
                           <div className="flex justify-center">
                             {delivery.cancellation?.cancelledFromStatus ||

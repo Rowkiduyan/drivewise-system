@@ -4007,7 +4007,16 @@ function DriverDeliveries() {
       setLiveAlerts([]);
       setIsAlertHistoryExpanded(false);
     }
-    prevActiveIdRef.current = workspaceDelivery?.id || null;
+    // Only tracked while genuinely non-terminal, so a later unrelated refresh
+    // (e.g. the Realtime subscription below firing for a change to some
+    // *other* delivery entirely) can't re-match this same id and re-fire the
+    // notice above for a delivery that was already terminal last call too --
+    // the match above only means something the first time it happens after
+    // a real ASSIGNED/... -> DELIVERED transition.
+    prevActiveIdRef.current =
+      workspaceDelivery && !TERMINAL_STATUSES.has(workspaceDelivery.status)
+        ? workspaceDelivery.id
+        : null;
 
     setData({
       workspace: workspaceDelivery,

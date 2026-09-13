@@ -118,7 +118,11 @@ function haversineMeters(
 // block on Pi absence). Returns an error string when it fails CLOSED (target
 // resolves, GPS exists, but they're too far apart).
 async function checkProofLocation(
-  adminClient: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- ReturnType<typeof createClient> with
+  // no Database generic (none exists anywhere in this codebase) collapses
+  // every chained .from()/.select() call to `never`; same fix already used
+  // by driver-trip/index.ts's closeReturnTripSession.
+  adminClient: any,
   deliveryId: string,
   targetLocation: string | null | undefined,
   targetCoords?: { lat: number | null; lng: number | null } | null,
@@ -166,7 +170,11 @@ function decodeBase64(base64: string): Uint8Array {
 // a cache-busted public URL. `pathWithoutExtension` gets the content type's
 // extension appended (e.g. "DR-0011/pickup" -> "DR-0011/pickup.jpg").
 async function uploadProofPhoto(
-  adminClient: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- ReturnType<typeof createClient> with
+  // no Database generic (none exists anywhere in this codebase) collapses
+  // every chained .from()/.select() call to `never`; same fix already used
+  // by driver-trip/index.ts's closeReturnTripSession.
+  adminClient: any,
   pathWithoutExtension: string,
   fileBase64: string,
   contentType: string,
@@ -283,7 +291,11 @@ function loginEmailLocalPart(
 }
 
 async function nextLoginEmail(
-  adminClient: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- ReturnType<typeof createClient> with
+  // no Database generic (none exists anywhere in this codebase) collapses
+  // every chained .from()/.select() call to `never`; same fix already used
+  // by driver-trip/index.ts's closeReturnTripSession.
+  adminClient: any,
   localPrefix: string,
 ) {
   const { data, error } = await adminClient
@@ -417,7 +429,11 @@ function profileRow(role: string, profile: ProfileInput) {
 }
 
 async function nextRecordId(
-  adminClient: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- ReturnType<typeof createClient> with
+  // no Database generic (none exists anywhere in this codebase) collapses
+  // every chained .from()/.select() call to `never`; same fix already used
+  // by driver-trip/index.ts's closeReturnTripSession.
+  adminClient: any,
   table: string,
   prefix: string,
 ) {
@@ -447,7 +463,11 @@ async function nextRecordId(
 // demoting/promoting a user leaves their old role's row as-is, same as
 // the original driver-only behavior this generalizes.
 async function upsertRoleRecord(
-  adminClient: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- ReturnType<typeof createClient> with
+  // no Database generic (none exists anywhere in this codebase) collapses
+  // every chained .from()/.select() call to `never`; same fix already used
+  // by driver-trip/index.ts's closeReturnTripSession.
+  adminClient: any,
   role: string,
   authId: string,
   profile: ProfileInput,
@@ -494,7 +514,11 @@ async function upsertRoleRecord(
 }
 
 async function findContactEmail(
-  adminClient: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- ReturnType<typeof createClient> with
+  // no Database generic (none exists anywhere in this codebase) collapses
+  // every chained .from()/.select() call to `never`; same fix already used
+  // by driver-trip/index.ts's closeReturnTripSession.
+  adminClient: any,
   role: string,
   authId: string,
 ) {
@@ -517,7 +541,11 @@ async function findContactEmail(
 // their matching *_records row by auth_id, since the client can't read
 // the *_records tables directly (service_role only, see DATABASE.md).
 async function listUsersWithProfiles(
-  adminClient: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- ReturnType<typeof createClient> with
+  // no Database generic (none exists anywhere in this codebase) collapses
+  // every chained .from()/.select() call to `never`; same fix already used
+  // by driver-trip/index.ts's closeReturnTripSession.
+  adminClient: any,
   roles?: string[],
 ) {
   let usersQuery = adminClient
@@ -549,7 +577,9 @@ async function listUsersWithProfiles(
     }
   }
 
-  return (usersRows || []).map((user) => {
+  // deno-lint-ignore no-explicit-any -- usersRows comes from the adminClient
+  // `any` workaround above, same reasoning as the parameter comments.
+  return (usersRows || []).map((user: any) => {
     const profile = profilesByAuthId.get(user.id as string) || {};
     return {
       id: user.id,
@@ -577,7 +607,11 @@ async function listUsersWithProfiles(
 // once for the whole roster rather than per-row, since list-crew renders a
 // full table (see SupDeliveryCrew.jsx).
 async function attachClientSpecialties(
-  adminClient: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- ReturnType<typeof createClient> with
+  // no Database generic (none exists anywhere in this codebase) collapses
+  // every chained .from()/.select() call to `never`; same fix already used
+  // by driver-trip/index.ts's closeReturnTripSession.
+  adminClient: any,
   crew: Array<Record<string, unknown>>,
 ) {
   const crewIds = crew.map((member) => member.id as string);
@@ -597,8 +631,10 @@ async function attachClientSpecialties(
     throw new Error(linksError.message);
   }
 
+  // deno-lint-ignore no-explicit-any -- links comes from the adminClient
+  // `any` workaround above, same reasoning as the parameter comments.
   const clientIds = Array.from(
-    new Set((links || []).map((link) => link.client_auth_id as string)),
+    new Set((links || []).map((link: any) => link.client_auth_id as string)),
   );
   const clientNameById = new Map<string, string>();
 
@@ -646,7 +682,11 @@ async function attachClientSpecialties(
 // on their own profile page (DriverProfile.jsx / HelperProfile.jsx); this is
 // the Supervisor's read-only view.
 async function attachWorkingDays(
-  adminClient: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- ReturnType<typeof createClient> with
+  // no Database generic (none exists anywhere in this codebase) collapses
+  // every chained .from()/.select() call to `never`; same fix already used
+  // by driver-trip/index.ts's closeReturnTripSession.
+  adminClient: any,
   crew: Array<Record<string, unknown>>,
 ) {
   const crewIds = crew.map((member) => member.id as string);
