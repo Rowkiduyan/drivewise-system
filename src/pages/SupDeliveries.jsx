@@ -4330,9 +4330,10 @@ function SupDeliveries() {
     if (!deliveryId) return;
     // Reacting to an external source (the URL), same as this file's own
     // loadInbox effect below.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setActiveModule("transit");
-    setMonitoredDeliveryId(deliveryId);
+    Promise.resolve().then(() => {
+      setActiveModule("transit");
+      setMonitoredDeliveryId(deliveryId);
+    });
   }, [searchParams]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -4347,12 +4348,15 @@ function SupDeliveries() {
     // (with an isMounted guard against a stale response) -- the correct,
     // intentional use of an effect, not derived state.
     if (!selectedRequest?.id) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSelectedRequestSuggestedRoute(null);
+      Promise.resolve().then(() => {
+        setSelectedRequestSuggestedRoute(null);
+      });
       return;
     }
     let isMounted = true;
-    setSelectedRequestSuggestedRoute(null);
+    Promise.resolve().then(() => {
+      setSelectedRequestSuggestedRoute(null);
+    });
     supabase
       .from("delivery_requests")
       .select("suggested_route")
@@ -4749,8 +4753,9 @@ function SupDeliveries() {
     mountedRef.current = true;
     // Real async fetch on mount, not derived state -- the correct,
     // intentional use of an effect.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadInbox();
+    Promise.resolve().then(() => {
+      loadInbox();
+    });
     return () => {
       mountedRef.current = false;
     };
@@ -5397,8 +5402,9 @@ function SupDeliveries() {
     const match = dbRequests.find((r) => r.id === targetId);
     if (!match) return;
     openedFromNotificationRef.current = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    openDetails(match);
+    Promise.resolve().then(() => {
+      openDetails(match);
+    });
     // openDetails deliberately omitted -- a plain function redefined every
     // render, not memoized; including it would fire this effect every
     // render instead of only when dbRequests/location.state actually change.

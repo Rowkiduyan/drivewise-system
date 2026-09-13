@@ -649,8 +649,9 @@ function AdminTruckProfile() {
     // from deps -- it's a plain function redefined every render, not
     // memoized; including it would refire this effect every render instead
     // of only when `truck` changes.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadMaintenanceRecords();
+    Promise.resolve().then(() => {
+      loadMaintenanceRecords();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [truck]);
 

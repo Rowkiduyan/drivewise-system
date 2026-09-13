@@ -2,6 +2,7 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient.js";
+import { clearProfileCache } from "../lib/useUserInitials.js";
 
 function LogoutButton({
   isExpanded,
@@ -32,7 +33,7 @@ function LogoutButton({
     }
     setIsLoggingOut(true);
     await supabase.auth.signOut();
-    // Clear all session‑scoped caches on logout (rule 2)
+    clearProfileCache();
     try {
       sessionStorage.clear();
     } catch (e) {

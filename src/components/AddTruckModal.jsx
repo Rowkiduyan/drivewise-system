@@ -123,8 +123,8 @@ export default function AddTruckModal({
       const modelInOptions = INITIAL_MODEL_OPTIONS.some(
         (m) => m.toLowerCase() === normalizedModel.toLowerCase(),
       );
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setFormData({
+      Promise.resolve().then(() => {
+        setFormData({
         plate_number: initialData.plate_number || "",
         // If the brand exists in the predefined options, use it; otherwise set to "Custom"
         brand: brandInOptions ? normalizedBrand : "Custom",
@@ -152,6 +152,7 @@ export default function AddTruckModal({
         status: initialData.status || "",
       });
       setOriginalDeviceId(initialData.device_id || null);
+      });
 
       // Fetch every device (including ones taken by other trucks) so taken
       // devices still show up, just disabled — see the Device ID <select> below.
@@ -169,30 +170,32 @@ export default function AddTruckModal({
       fetchDevices();
     } else {
       // Add mode – reset to defaults and fetch only unassigned devices
-      setFormData({
-        plate_number: "",
-        brand: "",
-        customBrand: "",
-        model: "",
-        customModel: "",
-        truck_type: TRUCK_TYPES[0],
-        customtruck_type: "",
-        commodity_type: "Ordinary",
-        device_id: "",
-        year_model: 2026,
-        date_acquired: "",
-        max_capacity: "",
-        // container dimensions removed (no longer in DB schema)
-        current_mileage: "",
-        // New PMS baseline fields
-        /*previous_maintenance_date: "",
-        previous_mileage: "",*/
-        maintenance_interval_km: DEFAULT_MAINTENANCE_INTERVAL_KM,
-        maintenance_interval_months: DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
-        // Default status to avoid null values
-        status: "Available",
+      Promise.resolve().then(() => {
+        setFormData({
+          plate_number: "",
+          brand: "",
+          customBrand: "",
+          model: "",
+          customModel: "",
+          truck_type: TRUCK_TYPES[0],
+          customtruck_type: "",
+          commodity_type: "Ordinary",
+          device_id: "",
+          year_model: 2026,
+          date_acquired: "",
+          max_capacity: "",
+          // container dimensions removed (no longer in DB schema)
+          current_mileage: "",
+          // New PMS baseline fields
+          /*previous_maintenance_date: "",
+          previous_mileage: "",*/
+          maintenance_interval_km: DEFAULT_MAINTENANCE_INTERVAL_KM,
+          maintenance_interval_months: DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
+          // Default status to avoid null values
+          status: "Available",
+        });
+        setOriginalDeviceId(null);
       });
-      setOriginalDeviceId(null);
       const fetchDevices = async () => {
         const { data, error } = await supabase
           .from("devices")

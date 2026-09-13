@@ -5,6 +5,7 @@ import LogoutButton from "./LogoutButton.jsx";
 import { useUserProfile } from "../lib/useUserInitials.js";
 import { useDeactivationGuard } from "../lib/useDeactivationGuard.js";
 import { formatCutoff } from "../lib/deactivation.js";
+import { useSidebarBadges } from "../lib/useSidebarBadges.js";
 
 const supervisorModules = [
   {
@@ -142,6 +143,8 @@ function SupLayout({ background, children, bg = "bg-white" }) {
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
   const deactivationWarning = useDeactivationGuard();
   const location = useLocation();
+  const { pendingDeliveries, overdueTrucks, scheduledTrucks } =
+    useSidebarBadges();
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -225,7 +228,7 @@ function SupLayout({ background, children, bg = "bg-white" }) {
                 aria-label={module.label}
                 onClick={(event) => event.stopPropagation()}
                 className={({ isActive }) =>
-                  `flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
+                  `relative flex items-center justify-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm transition-all duration-200 ${
                     isActive
                       ? `${supervisorSidebarTheme.activeLink} rounded-lg`
                       : `${supervisorSidebarTheme.inactiveLink} hover:rounded-lg hover:bg-blue-900/40`
@@ -244,6 +247,60 @@ function SupLayout({ background, children, bg = "bg-white" }) {
                 >
                   {module.label}
                 </span>
+
+                {module.label === "Deliveries" &&
+                pendingDeliveries > 0 ? (
+                  isExpanded ? (
+                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+                      {pendingDeliveries > 99
+                        ? "99+"
+                        : pendingDeliveries}
+                    </span>
+                  ) : (
+                    <span className="absolute -right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-0.5 text-[9px] font-bold text-white">
+                      {pendingDeliveries > 99
+                        ? "99+"
+                        : pendingDeliveries}
+                    </span>
+                  )
+                ) : null}
+
+                {module.label === "Trucks" &&
+                (overdueTrucks > 0 || scheduledTrucks > 0) ? (
+                  isExpanded ? (
+                    <span className="ml-auto flex items-center gap-1">
+                      {overdueTrucks > 0 ? (
+                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+                          {overdueTrucks > 99 ? "99+" : overdueTrucks}
+                        </span>
+                      ) : null}
+                      {scheduledTrucks > 0 ? (
+                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold text-white">
+                          {scheduledTrucks > 99
+                            ? "99+"
+                            : scheduledTrucks}
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className="absolute -right-0.5 top-0.5 flex flex-col items-center gap-0.5">
+                      {overdueTrucks > 0 ? (
+                        <span className="flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-[8px] font-bold text-white leading-none">
+                          {overdueTrucks > 99
+                            ? "99+"
+                            : overdueTrucks}
+                        </span>
+                      ) : null}
+                      {scheduledTrucks > 0 ? (
+                        <span className="flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-amber-400 px-0.5 text-[8px] font-bold text-white leading-none">
+                          {scheduledTrucks > 99
+                            ? "99+"
+                            : scheduledTrucks}
+                        </span>
+                      ) : null}
+                    </span>
+                  )
+                ) : null}
               </NavLink>
             ))}
           </nav>

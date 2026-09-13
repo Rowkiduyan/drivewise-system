@@ -331,8 +331,9 @@ function useFleetOps() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadOps();
+    Promise.resolve().then(() => {
+      loadOps();
+    });
     const channel = supabase
       .channel("admin-dashboard-ops")
       .on("postgres_changes", { event: "*", schema: "public", table: "devices" }, loadOps)

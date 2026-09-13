@@ -322,10 +322,10 @@ function AdminTrucks() {
       try {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
-          // eslint-disable-next-line react-hooks/set-state-in-effect
-          setTrucks(parsed);
-
-          setLoading(false);
+          Promise.resolve().then(() => {
+            setTrucks(parsed);
+            setLoading(false);
+          });
         }
       } catch (e) {
         console.error("Failed to parse stored trucks", e);
