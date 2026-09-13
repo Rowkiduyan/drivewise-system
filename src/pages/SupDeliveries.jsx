@@ -585,7 +585,7 @@ function MoneyInput({ value, onValueChange, accent = "blue" }) {
           );
         }
       }}
-      className={`w-40 rounded-lg border px-3 py-2 text-sm text-right font-mono outline-none focus:ring-1 bg-white ${accentClasses[accent]}`}
+      className={`w-40 rounded-lg border px-3 py-2 text-sm text-right font-semibold outline-none focus:ring-1 bg-white ${accentClasses[accent]}`}
       placeholder="0.00"
     />
   );
@@ -677,7 +677,7 @@ function QuotationExpenseForm({
             type="text"
             readOnly
             value={`₱${(parseMoney(directExpenses.dieselRate) * distanceKm).toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
-            className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-mono text-slate-900 bg-white"
+            className="w-40 rounded-lg border border-blue-200 px-3 py-2 text-sm text-right font-semibold text-slate-900 bg-white"
           />
         </div>
         <p className="text-sm text-blue-700 ml-1 mt-1 mb-2">
@@ -2638,7 +2638,7 @@ function BreakdownRow({ label, value, indent = false }) {
       className={`flex items-center justify-between py-1.5 ${indent ? "pl-4" : ""}`}
     >
       <span className="text-sm font-medium text-slate-700">{label}</span>
-      <span className="text-sm font-mono text-slate-900">
+      <span className="text-sm font-semibold text-slate-900">
         ₱{num.toLocaleString("en-US", { minimumFractionDigits: 2 })}
       </span>
     </div>
@@ -3304,7 +3304,7 @@ function DriveWiseAnalysisTab({ report }) {
         </p>
         <div className="space-y-1.5">
           {b.sessions.map((session, i) => (
-            <div key={i} className="flex items-center justify-between text-sm">
+            <div key={i} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-sm">
               <span className="text-slate-600">
                 {session.label && (
                   <span className="mr-1.5 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700">
@@ -3323,11 +3323,18 @@ function DriveWiseAnalysisTab({ report }) {
                 {formatAlertTimestamp(session.start)} —{" "}
                 {formatAlertTimestamp(session.end)}
               </span>
-              <span className="font-semibold text-slate-900">
-                {session.alerts} alerts
-              </span>
-              <span className="text-slate-400">
-                {formatAlertDuration(session.duration)}
+              {/* Grouped and anchored to the right edge as one unit (matches
+                  DriverDeliveries.jsx's identical Session Log block) -- a
+                  plain 3-way justify-between let this drift left/right per
+                  row depending on how long the left-hand label+badges text
+                  was, instead of forming a real aligned column. */}
+              <span className="ml-auto flex shrink-0 items-center gap-2">
+                <span className="font-semibold text-slate-900">
+                  {session.alerts} alerts
+                </span>
+                <span className="text-slate-400">
+                  {formatAlertDuration(session.duration)}
+                </span>
               </span>
             </div>
           ))}
@@ -6453,7 +6460,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700">
                                             Depreciation Expenses
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6466,7 +6473,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700">
                                             Total Diesel Expenses
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {Number(
                                               selectedRequest.quotation
@@ -6503,7 +6510,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700 pl-4">
                                             a. Batteries
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6516,7 +6523,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700 pl-4">
                                             b. Tires
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6532,7 +6539,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700 pl-4">
                                             a. Driver
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6545,7 +6552,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700 pl-4">
                                             b. Helper (1)
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6561,7 +6568,7 @@ function SupDeliveries() {
                                             <span className="text-sm font-medium text-slate-700 pl-4">
                                               c. Helper (2)
                                             </span>
-                                            <span className="text-sm font-mono text-slate-900">
+                                            <span className="text-sm font-semibold text-slate-900">
                                               ₱
                                               {
                                                 selectedRequest.quotation
@@ -6575,7 +6582,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700">
                                             Trip Allowance
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6588,7 +6595,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700">
                                             Lodging Allowance
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6601,7 +6608,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700">
                                             Toll/Parking (Delivery Truck)
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6639,7 +6646,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700">
                                             Administration Fees
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6652,7 +6659,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700">
                                             Insurance (Vehicle)
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6665,7 +6672,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700">
                                             Motor Vehicle Registration
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6678,7 +6685,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700">
                                             Rental (Garage)
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.quotation
@@ -6880,7 +6887,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700">
                                           Depreciation Expenses
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -6893,7 +6900,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700">
                                           Total Diesel Expenses
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {Number(
                                             selectedRequest.updatedQuotation
@@ -6931,7 +6938,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700 pl-4">
                                           a. Batteries
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -6944,7 +6951,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700 pl-4">
                                           b. Tires
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -6960,7 +6967,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700 pl-4">
                                           a. Driver
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -6973,7 +6980,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700 pl-4">
                                           b. Helper (1)
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -6989,7 +6996,7 @@ function SupDeliveries() {
                                           <span className="text-sm font-medium text-slate-700 pl-4">
                                             c. Helper (2)
                                           </span>
-                                          <span className="text-sm font-mono text-slate-900">
+                                          <span className="text-sm font-semibold text-slate-900">
                                             ₱
                                             {
                                               selectedRequest.updatedQuotation
@@ -7003,7 +7010,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700">
                                           Trip Allowance
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -7016,7 +7023,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700">
                                           Lodging Allowance
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -7029,7 +7036,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700">
                                           Toll/Parking (Delivery Truck)
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -7051,7 +7058,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700">
                                           Administration Fees
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -7064,7 +7071,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700">
                                           Insurance (Vehicle)
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -7077,7 +7084,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700">
                                           Motor Vehicle Registration
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation
@@ -7090,7 +7097,7 @@ function SupDeliveries() {
                                         <span className="text-sm font-medium text-slate-700">
                                           Rental (Garage)
                                         </span>
-                                        <span className="text-sm font-mono text-slate-900">
+                                        <span className="text-sm font-semibold text-slate-900">
                                           ₱
                                           {
                                             selectedRequest.updatedQuotation

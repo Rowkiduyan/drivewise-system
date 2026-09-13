@@ -140,7 +140,7 @@ export default function QuotationSettingsModal({ rules, onClose, onSave }) {
                       step={f.step || "1"}
                       value={draft[f.key] ?? ""}
                       onChange={(e) => setNumber(f.key, e.target.value)}
-                      className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-right font-mono text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
+                      className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-right font-semibold text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
                     />
                   </label>
                 ))}
@@ -178,11 +178,11 @@ export default function QuotationSettingsModal({ rules, onClose, onSave }) {
                             step={f.step}
                             value={profile[f.key] ?? ""}
                             onChange={(e) => setTruckProfile(key, f.key, e.target.value)}
-                            className="w-20 rounded-lg border border-slate-200 px-2 py-1 text-right font-mono outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
+                            className="w-20 rounded-lg border border-slate-200 px-2 py-1 text-right font-semibold outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
                           />
                         </td>
                       ))}
-                      <td className="py-1.5 text-right font-mono text-slate-500">
+                      <td className="py-1.5 text-right font-semibold text-slate-500">
                         {dieselPerKm != null
                           ? `₱${(literPrice / kmPerL).toFixed(2)}`
                           : ""}

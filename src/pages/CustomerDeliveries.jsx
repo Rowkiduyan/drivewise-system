@@ -25,6 +25,7 @@ import CustomerLayout from "../layout/CustomerLayout.jsx";
 import { truckTypes, getItemTypeLabel } from "../lib/deliveryOptions.js";
 import { supabase } from "../lib/supabaseClient.js";
 import { manilaTodayISO, MANILA_TIMEZONE } from "../lib/manilaTime.js";
+import { useResolvedAddress } from "../lib/reverseGeocode.js";
 import SuggestedRouteMap from "../components/SuggestedRouteMap.jsx";
 
 const background = null;
@@ -32,6 +33,16 @@ const background = null;
 // Explicit Inter typeface for this page's content, matching CustomerLayout's
 // own font stack instead of relying solely on inherited font-family.
 const interFontStyle = { fontFamily: "Inter, system-ui, sans-serif" };
+
+// Resolves a single "lat, lng"-shaped location (e.g. DR-0020-style fixture
+// data) into a real address inline -- its own component (not called inline
+// as a plain function) so `useResolvedAddress` can be called once per row
+// without violating the rules of hooks. Mirrors SupDeliveries.jsx's/
+// DriverDeliveries.jsx's identical helper, not shared, per this codebase's
+// existing per-portal convention.
+function ResolvedText({ value }) {
+  return useResolvedAddress(value || "");
+}
 
 function format12Hour(timeStr) {
   const [hour, minute] = timeStr.split(":").map(Number);
@@ -1485,7 +1496,7 @@ function RequestDetailView({
                       </span>
                     </p>
                     <p className="mt-0.5 text-slate-500">
-                      {request.pickupLocation}
+                      <ResolvedText value={request.pickupLocation} />
                     </p>
                   </div>
                 </div>
@@ -1503,7 +1514,7 @@ function RequestDetailView({
                       </span>
                     </p>
                     <p className="mt-0.5 text-slate-500">
-                      {request.dropoffLocation}
+                      <ResolvedText value={request.dropoffLocation} />
                     </p>
                   </div>
                 </div>
@@ -1551,7 +1562,7 @@ function RequestDetailView({
                       Pickup Location
                     </p>
                     <p className="font-medium text-slate-900">
-                      {request.pickupLocation}
+                      <ResolvedText value={request.pickupLocation} />
                     </p>
                   </div>
                 </div>
@@ -1562,7 +1573,7 @@ function RequestDetailView({
                       Drop-off Location
                     </p>
                     <p className="font-medium text-slate-900">
-                      {request.dropoffLocation}
+                      <ResolvedText value={request.dropoffLocation} />
                     </p>
                   </div>
                 </div>
@@ -3074,10 +3085,10 @@ function RequestCard({ request, onViewDetails, onConfirmReceived }) {
           {itemLabel}
         </p>
         <p className="line-clamp-2 text-sm text-slate-700">
-          {request.pickupLocation}
+          <ResolvedText value={request.pickupLocation} />
         </p>
         <p className="line-clamp-2 text-sm text-slate-700">
-          {request.dropoffLocation}
+          <ResolvedText value={request.dropoffLocation} />
         </p>
         <div className="flex justify-end">
           <ChevronRight className="h-4 w-4 text-slate-400" />
