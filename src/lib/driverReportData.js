@@ -599,8 +599,13 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs, r
     },
     delivery: {
       totalAlerts: alerts.length,
+      // "No data" rather than blank/0/"--" when there's nothing to average
+      // (matches SupDeliveries.jsx's identical fix, per explicit user
+      // request) -- 0s or a dash would misread as "zero seconds of eye
+      // closure," when the real reason is there were no closure alerts at
+      // all to average in the first place.
       avgAlertDuration:
-        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "",
+        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "No data",
       peakAlertTime:
         peakHour != null ? `${String(peakHour).padStart(2, "0")}:00` : "",
       eyeClosureAlerts,

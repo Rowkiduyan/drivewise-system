@@ -732,6 +732,27 @@ function PlannedRouteMap({
             mapContainerStyle={GOOGLE_MAP_CONTAINER_STYLE}
             onLoad={(map) => {
               mapRef.current = map;
+              // Bug fix: when `legs` is already known at mount (an
+              // already-saved suggestedRoute, the common case for any
+              // delivery viewed more than once), the [suggestedRoute, legs]
+              // effect below runs once on mount, finds mapRef.current still
+              // null (this onLoad callback fires asynchronously, after the
+              // underlying Google Maps instance actually finishes
+              // initializing -- not synchronously with render), and bails.
+              // Nothing re-triggers it afterward since setting a plain ref
+              // doesn't change any dependency the effect is watching, so
+              // the map never gets a center/zoom and never requests a
+              // single tile -- a permanent blank grey box. Calling
+              // fitBounds here too covers exactly that ordering; the effect
+              // below still covers the opposite ordering (route computed
+              // fresh, after the map has already loaded).
+              if (legs?.length && window.google) {
+                const bounds = new window.google.maps.LatLngBounds();
+                legs.forEach((leg) =>
+                  leg.path.forEach(([lat, lng]) => bounds.extend({ lat, lng })),
+                );
+                map.fitBounds(bounds, 16);
+              }
             }}
             options={{
               disableDefaultUI: true,
@@ -1065,9 +1086,28 @@ function LiveNavigationMap({
   // livePosition is deliberately left out of this dependency list; see the
   // deviation effect below for the one case a live position should trigger a
   // fresh route.
+  //
+  // Bug fix (user-reported 2026-09-14): this used to fall back to `origin`
+  // (WAREHOUSE_COORDS, passed in via activeNavOrigin whenever the driver
+  // still needs pickup) whenever livePosition hadn't arrived yet -- which is
+  // effectively every fresh mount, since livePosition starts at `null` and
+  // only gets set once the browser's geolocation/piPosition-seed-fetch
+  // actually resolves (a real, if usually brief, delay). The
+  // "upgrade to real GPS" effect further down does correctly recompute once
+  // a position arrives, and the watchdog request-id guard in computeRoute
+  // correctly discards a stale response arriving out of order -- but for
+  // however long that gap lasts, the driver was shown (and, unmuted, told
+  // via voice guidance) a route starting from the warehouse, which is wrong
+  // and confusing the moment they're already out and near pickup. Simply
+  // not computing a route at all until livePosition is known avoids ever
+  // drawing/announcing that wrong route -- the map still renders (centered
+  // on initialCenter) via the isLoaded branch below, just without a route
+  // until one becomes available, which the "upgrade" effect provides within
+  // the same short window this used to spend on the wrong route instead.
   useEffect(() => {
-    if (!isLoaded || !destination || !stopCoordsReady) return;
-    computeRoute(livePosition || origin, destination, waypoints);
+    if (!isLoaded || !livePosition || !destination || !stopCoordsReady)
+      return;
+    computeRoute(livePosition, destination, waypoints);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, destination?.lat, destination?.lng, stopsKey, stopCoordsReady]);
 
@@ -1423,9 +1463,21 @@ function LiveNavigationMap({
                 never repeat the to-pickup color. */}
             {legs[currentLegIndex] && (
               <GoogleMapPolyline
-                path={(legs[currentLegIndex].steps || []).flatMap(
-                  (step) => step.path || [],
-                )}
+                // Bug fix (user-reported 2026-09-14, "walked the route and
+                // the line wasn't disappearing behind the arrow"): this used
+                // to draw every step of the current leg unconditionally, so
+                // the line only ever shrank once the *entire* leg finished
+                // (reaching pickup/dropoff) -- for a leg with many steps,
+                // that could be a long walk/drive with the line never
+                // visibly trimming. Slicing from currentStepIndex (already
+                // tracked and advanced by the step-advance effect above,
+                // same NAV_STEP_ADVANCE_METERS threshold) drops each step's
+                // path the moment it's completed, so the drawn line
+                // progressively "gets eaten" by the live position, matching
+                // standard turn-by-turn nav behavior.
+                path={(legs[currentLegIndex].steps || [])
+                  .slice(currentStepIndex)
+                  .flatMap((step) => step.path || [])}
                 options={{
                   strokeColor: needsPickup
                     ? NAV_LEG_COLORS[0]
@@ -1891,9 +1943,14 @@ function ReturnTripNavigationMap({ livePosition }) {
                 suggested_route chain, which this leg isn't part of. */}
             {directions?.routes[0]?.legs[0] && (
               <GoogleMapPolyline
-                path={(directions.routes[0].legs[0].steps || []).flatMap(
-                  (step) => step.path || [],
-                )}
+                // Same fix as LiveNavigationMap's identical polyline -- see
+                // its own comment for why slicing from currentStepIndex is
+                // needed for the line to progressively disappear as the
+                // driver passes each step, instead of only shrinking once
+                // this single leg finishes entirely.
+                path={(directions.routes[0].legs[0].steps || [])
+                  .slice(currentStepIndex)
+                  .flatMap((step) => step.path || [])}
                 options={{
                   strokeColor: "#0891b2",
                   strokeOpacity: 0.9,
@@ -2378,14 +2435,22 @@ export function CompletedDeliveryReport({
                         </span>
                       )}
                     {formatAlertTimestamp(session.start)} —{" "}
-                    {formatAlertTimestamp(session.end)}
+                    {session.end ? formatAlertTimestamp(session.end) : ""}
                   </span>
                   <span className="ml-auto flex shrink-0 items-center gap-2">
                     <span className="font-semibold text-slate-900">
                       {session.alerts} alerts
                     </span>
-                    <span className="text-[10px] text-slate-400">
-                      {formatAlertDuration(session.duration)}
+                    {/* Fixed width, always rendered (even empty) -- see
+                        SupDeliveries.jsx's identical span for why: omitting
+                        the element entirely on a still-open session (no
+                        duration yet) shrank the group, which -- being
+                        right-anchored via ml-auto -- shifted "alerts"
+                        sideways relative to rows that do have a duration. */}
+                    <span className="w-8 shrink-0 text-right text-[10px] text-slate-400">
+                      {Number.isFinite(session.duration) && session.duration > 0
+                        ? formatAlertDuration(session.duration)
+                        : ""}
                     </span>
                   </span>
                 </div>

@@ -2068,8 +2068,12 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs, rer
       drowsinessAlertCount,
       riskLevel,
       drowsinessLevel: worst,
+      // "No data" rather than blank/0/"--" when there's nothing to average
+      // (per explicit user request) -- 0s or a dash would misread as "zero
+      // seconds of eye closure," when the real reason is there were no
+      // closure alerts at all to average in the first place.
       avgClosureDuration:
-        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "",
+        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "No data",
       yawnCount: typeCounts.pattern_eye_closure_yawn || 0,
       eyeDetectionFailures: typeCounts.face_not_detected || 0,
       alertsByType,
@@ -3321,7 +3325,7 @@ function DriveWiseAnalysisTab({ report }) {
                     </span>
                   )}
                 {formatAlertTimestamp(session.start)} —{" "}
-                {formatAlertTimestamp(session.end)}
+                {session.end ? formatAlertTimestamp(session.end) : ""}
               </span>
               {/* Grouped and anchored to the right edge as one unit (matches
                   DriverDeliveries.jsx's identical Session Log block) -- a
@@ -3332,8 +3336,21 @@ function DriveWiseAnalysisTab({ report }) {
                 <span className="font-semibold text-slate-900">
                   {session.alerts} alerts
                 </span>
-                <span className="text-slate-400">
-                  {formatAlertDuration(session.duration)}
+                {/* Fixed width, always rendered (even empty) -- a still-open
+                    session (no end_time yet) has no duration to show, and
+                    formatAlertDuration's own "--" placeholder isn't right
+                    here (per explicit user request, this report should
+                    leave it blank rather than a literal dash). Omitting the
+                    element entirely on those rows (the previous approach)
+                    shrank the group, which -- being right-anchored via
+                    ml-auto -- shifted "alerts" sideways relative to rows
+                    that do have a duration. Reserving the same width every
+                    row regardless of content keeps "alerts" aligned in a
+                    real column across all of them. */}
+                <span className="w-9 shrink-0 text-right text-slate-400">
+                  {Number.isFinite(session.duration) && session.duration > 0
+                    ? formatAlertDuration(session.duration)
+                    : ""}
                 </span>
               </span>
             </div>
@@ -4627,6 +4644,7 @@ function SupDeliveries() {
           };
           const truckCrew = {};
           const helpersByDriver = {};
+          const today = todayDateKey();
           for (const trip of activeTrips || []) {
             if (trip.assigned_driver_id) {
               addBusy(
@@ -4634,9 +4652,23 @@ function SupDeliveries() {
                 trip.pickup_date,
                 trip.dropoff_date,
               );
+              // Bug fix, found 2026-09-14 (user-reported): an ASSIGNED
+              // delivery that was never actually started keeps that status
+              // forever (09_EDGE_CASES.md's documented "never-started
+              // ASSIGNED delivery" gap) -- its dropoff_date can be weeks in
+              // the past. Without this check, the *first* such stale trip
+              // for a given plate got permanently crowned "this truck's
+              // current crew" here, wrongly warning the Supervisor that a
+              // long-departed driver was "unavailable" on a totally
+              // unrelated new delivery's date, instead of either the real
+              // current driver or the saved default assignment. addBusy
+              // above still records the trip (correctly date-scoped
+              // per-delivery via getCrewAvailability), only this
+              // truck-level snapshot needs the extra guard.
               if (
                 trip.assigned_truck_plate &&
-                !truckCrew[trip.assigned_truck_plate]
+                !truckCrew[trip.assigned_truck_plate] &&
+                (!trip.dropoff_date || trip.dropoff_date >= today)
               ) {
                 truckCrew[trip.assigned_truck_plate] = {
                   driverId: trip.assigned_driver_id,

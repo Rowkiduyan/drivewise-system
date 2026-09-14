@@ -230,7 +230,7 @@ function Login() {
                   type="email"
                   name="email"
                   autoComplete="email"
-                  placeholder="operator@marveltrucking.com"
+                  placeholder="username@marveltrucking.com"
                   value={formValues.email}
                   onChange={handleInputChange}
                   aria-invalid={showError}
@@ -256,7 +256,7 @@ function Login() {
                   type={showPassword ? 'text' : 'password'}
                   name="password"
                   autoComplete="current-password"
-                  placeholder="Enter your secure password"
+                  placeholder="Enter your password"
                   value={formValues.password}
                   onChange={handleInputChange}
                   aria-invalid={showError}

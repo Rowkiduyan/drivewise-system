@@ -583,6 +583,22 @@ function RouteOverviewMap({ suggestedRoute, dropoffCoords }) {
           mapContainerStyle={GOOGLE_MAP_CONTAINER_STYLE}
           onLoad={(map) => {
             mapRef.current = map;
+            // Bug fix (same as DriverDeliveries.jsx's PlannedRouteMap):
+            // `legs` is already known at mount here (this component never
+            // computes a route itself, only renders an already-saved one),
+            // so the [legs] effect above runs once on mount, finds
+            // mapRef.current still null (onLoad fires asynchronously,
+            // after this effect's mount-time run), and bails -- nothing
+            // re-triggers it once the map actually loads, so it never gets
+            // a center/zoom and never requests a tile. Calling fitBounds
+            // here too covers that ordering directly.
+            if (legs?.length && window.google) {
+              const bounds = new window.google.maps.LatLngBounds();
+              legs.forEach((leg) =>
+                leg.path.forEach(([lat, lng]) => bounds.extend({ lat, lng })),
+              );
+              map.fitBounds(bounds, 16);
+            }
           }}
           options={{
             disableDefaultUI: true,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Search } from 'lucide-react'
+import { Search, Copy, Check } from 'lucide-react'
 import AdminLayout from '../layout/AdminLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 import { getCityNamesForProvince, getProvinceNames } from '../lib/philippineLocations.js'
@@ -388,6 +388,7 @@ function AdminHome() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [tempPassword, setTempPassword] = useState('')
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
+  const [isPasswordCopied, setIsPasswordCopied] = useState(false)
   const [isAddConfirmOpen, setIsAddConfirmOpen] = useState(false)
   const [statusModal, setStatusModal] = useState({
     open: false,
@@ -840,6 +841,7 @@ function AdminHome() {
       )
     } else {
       setTempPassword(data.tempPassword || '')
+      setIsPasswordCopied(false)
       showStatusModal(
         'error',
         'User Added — Email Not Sent',
@@ -1041,6 +1043,7 @@ function AdminHome() {
       )
     } else {
       setTempPassword(data.tempPassword || '')
+      setIsPasswordCopied(false)
       showStatusModal(
         'error',
         'Password Reset — Email Not Sent',
@@ -1956,9 +1959,39 @@ function AdminHome() {
             <h3 id="temp-password-title" className="mt-2 text-base font-semibold text-slate-900">
               Share this temporary password
             </h3>
-            <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm text-slate-900">
-              {tempPassword}
-            </p>
+            <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="min-w-0 flex-1 truncate font-mono text-sm text-slate-900">
+                {tempPassword}
+              </p>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(tempPassword)
+                    setIsPasswordCopied(true)
+                    setTimeout(() => setIsPasswordCopied(false), 2000)
+                  } catch {
+                    // Clipboard API can fail (permissions, insecure context) --
+                    // the password stays selectable/visible either way, so
+                    // there's nothing else to fall back to here.
+                  }
+                }}
+                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-violet-300 hover:text-violet-700"
+                title="Copy password"
+              >
+                {isPasswordCopied ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3.5 w-3.5" />
+                    Copy
+                  </>
+                )}
+              </button>
+            </div>
             <p className="mt-3 text-sm text-slate-500">
               This password will not be shown again. Send it to the new user securely.
             </p>
