@@ -264,41 +264,44 @@ export async function fetchRerouteEvents(deliveryRequestId) {
   return data || [];
 }
 
-// Greedy nearest-neighbor ordering for dropoff-type candidates (02B_MULTI_
-// STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering"). Each candidate is
+// Nearest-from-Pickup ordering for dropoff-type candidates (02B_MULTI_
+// STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering", changed 2026-09-15
+// per explicit user request from a chained greedy walk -- each pick used to
+// become the reference point for the next one -- to a single fixed-reference
+// sort: every candidate's distance is measured from `referencePos` (Pickup)
+// directly, never from a previously-picked candidate or (for the live in-
+// trip case) the driver's current position. Each candidate is
 // `{ location, coords }`; `coords` may be null for a candidate whose address
 // doesn't resolve to a coordinate pair -- such a candidate can't be ranked by
-// distance, so it's kept in its original relative position among the other
-// un-rankable candidates and only ever picked once no coordinate-bearing
-// candidate remains closer. Chains from each picked candidate's own coords
-// for the next pick (simulating "having arrived there"), since only the very
-// first pick is ever actually driven to before the caller re-derives this
-// list from a real position again.
+// distance, so it sorts after every coordinate-bearing candidate, keeping its
+// original relative position among other un-rankable ones (stable sort).
 export function nearestDropoffOrder(referencePos, candidates) {
-  const remaining = [...candidates];
-  const ordered = [];
-  let fromPos = referencePos;
-  while (remaining.length > 0) {
-    let pickIndex = 0;
-    let pickDistance = Infinity;
-    remaining.forEach((candidate, i) => {
-      if (!candidate.coords || !fromPos) return;
-      const d = distanceMeters(
-        fromPos.lat,
-        fromPos.lng,
-        candidate.coords.lat,
-        candidate.coords.lng,
-      );
-      if (d < pickDistance) {
-        pickDistance = d;
-        pickIndex = i;
-      }
-    });
-    const [next] = remaining.splice(pickIndex, 1);
-    ordered.push(next);
-    if (next.coords) fromPos = next.coords;
-  }
-  return ordered;
+  if (!referencePos) return [...candidates];
+  return [...candidates]
+    .map((candidate, i) => ({ candidate, i }))
+    .sort((a, b) => {
+      const da = a.candidate.coords
+        ? distanceMeters(
+            referencePos.lat,
+            referencePos.lng,
+            a.candidate.coords.lat,
+            a.candidate.coords.lng,
+          )
+        : Infinity;
+      const db = b.candidate.coords
+        ? distanceMeters(
+            referencePos.lat,
+            referencePos.lng,
+            b.candidate.coords.lat,
+            b.candidate.coords.lng,
+          )
+        : Infinity;
+      // Tie-break on original index so two un-rankable (or exactly
+      // equidistant) candidates never swap -- Array.prototype.sort's
+      // stability alone isn't guaranteed across every JS engine.
+      return da !== db ? da - db : a.i - b.i;
+    })
+    .map(({ candidate }) => candidate);
 }
 
 // Computes the full Warehouse -> Pickup -> Dropoff/Stops (nearest-order)

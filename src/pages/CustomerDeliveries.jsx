@@ -756,7 +756,11 @@ function ApprovedRouteMap({ request }) {
   if (!request.suggestedRoute) return null;
   return (
     <div className="mt-2 md:mt-3">
-      <SuggestedRouteMap key={request.id} suggestedRoute={request.suggestedRoute} />
+      <SuggestedRouteMap
+        key={request.id}
+        suggestedRoute={request.suggestedRoute}
+        stops={request.stops}
+      />
     </div>
   );
 }
@@ -1579,6 +1583,18 @@ function RequestDetailView({
                 </div>
               </div>
             </div>
+
+            {/* PENDING_REQUEST has no status-specific right-column panel at
+                all (hasRightContent is false until PROCESSING) -- every
+                other status already shows the planned route inside that
+                panel (see the other 3 ApprovedRouteMap call sites below),
+                so this is the one place a pending request can show it
+                without duplicating it once a quotation panel exists. */}
+            {request.status === "PENDING_REQUEST" && (
+              <div className="py-4 first:pt-0">
+                <ApprovedRouteMap request={request} />
+              </div>
+            )}
 
             <div className="py-4 first:pt-0 md:hidden">
               <h3 className="text-[11px] font-bold uppercase tracking-wide text-emerald-700">

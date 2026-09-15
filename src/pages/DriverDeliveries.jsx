@@ -3081,6 +3081,9 @@ function mapDelivery(d) {
     pickupDate: str(d.pickupDate),
     pickupTime: str(d.pickupTime),
     pickupTimeEnd: d.pickupTimeEnd ? str(d.pickupTimeEnd) : "",
+    dropoffDate: str(d.dropoffDate),
+    dropoffTime: str(d.dropoffTime),
+    dropoffTimeEnd: d.dropoffTimeEnd ? str(d.dropoffTimeEnd) : "",
     pickupAddress: str(d.pickupAddress),
     deliveryAddress: str(d.deliveryAddress),
     pickupLat: d.pickupLat,
@@ -3988,18 +3991,22 @@ function DriverDeliveries() {
       : workspaceDelivery.pickupCoords
     : null;
 
-  // Greedy nearest-neighbor dropoff ordering (decided 2026-08-14, see
-  // 02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering") --
-  // completion order/permission is unchanged (the Helper can still complete
-  // Dropoff or any Stop in any order, enforced nowhere client-side, see
-  // admin-users/index.ts), but the DRIVER is now routed to whichever
-  // still-incomplete dropoff (dropoff_location or a stop) is nearest to the
-  // current position, not whichever is next in the customer-entered list.
-  // Recomputed on every render off livePosition/activeNavOrigin -- since the
-  // candidate list only changes when a completion actually lands (via the
-  // Realtime subscription updating workspaceDelivery.stops/
-  // .dropoffCompletedAt), this naturally re-evaluates once per completion
-  // rather than continuously reordering mid-drive.
+  // Nearest-from-Pickup dropoff ordering (decided 2026-08-14, changed
+  // 2026-09-15 per explicit user request from the driver's live position to
+  // a fixed reference -- see nearestDropoffOrder's own comment in
+  // lib/suggestedRoute.js -- see 02B_MULTI_STOP_DELIVERIES.md's "Dynamic
+  // Nearest-Dropoff Ordering") -- completion order/permission is unchanged
+  // (the Helper can still complete Dropoff or any Stop in any order,
+  // enforced nowhere client-side, see admin-users/index.ts), but the DRIVER
+  // is now routed to whichever still-incomplete dropoff (dropoff_location or
+  // a stop) is nearest to Pickup, not whichever is next in the
+  // customer-entered list, and not whichever is nearest to wherever the
+  // driver currently happens to be. Recomputed on every render, but the
+  // order itself only actually changes when the candidate list does (a
+  // completion landing via the Realtime subscription) since the reference
+  // point (activeNavOrigin, which is workspaceDelivery.pickupCoords once
+  // pickup is done -- see activeNeedsPickup's guard above) is fixed per
+  // delivery, not the driver's moving livePosition.
   const remainingDropoffCandidates =
     workspaceDelivery && !activeNeedsPickup
       ? [
@@ -4016,17 +4023,27 @@ function DriverDeliveries() {
             .filter((s) => !s.completed)
             .map((s) => ({
               location: s.location,
-              coords: parseCoords(s.location),
+              // Real bug found on review: a genuine street-address stop (the
+              // overwhelming majority -- parseCoords only matches the
+              // "lat, lng"-text fixture convention) resolved to coords: null
+              // here, which nearestDropoffOrder below can never pick as
+              // "nearest" over a candidate that does have coords. Since the
+              // real Dropoff normally does have coords (destinationCoords,
+              // above), every coordless stop silently lost to it every time
+              // -- Dynamic Nearest-Dropoff Ordering degraded into "route to
+              // the final Dropoff first, stops after in list order" instead
+              // of true nearest-first, for the common real-address case.
+              // activeStopCoords (this component's existing Photon
+              // resolution, already used for the Summary card's legend) was
+              // sitting right above, just never consulted here.
+              coords: parseCoords(s.location) || activeStopCoords[s.location] || null,
               key: "stop",
             })),
         ]
       : [];
   const orderedRemainingDropoffs =
     remainingDropoffCandidates.length > 0
-      ? nearestDropoffOrder(
-          livePosition || activeNavOrigin,
-          remainingDropoffCandidates,
-        )
+      ? nearestDropoffOrder(activeNavOrigin, remainingDropoffCandidates)
       : [];
   // Whether the real dropoff is the LAST item left in the nearest-ordered
   // chain (as opposed to merely the current/nearest one) -- Dynamic
@@ -5480,10 +5497,21 @@ function DriverDeliveries() {
                               Schedule
                             </p>
                             <p className="font-medium text-slate-900">
-                              {workspaceDelivery.pickupDate} at{" "}
+                              Pickup: {workspaceDelivery.pickupDate} at{" "}
                               {pickupWindowLabel(
                                 workspaceDelivery.pickupTime,
                                 workspaceDelivery.pickupTimeEnd,
+                              )}
+                            </p>
+                            {/* Kept in the same cell as Pickup (not a 5th grid
+                                item) so this 2-column, 4-item grid stays an
+                                even 2x2 -- a 5th cell would leave an
+                                unpaired, misaligned item on its own row. */}
+                            <p className="mt-1 font-medium text-slate-900">
+                              Drop Off: {workspaceDelivery.dropoffDate} at{" "}
+                              {pickupWindowLabel(
+                                workspaceDelivery.dropoffTime,
+                                workspaceDelivery.dropoffTimeEnd,
                               )}
                             </p>
                           </div>

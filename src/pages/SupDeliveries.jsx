@@ -2525,9 +2525,28 @@ function DeliveryRequestDetails({ request, realDistanceKm }) {
               )}
             />
             <Row
-              label="Drop-off"
-              value={formatDateTime(request.dropoffDate, request.dropoffTime)}
+              label="Drop-off 1"
+              value={formatDateTime(
+                request.dropoffDate,
+                request.dropoffTime,
+                request.dropoffTimeEnd,
+              )}
             />
+            {/* Additional dropoffs (stops) share the main Drop-off Date --
+                stops don't get their own date field (02B_MULTI_STOP_DELIVERIES.md)
+                -- only shown when present, this Schedule card previously
+                displayed only the primary Drop-off for a multi-stop request. */}
+            {(request.stops || []).map((stop, i) => (
+              <Row
+                key={i}
+                label={`Drop-off ${i + 2}`}
+                value={formatDateTime(
+                  request.dropoffDate,
+                  stop.dropoffTime,
+                  stop.dropoffTimeEnd,
+                )}
+              />
+            ))}
           </div>
         </div>
 
@@ -4221,6 +4240,7 @@ function mapDbRequest(row, clientName, fleet) {
     pickupTimeEnd: row.pickup_time_end || null,
     dropoffDate: row.dropoff_date,
     dropoffTime: row.dropoff_time,
+    dropoffTimeEnd: row.dropoff_time_end || null,
     pickupAddress: row.pickup_location,
     pickupLat: row.pickup_lat,
     pickupLng: row.pickup_lng,
@@ -6064,12 +6084,28 @@ function SupDeliveries() {
                               )}
                             />
                             <Row
-                              label="Drop-off"
+                              label="Drop-off 1"
                               value={formatDateTime(
                                 selectedRequest.dropoffDate,
                                 selectedRequest.dropoffTime,
+                                selectedRequest.dropoffTimeEnd,
                               )}
                             />
+                            {/* Additional dropoffs (stops) share the main
+                                Drop-off Date -- stops don't get their own
+                                date field (02B_MULTI_STOP_DELIVERIES.md).
+                                Mirrors DeliveryRequestDetails' identical fix. */}
+                            {(selectedRequest.stops || []).map((stop, i) => (
+                              <Row
+                                key={i}
+                                label={`Drop-off ${i + 2}`}
+                                value={formatDateTime(
+                                  selectedRequest.dropoffDate,
+                                  stop.dropoffTime,
+                                  stop.dropoffTimeEnd,
+                                )}
+                              />
+                            ))}
                           </div>
                         </div>
 
@@ -6218,6 +6254,7 @@ function SupDeliveries() {
                             <SuggestedRouteMap
                               key={selectedRequest.id}
                               suggestedRoute={selectedRequestSuggestedRoute}
+                              stops={selectedRequest.stops}
                             />
                           </div>
                         )}

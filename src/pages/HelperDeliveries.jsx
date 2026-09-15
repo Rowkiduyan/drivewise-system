@@ -38,7 +38,7 @@ import {
 } from "../lib/driverReportData.js";
 import { supabase } from "../lib/supabaseClient.js";
 import { resizeProofPhotoToBase64 } from "../lib/proofPhoto.js";
-import { fetchRerouteEvents } from "../lib/suggestedRoute.js";
+import { fetchRerouteEvents, nearestDropoffOrder } from "../lib/suggestedRoute.js";
 import { verifyProofPhotoHasPerson } from "../lib/proofPhotoVerification.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
 import { useResolvedStopCoords } from "../lib/forwardGeocode.js";
@@ -340,22 +340,6 @@ function buildRouteLegend(
       address: bestAddress || `Stop ${stopNum}`,
     };
   });
-}
-
-// Plain-JS haversine, no google.maps dependency -- mirrors DriverDeliveries.jsx's
-// own distanceMeters helper exactly, used to pick which Delivery Chain item
-// is nearest the truck's live position (see the "Next" flag in chainItems
-// below, 02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering").
-function distanceMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function formatAssignedAt(iso) {
@@ -1261,10 +1245,6 @@ function HelperDeliveries() {
   const [currentHelperName, setCurrentHelperName] = useState("");
   const [liveAlerts, setLiveAlerts] = useState([]);
   const [isAlertHistoryExpanded, setIsAlertHistoryExpanded] = useState(false);
-  // Truck's live GPS position, used only to flag which Delivery Chain item
-  // is "Next" per the nearest-dropoff logic below -- see the gps_logs
-  // subscription further down.
-  const [livePosition, setLivePosition] = useState(null);
   // Success confirmation shown after a chain-item photo upload completes
   // (submitChainAction below) -- { label, isFinal }. Mirrors
   // DriverDeliveries.jsx's completionNotice toast (same auto-dismiss
@@ -1351,108 +1331,93 @@ function HelperDeliveries() {
   const chainItemKey = (item) =>
     item.type === "stop" ? `stop-${item.index}` : item.type;
 
-  // The full completion chain for the workspace delivery, in the real order
-  // (Pickup -> Dropoff -> Stops, not "stops between a fixed pickup/dropoff")
-  // — see 02B_MULTI_STOP_DELIVERIES.md. Each item's Complete button is only
-  // actionable at the specific stage that item belongs to; once the whole
-  // delivery is DELIVERED every button disappears regardless of which
-  // individual items happened to get completed (no ordering is enforced
-  // server-side, so dropoff can end up never completed if the last stop
-  // was completed directly — that's accepted, not a bug).
+  // The full completion chain for the workspace delivery, ordered Pickup
+  // first, then every remaining Dropoff/Stop nearest-from-Pickup first (same
+  // fixed-reference nearestDropoffOrder the Driver's own Planned Route/Live
+  // Navigation use -- see lib/suggestedRoute.js and
+  // 02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering",
+  // changed 2026-09-15 per explicit user request so the Helper's own Proof
+  // of Delivery tabs match that same order, not the customer-entered list
+  // order). Each item's Complete button is only actionable at the specific
+  // stage that item belongs to; once the whole delivery is DELIVERED every
+  // button disappears regardless of which individual items happened to get
+  // completed (no ordering is enforced server-side, so dropoff can end up
+  // never completed if the last stop was completed directly — that's
+  // accepted, not a bug).
   const chainItems = workspaceDelivery
     ? (() => {
-        const items = [
-          {
-            type: "pickup",
-            label: "Pickup",
-            // Keyed on pickupCompletedAt (ground truth, same as the
-            // dropoff/stop items below), not the mapped status -- the mapped
-            // status collapses OUT_FOR_PICKUP/ARRIVED_PICKUP/OUT_FOR_DROPOFF/
-            // ARRIVED_DROPOFF into fewer buckets (see DB_TO_HELPER_STATUS),
-            // so a delivery sitting in ARRIVED_PICKUP (Driver's optional
-            // "Arrived" announcement, 2026-09-08) would otherwise read as
-            // "OUT_FOR_DELIVERY" here too and wrongly mark Pickup done while
-            // offering Confirm Dropoff before pickup was ever confirmed.
-            location: workspaceDelivery.pickupAddress,
-            done: Boolean(workspaceDelivery.pickupCompletedAt),
-            photoUrl: workspaceDelivery.pickupPhotoUrl,
-            actionable:
-              workspaceDelivery.status !== "ASSIGNED" &&
-              !workspaceDelivery.pickupCompletedAt,
-          },
-          {
-            type: "dropoff",
-            label: "Dropoff",
-            location: workspaceDelivery.deliveryAddress,
-            done: Boolean(workspaceDelivery.dropoffCompletedAt),
-            photoUrl: workspaceDelivery.dropoffPhotoUrl,
-            // Also requires pickup to actually be confirmed first (not just
-            // the mapped status reading "OUT_FOR_DELIVERY", which
-            // ARRIVED_PICKUP collapses into as well -- see the pickup item's
-            // comment above) so Confirm Dropoff can't appear before Confirm
-            // Pickup ever ran.
-            actionable:
-              workspaceDelivery.status === "OUT_FOR_DELIVERY" &&
-              Boolean(workspaceDelivery.pickupCompletedAt) &&
-              !workspaceDelivery.dropoffCompletedAt,
-          },
-          ...workspaceDelivery.stops.map((stop, index) => ({
-            type: "stop",
-            index,
-            // "Dropoff N" naming, not "Stop N" -- every point after Pickup is
-            // conceptually another dropoff (Dropoff itself is implicitly
-            // "Dropoff 1"), keeps the chain's vocabulary consistent end to end
-            // (Delivery Chain list, confirm modal, Proof of Delivery labels).
-            label: `Dropoff ${index + 2}`,
-            location: stop.location,
-            done: Boolean(stop.completed),
-            photoUrl: stop.photoUrl,
-            actionable:
-              workspaceDelivery.status === "OUT_FOR_DELIVERY" &&
-              Boolean(workspaceDelivery.pickupCompletedAt) &&
-              !stop.completed,
-          })),
-        ];
+        const pickupItem = {
+          type: "pickup",
+          label: "Pickup",
+          // Keyed on pickupCompletedAt (ground truth, same as the
+          // dropoff/stop items below), not the mapped status -- the mapped
+          // status collapses OUT_FOR_PICKUP/ARRIVED_PICKUP/OUT_FOR_DROPOFF/
+          // ARRIVED_DROPOFF into fewer buckets (see DB_TO_HELPER_STATUS),
+          // so a delivery sitting in ARRIVED_PICKUP (Driver's optional
+          // "Arrived" announcement, 2026-09-08) would otherwise read as
+          // "OUT_FOR_DELIVERY" here too and wrongly mark Pickup done while
+          // offering Confirm Dropoff before pickup was ever confirmed.
+          location: workspaceDelivery.pickupAddress,
+          coords: workspaceDelivery.pickupCoords,
+          done: Boolean(workspaceDelivery.pickupCompletedAt),
+          photoUrl: workspaceDelivery.pickupPhotoUrl,
+          actionable:
+            workspaceDelivery.status !== "ASSIGNED" &&
+            !workspaceDelivery.pickupCompletedAt,
+        };
+        const dropoffItem = {
+          type: "dropoff",
+          label: "Dropoff",
+          location: workspaceDelivery.deliveryAddress,
+          coords: workspaceDelivery.destinationCoords,
+          done: Boolean(workspaceDelivery.dropoffCompletedAt),
+          photoUrl: workspaceDelivery.dropoffPhotoUrl,
+          // Also requires pickup to actually be confirmed first (not just
+          // the mapped status reading "OUT_FOR_DELIVERY", which
+          // ARRIVED_PICKUP collapses into as well -- see the pickup item's
+          // comment above) so Confirm Dropoff can't appear before Confirm
+          // Pickup ever ran.
+          actionable:
+            workspaceDelivery.status === "OUT_FOR_DELIVERY" &&
+            Boolean(workspaceDelivery.pickupCompletedAt) &&
+            !workspaceDelivery.dropoffCompletedAt,
+        };
+        const stopItems = workspaceDelivery.stops.map((stop, index) => ({
+          type: "stop",
+          index,
+          // "Dropoff N" naming, not "Stop N" -- every point after Pickup is
+          // conceptually another dropoff (Dropoff itself is implicitly
+          // "Dropoff 1"), keeps the chain's vocabulary consistent end to end
+          // (Delivery Chain list, confirm modal, Proof of Delivery labels).
+          // This label is fixed to the ORIGINAL booking-order index, even
+          // though the tab's actual POSITION below is nearest-ordered --
+          // matches the Schedule panel's "Drop-off N" labels (SupDeliveries.jsx),
+          // same reasoning as SuggestedRouteMap.jsx's marker numbering.
+          label: `Dropoff ${index + 2}`,
+          location: stop.location,
+          coords: parseCoords(stop.location) || activeStopCoords[stop.location] || null,
+          done: Boolean(stop.completed),
+          photoUrl: stop.photoUrl,
+          actionable:
+            workspaceDelivery.status === "OUT_FOR_DELIVERY" &&
+            Boolean(workspaceDelivery.pickupCompletedAt) &&
+            !stop.completed,
+        }));
 
-        // "Next" highlight (02B_MULTI_STOP_DELIVERIES.md's "Dynamic
-        // Nearest-Dropoff Ordering", 2026-08-14) -- purely informational,
-        // doesn't change which buttons are actionable above (completion
-        // order is still unenforced server-side). Pickup is always first
-        // when undone. After that, whichever remaining dropoff/stop is
-        // nearest the truck's live position gets the flag, matching what
-        // the driver's own nav is routing to; falls back to the first
-        // remaining item in chain order if no live position has arrived yet
-        // or none of the remaining items have parseable coordinates.
-        let nextKey = null;
-        if (!items[0].done) {
-          nextKey = "pickup";
-        } else {
-          const undone = items.slice(1).filter((it) => !it.done);
-          if (undone.length > 0) {
-            const rankable = undone
-              .map((it) => ({ item: it, coords: parseCoords(it.location) }))
-              .filter((c) => c.coords);
-            const nearest =
-              livePosition && rankable.length > 0
-                ? rankable.reduce((best, c) => {
-                    const d = distanceMeters(
-                      livePosition.lat,
-                      livePosition.lng,
-                      c.coords.lat,
-                      c.coords.lng,
-                    );
-                    return !best || d < best.distance
-                      ? { ...c, distance: d }
-                      : best;
-                  }, null)
-                : null;
-            nextKey = chainItemKey(nearest ? nearest.item : undone[0]);
-          }
-        }
+        const orderedRest = nearestDropoffOrder(workspaceDelivery.pickupCoords, [
+          dropoffItem,
+          ...stopItems,
+        ]);
+        const items = [pickupItem, ...orderedRest];
 
+        // "Next" highlight -- purely informational, doesn't change which
+        // buttons are actionable above (completion order is still
+        // unenforced server-side). Simply the first undone item in the
+        // list above, which is already nearest-from-Pickup ordered.
+        const firstUndone = items.find((it) => !it.done);
         return items.map((it) => ({
           ...it,
-          isNext: nextKey !== null && chainItemKey(it) === nextKey,
+          isNext: Boolean(firstUndone) && chainItemKey(it) === chainItemKey(firstUndone),
         }));
       })()
     : [];
@@ -1941,58 +1906,11 @@ function HelperDeliveries() {
     };
   }, [isMonitoring, workspaceDelivery?.sessionId]);
 
-  // Live truck position (05_GPS_PIPELINE.md), added 2026-08-14 to support the
-  // Delivery Chain list's "Next" highlight (02B_MULTI_STOP_DELIVERIES.md's
-  // "Dynamic Nearest-Dropoff Ordering") -- the Helper has no GPS device of
-  // their own, only the truck's Pi does, so this reads the same gps_logs
-  // stream the Driver's own live nav and the backend's proof-location check
-  // already use. Same seed-fetch + postgres_changes INSERT pattern as the
-  // alerts subscription above.
   useEffect(() => {
     if (!chainSuccessNotice) return undefined;
     const timer = setTimeout(() => setChainSuccessNotice(null), 5000);
     return () => clearTimeout(timer);
   }, [chainSuccessNotice]);
-
-  useEffect(() => {
-    if (!isMonitoring || !workspaceDelivery?.sessionId) return undefined;
-    let cancelled = false;
-
-    async function loadLatestPosition() {
-      const { data, error } = await supabase
-        .from("gps_logs")
-        .select("latitude, longitude")
-        .eq("session_id", workspaceDelivery.sessionId)
-        .order("created_at", { ascending: false })
-        .limit(1);
-      if (cancelled || error || !data?.length) return;
-      setLivePosition({ lat: data[0].latitude, lng: data[0].longitude });
-    }
-    loadLatestPosition();
-
-    const channel = supabase
-      .channel(`helper-gps-session-${workspaceDelivery.sessionId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "gps_logs",
-          filter: `session_id=eq.${workspaceDelivery.sessionId}`,
-        },
-        (payload) => {
-          setLivePosition({
-            lat: payload.new.latitude,
-            lng: payload.new.longitude,
-          });
-        },
-      )
-      .subscribe();
-    return () => {
-      cancelled = true;
-      supabase.removeChannel(channel);
-    };
-  }, [isMonitoring, workspaceDelivery?.sessionId]);
 
   useEffect(() => {
     // Resets local alert state when the workspace delivery's session changes

@@ -1151,6 +1151,9 @@ Deno.serve(async (req) => {
           dropoffTime: r.dropoff_time
             ? String(r.dropoff_time).slice(0, 5)
             : null,
+          dropoffTimeEnd: r.dropoff_time_end
+            ? String(r.dropoff_time_end).slice(0, 5)
+            : null,
           pickupAddress: r.pickup_location,
           pickupLat: r.pickup_lat,
           pickupLng: r.pickup_lng,

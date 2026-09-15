@@ -6,6 +6,23 @@ import {
   useJsApiLoader,
 } from "@react-google-maps/api";
 import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
+import { useResolvedStopCoords } from "../lib/forwardGeocode.js";
+
+// Some stop locations are stored as a "lat, lng" coordinate pair rather than
+// a street address -- parse those back into coords. Mirrors
+// DriverDeliveries.jsx's identical helper (not shared, per this codebase's
+// existing per-portal convention).
+function parseCoords(value) {
+  if (!value) return null;
+  const m = String(value)
+    .trim()
+    .match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const lat = parseFloat(m[1]);
+  const lng = parseFloat(m[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
 
 const MAP_CONTAINER_STYLE = { width: "100%", height: "100%" };
 // Index 0 was red until 2026-09-09 -- changed to teal per explicit user
@@ -26,6 +43,7 @@ const LEG_COLORS = ["#0D9488", "#2563EB", "#059669", "#7C3AED", "#EA580C", "#DB2
 // key={request.id}) so switching between requests remounts it fresh.
 export default function SuggestedRouteMap({
   suggestedRoute,
+  stops,
   title = "Planned Route",
 }) {
   const { isLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS);
@@ -35,9 +53,58 @@ export default function SuggestedRouteMap({
   const warehousePos = legs[0]?.path?.[0];
   const pickupPos = legEndpoint(legs, "pickup");
   const dropoffPos = legEndpoint(legs, "dropoff");
-  const stopPositions = legs
-    .filter((leg) => leg.to === "stop")
-    .map((leg) => leg.path[leg.path.length - 1]);
+
+  // Additional dropoffs (stops) never get a lat/lng persisted at booking
+  // time -- resolved here via Photon, same fallback every other portal's
+  // map uses for a real street-address stop.
+  const stopLocations = (stops || []).map((s) => s.location);
+  const { coordsByLocation: resolvedStopCoords } =
+    useResolvedStopCoords(stopLocations);
+
+  // "Drop-off 1" (per explicit user decision) is literally the first
+  // drop-off, not a conceptually separate "main" one -- so every drop-off
+  // (main + stops) gets ONE consistent numbering, matching the Schedule
+  // panel's "Drop-off 1/2/3..." labels (booking order), not the driving
+  // visit order Dynamic Nearest-Dropoff Ordering actually routes in. A
+  // "stop" leg's `to` key has no index of its own (computeSuggestedRoute
+  // only tags it generically), so each one is matched back to its original
+  // stops[] entry by nearest real coordinate -- same technique
+  // DriverDeliveries.jsx's buildRouteLegend already uses for its own legend.
+  const stopNumberByLegIndex = useMemo(() => {
+    const usedStopIndexes = new Set();
+    return legs.map((leg) => {
+      if (leg.to !== "stop") return null;
+      const [endLat, endLng] = leg.path[leg.path.length - 1];
+      let bestIndex = -1;
+      let bestDist = Infinity;
+      (stops || []).forEach((s, i) => {
+        if (usedStopIndexes.has(i)) return;
+        const c = parseCoords(s.location) || resolvedStopCoords[s.location];
+        if (!c) return;
+        const d = (c.lat - endLat) ** 2 + (c.lng - endLng) ** 2;
+        if (d < bestDist) {
+          bestDist = d;
+          bestIndex = i;
+        }
+      });
+      if (bestIndex === -1) return null;
+      usedStopIndexes.add(bestIndex);
+      // +2: index 0 is "Drop-off 2" (index 0 in stops[] follows the main
+      // Drop-off, which is "Drop-off 1").
+      return bestIndex + 2;
+    });
+  }, [legs, stops, resolvedStopCoords]);
+
+  const stopMarkers = legs
+    .map((leg, i) =>
+      leg.to === "stop" && stopNumberByLegIndex[i] != null
+        ? {
+            pos: leg.path[leg.path.length - 1],
+            number: stopNumberByLegIndex[i],
+          }
+        : null,
+    )
+    .filter(Boolean);
 
   const bounds = useMemo(() => {
     if (!isLoaded || !window.google || !legs.length) return null;
@@ -101,18 +168,18 @@ export default function SuggestedRouteMap({
             {dropoffPos && (
               <GoogleMapMarker
                 position={{ lat: dropoffPos[0], lng: dropoffPos[1] }}
-                label={{ text: "D", color: "#fff", fontSize: "11px", fontWeight: "700" }}
+                label={{ text: "1", color: "#fff", fontSize: "11px", fontWeight: "700" }}
                 icon={circleIcon("#059669")}
               />
             )}
-            {stopPositions.map(
-              (pos, i) =>
+            {stopMarkers.map(
+              ({ pos, number }, i) =>
                 pos && (
                   <GoogleMapMarker
                     key={i}
                     position={{ lat: pos[0], lng: pos[1] }}
                     label={{
-                      text: String(i + 1),
+                      text: String(number),
                       color: "#fff",
                       fontSize: "11px",
                       fontWeight: "700",
