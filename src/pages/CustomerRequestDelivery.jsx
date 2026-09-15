@@ -35,11 +35,8 @@ import {
   getRecommendedTruckValue,
   MIN_SCHEDULING_DAYS,
   getMinDeliveryDate,
-  getScheduleErrors,
-  getPickupWindowError,
-  getDropoffWindowError,
+  getDropoffDateError,
   getBudgetError,
-  getStopTimeError,
 } from "../lib/deliveryOptions.js";
 import { photonGeocode, useResolvedStopCoords } from "../lib/forwardGeocode.js";
 import { computeSuggestedRoute } from "../lib/suggestedRoute.js";
@@ -760,18 +757,11 @@ function CustomerRequestDelivery() {
   const navigate = useNavigate();
   const { isLoaded: mapsApiLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS);
   const [dateError, setDateError] = useState("");
-  const [pickupWindowError, setPickupWindowError] = useState("");
   const [dropoffDateError, setDropoffDateError] = useState("");
-  const [dropoffTimeError, setDropoffTimeError] = useState("");
-  const [dropoffWindowError, setDropoffWindowError] = useState("");
   const [budgetError, setBudgetError] = useState("");
   const [truckSelectionError, setTruckSelectionError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  // Keyed by stop index -- each additional dropoff's own time error, kept
-  // separate from dropoffTimeError (the main dropoff's error) since stops
-  // are a variable-length list, not a fixed field.
-  const [stopTimeErrors, setStopTimeErrors] = useState({});
   // null = hidden; a simulateSchedule() result = the 13-hour-cap rejection
   // modal is shown, holding the Day1/Day2/Total breakdown for its message.
   // A dedicated modal rather than the inline submitError banner, per
@@ -856,26 +846,20 @@ function CustomerRequestDelivery() {
     formData.dropoffDate > formData.pickupDate
       ? "TWO_DAY"
       : "SAME_DAY";
-  // Real bug found on review: dropoffTimeEnd is only rendered/editable in
-  // SAME_DAY mode, but its state doesn't reset itself just because the
-  // field got hidden -- a customer who fills a same-day window, then picks
-  // a later Drop Off Date (auto-switching to TWO_DAY), would be left with a
-  // stale dropoffTimeEnd sitting in state. getDropoffWindowError would then
-  // compare it against the repurposed "Day 2 Start Time" value and could
-  // easily fail ("window end must be later than start"), permanently
-  // blocking submission with an error pointing at a field that no longer
-  // exists in the UI -- a genuine dead end, not just a cosmetic issue. Also
-  // matters for persistence: dropoff_time_end's `|| null` fallback in
-  // newRequest only catches an EMPTY string, not a stale non-empty one, so
-  // without this it could silently write a meaningless leftover value to
-  // the DB. Clearing it the moment mode flips to TWO_DAY prevents both.
+  // dropoffTimeEnd is only rendered/editable in SAME_DAY mode, but its state
+  // doesn't reset itself just because the field got hidden -- a customer who
+  // fills a same-day window, then picks a later Drop Off Date (auto-
+  // switching to TWO_DAY), would be left with a stale dropoffTimeEnd sitting
+  // in state. Matters for persistence: dropoff_time_end's `|| null` fallback
+  // in newRequest only catches an EMPTY string, not a stale non-empty one,
+  // so without this it could silently write a meaningless leftover value to
+  // the DB. Clearing it the moment mode flips to TWO_DAY prevents that.
   useEffect(() => {
     if (deliveryMode === "TWO_DAY") {
       Promise.resolve().then(() => {
         setFormData((prev) =>
           prev.dropoffTimeEnd ? { ...prev, dropoffTimeEnd: "" } : prev,
         );
-        setDropoffWindowError("");
       });
     }
   }, [deliveryMode]);
@@ -1128,15 +1112,6 @@ function CustomerRequestDelivery() {
   const handleChange = (e) => {
     const { name, value, lat, lng } = e.target;
     const next = { ...formData, [name]: value };
-    // Recomputed per-change rather than reading the component-level
-    // deliveryMode, since `next` may already reflect a date edit this same
-    // call hasn't been committed to state yet (e.g. editing dropoffDate
-    // itself) -- must match what deliveryMode will become on the next
-    // render, not what it still is on this one.
-    const nextIsTwoDay = Boolean(
-      next.pickupDate && next.dropoffDate && next.dropoffDate > next.pickupDate,
-    );
-
     // LocationInput passes lat/lng alongside the address text when the
     // value came from a search suggestion or the map picker (both already
     // resolve real coordinates via Photon); a manually-typed address has
@@ -1162,44 +1137,8 @@ function CustomerRequestDelivery() {
       dropoffDateTouched.current = true;
     }
 
-    if (name === "pickupTime" || name === "pickupTimeEnd") {
-      setPickupWindowError(getPickupWindowError(next));
-    }
-
-    if (
-      [
-        "pickupDate",
-        "pickupTime",
-        "pickupTimeEnd",
-        "dropoffDate",
-        "dropoffTime",
-      ].includes(name)
-    ) {
-      const { dropoffDateError, dropoffTimeError } = getScheduleErrors(next);
-      setDropoffDateError(dropoffDateError);
-      setDropoffTimeError(dropoffTimeError);
-      // Recomputed on every date/time field that can flip Same-Day<->Two-Day
-      // or move the pickup window, not just pickupTime/pickupTimeEnd --
-      // crossing that mode boundary changes whether each stop's window
-      // should even be compared against the pickup window at all (see
-      // getStopTimeError's isTwoDay param and its own comment).
-      setStopTimeErrors(
-        Object.fromEntries(
-          next.stops.map((stop, i) => [
-            i,
-            getStopTimeError(stop, next, nextIsTwoDay),
-          ]),
-        ),
-      );
-    }
-
-    if (name === "dropoffTime" || name === "dropoffTimeEnd") {
-      // Window-end doesn't apply once dropoffDate is later than pickupDate
-      // (Two-Day mode) -- dropoffTime becomes the Day 2 start instant, not
-      // a window start, so a stale dropoffTimeEnd must never be validated
-      // against it here (see the auto-clear effect's comment above for the
-      // stuck-submission bug this guards against).
-      setDropoffWindowError(nextIsTwoDay ? "" : getDropoffWindowError(next));
+    if (["pickupDate", "dropoffDate"].includes(name)) {
+      setDropoffDateError(getDropoffDateError(next));
     }
 
     if (name === "budgetMin" || name === "budgetMax") {
@@ -1238,11 +1177,6 @@ function CustomerRequestDelivery() {
       ...prev,
       stops: prev.stops.filter((_, i) => i !== index),
     }));
-    setStopTimeErrors((prev) => {
-      const next = { ...prev };
-      delete next[index];
-      return next;
-    });
   };
 
   const handleStopChange = (index, e) => {
@@ -1263,21 +1197,11 @@ function CustomerRequestDelivery() {
   };
 
   const handleStopTimeChange = (index, field, value) => {
-    // Computed directly from the current formData.stops[index] (this
-    // handler closes over the latest formData every render) rather than
-    // relying on a side-effect variable set inside the setFormData updater
-    // below -- that updater isn't guaranteed to run before this line does,
-    // and when it hadn't yet, `updatedStop` stayed undefined, crashing
-    // getStopTimeError's destructuring (real bug, found live 2026-09-06 with
-    // multiple stops).
-    const updatedStop = { ...formData.stops[index], [field]: value };
     setFormData((prev) => ({
       ...prev,
-      stops: prev.stops.map((stop, i) => (i === index ? updatedStop : stop)),
-    }));
-    setStopTimeErrors((prev) => ({
-      ...prev,
-      [index]: getStopTimeError(updatedStop, formData, deliveryMode === "TWO_DAY"),
+      stops: prev.stops.map((stop, i) =>
+        i === index ? { ...stop, [field]: value } : stop,
+      ),
     }));
   };
 
@@ -1298,38 +1222,9 @@ function CustomerRequestDelivery() {
       return;
     }
 
-    const pickupWindowErrorMessage = getPickupWindowError(formData);
-    if (pickupWindowErrorMessage) {
-      setPickupWindowError(pickupWindowErrorMessage);
-      return;
-    }
-
-    const { dropoffDateError, dropoffTimeError } =
-      getScheduleErrors(formData);
-    if (dropoffDateError || dropoffTimeError) {
-      setDropoffDateError(dropoffDateError);
-      setDropoffTimeError(dropoffTimeError);
-      return;
-    }
-
-    // Window-end doesn't apply in Two-Day mode (dropoffTime is the Day 2
-    // start instant, not a window start) -- never validate a stale
-    // dropoffTimeEnd against it here. See the auto-clear effect's comment.
-    const dropoffWindowErrorMessage =
-      deliveryMode === "TWO_DAY" ? "" : getDropoffWindowError(formData);
-    if (dropoffWindowErrorMessage) {
-      setDropoffWindowError(dropoffWindowErrorMessage);
-      return;
-    }
-
-    const nextStopTimeErrors = Object.fromEntries(
-      formData.stops.map((stop, i) => [
-        i,
-        getStopTimeError(stop, formData, deliveryMode === "TWO_DAY"),
-      ]),
-    );
-    if (Object.values(nextStopTimeErrors).some(Boolean)) {
-      setStopTimeErrors(nextStopTimeErrors);
+    const dropoffDateErrorMessage = getDropoffDateError(formData);
+    if (dropoffDateErrorMessage) {
+      setDropoffDateError(dropoffDateErrorMessage);
       return;
     }
 
@@ -1649,11 +1544,7 @@ function CustomerRequestDelivery() {
                       value={formData.pickupTime}
                       onChange={handleChange}
                       required
-                      className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
-                        pickupWindowError
-                          ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
-                          : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
-                      }`}
+                      className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                     />
                     <span className="shrink-0 text-sm text-slate-400">to</span>
                     <input
@@ -1664,18 +1555,9 @@ function CustomerRequestDelivery() {
                       value={formData.pickupTimeEnd}
                       onChange={handleChange}
                       required
-                      className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
-                        pickupWindowError
-                          ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
-                          : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
-                      }`}
+                      className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                     />
                   </div>
-                  {pickupWindowError && (
-                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">
-                      {pickupWindowError}
-                    </p>
-                  )}
                 </div>
                 <div className="relative space-y-2">
                   <label
@@ -1756,18 +1638,8 @@ function CustomerRequestDelivery() {
                           }
                           value={formData.dropoffTime}
                           onChange={handleChange}
-                          min={
-                            deliveryMode === "SAME_DAY" &&
-                            formData.dropoffDate === formData.pickupDate
-                              ? formData.pickupTimeEnd || formData.pickupTime
-                              : undefined
-                          }
                           required
-                          className={`w-full rounded-xl border bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 sm:w-[8.5rem] ${
-                            dropoffTimeError || dropoffWindowError
-                              ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
-                              : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
-                          }`}
+                          className="w-full rounded-xl border border-emerald-200 bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:w-[8.5rem]"
                         />
                         {deliveryMode === "SAME_DAY" && (
                           <>
@@ -1782,22 +1654,13 @@ function CustomerRequestDelivery() {
                               value={formData.dropoffTimeEnd}
                               onChange={handleChange}
                               required
-                              className={`w-full rounded-xl border bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 sm:w-[8.5rem] ${
-                                dropoffWindowError
-                                  ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
-                                  : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
-                              }`}
+                              className="w-full rounded-xl border border-emerald-200 bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:w-[8.5rem]"
                             />
                           </>
                         )}
                       </div>
                     </div>
                   </div>
-                  {(dropoffTimeError || dropoffWindowError) && (
-                    <p className="text-xs text-red-600">
-                      {dropoffTimeError || dropoffWindowError}
-                    </p>
-                  )}
                 </div>
               </div>
 
@@ -1841,11 +1704,7 @@ function CustomerRequestDelivery() {
                                   e.target.value,
                                 )
                               }
-                              className={`w-full rounded-xl border bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 sm:w-[8.5rem] ${
-                                stopTimeErrors[index]
-                                  ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
-                                  : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
-                              }`}
+                              className="w-full rounded-xl border border-emerald-200 bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:w-[8.5rem]"
                             />
                             <span className="shrink-0 text-xs text-slate-400">
                               to
@@ -1862,11 +1721,7 @@ function CustomerRequestDelivery() {
                                   e.target.value,
                                 )
                               }
-                              className={`w-full rounded-xl border bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 sm:w-[8.5rem] ${
-                                stopTimeErrors[index]
-                                  ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
-                                  : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
-                              }`}
+                              className="w-full rounded-xl border border-emerald-200 bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:w-[8.5rem]"
                             />
                           </div>
                         </div>
@@ -1879,11 +1734,6 @@ function CustomerRequestDelivery() {
                           <X className="h-4 w-4" />
                         </button>
                       </div>
-                      {stopTimeErrors[index] && (
-                        <p className="text-xs text-red-600">
-                          {stopTimeErrors[index]}
-                        </p>
-                      )}
                     </div>
                   ))}
                 </div>

@@ -176,102 +176,22 @@ export function getMinDeliveryDate() {
 
 // Pickup Time is a customer-selected window (start + end), not a single
 // instant -- returns an error if the end isn't strictly after the start.
-export function getPickupWindowError({ pickupTime, pickupTimeEnd }) {
-  if (pickupTime && pickupTimeEnd && pickupTimeEnd <= pickupTime) {
-    return "Pickup window end must be later than the start time.";
-  }
-  return "";
-}
-
-// Drop-off marks when goods arrive, so it can never be scheduled before the
-// pickup that collects them -- compared against the pickup window's end
-// (the latest the crew could still be there), falling back to pickupTime
-// for legacy rows with no window end.
+// Pickup/dropoff windows (and each stop's own window) are informational
+// only -- "Open from -- to --" labels describing when someone will be there,
+// not a scheduling constraint this form enforces (explicit user decision,
+// 2026-09-15: a customer can enter any times/order here; the window never
+// blocks submission). Drop-off date is the one exception below: delivering
+// before the pickup that collects the goods isn't just an unusual window,
+// it's physically impossible, so that ordering is still checked.
 //
 // deliveryMode is no longer a param here (2026-08-30 follow-up) -- it used
 // to be an explicit customer toggle needing its own date-relationship
 // checks, but is now derived automatically from pickupDate/dropoffDate
 // (CustomerRequestDelivery.jsx), so it can never disagree with them by
 // construction; a separate mode/date validation would be dead code.
-export function getScheduleErrors({
-  pickupDate,
-  pickupTime,
-  pickupTimeEnd,
-  dropoffDate,
-  dropoffTime,
-}) {
+export function getDropoffDateError({ pickupDate, dropoffDate }) {
   if (pickupDate && dropoffDate && dropoffDate < pickupDate) {
-    return {
-      dropoffDateError: "Drop-off date cannot be before the pick up date.",
-      dropoffTimeError: "",
-    };
-  }
-
-  const pickupWindowEnd = pickupTimeEnd || pickupTime;
-  if (
-    pickupDate &&
-    dropoffDate &&
-    pickupDate === dropoffDate &&
-    pickupWindowEnd &&
-    dropoffTime &&
-    dropoffTime <= pickupWindowEnd
-  ) {
-    return {
-      dropoffDateError: "",
-      dropoffTimeError: "Drop-off time must be later than the pickup window.",
-    };
-  }
-
-  return { dropoffDateError: "", dropoffTimeError: "" };
-}
-
-// Drop Off Time is a customer-selected window (start + end), not a single
-// instant -- mirrors getPickupWindowError, per explicit user decision
-// (2026-08-30, "should show up as Open from -- to --"). Returns an error if
-// the end isn't strictly after the start.
-export function getDropoffWindowError({ dropoffTime, dropoffTimeEnd }) {
-  if (dropoffTime && dropoffTimeEnd && dropoffTimeEnd <= dropoffTime) {
-    return "Drop-off window end must be later than the start time.";
-  }
-  return "";
-}
-
-// Each additional dropoff (stop) shares the main Drop Off Date -- stops
-// don't get their own date field, per explicit user decision (2026-08-30).
-// The stop's own time is a window (start + end, same "Open from -- to --"
-// decision as the main dropoff), not a single instant. The window's start
-// is held to the same pickup-window rule getScheduleErrors already applies
-// to the main dropoff time; the window's end (if given) must be later than
-// the start. A half-filled window (only one of the two) is also an error --
-// a window needs both ends to mean anything. Deliberately doesn't check
-// ordering between stops or estimate travel time between them -- out of
-// scope per that same decision.
-//
-// Real bug found on review: the pickup-window comparison assumed the stop
-// and the pickup always share the same calendar day. Once Two-Day mode
-// (delivery time-planning feature) was added, stops happen on Day 2 -- a
-// different day from pickup -- so comparing clock-time-only strings across
-// days is meaningless (a legitimate 09:00 Day-2 stop would wrongly compare
-// as "before" a 17:00 Day-1 pickup window). `isTwoDay` skips that specific
-// check in that mode; the half-filled/end-after-start checks still apply
-// regardless of day, since those don't depend on which day it is.
-export function getStopTimeError(
-  { dropoffTime, dropoffTimeEnd },
-  { pickupTime, pickupTimeEnd },
-  isTwoDay,
-) {
-  if (!dropoffTime && !dropoffTimeEnd) return "";
-  if (!dropoffTime || !dropoffTimeEnd) {
-    return "Enter both a start and end time for this dropoff's window.";
-  }
-  if (!isTwoDay) {
-    const pickupWindowEnd = pickupTimeEnd || pickupTime;
-    if (pickupWindowEnd && dropoffTime <= pickupWindowEnd) {
-      return "This dropoff's window must start later than the pickup window.";
-    }
-  }
-  if (dropoffTimeEnd <= dropoffTime) {
-    return "This dropoff's window end must be later than its start time.";
+    return "Drop-off date cannot be before the pick up date.";
   }
   return "";
 }
