@@ -4070,18 +4070,31 @@ function DriverDeliveries() {
   const upcomingCount = data.upcoming.length;
   const pastCount = data.overdue.length + data.history.length;
 
-  // The nav map's target/waypoints follow the same nearest-first order --
-  // route to the nearest remaining dropoff, with the rest (also nearest-
-  // first from that point) threaded in as waypoints after it.
+  // Real bug found on review: LiveNavigationMap's `destination` prop feeds
+  // DirectionsService's own `destination` field directly, which ALWAYS ends
+  // the computed route -- `waypoints` (this component's `stops` prop) are
+  // always visited BEFORE it, in the array order given (no
+  // optimizeWaypoints). This used to assign the NEAREST remaining item
+  // (orderedRemainingDropoffs[0]) as `destination` and everything farther as
+  // `waypoints` -- meaning with 3 remaining drop-offs ordered [A nearest, B,
+  // C farthest], the driver was actually routed origin -> B -> C -> A, the
+  // opposite of nearest-first. isDropoffFinal below already assumed the
+  // LAST array index is the genuine final stop -- consistent with the fix
+  // here, not with the old assignment, which is what surfaced this. Now the
+  // farthest remaining item (the true end of this leg of the trip) is the
+  // `destination`, and everything before it (already nearest-first) becomes
+  // `waypoints`, visited in that correct order.
   let activeNavTarget = null;
   let activeNavStops = [];
   if (workspaceDelivery) {
     if (activeNeedsPickup) {
       activeNavTarget = workspaceDelivery.pickupCoords;
     } else if (orderedRemainingDropoffs.length > 0) {
+      const lastIndex = orderedRemainingDropoffs.length - 1;
       activeNavTarget =
-        orderedRemainingDropoffs[0].coords || workspaceDelivery.destinationCoords;
-      activeNavStops = orderedRemainingDropoffs.slice(1);
+        orderedRemainingDropoffs[lastIndex].coords ||
+        workspaceDelivery.destinationCoords;
+      activeNavStops = orderedRemainingDropoffs.slice(0, lastIndex);
     } else {
       activeNavTarget = workspaceDelivery.destinationCoords;
     }

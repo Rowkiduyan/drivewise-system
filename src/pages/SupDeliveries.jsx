@@ -4609,7 +4609,7 @@ function SupDeliveries() {
         supabase
           .from("delivery_requests")
           .select(
-            "id, customer_auth_id, item_type, other_item_type, truck_type, cargo_weight, pickup_date, pickup_time, pickup_time_end, dropoff_date, dropoff_time, pickup_location, pickup_lat, pickup_lng, dropoff_location, dropoff_lat, dropoff_lng, stops, pickup_photo_url, dropoff_photo_url, pickup_completed_at, dropoff_completed_at, pickup_arrived_at, dropoff_arrived_at, budget_min, budget_max, notes, status, created_at, customer_counter_min, customer_counter_max, cancelled_by, cancel_reason, cancelled_at, cancelled_from_status, received_confirmed, received_confirmed_at, completed_at, assigned_driver_id, assigned_helper_ids, assigned_truck_plate, assigned_at",
+            "id, customer_auth_id, item_type, other_item_type, truck_type, cargo_weight, pickup_date, pickup_time, pickup_time_end, dropoff_date, dropoff_time, dropoff_time_end, pickup_location, pickup_lat, pickup_lng, dropoff_location, dropoff_lat, dropoff_lng, stops, pickup_photo_url, dropoff_photo_url, pickup_completed_at, dropoff_completed_at, pickup_arrived_at, dropoff_arrived_at, budget_min, budget_max, notes, status, created_at, customer_counter_min, customer_counter_max, cancelled_by, cancel_reason, cancelled_at, cancelled_from_status, received_confirmed, received_confirmed_at, completed_at, assigned_driver_id, assigned_helper_ids, assigned_truck_plate, assigned_at",
           )
           .order("created_at", { ascending: false }),
       ]);
