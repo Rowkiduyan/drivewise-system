@@ -1896,12 +1896,28 @@ function RequestDetailView({
                         )}
                       />
                       <Row
-                        label="Drop-off"
+                        label="Drop-off 1"
                         value={formatDisplayDateTime(
                           request.dropoffDate,
                           request.dropoffTime,
+                          request.dropoffTimeEnd,
                         )}
                       />
+                      {/* Additional dropoffs (stops) share the main Drop-off
+                          Date -- stops don't get their own date field
+                          (02B_MULTI_STOP_DELIVERIES.md). Mirrors
+                          SupDeliveries.jsx's identical fix. */}
+                      {(request.stops || []).map((stop, i) => (
+                        <Row
+                          key={i}
+                          label={`Drop-off ${i + 2}`}
+                          value={formatDisplayDateTime(
+                            request.dropoffDate,
+                            stop.dropoffTime,
+                            stop.dropoffTimeEnd,
+                          )}
+                        />
+                      ))}
                     </div>
                   </div>
 
@@ -3126,6 +3142,7 @@ function mapDeliveryRow(row) {
     pickupTimeEnd: row.pickup_time_end || null,
     dropoffDate: row.dropoff_date,
     dropoffTime: row.dropoff_time,
+    dropoffTimeEnd: row.dropoff_time_end || null,
     pickupLocation: row.pickup_location,
     pickupCoords:
       row.pickup_lat != null && row.pickup_lng != null
