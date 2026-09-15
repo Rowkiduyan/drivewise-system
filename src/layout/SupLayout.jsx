@@ -143,7 +143,7 @@ function SupLayout({ background, children, bg = "bg-white" }) {
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
   const deactivationWarning = useDeactivationGuard();
   const location = useLocation();
-  const { pendingDeliveries, overdueTrucks, scheduledTrucks } =
+  const { pendingDeliveries, assignableDeliveries, overdueTrucks, scheduledTrucks } =
     useSidebarBadges();
 
   useEffect(() => {
@@ -249,18 +249,40 @@ function SupLayout({ background, children, bg = "bg-white" }) {
                 </span>
 
                 {module.label === "Deliveries" &&
-                pendingDeliveries > 0 ? (
+                (pendingDeliveries > 0 || assignableDeliveries > 0) ? (
                   isExpanded ? (
-                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
-                      {pendingDeliveries > 99
-                        ? "99+"
-                        : pendingDeliveries}
+                    <span className="ml-auto flex items-center gap-1">
+                      {pendingDeliveries > 0 ? (
+                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+                          {pendingDeliveries > 99
+                            ? "99+"
+                            : pendingDeliveries}
+                        </span>
+                      ) : null}
+                      {assignableDeliveries > 0 ? (
+                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold text-white">
+                          {assignableDeliveries > 99
+                            ? "99+"
+                            : assignableDeliveries}
+                        </span>
+                      ) : null}
                     </span>
                   ) : (
-                    <span className="absolute -right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-0.5 text-[9px] font-bold text-white">
-                      {pendingDeliveries > 99
-                        ? "99+"
-                        : pendingDeliveries}
+                    <span className="absolute -right-0.5 top-0.5 flex flex-col items-center gap-0.5">
+                      {pendingDeliveries > 0 ? (
+                        <span className="flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-[8px] font-bold text-white leading-none">
+                          {pendingDeliveries > 99
+                            ? "99+"
+                            : pendingDeliveries}
+                        </span>
+                      ) : null}
+                      {assignableDeliveries > 0 ? (
+                        <span className="flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-amber-400 px-0.5 text-[8px] font-bold text-white leading-none">
+                          {assignableDeliveries > 99
+                            ? "99+"
+                            : assignableDeliveries}
+                        </span>
+                      ) : null}
                     </span>
                   )
                 ) : null}
