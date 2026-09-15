@@ -1642,7 +1642,7 @@ Deno.serve(async (req) => {
       const { data: row, error: rowError } = await adminClient
         .from("delivery_requests")
         .select(
-          "id, status, assigned_helper_ids, stops, dropoff_location, dropoff_lat, dropoff_lng",
+          "id, status, assigned_helper_ids, stops, dropoff_location, dropoff_lat, dropoff_lng, dropoff_arrived_at",
         )
         .eq("id", deliveryId)
         .maybeSingle();
@@ -1701,11 +1701,21 @@ Deno.serve(async (req) => {
       // Vacuously true when stops is empty, same as before.
       const isFinal = stops.every((s: { completed?: boolean }) => s?.completed);
 
+      const completedAt = new Date().toISOString();
       const updates: Record<string, unknown> = {
         dropoff_photo_url: upload.url,
-        dropoff_completed_at: new Date().toISOString(),
+        dropoff_completed_at: completedAt,
         dropoff_photo_verification: photoVerification,
       };
+      // Driver's "Arrived at Drop-off" tap is optional (see
+      // 20260908120000_delivery_requests_arrival_timestamps.sql) and often
+      // skipped — the Helper submitting the POD is proof the Driver did in
+      // fact arrive, so backfill it here rather than leaving the
+      // Supervisor's Trip Details "Arrival" row reading "not recorded" for a
+      // trip that plainly completed. Never overwrites a real tap timestamp.
+      if (!row.dropoff_arrived_at) {
+        updates.dropoff_arrived_at = completedAt;
+      }
       if (isFinal) {
         updates.status = "DELIVERED";
         updates.updated_at = new Date().toISOString();

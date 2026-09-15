@@ -131,12 +131,21 @@ function AdminProfile() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [formError, setFormError] = useState("");
-  const [formSuccess, setFormSuccess] = useState("");
   const [admin, setAdmin] = useState(null);
   const [profileError, setProfileError] = useState("");
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [pictureError, setPictureError] = useState("");
   const [isUpdatingPicture, setIsUpdatingPicture] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setToast(null), 3000);
+    return () => window.clearTimeout(timeoutId);
+  }, [toast]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -189,15 +198,19 @@ function AdminProfile() {
       });
 
       if (error) {
-        setPictureError(error.message || "Unable to upload profile picture.");
+        const message = error.message || "Unable to upload profile picture.";
+        setPictureError(message);
+        setToast({ message, type: "error" });
         return;
       }
 
       setAdmin((current) => (current ? { ...current, profilePicture: data.profile_picture } : current));
+      setToast({ message: "Photo was changed successfully.", type: "success" });
     } catch (uploadException) {
-      setPictureError(
-        uploadException instanceof Error ? uploadException.message : "Unable to process the selected image."
-      );
+      const message =
+        uploadException instanceof Error ? uploadException.message : "Unable to process the selected image.";
+      setPictureError(message);
+      setToast({ message, type: "error" });
     } finally {
       setIsUpdatingPicture(false);
     }
@@ -217,11 +230,14 @@ function AdminProfile() {
       });
 
       if (error) {
-        setPictureError(error.message || "Unable to remove profile picture.");
+        const message = error.message || "Unable to remove profile picture.";
+        setPictureError(message);
+        setToast({ message, type: "error" });
         return;
       }
 
       setAdmin((current) => (current ? { ...current, profilePicture: "" } : current));
+      setToast({ message: "Photo was removed successfully.", type: "success" });
     } finally {
       setIsUpdatingPicture(false);
     }
@@ -232,7 +248,6 @@ function AdminProfile() {
     setNewPassword("");
     setConfirmPassword("");
     setFormError("");
-    setFormSuccess("");
     setIsPasswordModalOpen(true);
   };
 
@@ -241,7 +256,7 @@ function AdminProfile() {
     setFormError("");
   };
 
-  const handleChangePassword = (event) => {
+  const handleChangePassword = async (event) => {
     event.preventDefault();
     setFormError("");
 
@@ -258,16 +273,46 @@ function AdminProfile() {
       return;
     }
 
-    setCurrentPassword("");
-    setNewPassword("");
-    setConfirmPassword("");
-    setIsPasswordModalOpen(false);
-    setFormSuccess("Password updated successfully.");
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+
+      if (error) {
+        const message = error.message || "Unable to update password.";
+        setFormError(message);
+        setToast({ message, type: "error" });
+        return;
+      }
+
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setIsPasswordModalOpen(false);
+      setToast({ message: "Password updated successfully.", type: "success" });
+    } catch (changeError) {
+      const message =
+        changeError instanceof Error ? changeError.message : "Unable to update password.";
+      setFormError(message);
+      setToast({ message, type: "error" });
+    }
   };
 
   return (
     <AdminLayout title="Admin Profile" background={null}>
       <div className="flex flex-col gap-6 pb-10">
+        {toast && (
+          <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+            <p
+              className={`px-4 py-2 rounded-md shadow-md text-sm font-medium transition-transform duration-300 ${
+                toast.type === "success"
+                  ? "bg-green-100 text-green-800 border border-green-300"
+                  : "bg-red-100 text-red-800 border border-red-300"
+              }`}
+            >
+              {toast.message}
+            </p>
+          </div>
+        )}
+
         {profileError ? (
           <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {profileError}
@@ -352,8 +397,6 @@ function AdminProfile() {
             <div className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm tracking-widest text-slate-500">
               ••••••••••••
             </div>
-
-            {formSuccess && <p className="mt-2 text-sm text-emerald-600">{formSuccess}</p>}
 
             <button
               type="button"

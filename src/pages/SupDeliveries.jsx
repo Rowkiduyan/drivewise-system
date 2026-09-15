@@ -57,6 +57,7 @@ import { useSearchParams } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
+import { useResolvedStopCoords } from "../lib/forwardGeocode.js";
 import SuggestedRouteMap from "../components/SuggestedRouteMap.jsx";
 import {
   classifyRouteDeviation,
@@ -2271,6 +2272,20 @@ function ResolvedText({ value }) {
 // useResolvedAddress so a "lat, lng"-shaped location (e.g. DR-0020's fixture
 // data) shows a real address instead of raw coordinates.
 function LocationSwitcher({ request }) {
+  const stops = request.stops || [];
+  // Stops never get a lat/lng persisted at booking time (unlike Pickup/
+  // Dropoff, which fall back to pickup_lat/lng and dropoff_lat/lng DB
+  // columns) -- parseCoords only succeeds for the rare "lat, lng"-shaped
+  // fixture address, so any real street address needs the same Photon
+  // forward-geocoding fallback DriverDeliveries.jsx already uses, or its map
+  // always reads "doesn't have parseable coordinates" here.
+  const unresolvedStopLocations = stops
+    .map((stop) => stop.location)
+    .filter((loc) => loc && !parseCoords(loc));
+  const { coordsByLocation: resolvedStopCoords } = useResolvedStopCoords(
+    unresolvedStopLocations,
+  );
+
   const points = [
     {
       key: "pickup",
@@ -2290,14 +2305,17 @@ function LocationSwitcher({ request }) {
       address: request.deliveryAddress,
       coords: getDropoffCoords(request),
     },
-    ...(request.stops || []).map((stop, index) => ({
+    ...stops.map((stop, index) => ({
       key: `stop-${index}`,
       badge: String(index + 2),
       badgeBg: "bg-amber-100",
       badgeText: "text-amber-700",
       label: `Dropoff ${index + 2}`,
       address: stop.location,
-      coords: parseCoords(stop.location),
+      coords:
+        parseCoords(stop.location) ||
+        resolvedStopCoords[stop.location] ||
+        null,
     })),
   ];
 

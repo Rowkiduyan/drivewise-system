@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { Search, Copy, Check } from 'lucide-react'
 import AdminLayout from '../layout/AdminLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
-import { getCityNamesForProvince, getProvinceNames } from '../lib/philippineLocations.js'
+import {
+  getCityNamesForProvince,
+  getProvinceNames,
+  normalizeLegacyProvince
+} from '../lib/philippineLocations.js'
 import { getDeactivationStatus, formatCutoff } from '../lib/deactivation.js'
 
 const background = null
@@ -390,6 +394,8 @@ function AdminHome() {
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
   const [isPasswordCopied, setIsPasswordCopied] = useState(false)
   const [isAddConfirmOpen, setIsAddConfirmOpen] = useState(false)
+  const [addedUserName, setAddedUserName] = useState('')
+  const [toast, setToast] = useState(null)
   const [statusModal, setStatusModal] = useState({
     open: false,
     tone: 'success',
@@ -452,6 +458,14 @@ function AdminHome() {
       document.body.style.overflow = previousOverflow
     }
   }, [isAnyModalOpen])
+
+  useEffect(() => {
+    if (!toast) {
+      return
+    }
+    const timeoutId = window.setTimeout(() => setToast(null), 3000)
+    return () => window.clearTimeout(timeoutId)
+  }, [toast])
 
   const loadUsers = async () => {
     setIsLoadingUsers(true)
@@ -834,14 +848,23 @@ function AdminHome() {
     setIsAddUserOpen(false)
 
     if (data.emailSent) {
+      const addedName = [data.user.first_name, data.user.last_name].filter(Boolean).join(' ')
       showStatusModal(
         'success',
         'User Added',
-        `${newUserName} has been added as ${data.user.role}. Login credentials were emailed to ${data.user.email}.`
+        `${newUserName} has been added as ${data.user.role}. Login credentials were emailed to ${data.user.email}.`,
+        () =>
+          setToast({
+            message: `User ${addedName} was successfully added.`,
+            type: 'success'
+          })
       )
     } else {
       setTempPassword(data.tempPassword || '')
       setIsPasswordCopied(false)
+      setAddedUserName(
+        [data.user.first_name, data.user.last_name].filter(Boolean).join(' ')
+      )
       showStatusModal(
         'error',
         'User Added — Email Not Sent',
@@ -866,7 +889,13 @@ function AdminHome() {
       birthdate: user.birthdate,
       street: user.street,
       city: user.city,
-      province: user.province,
+      // A user saved before the Province dropdown fix can have a legacy HUC
+      // name stored directly as its province (e.g. "City of Caloocan") --
+      // normalize it to a value the current dropdown actually offers
+      // ("Metro Manila") so the edit form doesn't open with a blank
+      // Province/City selection. Never writes this back unless the admin
+      // saves the form.
+      province: normalizeLegacyProvince(user.province),
       loginEmail: user.loginEmail,
       status: user.status,
       deactivatedAt: user.deactivatedAt
@@ -1044,6 +1073,11 @@ function AdminHome() {
     } else {
       setTempPassword(data.tempPassword || '')
       setIsPasswordCopied(false)
+      // Cleared, not set -- this modal/Done button is shared with
+      // confirmAddUser's identical "email failed" path, and addedUserName is
+      // how that Done handler decides whether to show the "successfully
+      // added" toast. Left stale here, a reset would incorrectly fire it.
+      setAddedUserName('')
       showStatusModal(
         'error',
         'Password Reset — Email Not Sent',
@@ -1056,6 +1090,20 @@ function AdminHome() {
   return (
     <AdminLayout title="User Management" background={background}>
       <div className="flex flex-col gap-6 pb-10">
+        {toast && (
+          <div className="fixed inset-x-0 top-4 flex justify-center z-50">
+            <p
+              className={`px-4 py-2 rounded-md shadow-md text-sm font-medium transition-transform duration-300 ${
+                toast.type === 'success'
+                  ? 'bg-green-100 text-green-800 border border-green-300'
+                  : 'bg-red-100 text-red-800 border border-red-300'
+              }`}
+            >
+              {toast.message}
+            </p>
+          </div>
+        )}
+
         {usersError ? (
           <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {usersError}
@@ -2001,6 +2049,17 @@ function AdminHome() {
               onClick={() => {
                 setIsPasswordModalOpen(false)
                 setTempPassword('')
+                // Only the Add User flow sets addedUserName (see
+                // confirmAddUser/handleResetPassword) -- this same modal is
+                // also reached from Reset Password, which should not show an
+                // "added" toast.
+                if (addedUserName) {
+                  setToast({
+                    message: `User ${addedUserName} was successfully added.`,
+                    type: 'success'
+                  })
+                  setAddedUserName('')
+                }
               }}
             >
               Done
