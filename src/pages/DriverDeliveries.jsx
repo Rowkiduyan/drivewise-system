@@ -3519,8 +3519,11 @@ function DeliveryDetailView({
           {/* Proof of Delivery — ProofOfDeliverySection self-gates on
               whichever chain items actually have a photo, so a Trip still
               in progress shows just what's been captured so far rather than
-              waiting for isArchived (DELIVERED/COMPLETED). */}
-          <ProofOfDeliverySection delivery={delivery} />
+              waiting for isArchived (DELIVERED/COMPLETED). Hidden for
+              ASSIGNED deliveries since no pickup has occurred yet. */}
+          {delivery.status !== "ASSIGNED" && (
+            <ProofOfDeliverySection delivery={delivery} />
+          )}
 
           {/* Delivery Fee — always visible */}
           {delivery.quotation && (
@@ -5489,8 +5492,11 @@ function DriverDeliveries() {
 
                       {/* Proof of Delivery — same self-gating section as
                     DeliveryDetailView, shown here too so it's visible on the
-                    live workspace without navigating into history. */}
-                      <ProofOfDeliverySection delivery={workspaceDelivery} />
+                    live workspace without navigating into history. Hidden for
+                    ASSIGNED deliveries since no pickup has occurred yet. */}
+                      {workspaceDelivery.status !== "ASSIGNED" && (
+                        <ProofOfDeliverySection delivery={workspaceDelivery} />
+                      )}
 
                       {/* Delivery Fee — always visible */}
                       {workspaceDelivery.quotation && (
