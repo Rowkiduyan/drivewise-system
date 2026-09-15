@@ -2675,7 +2675,14 @@ export function CompletedDeliveryReport({
                         </span>
                       )}
                     {formatAlertTimestamp(session.start)} —{" "}
-                    {session.end ? formatAlertTimestamp(session.end) : ""}
+                    {session.end ? (
+                      formatAlertTimestamp(session.end)
+                    ) : (
+                      <span className="inline-flex items-center gap-1 font-semibold text-sky-600">
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500" />
+                        En route
+                      </span>
+                    )}
                   </span>
                   <span className="ml-auto flex shrink-0 items-center gap-2">
                     <span className="font-semibold text-slate-900">
@@ -2686,7 +2693,10 @@ export function CompletedDeliveryReport({
                         the element entirely on a still-open session (no
                         duration yet) shrank the group, which -- being
                         right-anchored via ml-auto -- shifted "alerts"
-                        sideways relative to rows that do have a duration. */}
+                        sideways relative to rows that do have a duration.
+                        A still-open session already shows "En route" in the
+                        timestamp slot above, so this stays blank rather than
+                        repeating that status. */}
                     <span className="w-8 shrink-0 text-right text-[10px] text-slate-400">
                       {Number.isFinite(session.duration) && session.duration > 0
                         ? formatAlertDuration(session.duration)

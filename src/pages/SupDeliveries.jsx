@@ -2068,12 +2068,8 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs, rer
       drowsinessAlertCount,
       riskLevel,
       drowsinessLevel: worst,
-      // "No data" rather than blank/0/"--" when there's nothing to average
-      // (per explicit user request) -- 0s or a dash would misread as "zero
-      // seconds of eye closure," when the real reason is there were no
-      // closure alerts at all to average in the first place.
       avgClosureDuration:
-        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "No data",
+        avgClosureSec != null ? `${avgClosureSec.toFixed(1)}s` : "0s",
       yawnCount: typeCounts.pattern_eye_closure_yawn || 0,
       eyeDetectionFailures: typeCounts.face_not_detected || 0,
       alertsByType,
@@ -3325,7 +3321,14 @@ function DriveWiseAnalysisTab({ report }) {
                     </span>
                   )}
                 {formatAlertTimestamp(session.start)} —{" "}
-                {session.end ? formatAlertTimestamp(session.end) : ""}
+                {session.end ? (
+                  formatAlertTimestamp(session.end)
+                ) : (
+                  <span className="inline-flex items-center gap-1 font-semibold text-sky-600">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500" />
+                    En route
+                  </span>
+                )}
               </span>
               {/* Grouped and anchored to the right edge as one unit (matches
                   DriverDeliveries.jsx's identical Session Log block) -- a
@@ -3337,16 +3340,11 @@ function DriveWiseAnalysisTab({ report }) {
                   {session.alerts} alerts
                 </span>
                 {/* Fixed width, always rendered (even empty) -- a still-open
-                    session (no end_time yet) has no duration to show, and
-                    formatAlertDuration's own "--" placeholder isn't right
-                    here (per explicit user request, this report should
-                    leave it blank rather than a literal dash). Omitting the
-                    element entirely on those rows (the previous approach)
-                    shrank the group, which -- being right-anchored via
-                    ml-auto -- shifted "alerts" sideways relative to rows
-                    that do have a duration. Reserving the same width every
-                    row regardless of content keeps "alerts" aligned in a
-                    real column across all of them. */}
+                    session (no end_time yet) already shows "En route" in the
+                    timestamp slot above, so this stays blank rather than
+                    repeating that status. Reserving the same width every row
+                    regardless of content keeps "alerts" aligned in a real
+                    column across all of them. */}
                 <span className="w-9 shrink-0 text-right text-slate-400">
                   {Number.isFinite(session.duration) && session.duration > 0
                     ? formatAlertDuration(session.duration)
