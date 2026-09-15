@@ -402,6 +402,15 @@ const GOOGLE_MAP_CONTAINER_STYLE = { width: "100%", height: "100%" };
 // fine for a "has the driver visibly left the route" check.
 const NAV_REROUTE_TOLERANCE_DEGREES = 0.0009;
 const NAV_STEP_ADVANCE_METERS = 35;
+// Snap-to-route threshold (user-reported 2026-09-15: walking beside a road
+// during a live test showed the arrow on the sidewalk, not the road) --
+// ordinary phone GPS accuracy (commonly 5-15m) is easily enough to land the
+// raw coordinate off the actual road/route line. Purely display-only, see
+// snapToPolyline's own comment for the full reasoning; kept well under
+// NAV_REROUTE_TOLERANCE_DEGREES's own ~100m threshold so a driver who has
+// genuinely left the route (about to trigger a real reroute) shows their
+// real position, not one incorrectly glued to a line they're not on.
+const NAV_SNAP_TO_ROUTE_METERS = 40;
 // Was 12000 -- shortened per explicit user request 2026-08-15 (felt too
 // unresponsive during real-hardware testing, stacking on top of the
 // DirectionsService round-trip itself). Still a real throttle, not 0, so an
@@ -427,6 +436,240 @@ const ROUTE_RETRY_DELAY_MS = 5000;
 // outside dense city centers), so this is close to the real usable ceiling
 // most places already.
 const NAV_ZOOM = 21;
+
+// Snaps a raw GPS point to the nearest point on a route polyline, so the
+// live-nav arrow renders on the road/route itself instead of at the literal
+// raw coordinate (user-reported 2026-09-15, see NAV_SNAP_TO_ROUTE_METERS's
+// own comment). Purely a display concern -- the return value is only ever
+// used for the marker's rendered position and the camera's follow-center;
+// gps_logs, distance/mileage accumulation, the step-advance check, and the
+// reroute-on-deviation check all keep comparing against the real, raw
+// position, so a genuine deviation is still genuinely detected and still
+// genuinely triggers a real reroute (snapping the display would otherwise
+// quietly mask that the driver has actually left the route).
+//
+// Local flat-earth projection (meters-per-degree at this latitude), not
+// real haversine math per segment -- accurate to centimeters over the
+// sub-kilometer span a single route leg covers, which is all this needs.
+// `path` entries may be plain {lat,lng} (this app's own stored route
+// shape) or google.maps.LatLng instances (DirectionsService's live result,
+// lat/lng as methods, not properties) -- normalized inline either way.
+// Returns null (meaning "show the raw position instead") when the closest
+// point on the path is farther than maxMeters away.
+function snapToPolyline(point, path, maxMeters) {
+  if (!point || !path || path.length < 2) return null;
+  const latToMeters = 111320;
+  const lngToMeters = 111320 * Math.cos((point.lat * Math.PI) / 180);
+  const toLocalXY = (p) => {
+    const lat = typeof p.lat === "function" ? p.lat() : p.lat;
+    const lng = typeof p.lng === "function" ? p.lng() : p.lng;
+    return { x: (lng - point.lng) * lngToMeters, y: (lat - point.lat) * latToMeters };
+  };
+  let closest = null;
+  let closestDistSq = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    const a = toLocalXY(path[i - 1]);
+    const b = toLocalXY(path[i]);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq > 0 ? (-a.x * dx + -a.y * dy) / lenSq : 0;
+    t = Math.max(0, Math.min(1, t));
+    const cx = a.x + t * dx;
+    const cy = a.y + t * dy;
+    const distSq = cx * cx + cy * cy;
+    if (distSq < closestDistSq) {
+      closestDistSq = distSq;
+      closest = { x: cx, y: cy };
+    }
+  }
+  if (!closest || Math.sqrt(closestDistSq) > maxMeters) return null;
+  return {
+    lat: point.lat + closest.y / latToMeters,
+    lng: point.lng + closest.x / lngToMeters,
+  };
+}
+
+// Below this speed (m/s), a phone's own fused heading reading is typically
+// noise (near-stationary jitter, not real direction of travel) -- keep
+// whatever heading is already showing instead of following it.
+const MIN_HEADING_SPEED_MPS = 0.5;
+
+// Resolves the direction-of-travel arrow/camera should face for one new GPS
+// fix. Prefers the phone's own `coords.heading` (fused by the OS from GPS +
+// compass/motion sensors) when the device supplies one and is actually
+// moving -- far steadier at walking speed than comparing two raw lat/lng
+// fixes, since consecutive walking-speed fixes can be only a couple meters
+// apart, well within ordinary GPS noise (5-15m), which was flipping the
+// computed heading backwards (user-reported 2026-09-15 walking test).
+// Deliberately does NOT read any device-orientation/compass-facing signal
+// (which way the phone itself is physically pointed) -- explicit user
+// request: only real direction of travel should turn the camera, not how
+// the phone happens to be held.
+// Falls back to the previous two-fix secant calculation when the device
+// doesn't supply a usable heading (desktop browsers, older devices, or a
+// low-speed/stationary reading), same >2m movement threshold as before so
+// GPS drift while stopped doesn't jitter the arrow.
+function resolveTravelHeading(fix, previousFix, fallbackHeading) {
+  if (
+    typeof fix.heading === "number" &&
+    !Number.isNaN(fix.heading) &&
+    typeof fix.speed === "number" &&
+    fix.speed >= MIN_HEADING_SPEED_MPS
+  ) {
+    return fix.heading;
+  }
+  if (previousFix && window.google) {
+    const from = new window.google.maps.LatLng(previousFix.lat, previousFix.lng);
+    const to = new window.google.maps.LatLng(fix.lat, fix.lng);
+    if (
+      window.google.maps.geometry.spherical.computeDistanceBetween(from, to) >
+      2
+    ) {
+      return window.google.maps.geometry.spherical.computeHeading(from, to);
+    }
+  }
+  return fallbackHeading;
+}
+
+// Shortest angular step from `from` to `to` in degrees, in (-180, 180] --
+// e.g. 350 -> 10 returns +20 (turn forward through 0/360), not -340 (the
+// long way around backwards).
+function shortestAngleDeltaDeg(from, to) {
+  return ((((to - from) % 360) + 540) % 360) - 180;
+}
+
+function lerpAngleDeg(from, to, t) {
+  return from + shortestAngleDeltaDeg(from, to) * t;
+}
+
+// How much of the remaining gap to a new GPS fix's position/heading closes
+// per ms of real elapsed time (framerate-independent exponential ease) --
+// tuned so the glide settles well within one typical GPS tick interval
+// (~1s) instead of visibly lagging behind the real position.
+const CAMERA_SMOOTHING_MS = 350;
+
+// Continuously glides the camera (and the marker/arrow, which renders at the
+// same animated position) toward each new GPS fix instead of snapping to it
+// the instant a fix arrives -- the same look as Google Maps' own turn-by-
+// turn view, where the puck/camera never visibly teleports between raw GPS
+// ticks. Runs its own requestAnimationFrame loop rather than tying the
+// animation to GPS tick timing (ticks arrive irregularly): each frame eases
+// the currently-displayed position/heading a fraction of the way toward
+// whatever the latest real fix says, so it keeps gliding smoothly even if
+// the next real fix is a bit late. `heading` eases along the shorter
+// direction via lerpAngleDeg so a near-north driver doesn't see the camera
+// spin the long way around. Zoom is left alone every frame (read from the
+// map's own current zoom) so this never fights a driver's manual pinch --
+// only the very first fix snaps zoom to NAV_ZOOM, same as the pre-animation
+// behavior this replaces.
+function useAnimatedNavCamera({ mapRef, isMapReady, rawPosition, heading }) {
+  const [animatedPosition, setAnimatedPosition] = useState(null);
+  const targetRef = useRef(null);
+  const targetHeadingRef = useRef(heading);
+  const animatedPosRef = useRef(null);
+  const animatedHeadingRef = useRef(heading);
+  const rafRef = useRef(null);
+  const lastFrameAtRef = useRef(0);
+  // Set false the instant the driver starts a real drag gesture (Google
+  // Maps JS API only fires 'dragstart' for user-initiated panning, never
+  // for a programmatic moveCamera() call, so this can't misfire from the
+  // animation loop's own camera updates below). While false, the loop still
+  // keeps the marker/arrow gliding to the real position every frame, it
+  // just stops recentering the camera out from under the driver's fingers
+  // -- previously the camera only snapped back once per GPS tick (~1/s), so
+  // a manual pan had a brief window to look around; recentering every frame
+  // instead made any drag attempt feel like fighting the map. Set back to
+  // true by resumeFollowing (wired to the existing recenter button).
+  const isFollowingRef = useRef(true);
+
+  useEffect(() => {
+    targetRef.current = rawPosition;
+    targetHeadingRef.current = heading;
+  }, [rawPosition, heading]);
+
+  useEffect(() => {
+    if (!isMapReady || !mapRef.current || !window.google) return undefined;
+    const listener = window.google.maps.event.addListener(
+      mapRef.current,
+      "dragstart",
+      () => {
+        isFollowingRef.current = false;
+      },
+    );
+    return () => listener.remove();
+  }, [mapRef, isMapReady]);
+
+  useEffect(() => {
+    if (!rawPosition) return undefined;
+    const tick = (now) => {
+      const dt = lastFrameAtRef.current ? now - lastFrameAtRef.current : 16;
+      lastFrameAtRef.current = now;
+      const target = targetRef.current;
+      if (target && mapRef.current) {
+        if (!animatedPosRef.current) {
+          // First fix ever for this mount -- snap immediately (no previous
+          // position to glide from) and zoom in to the street-level nav
+          // view, matching the old isFirstPosition behavior exactly.
+          animatedPosRef.current = target;
+          animatedHeadingRef.current = targetHeadingRef.current;
+          mapRef.current.moveCamera({
+            center: target,
+            zoom: NAV_ZOOM,
+            tilt: 45,
+            heading: animatedHeadingRef.current,
+          });
+        } else {
+          const t = 1 - Math.exp(-dt / CAMERA_SMOOTHING_MS);
+          animatedPosRef.current = {
+            lat:
+              animatedPosRef.current.lat +
+              (target.lat - animatedPosRef.current.lat) * t,
+            lng:
+              animatedPosRef.current.lng +
+              (target.lng - animatedPosRef.current.lng) * t,
+          };
+          animatedHeadingRef.current = lerpAngleDeg(
+            animatedHeadingRef.current,
+            targetHeadingRef.current,
+            t,
+          );
+          if (isFollowingRef.current) {
+            mapRef.current.moveCamera({
+              center: animatedPosRef.current,
+              zoom: mapRef.current.getZoom(),
+              tilt: 45,
+              heading: animatedHeadingRef.current,
+            });
+          }
+        }
+        setAnimatedPosition(animatedPosRef.current);
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      lastFrameAtRef.current = 0;
+    };
+    // isMapReady read purely to (re)start the loop once mapRef.current is
+    // guaranteed set -- same refresh-race reasoning as the effect this
+    // replaces. rawPosition itself deliberately omitted: only whether it's
+    // present/absent (not its value) should restart the loop -- each fix's
+    // actual value already reaches the running loop via targetRef instead,
+    // re-running this on every single GPS tick would tear down and restart
+    // the rAF loop (and reset lastFrameAtRef) every tick instead of letting
+    // it glide continuously across ticks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapRef, isMapReady, !!rawPosition]);
+
+  const resumeFollowing = useCallback(() => {
+    isFollowingRef.current = true;
+  }, []);
+
+  return { animatedPosition, resumeFollowing };
+}
+
 // One color per leg of the Pickup -> Dropoff -> Stop 1 -> ... chain (cycles
 // if a chain somehow has more legs than colors), per 02C_ROUTE_STYLING's
 // per-leg design -- index 0 is reserved for the to-pickup leg specifically
@@ -917,6 +1160,26 @@ function LiveNavigationMap({
   // through moveCamera() below instead, which doesn't have that problem.
   const [initialCenter] = useState(() => origin || destination);
 
+  // Computed early (before the camera-follow effect below, which needs it)
+  // rather than alongside the other `legs`/`steps` derivations further down
+  // -- those stay where they are for the rest of the render, this is just
+  // the one subset the camera/marker positioning needs ahead of them.
+  // Snap-to-route (NAV_SNAP_TO_ROUTE_METERS's own comment has the full
+  // reasoning): displayPosition is what the arrow renders at and what the
+  // camera follows, falling back to the real livePosition when nothing on
+  // the current leg's remaining path is close enough to snap to. Every
+  // other consumer of position (gps writes, step-advance, reroute
+  // detection, heading derivation below) still uses the real livePosition,
+  // unaffected by this.
+  const navLegs = directions?.routes[0]?.legs || [];
+  const navCurrentLegPoints = (navLegs[currentLegIndex]?.steps || [])
+    .slice(currentStepIndex)
+    .flatMap((step) => step.path || []);
+  const displayPosition = livePosition
+    ? snapToPolyline(livePosition, navCurrentLegPoints, NAV_SNAP_TO_ROUTE_METERS) ||
+      livePosition
+    : livePosition;
+
   // Identifies the most recent computeRoute() call -- a watchdog timeout
   // captures its own request's id and only acts if it's still the latest one
   // by the time it fires, so a slow-but-eventually-successful earlier
@@ -1179,62 +1442,44 @@ function LiveNavigationMap({
   // `heading` state is still computed here and still drives the camera --
   // just no longer also fed into the marker's rotation.
   useEffect(() => {
-    if (!livePosition || !mapRef.current) return;
-    let nextHeading = heading;
-    // Only derive a heading from a *previous* position within this mount --
-    // on a fresh page load/refresh, previousPositionRef starts empty, so the
-    // first tick has nothing to compare against and correctly just recenters
-    // without changing heading; consecutive-tick comparisons behave the same
-    // as before once a second reading arrives.
-    if (previousPositionRef.current && window.google) {
-      const from = new window.google.maps.LatLng(
-        previousPositionRef.current.lat,
-        previousPositionRef.current.lng,
-      );
-      const to = new window.google.maps.LatLng(
-        livePosition.lat,
-        livePosition.lng,
-      );
-      if (
-        window.google.maps.geometry.spherical.computeDistanceBetween(from, to) >
-        2
-      ) {
-        nextHeading = window.google.maps.geometry.spherical.computeHeading(
-          from,
-          to,
-        );
-        setHeading(nextHeading);
-      }
-    }
-    // NAV_ZOOM only applies to the very first position (previousPositionRef
-    // still empty at that point) -- every tick after that preserves whatever
-    // zoom the driver currently has, so a manual pinch/scroll-out sticks
-    // instead of being overwritten by the next GPS tick's own moveCamera()
-    // call. Explicit recenter (handleRecenter below) still snaps back to
-    // NAV_ZOOM on demand.
-    const isFirstPosition = !previousPositionRef.current;
+    if (!livePosition) return;
+    // Heading derivation here deliberately still compares/reads raw
+    // livePosition ticks (real movement/the phone's own fused heading is
+    // what a direction-of-travel arrow should reflect) -- only the camera's
+    // own center follows the snapped display position, so the map itself
+    // visually centers on wherever the arrow is actually drawn (see
+    // displayPosition's own comment above).
+    const nextHeading = resolveTravelHeading(
+      livePosition,
+      previousPositionRef.current,
+      heading,
+    );
+    if (nextHeading !== heading) setHeading(nextHeading);
     previousPositionRef.current = livePosition;
-    mapRef.current.moveCamera({
-      center: livePosition,
-      zoom: isFirstPosition ? NAV_ZOOM : mapRef.current.getZoom(),
-      tilt: 45,
-      heading: nextHeading,
-    });
-    // isMapReady is read here (via mapRef.current, guaranteed set once it's
-    // true) purely to re-run this effect once the map finishes loading --
-    // see isMapReady's own comment for the refresh-race it closes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [livePosition, isMapReady]);
+  }, [livePosition]);
+
+  // Smoothly glides the camera/marker toward each new fix instead of
+  // snapping to it -- see useAnimatedNavCamera's own comment. Replaces the
+  // old direct moveCamera() call that used to live in the effect above.
+  const { animatedPosition, resumeFollowing } = useAnimatedNavCamera({
+    mapRef,
+    isMapReady,
+    rawPosition: displayPosition,
+    heading,
+  });
 
   // Manual recenter (the "Locate" button below) -- gestureHandling: 'greedy'
   // lets the driver freely drag/pan the map away from livePosition to look
-  // around, and nothing else snaps it back until the next GPS tick's own
-  // moveCamera() call overwrites wherever the driver left it. This lets them
-  // jump back immediately instead of waiting.
+  // around; the animation loop notices the drag and stops recentering (see
+  // useAnimatedNavCamera's isFollowingRef) until this button is tapped,
+  // which both snaps back immediately and tells the loop to resume
+  // following on its own again.
   const handleRecenter = () => {
     if (!livePosition || !mapRef.current) return;
+    resumeFollowing();
     mapRef.current.moveCamera({
-      center: livePosition,
+      center: animatedPosition || displayPosition,
       zoom: NAV_ZOOM,
       tilt: 45,
       heading,
@@ -1475,9 +1720,7 @@ function LiveNavigationMap({
                 // path the moment it's completed, so the drawn line
                 // progressively "gets eaten" by the live position, matching
                 // standard turn-by-turn nav behavior.
-                path={(legs[currentLegIndex].steps || [])
-                  .slice(currentStepIndex)
-                  .flatMap((step) => step.path || [])}
+                path={navCurrentLegPoints}
                 options={{
                   strokeColor: needsPickup
                     ? NAV_LEG_COLORS[0]
@@ -1547,7 +1790,7 @@ function LiveNavigationMap({
             })}
             {livePosition && (
               <GoogleMapMarker
-                position={livePosition}
+                position={animatedPosition || displayPosition}
                 icon={{
                   path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
                   scale: 6,
@@ -1685,6 +1928,17 @@ function ReturnTripNavigationMap({ livePosition }) {
   const previousPositionRef = useRef(null);
   const lastRecomputeAtRef = useRef(0);
   const hasRouteRef = useRef(false);
+
+  // Snap-to-route, same as LiveNavigationMap's identical derivation (see
+  // NAV_SNAP_TO_ROUTE_METERS's own comment) -- single leg only here, no
+  // stops/waypoints to account for.
+  const rtCurrentLegPoints = (directions?.routes[0]?.legs[0]?.steps || [])
+    .slice(currentStepIndex)
+    .flatMap((step) => step.path || []);
+  const displayPosition = livePosition
+    ? snapToPolyline(livePosition, rtCurrentLegPoints, NAV_SNAP_TO_ROUTE_METERS) ||
+      livePosition
+    : livePosition;
   // Same "captured once, camera moves via moveCamera() only after" reasoning
   // as LiveNavigationMap's initialCenter -- falls back to the warehouse
   // itself (the one fixed point known before any GPS fix has arrived).
@@ -1751,43 +2005,31 @@ function ReturnTripNavigationMap({ livePosition }) {
   // paused (14_RETURN_TRIP_MONITORING.md's scope: fully automatic start/end,
   // no mid-leg pause concept).
   useEffect(() => {
-    if (!livePosition || !mapRef.current) return;
-    let nextHeading = heading;
-    if (previousPositionRef.current && window.google) {
-      const from = new window.google.maps.LatLng(
-        previousPositionRef.current.lat,
-        previousPositionRef.current.lng,
-      );
-      const to = new window.google.maps.LatLng(
-        livePosition.lat,
-        livePosition.lng,
-      );
-      if (
-        window.google.maps.geometry.spherical.computeDistanceBetween(from, to) >
-        2
-      ) {
-        nextHeading = window.google.maps.geometry.spherical.computeHeading(
-          from,
-          to,
-        );
-        setHeading(nextHeading);
-      }
-    }
-    const isFirstPosition = !previousPositionRef.current;
+    if (!livePosition) return;
+    const nextHeading = resolveTravelHeading(
+      livePosition,
+      previousPositionRef.current,
+      heading,
+    );
+    if (nextHeading !== heading) setHeading(nextHeading);
     previousPositionRef.current = livePosition;
-    mapRef.current.moveCamera({
-      center: livePosition,
-      zoom: isFirstPosition ? NAV_ZOOM : mapRef.current.getZoom(),
-      tilt: 45,
-      heading: nextHeading,
-    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [livePosition, isMapReady]);
+  }, [livePosition]);
+
+  // Smoothly glides the camera/marker toward each new fix -- see
+  // useAnimatedNavCamera's own comment (same as LiveNavigationMap's use).
+  const { animatedPosition, resumeFollowing } = useAnimatedNavCamera({
+    mapRef,
+    isMapReady,
+    rawPosition: displayPosition,
+    heading,
+  });
 
   const handleRecenter = () => {
     if (!livePosition || !mapRef.current) return;
+    resumeFollowing();
     mapRef.current.moveCamera({
-      center: livePosition,
+      center: animatedPosition || displayPosition,
       zoom: NAV_ZOOM,
       tilt: 45,
       heading,
@@ -1948,9 +2190,7 @@ function ReturnTripNavigationMap({ livePosition }) {
                 // needed for the line to progressively disappear as the
                 // driver passes each step, instead of only shrinking once
                 // this single leg finishes entirely.
-                path={(directions.routes[0].legs[0].steps || [])
-                  .slice(currentStepIndex)
-                  .flatMap((step) => step.path || [])}
+                path={rtCurrentLegPoints}
                 options={{
                   strokeColor: "#0891b2",
                   strokeOpacity: 0.9,
@@ -1966,7 +2206,7 @@ function ReturnTripNavigationMap({ livePosition }) {
             />
             {livePosition && (
               <GoogleMapMarker
-                position={livePosition}
+                position={animatedPosition || displayPosition}
                 icon={{
                   path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
                   scale: 6,
@@ -4412,7 +4652,23 @@ function DriverDeliveries() {
     const startWatch = () => {
       watchId = navigator.geolocation.watchPosition(
         (pos) => {
-          const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          const next = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            // The OS's own fused GPS+compass/motion heading, when it has
+            // one -- see resolveTravelHeading's comment for why this is
+            // preferred over deriving heading from raw lat/lng ourselves.
+            heading:
+              typeof pos.coords.heading === "number" &&
+              !Number.isNaN(pos.coords.heading)
+                ? pos.coords.heading
+                : null,
+            speed:
+              typeof pos.coords.speed === "number" &&
+              !Number.isNaN(pos.coords.speed)
+                ? pos.coords.speed
+                : null,
+          };
           setPhonePosition(next);
           latestPhonePositionRef.current = next;
           phoneBroadcastChannelRef.current?.send({
