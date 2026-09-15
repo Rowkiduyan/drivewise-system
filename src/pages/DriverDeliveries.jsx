@@ -33,6 +33,7 @@ import {
   Minimize2,
   LocateFixed,
   Coffee,
+  RefreshCw,
 } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -5719,17 +5720,17 @@ function DriverDeliveries() {
                 )}
 
                 {!workspaceDelivery && data.today.length === 0 && (
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-center">
-                    <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-500" />
-                    <p className="mt-2 text-xs font-semibold text-emerald-800">
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-center">
+                    <CheckCircle2 className="mx-auto h-8 w-8 text-amber-500" />
+                    <p className="mt-2 text-xs font-semibold text-amber-800">
                       Nothing scheduled for today
                     </p>
-                    <p className="mt-0.5 text-[11px] text-emerald-600">
+                    <p className="mt-0.5 text-[11px] text-amber-600">
                       No delivery in progress, and nothing scheduled for today.
                     </p>
                     <button
                       onClick={() => setActiveTab("upcoming")}
-                      className="mt-3 inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-emerald-700"
+                      className="mt-3 inline-flex items-center gap-1 rounded-lg bg-amber-600 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-amber-700"
                     >
                       View Upcoming Deliveries
                     </button>
@@ -6174,6 +6175,21 @@ function DriverDeliveries() {
           </div>
         </div>
       )}
+
+      {/* Floating refresh button — bottom-right, always visible */}
+      <button
+        type="button"
+        onClick={loadDeliveries}
+        disabled={isLoadingDeliveries}
+        className="fixed bottom-24 right-5 z-[75] flex h-14 w-14 items-center justify-center rounded-full bg-amber-900 shadow-xl shadow-amber-900/30 ring-1 ring-amber-700 transition hover:bg-amber-800 disabled:opacity-60"
+        title="Refresh deliveries"
+      >
+        {isLoadingDeliveries ? (
+          <Loader2 className="h-6 w-6 animate-spin text-white" />
+        ) : (
+          <RefreshCw className="h-6 w-6 text-white" />
+        )}
+      </button>
     </DriverLayout>
   );
 }

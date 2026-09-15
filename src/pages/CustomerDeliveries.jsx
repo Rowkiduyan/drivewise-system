@@ -1251,7 +1251,7 @@ function RequestDetailView({
   const isCancellable =
     CANCELLABLE_STATUSES.includes(request.status) &&
     pickupDaysAway != null &&
-    pickupDaysAway >= CANCEL_MIN_DAYS_BEFORE_PICKUP;
+    (request.status === "PENDING_REQUEST" || request.status === "PROCESSING" || pickupDaysAway >= CANCEL_MIN_DAYS_BEFORE_PICKUP);
   const isCancelReasonValid =
     cancelReason && (cancelReason !== "Other" || cancelReasonOther.trim());
 
@@ -2850,7 +2850,7 @@ function RequestDetailView({
       )}
 
       {isCancellable && !showCancelForm && (
-        <div className="flex flex-col gap-1 border-t border-emerald-200/70 pt-3 md:pt-4">
+        <div className="flex flex-col items-center gap-1 border-t border-emerald-200/70 pt-3 md:pt-4">
           <button
             onClick={() => setShowCancelForm(true)}
             className="w-full rounded-xl border border-red-300 px-3 py-2 text-xs font-medium text-red-600 transition hover:bg-red-50 active:bg-red-100 md:w-fit md:px-4 md:py-2.5 md:text-sm"

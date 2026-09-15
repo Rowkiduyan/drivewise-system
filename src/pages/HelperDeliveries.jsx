@@ -28,6 +28,7 @@ import {
   Truck,
   Wallet,
   X,
+  RefreshCw,
 } from "lucide-react";
 import HelperLayout from "../layout/HelperLayout.jsx";
 import { CompletedDeliveryReport } from "./DriverDeliveries.jsx";
@@ -1563,8 +1564,9 @@ function HelperDeliveries() {
       return;
     }
     stopCamera();
+    const type = confirmingChainItem?.type || "photo";
     await processChainPhoto(
-      new File([blob], `dropoff-${Date.now()}.jpg`, { type: "image/jpeg" }),
+      new File([blob], `${type}-${Date.now()}.jpg`, { type: "image/jpeg" }),
     );
   };
 
@@ -2638,7 +2640,7 @@ function HelperDeliveries() {
               </div>
             )}
 
-            {confirmingChainItem.type === "dropoff" && !isCameraOpen && (
+            {!isCameraOpen && (
               <div className="mt-2 flex gap-1.5">
                 <button
                   type="button"
@@ -2755,6 +2757,21 @@ function HelperDeliveries() {
           </div>
         </div>
       )}
+
+      {/* Floating refresh button — bottom-right, always visible */}
+      <button
+        type="button"
+        onClick={loadDeliveries}
+        disabled={isLoadingDeliveries}
+        className="fixed bottom-24 right-5 z-[75] flex h-14 w-14 items-center justify-center rounded-full bg-teal-900 shadow-xl shadow-teal-900/30 ring-1 ring-teal-700 transition hover:bg-teal-800 disabled:opacity-60"
+        title="Refresh deliveries"
+      >
+        {isLoadingDeliveries ? (
+          <Loader2 className="h-6 w-6 animate-spin text-white" />
+        ) : (
+          <RefreshCw className="h-6 w-6 text-white" />
+        )}
+      </button>
     </HelperLayout>
   );
 }

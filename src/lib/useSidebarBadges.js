@@ -12,6 +12,8 @@ const PENDING_DELIVERY_STATUSES = [
   "FINAL_QUOTATION_SUBMITTED",
 ];
 
+const ASSIGNABLE_DELIVERY_STATUSES = ["APPROVED", "ASSIGNED"];
+
 const POLL_MS = 60_000;
 
 // Module-level cache shared across all hook instances.  Initialized to null
@@ -20,6 +22,7 @@ const POLL_MS = 60_000;
 // the last-known values — no flash.
 const cache = {
   pendingDeliveries: 0,
+  assignableDeliveries: 0,
   overdueTrucks: 0,
   scheduledTrucks: 0,
   lastFetch: 0,
@@ -34,9 +37,16 @@ async function fetchAndStore(includeDeliveries) {
         .from("delivery_requests")
         .select("id", { count: "exact", head: true })
         .in("status", PENDING_DELIVERY_STATUSES),
+      supabase
+        .from("delivery_requests")
+        .select("id", { count: "exact", head: true })
+        .in("status", ASSIGNABLE_DELIVERY_STATUSES),
     );
   } else {
-    promises.push(Promise.resolve({ count: 0, error: null }));
+    promises.push(
+      Promise.resolve({ count: 0, error: null }),
+      Promise.resolve({ count: 0, error: null }),
+    );
   }
 
   promises.push(
@@ -46,7 +56,7 @@ async function fetchAndStore(includeDeliveries) {
       .select("truck_id, status, mileage_at_service, start_date, end_date"),
   );
 
-  const [deliveryResult, trucksResult, maintenanceResult] =
+  const [pendingResult, assignableResult, trucksResult, maintenanceResult] =
     await Promise.all(promises);
 
   const trucks = trucksResult.data || [];
@@ -62,8 +72,11 @@ async function fetchAndStore(includeDeliveries) {
   }
 
   cache.pendingDeliveries = includeDeliveries
-    ? (deliveryResult.count ?? 0)
+    ? (pendingResult.count ?? 0)
     : cache.pendingDeliveries;
+  cache.assignableDeliveries = includeDeliveries
+    ? (assignableResult.count ?? 0)
+    : cache.assignableDeliveries;
   cache.overdueTrucks = overdue;
   cache.scheduledTrucks = scheduled;
   cache.lastFetch = Date.now();
@@ -84,6 +97,9 @@ export function useSidebarBadges({ includeDeliveries = true } = {}) {
   const [pendingDeliveries, setPendingDeliveries] = useState(
     cache.pendingDeliveries,
   );
+  const [assignableDeliveries, setAssignableDeliveries] = useState(
+    cache.assignableDeliveries,
+  );
   const [overdueTrucks, setOverdueTrucks] = useState(cache.overdueTrucks);
   const [scheduledTrucks, setScheduledTrucks] = useState(
     cache.scheduledTrucks,
@@ -93,10 +109,10 @@ export function useSidebarBadges({ includeDeliveries = true } = {}) {
     let isMounted = true;
 
     async function run() {
-      // Skip fetch if cache is fresh (< 30 s old)
       if (Date.now() - cache.lastFetch < POLL_MS / 2) {
         if (isMounted) {
           setPendingDeliveries(cache.pendingDeliveries);
+          setAssignableDeliveries(cache.assignableDeliveries);
           setOverdueTrucks(cache.overdueTrucks);
           setScheduledTrucks(cache.scheduledTrucks);
         }
@@ -107,6 +123,7 @@ export function useSidebarBadges({ includeDeliveries = true } = {}) {
       if (!isMounted) return;
 
       setPendingDeliveries(cache.pendingDeliveries);
+      setAssignableDeliveries(cache.assignableDeliveries);
       setOverdueTrucks(cache.overdueTrucks);
       setScheduledTrucks(cache.scheduledTrucks);
     }
@@ -119,5 +136,5 @@ export function useSidebarBadges({ includeDeliveries = true } = {}) {
     };
   }, [includeDeliveries]);
 
-  return { pendingDeliveries, overdueTrucks, scheduledTrucks };
+  return { pendingDeliveries, assignableDeliveries, overdueTrucks, scheduledTrucks };
 }
