@@ -1062,8 +1062,11 @@ function DeliveryDetailView({
           {/* Proof of Delivery — ProofOfDeliverySection self-gates on
               whichever chain items actually have a photo, so a Trip still
               in progress shows just what's been captured so far rather than
-              waiting for Delivered/Completed. */}
-          <ProofOfDeliverySection delivery={delivery} />
+              waiting for Delivered/Completed. Hidden for ASSIGNED deliveries
+              since no pickup has occurred yet. */}
+          {delivery.status !== "ASSIGNED" && (
+            <ProofOfDeliverySection delivery={delivery} />
+          )}
 
           {/* Delivery Fee — always visible */}
           {delivery.quotation && (
