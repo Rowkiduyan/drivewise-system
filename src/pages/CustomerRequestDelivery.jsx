@@ -1815,6 +1815,7 @@ function CustomerRequestDelivery() {
               {routePreview && !routePreviewLoading && (
                 <SuggestedRouteMap
                   suggestedRoute={routePreview}
+                  stops={formData.stops.filter((stop) => stop.location.trim())}
                   title="Planned Route Preview"
                 />
               )}
