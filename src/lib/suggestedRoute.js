@@ -304,6 +304,20 @@ export function nearestDropoffOrder(referencePos, candidates) {
     .map(({ candidate }) => candidate);
 }
 
+// DirectionsService statuses worth retrying with plain address text instead
+// of a coordinate: a coordinate resolved by a *different* geocoder than the
+// one that will route it (Photon/OSM feeding Google's DirectionsService --
+// see forwardGeocode.js's own comment on why Photon is used for geocoding in
+// the first place) can land on a point Google's road graph has no route to
+// -- e.g. an interior street of a gated subdivision that OSM maps but
+// Google's routing considers unreachable -- even though the address itself
+// is real and the coordinate is accurate. Retrying with the address string
+// lets DirectionsService fall back to its own geocoding, which tends to
+// land on a connected point near the same place. Anything else (REQUEST_
+// DENIED, OVER_QUERY_LIMIT, UNKNOWN_ERROR, ...) is a real failure a retry
+// won't fix.
+const RETRYABLE_DIRECTIONS_STATUSES = new Set(["ZERO_RESULTS", "NOT_FOUND"]);
+
 // Computes the full Warehouse -> Pickup -> Dropoff/Stops (nearest-order)
 // route via one DirectionsService request, resolving to the same
 // `[{from, to, path}]` shape persisted as delivery_requests.suggested_route
@@ -346,34 +360,46 @@ export function computeSuggestedRoute({
       ...orderedStops.slice(0, -1),
     ];
 
-    new window.google.maps.DirectionsService().route(
-      {
-        origin: WAREHOUSE_ADDRESS,
-        destination: destination.coords || destination.location,
-        waypoints: waypointStops.map((s) => ({
-          location: s.coords || s.location,
-          stopover: true,
-        })),
-        travelMode: window.google.maps.TravelMode.DRIVING,
-        drivingOptions: {
-          departureTime: new Date(),
-          trafficModel: "bestguess",
+    // `preferCoords`: true tries each stop's resolved coordinate first
+    // (the normal, more precise path); false forces plain address text for
+    // every stop, used as the retry once a coordinate-based request comes
+    // back ZERO_RESULTS/NOT_FOUND.
+    const attempt = (preferCoords) => {
+      new window.google.maps.DirectionsService().route(
+        {
+          origin: WAREHOUSE_ADDRESS,
+          destination:
+            (preferCoords && destination.coords) || destination.location,
+          waypoints: waypointStops.map((s) => ({
+            location: (preferCoords && s.coords) || s.location,
+            stopover: true,
+          })),
+          travelMode: window.google.maps.TravelMode.DRIVING,
+          drivingOptions: {
+            departureTime: new Date(),
+            trafficModel: "bestguess",
+          },
         },
-      },
-      (result, status) => {
-        if (status !== "OK" || !result) {
-          reject(new Error(`DirectionsService failed: ${status}`));
-          return;
-        }
-        const fromKeys = ["warehouse", ...waypointStops.map((s) => s.key)];
-        const toKeys = [...waypointStops.map((s) => s.key), destination.key];
-        const payload = result.routes[0].legs.map((leg, i) => ({
-          from: fromKeys[i],
-          to: toKeys[i],
-          path: flattenLegPath(leg),
-        }));
-        resolve({ legs: payload, bounds: result.routes[0].bounds });
-      },
-    );
+        (result, status) => {
+          if (status !== "OK" || !result) {
+            if (preferCoords && RETRYABLE_DIRECTIONS_STATUSES.has(status)) {
+              attempt(false);
+              return;
+            }
+            reject(new Error(`DirectionsService failed: ${status}`));
+            return;
+          }
+          const fromKeys = ["warehouse", ...waypointStops.map((s) => s.key)];
+          const toKeys = [...waypointStops.map((s) => s.key), destination.key];
+          const payload = result.routes[0].legs.map((leg, i) => ({
+            from: fromKeys[i],
+            to: toKeys[i],
+            path: flattenLegPath(leg),
+          }));
+          resolve({ legs: payload, bounds: result.routes[0].bounds });
+        },
+      );
+    };
+    attempt(true);
   });
 }

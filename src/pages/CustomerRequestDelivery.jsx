@@ -81,36 +81,59 @@ const MAX_STOPS = 5;
 // schedule must reflect the customer-entered stop order, not a
 // re-optimized shortest path, since each returned leg maps 1:1 to an
 // unload event in scheduleSimulator.js's walk.
-function estimateLegDurations(waypointCoords) {
+// Statuses worth retrying with the raw address text instead of the
+// Photon-resolved coordinate for that leg -- same reasoning as
+// suggestedRoute.js's RETRYABLE_DIRECTIONS_STATUSES: a coordinate from a
+// different geocoder than the one routing it can land on a point Google's
+// road graph can't reach (e.g. an interior subdivision street), even though
+// the address itself is real. Anything else is a genuine failure.
+const RETRYABLE_DIRECTIONS_STATUSES = new Set(["ZERO_RESULTS", "NOT_FOUND"]);
+
+// `waypointAddresses`, same length/order as `waypointCoords`, is the raw
+// address text for each leg -- used as a retry (in place of the
+// coordinate) for whichever legs still fail after the first, coordinate-
+// based attempt.
+function estimateLegDurations(waypointCoords, waypointAddresses) {
   return new Promise((resolve, reject) => {
-    const [origin, ...rest] = waypointCoords;
-    const destination = rest[rest.length - 1];
-    const middleWaypoints = rest
-      .slice(0, -1)
-      .map((location) => ({ location, stopover: true }));
-    new window.google.maps.DirectionsService().route(
-      {
-        origin,
-        destination,
-        waypoints: middleWaypoints.length > 0 ? middleWaypoints : undefined,
-        travelMode: window.google.maps.TravelMode.DRIVING,
-        drivingOptions: {
-          departureTime: new Date(),
-          trafficModel: "bestguess",
+    const attempt = (waypoints) => {
+      const [origin, ...rest] = waypoints;
+      const destination = rest[rest.length - 1];
+      const middleWaypoints = rest
+        .slice(0, -1)
+        .map((location) => ({ location, stopover: true }));
+      new window.google.maps.DirectionsService().route(
+        {
+          origin,
+          destination,
+          waypoints: middleWaypoints.length > 0 ? middleWaypoints : undefined,
+          travelMode: window.google.maps.TravelMode.DRIVING,
+          drivingOptions: {
+            departureTime: new Date(),
+            trafficModel: "bestguess",
+          },
         },
-      },
-      (result, status) => {
-        if (status !== "OK" || !result?.routes?.[0]?.legs?.length) {
-          reject(new Error(status));
-          return;
-        }
-        resolve(
-          result.routes[0].legs.map(
-            (leg) => (leg.duration_in_traffic || leg.duration).value,
-          ),
-        );
-      },
-    );
+        (result, status) => {
+          if (status !== "OK" || !result?.routes?.[0]?.legs?.length) {
+            if (
+              waypoints === waypointCoords &&
+              waypointAddresses &&
+              RETRYABLE_DIRECTIONS_STATUSES.has(status)
+            ) {
+              attempt(waypointAddresses);
+              return;
+            }
+            reject(new Error(status));
+            return;
+          }
+          resolve(
+            result.routes[0].legs.map(
+              (leg) => (leg.duration_in_traffic || leg.duration).value,
+            ),
+          );
+        },
+      );
+    };
+    attempt(waypointCoords);
   });
 }
 
@@ -942,7 +965,14 @@ function CustomerRequestDelivery() {
         { lat: formData.dropoffLat, lng: formData.dropoffLng },
         ...stopCoordsList,
       ];
-      estimateLegDurations(waypoints)
+      const waypointAddresses = [
+        formData.pickupLocation,
+        formData.dropoffLocation,
+        ...formData.stops
+          .filter((stop) => stop.location.trim())
+          .map((stop) => stop.location),
+      ];
+      estimateLegDurations(waypoints, waypointAddresses)
         .then((legTravelSeconds) => {
           if (cancelled) return;
           setScheduleResult(
@@ -955,8 +985,12 @@ function CustomerRequestDelivery() {
           );
           setScheduleLoading(false);
         })
-        .catch(() => {
+        .catch((err) => {
           if (cancelled) return;
+          // Logged (not shown) so a real cause -- e.g. ZERO_RESULTS
+          // surviving the address-text retry -- is diagnosable without
+          // exposing raw Directions API status text to the customer.
+          console.warn("Schedule preview failed:", err?.message || err);
           setScheduleResult(null);
           setScheduleError(
             "We couldn't estimate the schedule for these locations.",
@@ -1032,8 +1066,9 @@ function CustomerRequestDelivery() {
           setRoutePreview(legs);
           setRoutePreviewLoading(false);
         })
-        .catch(() => {
+        .catch((err) => {
           if (cancelled) return;
+          console.warn("Route preview failed:", err?.message || err);
           setRoutePreview(null);
           setRoutePreviewError("We couldn't preview the route for these locations.");
           setRoutePreviewLoading(false);
@@ -1360,12 +1395,20 @@ function CustomerRequestDelivery() {
 
       let legTravelSeconds;
       try {
-        legTravelSeconds = await estimateLegDurations([
-          { lat: pickupLat, lng: pickupLng },
-          { lat: dropoffLat, lng: dropoffLng },
-          ...resolvedStopCoords,
-        ]);
-      } catch {
+        legTravelSeconds = await estimateLegDurations(
+          [
+            { lat: pickupLat, lng: pickupLng },
+            { lat: dropoffLat, lng: dropoffLng },
+            ...resolvedStopCoords,
+          ],
+          [
+            formData.pickupLocation,
+            formData.dropoffLocation,
+            ...activeStops.map((stop) => stop.location),
+          ],
+        );
+      } catch (err) {
+        console.warn("Schedule calculation failed:", err?.message || err);
         setSubmitting(false);
         setSubmitError(
           "We couldn't calculate a route between these locations. Please double-check the pickup and dropoff addresses.",
