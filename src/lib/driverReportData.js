@@ -1,6 +1,38 @@
 import { distanceMeters, classifyRouteDeviation } from "./suggestedRoute.js";
 import { getManilaHour, formatManilaTimestamp } from "./manilaTime.js";
 
+// A gap this long between two consecutive gps_logs readings means "we
+// genuinely don't know what happened here" (05_GPS_PIPELINE.md's 2026-09-15
+// investigation) -- mirrors SupDeliveries.jsx's identical constant/helper,
+// kept as a separate copy per this codebase's per-portal duplication
+// convention (this one feeds DriverDeliveries.jsx's/HelperDeliveries.jsx's
+// shared report builder).
+const GPS_GAP_MS = 3 * 60 * 1000;
+
+// Splits a chronological run of {latitude, longitude, timestamp} points into
+// alternating "confirmed" and "gap" segments wherever GPS_GAP_MS is exceeded
+// between two consecutive readings -- see SupDeliveries.jsx's identical
+// helper for the full reasoning.
+function splitActualRouteIntoSegments(points) {
+  if (!points || points.length === 0) return [];
+  const segments = [];
+  let current = [points[0]];
+  for (let i = 1; i < points.length; i += 1) {
+    const gapMs =
+      new Date(points[i].timestamp).getTime() -
+      new Date(points[i - 1].timestamp).getTime();
+    if (gapMs > GPS_GAP_MS) {
+      segments.push({ points: current, isGap: false });
+      segments.push({ points: [points[i - 1], points[i]], isGap: true });
+      current = [points[i]];
+    } else {
+      current.push(points[i]);
+    }
+  }
+  segments.push({ points: current, isGap: false });
+  return segments.filter((s) => s.points.length > 0);
+}
+
 const ALERT_TYPE_LABELS = {
   prolonged_eye_closure: "Prolonged Eye Closure",
   pattern_eye_closure_yawn: "Eye Closure + Yawn",
@@ -571,6 +603,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs, r
       actualRoute: mainSessions.flatMap((s) =>
         (bySessionId[s.session_id] || []).map((p) => [p.latitude, p.longitude]),
       ),
+      actualSegments: splitActualRouteIntoSegments(actualPointsWithTime),
       pickupCoords: pickupPoint
         ? { lat: pickupPoint[0], lng: pickupPoint[1] }
         : null,

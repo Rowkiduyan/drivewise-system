@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Calendar,
@@ -98,6 +98,16 @@ const endIcon = L.divIcon({
   html: '<div style="background:#059669;color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.3)">E</div>',
   iconSize: [24, 24],
   iconAnchor: [12, 12],
+});
+
+// Marks where GPS tracking was lost/regained (RouteDeviationMap's "gap"
+// segments) -- mirrors SupDeliveries.jsx's identical icon/decision (2026-09-15,
+// no connecting line drawn for a gap, only these markers + the text summary).
+const gapMarkerIcon = L.divIcon({
+  className: "",
+  html: '<div style="background:#94a3b8;color:#fff;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.3)">!</div>',
+  iconSize: [20, 20],
+  iconAnchor: [10, 10],
 });
 
 // Driver-facing workflow: Assigned -> Heading to Pickup -> Out for Delivery -> Delivered.
@@ -326,13 +336,68 @@ function formatTimeOnly(value) {
 // (previously the same blue as a planned leg, distinguished only by
 // dashed-vs-solid) read as too similar at a glance.
 const ACTUAL_ROUTE_COLOR = "#0F172A";
+// Mirrors SupDeliveries.jsx's identical constant/helper (05_GPS_PIPELINE.md's
+// 2026-09-15 investigation + explicit user decision) -- kept as a separate
+// copy per this codebase's existing per-portal duplication convention. The
+// segment-splitting itself (GPS_GAP_MS's counterpart) lives in
+// lib/driverReportData.js instead, since that's what actually builds this
+// component's `actualSegments` prop -- only the display-only road-snapping
+// is needed here.
+const REPORT_SNAP_TO_ROAD_METERS = 15;
+
+function snapPointToRoad(lat, lng, plannedPoints, maxMeters) {
+  let bestDist = Infinity;
+  let best = null;
+  for (const [pLat, pLng] of plannedPoints) {
+    const d = distanceMeters(lat, lng, pLat, pLng);
+    if (d < bestDist) {
+      bestDist = d;
+      best = [pLat, pLng];
+    }
+  }
+  return best && bestDist <= maxMeters ? best : [lat, lng];
+}
+
+// Plain-language callout for the report's route tab, per explicit user
+// request -- mirrors SupDeliveries.jsx's identical helper.
+function summarizeGpsGaps(actualSegments) {
+  if (!actualSegments || actualSegments.length === 0) return null;
+  const gaps = actualSegments
+    .filter((s) => s.isGap)
+    .map((s) => {
+      const startedAt = s.points[0].timestamp;
+      const endedAt = s.points[s.points.length - 1].timestamp;
+      const minutes =
+        (new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 60000;
+      return { startedAt, endedAt, minutes };
+    });
+  if (gaps.length === 0) return null;
+  const totalMinutes = gaps.reduce((sum, g) => sum + g.minutes, 0);
+  const longest = gaps.reduce(
+    (best, g) => (!best || g.minutes > best.minutes ? g : best),
+    null,
+  );
+  return { count: gaps.length, totalMinutes, longest };
+}
+
 function RouteDeviationMap({
   plannedLegs,
   actualRoute,
+  actualSegments,
   pickupCoords,
   dropoffCoords,
 }) {
-  const allPoints = [...plannedLegs.flatMap((leg) => leg.path), ...actualRoute];
+  const plannedPoints = plannedLegs.flatMap((leg) => leg.path);
+  const segments =
+    actualSegments && actualSegments.length > 0
+      ? actualSegments.map((seg) => ({
+          isGap: seg.isGap,
+          path: seg.points.map((p) => [p.latitude, p.longitude]),
+          points: seg.points,
+        }))
+      : [{ isGap: false, path: actualRoute, points: [] }];
+
+  const allPoints = [...plannedPoints, ...actualRoute];
   const lats = allPoints.map((p) => p[0]);
   const lngs = allPoints.map((p) => p[1]);
   const minLat = Math.min(...lats);
@@ -373,15 +438,55 @@ function RouteDeviationMap({
           />
         ))}
         {/* White halo underneath the actual-route line for contrast against
-            busy tiles and the colorful planned legs. */}
-        <Polyline
-          positions={actualRoute}
-          pathOptions={{ color: "#ffffff", weight: 8, opacity: 0.9 }}
-        />
-        <Polyline
-          positions={actualRoute}
-          pathOptions={{ color: ACTUAL_ROUTE_COLOR, weight: 4 }}
-        />
+            busy tiles and the colorful planned legs. A "gap" segment (no
+            GPS data for that stretch) draws no connecting line at all --
+            per explicit user decision (2026-09-15), a marker sits at each
+            end (signal lost / regained) instead, since any line would still
+            visually imply a route that was never actually recorded; a
+            confirmed segment's points are snapped onto the nearest
+            planned-route point within REPORT_SNAP_TO_ROAD_METERS, purely
+            cosmetic (mirrors SupDeliveries.jsx's identical fix,
+            05_GPS_PIPELINE.md). */}
+        {segments.map((seg, i) =>
+          seg.isGap ? (
+            <Fragment key={`gap-${i}`}>
+              <Marker position={seg.path[0]} icon={gapMarkerIcon}>
+                <Popup>
+                  GPS signal lost here
+                  {seg.points[0]?.timestamp
+                    ? ` at ${formatAlertTimestamp(seg.points[0].timestamp)}`
+                    : ""}
+                </Popup>
+              </Marker>
+              <Marker
+                position={seg.path[seg.path.length - 1]}
+                icon={gapMarkerIcon}
+              >
+                <Popup>
+                  GPS signal regained here
+                  {seg.points[seg.points.length - 1]?.timestamp
+                    ? ` at ${formatAlertTimestamp(seg.points[seg.points.length - 1].timestamp)}`
+                    : ""}
+                </Popup>
+              </Marker>
+            </Fragment>
+          ) : (
+            <Fragment key={`confirmed-${i}`}>
+              <Polyline
+                positions={seg.path.map(([lat, lng]) =>
+                  snapPointToRoad(lat, lng, plannedPoints, REPORT_SNAP_TO_ROAD_METERS),
+                )}
+                pathOptions={{ color: "#ffffff", weight: 8, opacity: 0.9 }}
+              />
+              <Polyline
+                positions={seg.path.map(([lat, lng]) =>
+                  snapPointToRoad(lat, lng, plannedPoints, REPORT_SNAP_TO_ROAD_METERS),
+                )}
+                pathOptions={{ color: ACTUAL_ROUTE_COLOR, weight: 4 }}
+              />
+            </Fragment>
+          ),
+        )}
         {pickupCoords && (
           <Marker position={pickupCoords} icon={startIcon}>
             <Popup>Pickup Location</Popup>
@@ -2726,6 +2831,8 @@ export function CompletedDeliveryReport({
               { path: r.planned, color: "#059669" },
             ];
             const actualRoute = r.actualRoute || r.actual || [];
+            const actualSegments = r.actualSegments || null;
+            const gapSummary = summarizeGpsGaps(actualSegments);
             const pickupCoords = r.pickupCoords || r.planned?.[0];
             const dropoffCoords =
               r.dropoffCoords || r.planned?.[r.planned.length - 1];
@@ -2741,9 +2848,38 @@ export function CompletedDeliveryReport({
                 <RouteDeviationMap
                   plannedLegs={plannedLegs}
                   actualRoute={actualRoute}
+                  actualSegments={actualSegments}
                   pickupCoords={pickupCoords}
                   dropoffCoords={dropoffCoords}
                 />
+
+                {gapSummary && (
+                  <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-[11px] text-slate-600">
+                    <span className="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-slate-400 text-[9px] font-bold text-white">
+                      !
+                    </span>
+                    <p>
+                      <span className="font-semibold text-slate-700">
+                        GPS signal lost {gapSummary.count}{" "}
+                        {gapSummary.count === 1 ? "time" : "times"} during
+                        this trip
+                      </span>
+                      , totaling ~{Math.round(gapSummary.totalMinutes)} min
+                      {gapSummary.longest && (
+                        <>
+                          {" "}
+                          (longest: {Math.round(gapSummary.longest.minutes)}{" "}
+                          min, {formatAlertTimestamp(gapSummary.longest.startedAt)}{" "}
+                          – {formatAlertTimestamp(gapSummary.longest.endedAt)})
+                        </>
+                      )}
+                      . The gray "!" markers on the map show exactly where
+                      signal was lost and regained — no line is drawn
+                      between them, since there's no real location data for
+                      that stretch.
+                    </p>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
