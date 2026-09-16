@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, Copy, Check } from 'lucide-react'
 import AdminLayout from '../layout/AdminLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
@@ -95,6 +95,9 @@ const BULK_COLUMNS = [
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+// PH mobile numbers: 11 digits, always starting with 09 (e.g. 09171234567).
+const PH_MOBILE_PATTERN = /^09\d{9}$/
+const CONTACT_NUMBER_ERROR = 'Contact Number must be an 11-digit number starting with 09 (e.g. 09171234567).'
 
 // Minimal RFC4180-style CSV parser (quoted fields, escaped "" quotes,
 // \r\n or \n line endings) — small enough to hand-roll rather than pull in
@@ -164,6 +167,36 @@ function parseCsv(text) {
   return rows.filter((cells) => cells.some((cell) => cell.trim() !== ''))
 }
 
+// Excel silently reformats a YYYY-MM-DD value typed/pasted into a cell to
+// the workstation's locale short-date format (commonly M/D/YYYY) once the
+// file is resaved as CSV -- our own downloadBulkUploadTemplate() sample row
+// is exactly this kind of value, so a template that's been opened, edited
+// and resaved in Excel can come back non-ISO even though nothing else about
+// it changed. Accept that shape too instead of only ISO, normalizing to
+// YYYY-MM-DD before validation.
+function normalizeBirthdate(value) {
+  const trimmed = (value || '').trim()
+  if (ISO_DATE_PATTERN.test(trimmed)) {
+    return trimmed
+  }
+
+  const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+  if (!slashMatch) {
+    return null
+  }
+
+  const [, first, second, year] = slashMatch.map(Number)
+  // Excel's default short-date format is month-first (M/D/YYYY); fall back
+  // to day-first only when the first number can't be a month.
+  const month = first <= 12 ? first : second
+  const day = first <= 12 ? second : first
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return null
+  }
+
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
 // Field-level checks only — duplicate-email checks (against existing users
 // and other rows in the same file) are done by the caller, which has that
 // context.
@@ -204,16 +237,18 @@ function validateBulkRow(record) {
     return { payload, error: 'Client Name is required for the Customer role.' }
   }
 
-  if (!ISO_DATE_PATTERN.test(payload.birthdate)) {
-    return { payload, error: 'Birthdate must be in YYYY-MM-DD format.' }
+  const normalizedBirthdate = normalizeBirthdate(payload.birthdate)
+  if (!normalizedBirthdate) {
+    return { payload, error: 'Birthdate must be in YYYY-MM-DD format (e.g. 1995-05-18).' }
   }
+  payload.birthdate = normalizedBirthdate
 
   if (payload.birthdate > maxBirthdateForMinAge()) {
     return { payload, error: `User must be at least ${MIN_USER_AGE} years old.` }
   }
 
-  if (!/^\d{1,11}$/.test(payload.contactNumber)) {
-    return { payload, error: 'Contact Number must be numeric and at most 11 digits.' }
+  if (!PH_MOBILE_PATTERN.test(payload.contactNumber)) {
+    return { payload, error: CONTACT_NUMBER_ERROR }
   }
 
   if (!EMAIL_PATTERN.test(payload.personalEmail)) {
@@ -379,6 +414,83 @@ function CloseIcon() {
 
 const USERS_PER_PAGE = 15
 
+// Same numbered pagination bar as SupDeliveryCrew.jsx's PaginationBar, so
+// User Management's table paging matches the Supervisor section instead of
+// the plain Previous/Next bar this page had before.
+function PaginationBar({ page, setPage, totalPages }) {
+  if (totalPages <= 1) return null
+  return (
+    <div className="flex shrink-0 flex-col items-center justify-between gap-3 border-t border-slate-100 px-4 py-4 sm:flex-row sm:px-5">
+      <p className="text-[11px] font-medium text-slate-500 sm:text-xs">
+        Page {page} of {totalPages}
+      </p>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setPage(1)}
+          disabled={page === 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+          title="First page"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+        </button>
+        <button
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page === 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+        </button>
+        <div className="flex items-center gap-1 px-1">
+          {(() => {
+            const pages = []
+            if (totalPages <= 7) {
+              for (let i = 1; i <= totalPages; i++) pages.push(i)
+            } else {
+              pages.push(1)
+              if (page > 3) pages.push('...')
+              for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i)
+              if (page < totalPages - 2) pages.push('...')
+              pages.push(totalPages)
+            }
+            return pages.map((num, idx) =>
+              num === '...' ? (
+                <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-sm text-slate-400">...</span>
+              ) : (
+                <button
+                  key={num}
+                  onClick={() => setPage(num)}
+                  className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition ${
+                    num === page
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {num}
+                </button>
+              )
+            )
+          })()}
+        </div>
+        <button
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page === totalPages}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+        </button>
+        <button
+          onClick={() => setPage(totalPages)}
+          disabled={page === totalPages}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+          title="Last page"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function AdminHome() {
   const [newUserForm, setNewUserForm] = useState(EMPTY_NEW_USER_FORM)
   const [isAddUserOpen, setIsAddUserOpen] = useState(false)
@@ -388,6 +500,7 @@ function AdminHome() {
   const [bulkRows, setBulkRows] = useState([])
   const [isBulkUploading, setIsBulkUploading] = useState(false)
   const [bulkUploadResults, setBulkUploadResults] = useState([])
+  const fileInputRef = useRef(null)
   const [formError, setFormError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [tempPassword, setTempPassword] = useState('')
@@ -778,12 +891,12 @@ function AdminHome() {
       !province ||
       (role === 'Customer' && !clientName)
     ) {
-      setFormError('All fields except Middle Name are required.')
+      setFormError('Please fill in all required fields (Middle Name is optional).')
       return
     }
 
-    if (!/^\d{1,11}$/.test(contactNumber)) {
-      setFormError('Contact Number must be numeric and at most 11 digits.')
+    if (!PH_MOBILE_PATTERN.test(contactNumber)) {
+      setFormError(CONTACT_NUMBER_ERROR)
       return
     }
 
@@ -798,11 +911,13 @@ function AdminHome() {
       return
     }
 
+    setIsAddUserOpen(false)
     setIsAddConfirmOpen(true)
   }
 
   const cancelAddUser = () => {
     setIsAddConfirmOpen(false)
+    setIsAddUserOpen(true)
   }
 
   const confirmAddUser = async () => {
@@ -834,6 +949,7 @@ function AdminHome() {
 
     if (error) {
       setIsSubmitting(false)
+      setIsAddUserOpen(true)
       showStatusModal('error', 'Unable to Add User', error.message || 'Something went wrong while adding the user.')
       return
     }
@@ -924,8 +1040,8 @@ function AdminHome() {
     setManageError('')
 
     const contactNumber = manageForm.contactNumber.trim()
-    if (!/^\d{1,11}$/.test(contactNumber)) {
-      setManageError('Contact Number must be numeric and at most 11 digits.')
+    if (!PH_MOBILE_PATTERN.test(contactNumber)) {
+      setManageError(CONTACT_NUMBER_ERROR)
       return
     }
 
@@ -1261,34 +1377,7 @@ function AdminHome() {
             )}
 
             {!isLoadingUsers && sortedUsers.length > 0 ? (
-              <div className="flex flex-col items-center justify-between gap-3 border-t border-slate-100 px-4 py-4 sm:flex-row sm:px-5">
-                <p className="text-[11px] font-medium text-slate-500 sm:text-xs">
-                  Showing {(currentPageSafe - 1) * USERS_PER_PAGE + 1}–
-                  {Math.min(currentPageSafe * USERS_PER_PAGE, sortedUsers.length)} of{' '}
-                  {sortedUsers.length}
-                </p>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={currentPageSafe <= 1}
-                    onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Previous
-                  </button>
-                  <span className="text-[11px] font-medium text-slate-500 sm:text-xs">
-                    Page {currentPageSafe} of {totalPages}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={currentPageSafe >= totalPages}
-                    onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
+              <PaginationBar page={currentPageSafe} setPage={setCurrentPage} totalPages={totalPages} />
             ) : null}
           </div>
         </div>
@@ -1326,7 +1415,7 @@ function AdminHome() {
               </button>
             </div>
 
-            <form onSubmit={handleAddUser} className="mt-4 flex flex-col gap-4">
+            <form onSubmit={handleAddUser} className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
               {/* Identity */}
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <FormField
@@ -1361,7 +1450,11 @@ function AdminHome() {
               </div>
 
               {/* Role */}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div
+                className={`grid grid-cols-1 gap-4 ${
+                  newUserForm.role === 'Customer' ? 'sm:grid-cols-2' : ''
+                }`}
+              >
                 <FormField
                   as="select"
                   label="Role"
@@ -1371,18 +1464,17 @@ function AdminHome() {
                   options={ROLE_OPTIONS}
                   required
                 />
+                {newUserForm.role === 'Customer' ? (
+                  <FormField
+                    label="Client Name"
+                    name="clientName"
+                    placeholder="e.g. Acme Logistics Corp."
+                    value={newUserForm.clientName}
+                    onChange={handleAddInputChange}
+                    required
+                  />
+                ) : null}
               </div>
-
-              {newUserForm.role === 'Customer' ? (
-                <FormField
-                  label="Client Name"
-                  name="clientName"
-                  placeholder="e.g. Acme Logistics Corp."
-                  value={newUserForm.clientName}
-                  onChange={handleAddInputChange}
-                  required
-                />
-              ) : null}
 
               {/* Contact */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -1411,44 +1503,65 @@ function AdminHome() {
                 <span className="text-sm font-medium text-slate-700">
                   Address <span className="text-red-600">*</span>
                 </span>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Pick a province first — it determines which cities/municipalities are available.
+                </p>
                 <div className="mt-1.5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <input
-                    type="text"
-                    name="street"
-                    placeholder="Street"
-                    value={newUserForm.street}
-                    onChange={handleAddInputChange}
-                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
-                  />
-                  <select
-                    name="province"
-                    value={newUserForm.province}
-                    onChange={handleAddInputChange}
-                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
-                  >
-                    <option value="">Select province</option>
-                    {PROVINCE_OPTIONS.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
+                  <div>
+                    <label htmlFor="new-user-street" className="text-xs font-medium text-slate-500">
+                      Street
+                    </label>
+                    <input
+                      id="new-user-street"
+                      type="text"
+                      name="street"
+                      placeholder="e.g. 123 Main St"
+                      value={newUserForm.street}
+                      onChange={handleAddInputChange}
+                      className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="new-user-province" className="text-xs font-medium text-slate-500">
+                      Province
+                    </label>
+                    <select
+                      id="new-user-province"
+                      name="province"
+                      value={newUserForm.province}
+                      onChange={handleAddInputChange}
+                      className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                    >
+                      <option value="">Select province</option>
+                      {PROVINCE_OPTIONS.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="new-user-city" className="text-xs font-medium text-slate-500">
+                      City/Municipality
+                    </label>
+                    <select
+                      id="new-user-city"
+                      name="city"
+                      value={newUserForm.city}
+                      onChange={handleAddInputChange}
+                      disabled={!newUserForm.province}
+                      className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <option value="">
+                        {newUserForm.province ? 'Select city/municipality' : 'Select province first'}
                       </option>
-                    ))}
-                  </select>
-                  <select
-                    name="city"
-                    value={newUserForm.city}
-                    onChange={handleAddInputChange}
-                    disabled={!newUserForm.province}
-                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <option value="">
-                      {newUserForm.province ? 'Select city/municipality' : 'Select province first'}
-                    </option>
-                    {newUserCityOptions.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
+                      {newUserCityOptions.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -1510,33 +1623,51 @@ function AdminHome() {
             </div>
 
             <div className="mt-4 flex-1 overflow-y-auto">
-              <div className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+              <div className="flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
                 <UploadIcon className="h-6 w-6 text-slate-400" />
                 <p className="text-sm font-medium text-slate-600">
-                  {bulkFileName || 'Click to browse for a CSV file'}
+                  {bulkFileName || 'No file selected'}
                 </p>
-                <p className="text-xs text-slate-400">
-                  Columns: Last Name, First Name, Middle Name, Role, Client Name,
-                  Personal Email, Contact Number, Birthdate, Street, City, Province
-                </p>
-                <p className="text-xs text-slate-400">
-                  Client Name is only required for the Customer role. Birthdate must be
-                  YYYY-MM-DD.
-                </p>
+                {/* Two same-weight buttons instead of a native file input next
+                    to a lone underlined link -- balances the dropzone, and
+                    (since the native file input's own button label is
+                    browser-controlled, not ours to word) gives us full
+                    control over what each action is called. */}
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isBulkUploading}
+                    className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {bulkFileName ? 'Choose a Different File' : 'Choose CSV File'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadBulkUploadTemplate}
+                    className="rounded-xl border border-violet-200 bg-white px-4 py-2 text-xs font-semibold text-violet-700 transition hover:bg-violet-50"
+                  >
+                    Download CSV Template
+                  </button>
+                </div>
                 <input
+                  ref={fileInputRef}
                   type="file"
                   accept=".csv"
                   onChange={handleBulkFileChange}
                   disabled={isBulkUploading}
-                  className="mt-2 w-full text-xs text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="sr-only"
                 />
-                <button
-                  type="button"
-                  onClick={downloadBulkUploadTemplate}
-                  className="text-xs font-semibold text-violet-700 underline-offset-2 hover:underline"
-                >
-                  Download CSV template
-                </button>
+                <div className="space-y-1">
+                  <p className="text-xs text-slate-400">
+                    Columns: Last Name, First Name, Middle Name, Role, Client Name,
+                    Personal Email, Contact Number, Birthdate, Street, City, Province
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    Client Name is only required for the Customer role. Birthdate should be
+                    YYYY-MM-DD, but the M/D/YYYY format Excel saves it as is also accepted.
+                  </p>
+                </div>
               </div>
 
               {bulkParseError ? (
@@ -1622,7 +1753,7 @@ function AdminHome() {
           onClick={closeManageDialog}
         >
           <div
-            className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6"
+            className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4">
@@ -1644,7 +1775,7 @@ function AdminHome() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveManagedAccount} className="mt-5 flex flex-col gap-4">
+            <form onSubmit={handleSaveManagedAccount} className="mt-5 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <FormField
                   label="Last Name"
@@ -1725,44 +1856,65 @@ function AdminHome() {
                 <span className="text-sm font-medium text-slate-700">
                   Address <span className="text-red-600">*</span>
                 </span>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Pick a province first — it determines which cities/municipalities are available.
+                </p>
                 <div className="mt-1.5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <input
-                    type="text"
-                    name="street"
-                    placeholder="Street"
-                    value={manageForm.street}
-                    onChange={handleManageInputChange}
-                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
-                  />
-                  <select
-                    name="province"
-                    value={manageForm.province}
-                    onChange={handleManageInputChange}
-                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
-                  >
-                    <option value="">Select province</option>
-                    {PROVINCE_OPTIONS.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
+                  <div>
+                    <label htmlFor="manage-user-street" className="text-xs font-medium text-slate-500">
+                      Street
+                    </label>
+                    <input
+                      id="manage-user-street"
+                      type="text"
+                      name="street"
+                      placeholder="e.g. 123 Main St"
+                      value={manageForm.street}
+                      onChange={handleManageInputChange}
+                      className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="manage-user-province" className="text-xs font-medium text-slate-500">
+                      Province
+                    </label>
+                    <select
+                      id="manage-user-province"
+                      name="province"
+                      value={manageForm.province}
+                      onChange={handleManageInputChange}
+                      className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                    >
+                      <option value="">Select province</option>
+                      {PROVINCE_OPTIONS.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="manage-user-city" className="text-xs font-medium text-slate-500">
+                      City/Municipality
+                    </label>
+                    <select
+                      id="manage-user-city"
+                      name="city"
+                      value={manageForm.city}
+                      onChange={handleManageInputChange}
+                      disabled={!manageForm.province}
+                      className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <option value="">
+                        {manageForm.province ? 'Select city/municipality' : 'Select province first'}
                       </option>
-                    ))}
-                  </select>
-                  <select
-                    name="city"
-                    value={manageForm.city}
-                    onChange={handleManageInputChange}
-                    disabled={!manageForm.province}
-                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <option value="">
-                      {manageForm.province ? 'Select city/municipality' : 'Select province first'}
-                    </option>
-                    {manageCityOptions.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
+                      {manageCityOptions.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
               <div>

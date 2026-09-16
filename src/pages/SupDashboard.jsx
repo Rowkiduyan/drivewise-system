@@ -799,11 +799,6 @@ function ActiveDeliveries({ data, isLoading, now, focusedTruckId, onFocusTruck }
                     <td className="py-1.5 pr-2">
                       <Badge tone={DEVICE_STATE_TONE[row.deviceState]}>{row.deviceState}</Badge>
                       <p className="mt-0.5 text-[10px] text-slate-400">Heartbeat: {formatAgo(row.lastHeartbeat, now)}</p>
-                      {row.positionSource && (
-                        <p className="mt-0.5 text-[10px] text-slate-400">
-                          Position: {row.positionSource === "phone" ? "📱 Phone GPS" : "📡 Pi GPS"}
-                        </p>
-                      )}
                     </td>
                     <td className="py-1.5">
                       {row.position && (

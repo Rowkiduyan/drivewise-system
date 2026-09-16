@@ -1111,27 +1111,21 @@ function SupTruckProfile() {
         {/* Trip History tab */}
         {activeTab === "trips" && (
           <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex gap-1 overflow-x-auto border-b border-slate-200">
               {TRIP_STATUS_FILTERS.map((status) => (
                 <button
                   key={status}
                   type="button"
                   onClick={() => updateTripStatusFilter(status)}
-                  className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
+                  className={`whitespace-nowrap border-b-2 px-3.5 py-2 text-sm font-semibold transition ${
                     tripStatusFilter === status
-                      ? "border-blue-600 bg-blue-600 text-white"
-                      : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
+                      ? "border-blue-600 text-blue-600"
+                      : "border-transparent text-slate-500 hover:text-slate-700"
                   }`}
                 >
-                  <span>{status}</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs ${
-                      tripStatusFilter === status
-                        ? "bg-white/20 text-white"
-                        : "bg-slate-200 text-slate-700"
-                    }`}
-                  >
-                    {tripStatusCounts[status]}
+                  {status}
+                  <span className="ml-1.5 text-[10px] font-medium text-slate-400">
+                    ({tripStatusCounts[status]})
                   </span>
                 </button>
               ))}
@@ -1423,34 +1417,30 @@ function SupTruckProfile() {
             {/* Maintenance History Table */}
             <SectionCard title="Maintenance History" icon={Wrench}>
               <div className="flex flex-col gap-4">
-                <div className="flex flex-wrap gap-2">
-                  {MAINTENANCE_STATUS_FILTERS.map((status) => (
-                    <button
-                      key={status}
-                      type="button"
-                      onClick={() => setMaintenanceStatusFilter(status)}
-                      className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm ${
-                        maintenanceStatusFilter === status
-                          ? "border-blue-600 bg-blue-600 text-white"
-                          : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
-                      }`}
-                    >
-                      <span>{status}</span>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs ${
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex gap-1 overflow-x-auto border-b border-slate-200">
+                    {MAINTENANCE_STATUS_FILTERS.map((status) => (
+                      <button
+                        key={status}
+                        type="button"
+                        onClick={() => setMaintenanceStatusFilter(status)}
+                        className={`whitespace-nowrap border-b-2 px-3.5 py-2 text-sm font-semibold transition ${
                           maintenanceStatusFilter === status
-                            ? "bg-white/20 text-white"
-                            : "bg-slate-200 text-slate-700"
+                            ? "border-blue-600 text-blue-600"
+                            : "border-transparent text-slate-500 hover:text-slate-700"
                         }`}
                       >
-                        {maintenanceStatusCounts[status]}
-                      </span>
-                    </button>
-                  ))}
+                        {status}
+                        <span className="ml-1.5 text-[10px] font-medium text-slate-400">
+                          ({maintenanceStatusCounts[status]})
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                   <button
                     type="button"
                     onClick={() => setIsLogMaintenanceModalOpen(true)}
-                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition sm:text-sm bg-blue-50 text-blue-700 hover:bg-blue-100 ml-auto`}
+                    className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-blue-50 px-3.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 sm:text-sm"
                   >
                     <Wrench className="h-3.5 w-3.5" />
                     <span>Add Record</span>

@@ -8,8 +8,7 @@ import {
   getPmsStatusDisplayLabel,
 } from "../components/trucks/utils/pms.js";
 import AddTruckModal from "../components/AddTruckModal.jsx";
-// Import only the icons that are still needed (Search, ChevronRight, RefreshCw)
-import { Search, ChevronRight, RefreshCw, Edit } from "lucide-react";
+import { Search, ChevronRight, Edit } from "lucide-react";
 // Truck type options are defined directly here as mockTrucks.js has been removed.
 const TRUCK_TYPES = [
   "LUV",
@@ -718,14 +717,6 @@ function SupTrucks() {
                 allLabel="PMS Status"
                 className="capitalize"
               />
-              {/* Manual refresh button (icon) */}
-              <button
-                onClick={refreshTrucks}
-                className="rounded-full bg-gray-200 p-2 hover:bg-gray-300"
-                title="Refresh data"
-              >
-                <RefreshCw className="h-4 w-4 text-slate-800" />
-              </button>
             </div>
             {/* Add Truck button removed for supervisor view */}
           </div>

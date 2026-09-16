@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import AdminLayout from "../layout/AdminLayout.jsx";
 import AddTruckModal from "../components/AddTruckModal.jsx";
-import { Search, ChevronRight, Trash2, Edit, RefreshCw } from "lucide-react";
+import { Search, ChevronRight, Trash2, Edit } from "lucide-react";
 import MaintenanceSummaryWidget from "../components/trucks/MaintenanceSummaryWidget.jsx";
 import {
   addMaintenanceBaselines,
@@ -729,14 +729,6 @@ function AdminTrucks() {
                 allLabel="PMS Status"
                 className="capitalize"
               />
-              {/* Manual refresh button (icon) */}
-              <button
-                onClick={refreshTrucks}
-                className="rounded-full bg-gray-200 p-2 hover:bg-gray-300"
-                title="Refresh data"
-              >
-                <RefreshCw className="h-4 w-4 text-slate-800" />
-              </button>
             </div>
             {/* Add Truck button (rightmost) – visible to admins only */}
             {userRole !== "supervisor" && (

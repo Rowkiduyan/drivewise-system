@@ -1,5 +1,5 @@
 import AdminLayout from "../layout/AdminLayout.jsx";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, LocateFixed, Loader2, MapPin, Maximize2, Minimize2 } from "lucide-react";
 import { GoogleMap, Marker as GoogleMapMarker, useJsApiLoader } from "@react-google-maps/api";
@@ -112,36 +112,22 @@ function ViewAllLink({ to }) {
   );
 }
 
-// ----- KPI strip. Unlike SupDashboard's StatTile, `to` is optional here --
-// several of these tiles have no Admin route to link into (see file header),
-// so they render as a plain (non-Link) tile instead of a dead/wrong link. -----
-function StatTile({ label, value, to, tone, state }) {
+// ----- KPI strip. Unlike SupDashboard's StatTile, these are never links --
+// none of this data has an Admin route to point to (see file header), and
+// making a couple of the five tiles clickable while the rest weren't made
+// the row look unbalanced (per the user, 2026-09-17), so all five render as
+// plain tiles for a consistent look. -----
+function StatTile({ label, value, tone }) {
   const toneClass = tone ? `border-l-4 ${TONE[tone].borderL}` : "";
-  const body = (
-    <>
+  return (
+    <div className={`flex flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5 ${toneClass}`}>
       <span className="text-[10.5px] font-medium uppercase tracking-wide text-slate-500">
         {label}
       </span>
       <span className="mt-0.5 text-xl font-bold leading-tight text-slate-900">
         {value}
       </span>
-    </>
-  );
-  if (!to) {
-    return (
-      <div className={`flex flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5 ${toneClass}`}>
-        {body}
-      </div>
-    );
-  }
-  return (
-    <Link
-      to={to}
-      state={state}
-      className={`flex flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors hover:border-violet-200 hover:bg-violet-50/40 ${toneClass}`}
-    >
-      {body}
-    </Link>
+    </div>
   );
 }
 
@@ -626,11 +612,6 @@ function ActiveDeliveries({ data, isLoading, now, focusedTruckId, onFocusTruck }
                     <td className="py-1.5 pr-2">
                       <Badge tone={DEVICE_STATE_TONE[row.deviceState]}>{row.deviceState}</Badge>
                       <p className="mt-0.5 text-[10px] text-slate-400">Heartbeat: {formatAgo(row.lastHeartbeat, now)}</p>
-                      {row.positionSource && (
-                        <p className="mt-0.5 text-[10px] text-slate-400">
-                          Position: {row.positionSource === "phone" ? "📱 Phone GPS" : "📡 Pi GPS"}
-                        </p>
-                      )}
                     </td>
                     <td className="py-1.5">
                       {row.position && (
@@ -890,7 +871,7 @@ function PausedMovementBanner({ data }) {
 // SupDashboard.jsx's DriverSafetyList. The last column has no "View Trip"
 // link -- no /admin/deliveries page exists to send it to. -----
 const SEVERITY_TONE = { High: "red", Medium: "amber", Low: "emerald" };
-const DRIVER_SAFETY_PAGE_SIZE = 15;
+const DRIVER_SAFETY_PAGE_SIZE = 5;
 
 function DriverSafetyPaginationBar({ page, setPage, totalPages }) {
   return (
@@ -973,10 +954,34 @@ function DriverSafetyPaginationBar({ page, setPage, totalPages }) {
   );
 }
 
+// Alerts grouped by driver -- one row per driver instead of one row per
+// alert, so a frequent offender (e.g. multiple "Jin Jin" alerts) doesn't
+// repeat the same name down the table. Each row expands (chevron toggle) to
+// reveal that driver's individual alerts.
+function groupAlertsByDriver(data) {
+  const byDriver = new Map();
+  for (const a of data) {
+    const entry = byDriver.get(a.name) || { name: a.name, truck: a.truck, alerts: [], highest: "Low" };
+    entry.alerts.push(a);
+    if (SEVERITY_RANK[a.severity] > SEVERITY_RANK[entry.highest]) entry.highest = a.severity;
+    byDriver.set(a.name, entry);
+  }
+  return Array.from(byDriver.values()).map((entry) => ({
+    name: entry.name,
+    truck: entry.truck,
+    severity: entry.highest,
+    count: entry.alerts.length,
+    latestTime: entry.alerts[0]?.time,
+    alerts: entry.alerts,
+  }));
+}
+
 function DriverSafetyList({ data, isLoading }) {
   const [page, setPage] = useState(1);
-  const sorted = [...data].sort(
-    (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.tripAlerts - a.tripAlerts
+  const [expandedDriver, setExpandedDriver] = useState(null);
+  const grouped = useMemo(() => groupAlertsByDriver(data), [data]);
+  const sorted = [...grouped].sort(
+    (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.count - a.count
   );
   const totalPages = Math.max(1, Math.ceil(sorted.length / DRIVER_SAFETY_PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -997,32 +1002,63 @@ function DriverSafetyList({ data, isLoading }) {
               <thead>
                 <tr className="text-left text-[10.5px] uppercase tracking-wide text-slate-400">
                   <th className="pb-1.5 pr-3 font-medium">Driver</th>
-                  <th className="pb-1.5 pr-3 font-medium">Alert</th>
+                  <th className="pb-1.5 pr-3 font-medium">Latest Alert</th>
                   <th className="pb-1.5 pr-3 font-medium">Time</th>
                   <th className="pb-1.5 pr-3 font-medium">Severity</th>
-                  <th className="pb-1.5 pr-3 font-medium">This Trip</th>
+                  <th className="pb-1.5 pr-3 font-medium">Total Alerts</th>
+                  <th className="pb-1.5 font-medium" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {paged.map((d) => (
-                  <tr key={d.id} className="hover:bg-slate-50">
-                    <td className="py-2 pr-3">
-                      <div className="flex items-center gap-2.5">
-                        <Avatar name={d.name} />
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-slate-800">{d.name}</p>
-                          <p className="truncate text-[11px] text-slate-500">{d.truck}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-2 pr-3 text-slate-700">{d.alertType}</td>
-                    <td className="py-2 pr-3 text-slate-400">{d.time}</td>
-                    <td className="py-2 pr-3">
-                      <Badge tone={SEVERITY_TONE[d.severity]}>{d.severity}</Badge>
-                    </td>
-                    <td className="whitespace-nowrap py-2 pr-3 text-slate-500">{d.tripAlerts} alerts</td>
-                  </tr>
-                ))}
+                {paged.map((d) => {
+                  const isOpen = expandedDriver === d.name;
+                  return (
+                    <Fragment key={d.name}>
+                      <tr
+                        className="cursor-pointer hover:bg-slate-50"
+                        onClick={() => setExpandedDriver(isOpen ? null : d.name)}
+                      >
+                        <td className="py-2 pr-3">
+                          <div className="flex items-center gap-2.5">
+                            <Avatar name={d.name} />
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-slate-800">{d.name}</p>
+                              <p className="truncate text-[11px] text-slate-500">{d.truck}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-2 pr-3 text-slate-700">{d.alerts[0]?.alertType}</td>
+                        <td className="py-2 pr-3 text-slate-400">{d.latestTime}</td>
+                        <td className="py-2 pr-3">
+                          <Badge tone={SEVERITY_TONE[d.severity]}>{d.severity}</Badge>
+                        </td>
+                        <td className="whitespace-nowrap py-2 pr-3 text-slate-500">{d.count} alerts</td>
+                        <td className="py-2 pr-1 text-right text-slate-400">
+                          {d.count > 1 ? (isOpen ? "▲" : "▼") : null}
+                        </td>
+                      </tr>
+                      {isOpen && d.count > 1 && (
+                        <tr className="bg-slate-50/70">
+                          <td colSpan={6} className="px-3 pb-2 pt-1">
+                            <table className="w-full text-[11px]">
+                              <tbody className="divide-y divide-slate-100">
+                                {d.alerts.map((a) => (
+                                  <tr key={a.id}>
+                                    <td className="py-1.5 pr-3 pl-9 text-slate-600">{a.alertType}</td>
+                                    <td className="py-1.5 pr-3 text-slate-400">{a.time}</td>
+                                    <td className="py-1.5 pr-3">
+                                      <Badge tone={SEVERITY_TONE[a.severity]}>{a.severity}</Badge>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1096,24 +1132,18 @@ function AdminDashboard() {
     [trucks],
   );
 
-  // KPI strip: PMS Overdue and Fleet Available are real and link into
-  // /admin/trucks (the only Admin route this data can point to). The rest
-  // have no backing Admin route (no /admin/deliveries or /admin/delivery-crew)
-  // so they render as plain, non-interactive tiles -- same real-data-where-
-  // possible precedent as SupDashboard.jsx, minus links to pages that don't
-  // exist here.
+  // KPI strip: all five tiles render as plain, non-interactive tiles for a
+  // consistent look -- none of this data has a backing Admin route to link
+  // into anyway (no /admin/deliveries or /admin/delivery-crew), and Fleet
+  // Available/PMS Overdue used to be the only two that linked into
+  // /admin/trucks, which made the row look unbalanced (per the user,
+  // 2026-09-17). Use the Trucks nav link or /admin/trucks directly instead.
   const kpis = [
     { label: "Active Deliveries", value: fleetOps.length },
     { label: "Alerts Today", value: alertFeed.length, tone: alertFeed.length > 0 ? "amber" : undefined },
     { label: "High-Risk Drivers", value: realDriverSafety.filter((d) => d.risk === "High Risk").length, tone: "red" },
-    { label: "Fleet Available", value: `${trucks.filter((t) => t.status === "Available").length}/${trucks.length}`, to: "/admin/trucks" },
-    {
-      label: "PMS Overdue",
-      value: pmsOverdueCount,
-      to: "/admin/trucks",
-      tone: pmsOverdueCount > 0 ? "red" : undefined,
-      state: { pmsFilter: "overdue" },
-    },
+    { label: "Fleet Available", value: `${trucks.filter((t) => t.status === "Available").length}/${trucks.length}` },
+    { label: "PMS Overdue", value: pmsOverdueCount, tone: pmsOverdueCount > 0 ? "red" : undefined },
   ];
 
   const fleetStatus = {
