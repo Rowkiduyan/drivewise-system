@@ -48,6 +48,55 @@ export const CREW_STATUS_META = {
   },
 }
 
+// ---------------------------------------------------------------------------
+// Weekly Performance — SupDeliveryCrew.jsx's roster table column.
+//
+// Per-session risk classification, same High Risk / Moderate / Safe
+// thresholds SupCrewProfile.jsx's "This Week (7 Days)" panel and current-trip
+// status card already use for a single driver's own profile page. Extracted
+// here (2026-09-17, when Weekly Performance was first wired to real data) so
+// both views share one definition of "risky trip" instead of each keeping
+// their own copy that could quietly drift apart.
+// ---------------------------------------------------------------------------
+export function getSessionRiskLevel(alertCount) {
+  if (alertCount >= 4) return { tone: 'red', label: 'High Risk' }
+  if (alertCount >= 2) return { tone: 'amber', label: 'Moderate' }
+  return { tone: 'emerald', label: 'Safe' }
+}
+
+// Weight each risk tier contributes toward the 0-100 weekly score. High Risk
+// sessions get zero weight rather than a partial penalty -- these are the
+// trips that matter most, so a week dominated by them should read as bad,
+// not just "slightly lower."
+const RISK_LEVEL_SCORE_WEIGHT = { Safe: 1, Moderate: 0.5, 'High Risk': 0 }
+
+export const WEEKLY_PERFORMANCE_WINDOW_DAYS = 7
+
+// Percentage-based, not point-deduction: `score = 100 * (safeCount + 0.5 *
+// moderateCount) / totalSessions`. This normalizes for how many trips a
+// driver actually ran in the window, so a high-volume driver with a couple
+// of moderate trips isn't penalized more harshly than a low-volume driver
+// with the same *proportion* of incidents -- a flat "-N points per bad trip"
+// scheme would do exactly that. Returns null (not 0) when there's no session
+// data at all -- zero trips this week is unmeasured, not a perfect or
+// failing week, same as how the profile page's own panel shows "No trips
+// recorded" instead of fabricating a number for that case.
+//
+// sessionAlertCounts: array of each session's total_alerts count (drivers
+// only -- Helpers have no sessions.driver_id rows and should never reach
+// this function; callers should pass null/skip instead of an empty array
+// for a Helper, since an empty array here means "driver drove zero trips",
+// a different, still-real fact).
+export function computeWeeklyPerformanceScore(sessionAlertCounts) {
+  if (!sessionAlertCounts || sessionAlertCounts.length === 0) return null
+  const weightedSum = sessionAlertCounts.reduce(
+    (sum, alertCount) =>
+      sum + RISK_LEVEL_SCORE_WEIGHT[getSessionRiskLevel(alertCount).label],
+    0,
+  )
+  return Math.round((weightedSum / sessionAlertCounts.length) * 100)
+}
+
 // 'YYYY-MM-DD' key for a Date or an existing 'YYYY-MM-DD' string.
 export function formatDateKey(value) {
   if (typeof value === 'string') {

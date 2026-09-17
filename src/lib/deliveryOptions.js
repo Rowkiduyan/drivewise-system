@@ -1,7 +1,7 @@
 // Shared delivery-request constants and pure helpers used by both the
 // deliveries list (for display) and the request delivery form (for input options).
 
-// Philippine truck models — payloadKg/dimensions are placeholder specs for frontend mock purposes only
+// Philippine truck models — payloadKg is a placeholder spec for frontend mock purposes only
 export const truckTypes = [
   {
     value: "AUV",
@@ -9,7 +9,6 @@ export const truckTypes = [
     description:
       "Utility vehicle for light cargo, suitable for small loads and flexible operations",
     payloadKg: 500,
-    dimensions: "2.1m x 1.5m x 1.5m",
     category: "dry",
   },
   {
@@ -18,7 +17,6 @@ export const truckTypes = [
     description:
       "Light commercial vehicle for small cargo, ideal for urban deliveries",
     payloadKg: 1000,
-    dimensions: "2.8m x 1.6m x 1.6m",
     category: "dry",
   },
   {
@@ -26,7 +24,6 @@ export const truckTypes = [
     label: "1T Dry Van",
     description: "One-ton dry van for transporting general cargo securely",
     payloadKg: 1000,
-    dimensions: "3.0m x 1.7m x 1.7m",
     category: "dry",
   },
   {
@@ -35,7 +32,6 @@ export const truckTypes = [
     description:
       "One-ton reefer truck for perishable cargo with temperature control",
     payloadKg: 1000,
-    dimensions: "3.0m x 1.7m x 1.7m",
     category: "reefer",
   },
   {
@@ -43,7 +39,6 @@ export const truckTypes = [
     label: "2T Dry Van",
     description: "Two-ton dry van for transporting bulk cargo",
     payloadKg: 2000,
-    dimensions: "4.3m x 1.9m x 1.9m",
     category: "dry",
   },
   {
@@ -51,7 +46,6 @@ export const truckTypes = [
     label: "2T Reefer",
     description: "Two-ton reefer for temperature-sensitive cargo",
     payloadKg: 2000,
-    dimensions: "4.3m x 1.9m x 1.9m",
     category: "reefer",
   },
   {
@@ -59,7 +53,6 @@ export const truckTypes = [
     label: "4T Dry Van",
     description: "Four-ton dry van for large cargo transport",
     payloadKg: 4000,
-    dimensions: "5.5m x 2.1m x 2.1m",
     category: "dry",
   },
   {
@@ -67,7 +60,6 @@ export const truckTypes = [
     label: "4T Reefer",
     description: "Four-ton reefer for large volume cold-chain operations",
     payloadKg: 4000,
-    dimensions: "5.5m x 2.1m x 2.1m",
     category: "reefer",
   },
 ];
@@ -196,8 +188,24 @@ export function getDropoffDateError({ pickupDate, dropoffDate }) {
   return "";
 }
 
-// A budget range only makes sense as a floor-to-ceiling span the supervisor can negotiate within
+// A budget range only makes sense as a floor-to-ceiling span the supervisor can negotiate within.
+// Flat sanity floor (2026-09-17, customer reported entering as little as
+// ₱20) -- this is deliberately NOT derived from the Supervisor's quotation
+// cost formula (buildQuotationDefaults in SupDeliveries.jsx): that formula is
+// an editable internal cost breakdown (diesel rate, tolls, wages, admin fee%,
+// etc.), not a public quote, and coupling customer-side validation to it
+// would leak Marvel's cost structure and shift under a Supervisor's own
+// pricing-rule tweaks. This is only a low bar to catch obviously-fake/typo
+// amounts, not an estimate of any real trip's cost.
+export const MIN_BUDGET_AMOUNT = 500;
+
 export function getBudgetError({ budgetMin, budgetMax }) {
+  if (budgetMin !== "" && Number(budgetMin) < MIN_BUDGET_AMOUNT) {
+    return `Minimum budget must be at least ₱${MIN_BUDGET_AMOUNT.toLocaleString()}.`;
+  }
+  if (budgetMax !== "" && Number(budgetMax) < MIN_BUDGET_AMOUNT) {
+    return `Maximum budget must be at least ₱${MIN_BUDGET_AMOUNT.toLocaleString()}.`;
+  }
   if (budgetMin === "" || budgetMax === "") return "";
   return Number(budgetMax) < Number(budgetMin)
     ? "Maximum budget must be greater than or equal to the minimum budget."

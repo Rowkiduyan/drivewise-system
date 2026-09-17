@@ -77,8 +77,11 @@ export const LUZON_SERVICE_AREA = [LUZON_MAINLAND, BICOL_PENINSULA, MINDORO, MAR
 export const SERVICE_AREA_MESSAGE =
   'This location is outside our service area. Please select a location within Luzon.'
 
-// Padded bbox of all polygons — used as Leaflet maxBounds so panning away
-// from the service area naturally pulls the user back toward Luzon.
+// Padded bbox of all polygons, as [[south, west], [north, east]] — used by
+// the booking form's map picker (CustomerRequestDelivery.jsx) both to bias
+// Places search results toward the service area and to soft-restrict the
+// map's pan/zoom, so moving away from the service area naturally pulls the
+// user back toward Luzon.
 export const SERVICE_AREA_MAX_BOUNDS = [
   [11.9, 118.9],
   [19.0, 125.0]

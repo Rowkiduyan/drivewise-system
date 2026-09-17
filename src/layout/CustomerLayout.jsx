@@ -6,7 +6,6 @@ import { useDeactivationGuard } from "../lib/useDeactivationGuard.js";
 import { formatCutoff } from "../lib/deactivation.js";
 
 const clientModules = [
-  { label: "Home", path: "/customer/home", description: "Customer overview" },
   {
     label: "Deliveries",
     path: "/customer/deliveries",
@@ -22,19 +21,6 @@ const clientModules = [
 const clientIconClassName = "h-5 w-5 stroke-current";
 
 const clientIcons = {
-  Home: (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      strokeWidth="1.6"
-      className={clientIconClassName}
-      aria-hidden="true"
-    >
-      <path d="M3 11.5 12 4l9 7.5" />
-      <path d="M5.5 10.5V20h13V10.5" />
-      <path d="M9.5 20v-6h5v6" />
-    </svg>
-  ),
   Deliveries: (
     <svg
       viewBox="0 0 24 24"

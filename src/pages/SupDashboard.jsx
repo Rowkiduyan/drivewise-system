@@ -154,6 +154,17 @@ const SUP_ROUTE_DEVIATION_TOLERANCE_DEGREES = 0.0045;
 // the window in which a Trip (Session) can be Active or Paused.
 const IN_PROGRESS_STATUSES = ["OUT_FOR_PICKUP", "ARRIVED_PICKUP", "OUT_FOR_DROPOFF", "ARRIVED_DROPOFF"];
 
+// Mirrors SupDeliveries.jsx's own pendingAssignments/inboxRows status groups
+// (its Assign Vehicle and Inbox tabs) so the KPI strip's counts agree with
+// what those tabs actually show.
+const PENDING_ASSIGNMENT_STATUSES = ["APPROVED", "ASSIGNED"];
+const REQUESTS_INBOX_STATUSES = [
+  "PENDING_REQUEST",
+  "QUOTATION_SUBMITTED",
+  "COUNTER_OFFER_SUBMITTED",
+  "FINAL_QUOTATION_SUBMITTED",
+];
+
 const MILESTONE_TONE = {
   OUT_FOR_PICKUP: { label: "Out for Pickup", tone: "sky" },
   ARRIVED_PICKUP: { label: "Arrived Pickup", tone: "sky" },
@@ -270,6 +281,8 @@ function useFleetOps() {
   const [sessions, setSessions] = useState([]);
   const [deliveries, setDeliveries] = useState([]);
   const [recentAlerts, setRecentAlerts] = useState([]);
+  const [pendingAssignmentsCount, setPendingAssignmentsCount] = useState(0);
+  const [requestsInboxCount, setRequestsInboxCount] = useState(0);
   const [positionsByDeliveryId, setPositionsByDeliveryId] = useState({});
   const [movementByDeliveryId, setMovementByDeliveryId] = useState({});
   // Phone-GPS live view (2026-09-03, user request: easier to demo/track
@@ -361,7 +374,13 @@ function useFleetOps() {
   // of the three, same "just refetch" pattern SupDeliveries.jsx already uses
   // for its own delivery_requests subscription.
   const loadOps = useCallback(async () => {
-    const [{ data: devicesData }, { data: sessionsData }, { data: deliveriesData }] = await Promise.all([
+    const [
+      { data: devicesData },
+      { data: sessionsData },
+      { data: deliveriesData },
+      { count: pendingAssignments },
+      { count: requestsInbox },
+    ] = await Promise.all([
       // Explicit column list, not select('*') -- `authenticated`'s grant on
       // devices is column-scoped and deliberately excludes
       // device_secret_hash (DATABASE.md's devices "Grants" note); selecting
@@ -372,10 +391,18 @@ function useFleetOps() {
       supabase.from("devices").select("id, device_id, plate_number, device_status, created_at, last_ping"),
       supabase.from("sessions").select("*").order("created_at", { ascending: false }).limit(300),
       supabase.from("delivery_requests").select("*").in("status", IN_PROGRESS_STATUSES),
+      // KPI-strip-only counts (head:true, no rows) -- kept separate from the
+      // `deliveries` state above since fleetOps only wants IN_PROGRESS_STATUSES
+      // rows and widening that query would drag unrelated rows through the
+      // whole live-ops pipeline (positions/movement/realtime GPS matching).
+      supabase.from("delivery_requests").select("id", { count: "exact", head: true }).in("status", PENDING_ASSIGNMENT_STATUSES),
+      supabase.from("delivery_requests").select("id", { count: "exact", head: true }).in("status", REQUESTS_INBOX_STATUSES),
     ]);
     setDevices(devicesData || []);
     setSessions(sessionsData || []);
     setDeliveries(deliveriesData || []);
+    setPendingAssignmentsCount(pendingAssignments || 0);
+    setRequestsInboxCount(requestsInbox || 0);
     setIsLoading(false);
   }, []);
 
@@ -754,6 +781,8 @@ function useFleetOps() {
     trucks,
     criticalAlerts,
     dismissCriticalAlert,
+    pendingAssignmentsCount,
+    requestsInboxCount,
   };
 }
 
@@ -1318,6 +1347,8 @@ function SupDashboard() {
     trucks,
     criticalAlerts,
     dismissCriticalAlert,
+    pendingAssignmentsCount,
+    requestsInboxCount,
   } = useFleetOps();
   const [focusedTruckId, setFocusedTruckId] = useState(null);
   const [focusToken, setFocusToken] = useState(0);
@@ -1336,17 +1367,36 @@ function SupDashboard() {
     [trucks],
   );
 
+  const highRiskDriverCount = useMemo(
+    () => realDriverSafety.filter((d) => d.risk === "High Risk").length,
+    [realDriverSafety],
+  );
+
   // ----- KPI strip: doubles as the "needs attention" summary — each tile
   // routes to the page that resolves it, so there's no separate task list.
-  // Left as mock per 08_REALTIME_DASHBOARD.md's reuse decision (out of scope
-  // for this phase), except PMS Overdue which is real (see above). -----
+  // All real now (2026-09-17): Active Deliveries/Fleet Available/High-Risk
+  // Drivers/PMS Overdue come from useFleetOps' live queries above (same
+  // shape as AdminDashboard.jsx's own KPI strip); Pending Assignments/
+  // Requests Inbox mirror SupDeliveries.jsx's own status groups for its
+  // Assign Vehicle/Inbox tabs so these counts agree with what those tabs
+  // show; Alerts Today reuses alertFeed.length, same "last 50 alerts" feed
+  // AdminDashboard.jsx's own Alerts Today tile counts off. -----
   const kpis = [
-    { label: "Active Deliveries", value: 18, to: "/supervisor/deliveries" },
-    { label: "Pending Assignments", value: 5, to: "/supervisor/deliveries", tone: "amber" },
-    { label: "Requests Inbox", value: 9, to: "/supervisor/deliveries" },
-    { label: "Alerts Today", value: 14, to: "/supervisor/deliveries", tone: "amber" },
-    { label: "High-Risk Drivers", value: 3, to: "/supervisor/delivery-crew", tone: "red" },
-    { label: "Fleet Available", value: "22/48", to: "/supervisor/trucks" },
+    { label: "Active Deliveries", value: fleetOps.length, to: "/supervisor/deliveries" },
+    {
+      label: "Pending Assignments",
+      value: pendingAssignmentsCount,
+      to: "/supervisor/deliveries",
+      tone: pendingAssignmentsCount > 0 ? "amber" : undefined,
+    },
+    { label: "Requests Inbox", value: requestsInboxCount, to: "/supervisor/deliveries" },
+    { label: "Alerts Today", value: alertFeed.length, to: "/supervisor/deliveries", tone: alertFeed.length > 0 ? "amber" : undefined },
+    { label: "High-Risk Drivers", value: highRiskDriverCount, to: "/supervisor/delivery-crew", tone: "red" },
+    {
+      label: "Fleet Available",
+      value: `${trucks.filter((t) => t.status === "Available").length}/${trucks.length}`,
+      to: "/supervisor/trucks",
+    },
     {
       label: "PMS Overdue",
       value: pmsOverdueCount,

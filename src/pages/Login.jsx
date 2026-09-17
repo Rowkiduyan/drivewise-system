@@ -18,7 +18,7 @@ const ROLE_HOME_ROUTES = {
   Supervisor: '/supervisor/dashboard',
   Driver: '/driver/trips',
   Helper: '/helper/trips',
-  Customer: '/customer/home'
+  Customer: '/customer/deliveries'
 }
 
 // Looks up the signed-in user's role and resolves the portal route it maps

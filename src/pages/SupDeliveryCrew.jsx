@@ -5,7 +5,15 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Search, ChevronRight } from "lucide-react";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 import { formatWorkingDays } from "../lib/workingDays.js";
-import { CREW_ACTIVE_STATUSES, CREW_STATUS_META, getCrewAvailability, todayDateKey, formatDateKey } from "../lib/crewStatus.js";
+import {
+  CREW_ACTIVE_STATUSES,
+  CREW_STATUS_META,
+  getCrewAvailability,
+  todayDateKey,
+  formatDateKey,
+  computeWeeklyPerformanceScore,
+  WEEKLY_PERFORMANCE_WINDOW_DAYS,
+} from "../lib/crewStatus.js";
 
 // ---------------------------------------------------------------------------
 // Crew roster — loaded from the admin-users Edge Function's `list-crew`
@@ -44,11 +52,17 @@ function buildDisplayName(firstName, middleName, lastName) {
 
 // Maps one row from the `list-crew` Edge Function response (users merged
 // with their driver_records/helper_records row) into the shape this page
-// and SupCrewProfile.jsx expect. Status/Weekly Performance have no real data
-// source yet (see module comment above) and are left as neutral placeholders
-// rather than fabricated values. Client Specialties and Working Days are
-// real — specialties via crew_client_specialties/customer_records, working
-// days via crew_availability, both attached by the Edge Function's list-crew.
+// and SupCrewProfile.jsx expect. Status has no real data source yet (see
+// module comment above) and is left as a neutral placeholder rather than a
+// fabricated value. Client Specialties and Working Days are real —
+// specialties via crew_client_specialties/customer_records, working days via
+// crew_availability, both attached by the Edge Function's list-crew.
+// weeklyPerformance defaults to null here and is filled in separately, after
+// this roster loads, by the weeklyPerformanceByDriverId merge below (see
+// that effect's comment for the scoring logic) — a Driver's score needs
+// `sessions` data this Edge Function response doesn't carry, and a Helper
+// never gets one at all (Helpers don't drive, so there's no session data to
+// score them on).
 function mapCrewRow(row) {
   const birthDate = row.birthdate ? new Date(row.birthdate) : null;
 
@@ -106,9 +120,9 @@ function PositionTag({ position }) {
 
 // Weekly Performance — color-coded so supervisors can spot frequent
 // eye-closure/drowsiness patterns at a glance without reading every number.
-// Helpers don't drive, so they show a plain dash instead of a badge; so
-// does every crew member right now, since there's no per-driver session/
-// alert linkage yet (see module comment above).
+// Score itself comes from computeWeeklyPerformanceScore (lib/crewStatus.js);
+// these are just the display tiers. Helpers don't drive, so they always show
+// "N/A" instead of a badge (see PerformanceBadge/mapCrewRow's null default).
 function getPerformanceTier(score) {
   if (score >= 85) {
     return { label: "Good", classes: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200" };
@@ -120,8 +134,12 @@ function getPerformanceTier(score) {
 }
 
 function PerformanceBadge({ score }) {
+  // null means either a Helper (never scored -- they don't drive) or a
+  // Driver with zero sessions in the trailing window (unmeasured, not a
+  // perfect or failing week) -- see computeWeeklyPerformanceScore. Shown as
+  // "N/A" rather than a blank cell, same fallback as Client Specialty below.
   if (score == null) {
-    return null;
+    return <span className="text-sm text-slate-400">N/A</span>;
   }
 
   const tier = getPerformanceTier(score);
@@ -315,6 +333,70 @@ function SupDeliveryCrew() {
     };
   }, []);
 
+  // Weekly Performance — real score per Driver, computed from their own
+  // `sessions` rows (Supervisors can read every session, see RLS.md) over
+  // the trailing WEEKLY_PERFORMANCE_WINDOW_DAYS. Bulk equivalent of
+  // SupCrewProfile.jsx's own per-driver "This Week (7 Days)" fetch: that page
+  // scopes to one driver_id at a time since it's only ever showing one
+  // profile, this one fetches every driver's sessions in a single query
+  // instead of one request per roster row.
+  //
+  // computeWeeklyPerformanceScore (lib/crewStatus.js) turns each driver's
+  // list of per-session total_alerts into one 0-100 number: `100 *
+  // (safeCount + 0.5 * moderateCount) / totalSessions`, using the same
+  // Safe/Moderate/High-Risk (<2 / 2-3 / 4+ alerts) thresholds the profile
+  // page's own risk badges already use. Percentage-based rather than a flat
+  // point deduction per bad trip, so a high-volume driver with a couple of
+  // moderate trips isn't penalized more harshly than a low-volume driver
+  // with the same *proportion* of incidents. A driver with zero sessions in
+  // the window gets null ("N/A"), not a fabricated 0 or 100 — no data isn't
+  // the same as a perfect or failing week.
+  //
+  // Helpers never get an entry here (sessions.driver_id has nothing for
+  // them) and stay at mapCrewRow's default null — they don't drive, so
+  // there's nothing to score them on.
+  const [weeklyPerformanceByDriverId, setWeeklyPerformanceByDriverId] =
+    useState({});
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadWeeklyPerformance() {
+      const since = new Date(
+        Date.now() - WEEKLY_PERFORMANCE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      const { data, error } = await supabase
+        .from("sessions")
+        .select("driver_id, total_alerts")
+        .gte("created_at", since);
+
+      if (!isMounted || error || !data) {
+        return;
+      }
+
+      const alertCountsByDriverId = {};
+      for (const row of data) {
+        if (!row.driver_id) continue;
+        (alertCountsByDriverId[row.driver_id] ||= []).push(
+          row.total_alerts || 0,
+        );
+      }
+
+      const scores = {};
+      for (const [driverId, alertCounts] of Object.entries(
+        alertCountsByDriverId,
+      )) {
+        scores[driverId] = computeWeeklyPerformanceScore(alertCounts);
+      }
+      setWeeklyPerformanceByDriverId(scores);
+    }
+
+    loadWeeklyPerformance();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // Live crew-assignment status: which record ids are on an ACTIVE trip
   // right now, and (for helpers) which driver they're riding with. Derived
   // from delivery_requests directly (Supervisor read policy), refreshed on
@@ -408,15 +490,19 @@ function SupDeliveryCrew() {
   }, [roster]);
 
   // Derive each member's live availability (Available / Assigned /
-  // Unavailable) from their weekly working days + current active trips.
+  // Unavailable) from their weekly working days + current active trips, and
+  // attach their real Weekly Performance score (Drivers only; Helpers keep
+  // mapCrewRow's default null since they have no session data).
   const rosterWithStatus = useMemo(
     () =>
       roster.map((member) => ({
         ...member,
         status: getCrewAvailability(member, busyRecordIds, todayDateKey()).key,
         statusLabel: getCrewAvailability(member, busyRecordIds, todayDateKey()).label,
+        weeklyPerformance:
+          weeklyPerformanceByDriverId[member.recordId] ?? null,
       })),
-    [roster, busyRecordIds],
+    [roster, busyRecordIds, weeklyPerformanceByDriverId],
   );
 
   const statusCounts = useMemo(
@@ -590,8 +676,11 @@ function SupDeliveryCrew() {
         </section>
 
         {/* View shortcuts: browse everyone, jump to who's free this week, or see
-            helpers alongside the driver they're assigned to. */}
-        <div className="flex flex-wrap items-center gap-2">
+            helpers alongside the driver they're assigned to. Same underline
+            tab style as the truck/crew profile pages (Overview/Deliveries/
+            Maintenance) for visual consistency across the app -- explicit
+            user request, 2026-09-17. */}
+        <div className="flex flex-wrap items-center gap-1 border-b border-slate-200">
           {[
             { mode: "all", label: "All Crew" },
             { mode: "week", label: "Available This Week" },
@@ -604,10 +693,10 @@ function SupDeliveryCrew() {
                 setViewMode(tab.mode);
                 setCurrentPage(1);
               }}
-              className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition ${
+              className={`whitespace-nowrap border-b-2 px-3.5 py-2 text-sm font-semibold transition ${
                 viewMode === tab.mode
-                  ? "bg-sky-600 text-white shadow-sm"
-                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  ? "border-blue-600 text-blue-600"
+                  : "border-transparent text-slate-500 hover:text-slate-700"
               }`}
             >
               {tab.label}
@@ -815,7 +904,9 @@ function SupDeliveryCrew() {
                           <PerformanceBadge score={crew.weeklyPerformance} />
                         </td>
                         <td className="px-5 py-2.5 text-slate-700">
-                          {crew.clientSpecialties.join(", ")}
+                          {crew.clientSpecialties.length > 0
+                            ? crew.clientSpecialties.join(", ")
+                            : <span className="text-slate-400">None</span>}
                         </td>
                         <td className="px-5 py-2.5 text-slate-700">
                           {formatWorkingDays(crew.workingDays) || ""}

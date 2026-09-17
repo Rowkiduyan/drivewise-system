@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import {
@@ -8,7 +8,11 @@ import {
   MANILA_TIMEZONE,
 } from "../lib/manilaTime.js";
 import { formatWorkingDays } from "../lib/workingDays.js";
-import { CREW_ACTIVE_STATUSES } from "../lib/crewStatus.js";
+import {
+  CREW_ACTIVE_STATUSES,
+  CREW_STATUS_META,
+  getSessionRiskLevel,
+} from "../lib/crewStatus.js";
 import {
   ArrowLeft,
   Route,
@@ -31,77 +35,45 @@ import {
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
-// Dummy trip history — frontend only, no backend/API/database.
-// The crew member being viewed is passed in via navigation state from the
-// Delivery Crew list (see SupDeliveryCrew.jsx), so this page doesn't need
-// its own copy of the crew roster.
+// Trip History — real delivery_requests rows this crew member is/was
+// assigned to (assigned_driver_id for a Driver, assigned_helper_ids contains
+// this crew member's record id for a Helper). Previously entirely mock data
+// (buildMockTrips, generating fake "TRIP-2100"-style ids never backed by any
+// real record) — found 2026-09-17 while investigating why rows weren't
+// clickable: there was nothing real to link to. Wired to real data below;
+// see loadTrips and mapTripRow.
 // ---------------------------------------------------------------------------
 
-const CLIENT_SPECIALTIES = [
-  "Jollibee",
-  "McDonald's",
-  "Chowking",
-  "KFC",
-  "Mang Inasal",
-  "Greenwich",
-  "Shakey's",
-  "Red Ribbon",
-  "Goldilocks",
-  "Max's Restaurant",
-];
+// The loadTrips query below already excludes CREW_ACTIVE_STATUSES, so every
+// row reaching here is finished -- only CANCELLED or COMPLETED/DELIVERED.
+// DELIVERED counts as Completed for the same reason SupDeliveries.jsx's own
+// completedDeliveries filter includes it: the crew's work is finished
+// either way, only the customer-confirmation step is still pending.
+function mapTripStatus(status) {
+  return status === "CANCELLED" ? "Cancelled" : "Completed";
+}
 
-const TRIP_ROUTES = [
-  "Manila Warehouse → Quezon Ave Branch",
-  "Cavite Depot → Alabang Branch",
-  "Manila Warehouse → Ortigas Branch",
-  "Pasig Hub → BGC Branch",
-  "Cavite Depot → Las Piñas Branch",
-  "Manila Warehouse → Cubao Branch",
-  "Pasig Hub → Marikina Branch",
-  "Cavite Depot → Parañaque Branch",
-];
+// Route label mirrors DriverDeliveries.jsx/HelperDeliveries.jsx's own
+// Pickup → Dropoff chain wording, truncated to just the two endpoints since
+// this table has no room for the full stop chain.
+function formatTripRoute(row) {
+  return `${row.pickup_location || "Pickup"} → ${row.dropoff_location || "Drop-off"}`;
+}
 
-const TRIP_STATUS_POOL = ["Completed", "Completed", "Completed", "Cancelled"];
-
-// Small seeded generator so a given crew member's trips stay the same while
-// you're viewing the page, instead of reshuffling on every re-render.
-function buildMockTrips(crew) {
-  let state = 0;
-  for (let i = 0; i < crew.id.length; i += 1)
-    state = (state * 31 + crew.id.charCodeAt(i)) >>> 0;
-  if (state <= 0) state = 1;
-  const rng = () => {
-    state = (state * 16807) % 2147483647;
-    return (state - 1) / 2147483646;
+function mapTripRow(row, clientNameById) {
+  const dateSource = row.pickup_date || row.created_at;
+  return {
+    id: row.id,
+    dateLabel: dateSource
+      ? new Date(`${dateSource}${dateSource.length <= 10 ? "T00:00:00" : ""}`).toLocaleDateString(
+          "en-US",
+          { timeZone: MANILA_TIMEZONE, month: "short", day: "numeric", year: "numeric" },
+        )
+      : "",
+    client: clientNameById[row.customer_auth_id] || "Client",
+    route: formatTripRoute(row),
+    status: mapTripStatus(row.status),
   };
-  const pick = (list) => list[Math.floor(rng() * list.length)];
-
-  const now = new Date("2026-07-19T08:00:00");
-  const tripCount = 8 + Math.floor(rng() * 5); // 8-12
-
-  return Array.from({ length: tripCount }, (_, i) => {
-    const isOngoing = i === 0 && crew.status === "On Delivery";
-    const status = isOngoing ? "Ongoing" : pick(TRIP_STATUS_POOL);
-    const date = new Date(
-      now.getTime() - i * (18 + rng() * 20) * 60 * 60 * 1000,
-    );
-    const client = crew.clientSpecialties?.length
-      ? pick(crew.clientSpecialties)
-      : pick(CLIENT_SPECIALTIES);
-
-    return {
-      id: `TRIP-${2100 - i}`,
-      dateLabel: date.toLocaleDateString("en-US", {
-        timeZone: MANILA_TIMEZONE,
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
-      client,
-      route: pick(TRIP_ROUTES),
-      status,
-    };
-  });
 }
 
 function getInitials(fullName) {
@@ -127,21 +99,23 @@ function buildHelperName(row) {
 
 const MAX_DEFAULT_HELPERS = 2;
 
-const STATUS_BADGE_CLASSES = {
-  Available:
-    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  "On Delivery": "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
-  "Off Duty": "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
-};
-
+// Was a stale local copy with its own vocabulary ("Available"/"On
+// Delivery"/"Off Duty") that never matched crew.status's real values
+// (getCrewAvailability's lowercase "available"/"assigned"/"unavailable" keys,
+// see lib/crewStatus.js) -- the case mismatch alone meant this always fell
+// through to the "Off Duty" grey fallback, and even a case fix wouldn't have
+// helped since "On Delivery"/"Off Duty" are never actually produced anywhere.
+// Found 2026-09-18 (every crew profile's status badge showed as a grey,
+// lowercase-as-typed "available" instead of a green "Available"). Now reuses
+// the same CREW_STATUS_META SupDeliveryCrew.jsx's own StatusBadge already
+// renders from, so both pages agree on one status vocabulary.
 function StatusBadge({ status }) {
+  const meta = CREW_STATUS_META[status] || CREW_STATUS_META.unavailable;
   return (
     <span
-      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${
-        STATUS_BADGE_CLASSES[status] || STATUS_BADGE_CLASSES["Off Duty"]
-      }`}
+      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${meta.badge}`}
     >
-      {status}
+      {meta.label}
     </span>
   );
 }
@@ -211,15 +185,6 @@ const HERO_TONE_CLASSES = {
   amber: "border-amber-200 bg-amber-50/50",
   emerald: "border-emerald-200 bg-emerald-50/50",
 };
-
-// Same High Risk / Moderate / Safe thresholds already used inline for the
-// current-trip status card, exposed as a helper so the Trip Log table can
-// flag risky trips the same way without duplicating the rule.
-function getRiskLevel(alertCount) {
-  if (alertCount >= 4) return { tone: "red", label: "High Risk" };
-  if (alertCount >= 2) return { tone: "amber", label: "Moderate" };
-  return { tone: "emerald", label: "Safe" };
-}
 
 const RISK_BADGE_CLASSES = {
   red: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200",
@@ -380,7 +345,7 @@ const TABS_BASE = [
   { id: "trips", label: "Trip History" },
 ];
 
-const TRIP_STATUS_OPTIONS = ["Completed", "Ongoing", "Cancelled"];
+const TRIP_STATUS_OPTIONS = ["Completed", "Cancelled"];
 const TRIPS_PAGE_SIZE = 6;
 
 function PaginationBar({ page, setPage, totalPages }) {
@@ -517,6 +482,7 @@ function PaginationBar({ page, setPage, totalPages }) {
 
 function SupCrewProfile() {
   const location = useLocation();
+  const navigate = useNavigate();
   const crew = location.state?.crew;
 
   const [activeTab, setActiveTab] = useState("overview");
@@ -757,13 +723,72 @@ function SupCrewProfile() {
     };
   }, [crew]);
 
-  const clientFallbackNames = useMemo(
-    () => availableClients.map((client) => client.name),
-    [availableClients],
-  );
+  // list-clients' client.id is customer_records.auth_id, the exact same
+  // value delivery_requests.customer_auth_id stores -- same lookup
+  // SupDeliveries.jsx's mapDbRequest builds (clientNameById) for its own
+  // request rows.
+  const clientNameById = useMemo(() => {
+    const byId = {};
+    availableClients.forEach((client) => {
+      byId[client.id] = client.name;
+    });
+    return byId;
+  }, [availableClients]);
+
+  // Real trip history -- delivery_requests this crew member is/was assigned
+  // to. A crew member is only ever attached to a request at/after ASSIGNED
+  // (assigned_driver_id/assigned_helper_ids are only set then), so every row
+  // this can return already has a real Request ID matching one shown
+  // elsewhere in SupDeliveries.jsx (Completed Delivery Report header,
+  // Live Tracking header, every list table's Request ID column).
+  const [rawTrips, setRawTrips] = useState([]);
+  const [tripsLoading, setTripsLoading] = useState(true);
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadTrips() {
+      if (!crew?.employeeId) {
+        setRawTrips([]);
+        setTripsLoading(false);
+        return;
+      }
+      setTripsLoading(true);
+      let query = supabase
+        .from("delivery_requests")
+        .select(
+          "id, status, pickup_date, pickup_location, dropoff_location, customer_auth_id, created_at",
+        )
+        // "History" means finished trips only -- a currently-active
+        // assignment (CREW_ACTIVE_STATUSES) belongs on the live In Transit
+        // view, not in this list. Found 2026-09-17: an ongoing trip was
+        // showing up here, which doesn't belong in a *history* of past work.
+        .not("status", "in", `(${CREW_ACTIVE_STATUSES.join(",")})`)
+        .order("created_at", { ascending: false });
+      query =
+        crew.position === "Driver"
+          ? query.eq("assigned_driver_id", crew.employeeId)
+          : query.contains("assigned_helper_ids", [crew.employeeId]);
+
+      const { data, error } = await query;
+      if (!isMounted) return;
+      if (error) {
+        console.error("Failed to load trip history:", error.message);
+        setRawTrips([]);
+      } else {
+        setRawTrips(data || []);
+      }
+      setTripsLoading(false);
+    }
+
+    loadTrips();
+    return () => {
+      isMounted = false;
+    };
+  }, [crew?.employeeId, crew?.position]);
+
   const trips = useMemo(
-    () => (crew ? buildMockTrips(crew, clientFallbackNames) : []),
-    [crew, clientFallbackNames],
+    () => rawTrips.map((row) => mapTripRow(row, clientNameById)),
+    [rawTrips, clientNameById],
   );
 
   // Scoped to this specific crew member's own driver_records.id
@@ -1054,13 +1079,13 @@ function SupCrewProfile() {
   );
 
   // Weekly performance — how many of this driver's last-7-days trips fell
-  // into each risk tier (same getRiskLevel thresholds as the per-trip
+  // into each risk tier (same getSessionRiskLevel thresholds as the per-trip
   // badges), so a supervisor can judge the week as a whole, not just the
   // single latest/ongoing trip. Overall tone is the worst tier present:
   // one High Risk trip should still flag the week, even if most were Safe.
   const weeklyRiskCounts = sessions.reduce(
     (counts, session) => {
-      const tier = getRiskLevel(session.total_alerts || 0).label;
+      const tier = getSessionRiskLevel(session.total_alerts || 0).label;
       counts[tier] += 1;
       return counts;
     },
@@ -1251,7 +1276,6 @@ function SupCrewProfile() {
   const tripStatusCounts = {
     All: trips.length,
     Completed: trips.filter((trip) => trip.status === "Completed").length,
-    Ongoing: trips.filter((trip) => trip.status === "Ongoing").length,
     Cancelled: trips.filter((trip) => trip.status === "Cancelled").length,
   };
 
@@ -1318,24 +1342,24 @@ function SupCrewProfile() {
         </div>
 
         {/* Profile header — compact identity strip: avatar, name/status on
-            the primary line, employee ID/shift as a secondary line, and
-            position as the trailing detail. */}
+            the primary line, position as the trailing detail. The old
+            secondary line ("employee ID · shift") was removed 2026-09-18 --
+            `crew.shift` was never backed by any real data anywhere in the
+            app, so it silently rendered as the literal word "undefined" on
+            every profile; the employee ID next to it was dropped along with
+            it since a bare ID isn't useful information on its own once the
+            shift half is gone. */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-blue-50 text-sm font-semibold text-blue-700">
                 {getInitials(crew.fullName)}
               </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-base font-semibold text-slate-900 sm:text-lg">
-                    {crew.fullName}
-                  </h1>
-                  <StatusBadge status={crew.status} />
-                </div>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  {crew.employeeId} · {crew.shift}
-                </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-base font-semibold text-slate-900 sm:text-lg">
+                  {crew.fullName}
+                </h1>
+                <StatusBadge status={crew.status} />
               </div>
             </div>
             <PositionTag position={crew.position} />
@@ -1894,7 +1918,7 @@ function SupCrewProfile() {
                     <tbody className="divide-y divide-slate-100">
                       {(isPerformanceLoading ? [] : recentSessions).map(
                         (session) => {
-                          const risk = getRiskLevel(session.alerts);
+                          const risk = getSessionRiskLevel(session.alerts);
                           return (
                             <tr
                               key={session.sessionId}
@@ -2261,43 +2285,63 @@ function SupCrewProfile() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {pagedTrips.map((trip) => (
-                      <tr
-                        key={trip.id}
-                        className="transition hover:bg-slate-50"
-                      >
-                        <td className="px-5 py-3.5">
-                          <p className="font-medium text-slate-900">
-                            {trip.id}
-                          </p>
-                          <p className="text-xs text-slate-500">
-                            {trip.dateLabel}
-                          </p>
-                        </td>
-                        <td className="px-5 py-3.5 text-slate-700">
-                          {trip.client}
-                        </td>
-                        <td className="px-5 py-3.5 text-slate-700">
-                          <span className="inline-flex items-center gap-1.5">
-                            <Route className="h-3.5 w-3.5 text-slate-400" />
-                            {trip.route}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3.5">
-                          <TripStatusBadge status={trip.status} />
-                        </td>
-                      </tr>
-                    ))}
-
-                    {filteredTrips.length === 0 && (
+                    {tripsLoading ? (
                       <tr>
                         <td
                           colSpan={4}
                           className="px-5 py-8 text-center text-sm text-slate-500"
                         >
-                          No trips match your search or filter.
+                          Loading trip history…
                         </td>
                       </tr>
+                    ) : (
+                      <>
+                        {pagedTrips.map((trip) => (
+                          <tr
+                            key={trip.id}
+                            onClick={() =>
+                              navigate("/supervisor/deliveries", {
+                                state: { openDeliveryId: trip.id },
+                              })
+                            }
+                            className="cursor-pointer transition hover:bg-slate-50"
+                          >
+                            <td className="px-5 py-3.5">
+                              <p className="font-medium text-slate-900">
+                                {trip.id}
+                              </p>
+                              <p className="text-xs text-slate-500">
+                                {trip.dateLabel}
+                              </p>
+                            </td>
+                            <td className="px-5 py-3.5 text-slate-700">
+                              {trip.client}
+                            </td>
+                            <td className="px-5 py-3.5 text-slate-700">
+                              <span className="inline-flex items-center gap-1.5">
+                                <Route className="h-3.5 w-3.5 text-slate-400" />
+                                {trip.route}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3.5">
+                              <TripStatusBadge status={trip.status} />
+                            </td>
+                          </tr>
+                        ))}
+
+                        {filteredTrips.length === 0 && (
+                          <tr>
+                            <td
+                              colSpan={4}
+                              className="px-5 py-8 text-center text-sm text-slate-500"
+                            >
+                              {trips.length === 0
+                                ? "No trips recorded for this crew member yet."
+                                : "No trips match your search or filter."}
+                            </td>
+                          </tr>
+                        )}
+                      </>
                     )}
                   </tbody>
                 </table>

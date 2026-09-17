@@ -4,8 +4,11 @@
 // useJsApiLoader call sites in the app pass different option objects --
 // so every call site must import this rather than building its own.
 // 'geometry' is needed by DriverDeliveries.jsx's LiveNavigationMap
-// (computeDistanceBetween / isLocationOnEdge).
-export const GOOGLE_MAPS_LIBRARIES = ['geometry']
+// (computeDistanceBetween / isLocationOnEdge). 'places' is needed by
+// CustomerRequestDelivery.jsx's LocationPickerModal (Places Autocomplete
+// search -- see 02_BOOKING_AND_TRIP_CREATION.md's "Google Maps Platform
+// Setup", which already enables Places API (New) on this same key).
+export const GOOGLE_MAPS_LIBRARIES = ['geometry', 'places']
 
 export const GOOGLE_MAPS_LOADER_OPTIONS = {
   googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,

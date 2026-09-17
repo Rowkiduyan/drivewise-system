@@ -280,17 +280,30 @@ const PAGE_SIZE = 10;
 function AdminTrucks() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [searchTerm, setSearchTerm] = useState("");
-  const [selectedType, setSelectedType] = useState("All");
-  const [selectedStatus, setSelectedStatus] = useState("All");
+  // Arriving back from AdminTruckProfile's "Back" link (state.restoreListState,
+  // set below via openProfile) restores search/filters/page exactly as the
+  // Admin left them -- explicit user request, 2026-09-17: selecting a truck
+  // under a filter and going back used to reset to the unfiltered list.
+  const restoreListState = location.state?.restoreListState;
+  const [searchTerm, setSearchTerm] = useState(
+    () => restoreListState?.searchTerm || "",
+  );
+  const [selectedType, setSelectedType] = useState(
+    () => restoreListState?.selectedType || "All",
+  );
+  const [selectedStatus, setSelectedStatus] = useState(
+    () => restoreListState?.selectedStatus || "All",
+  );
   // Arriving from AdminDashboard's "PMS Overdue" shortcut (state.pmsFilter)
   // pre-applies the filter, same pattern as SupTrucks.jsx's own -- read once
   // on mount so manually clearing the filter afterward isn't overridden by
   // the same nav state on a re-render.
   const [selectedPmsStatus, setSelectedPmsStatus] = useState(
-    () => location.state?.pmsFilter || "All",
+    () => restoreListState?.selectedPmsStatus || location.state?.pmsFilter || "All",
   );
-  const [currentPage, setCurrentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(
+    () => restoreListState?.currentPage || 1,
+  );
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [truckToEdit, setTruckToEdit] = useState(null);
@@ -617,7 +630,18 @@ function AdminTrucks() {
   };
 
   const openProfile = (truck) => {
-    navigate("/admin/trucks/profile", { state: { truck } });
+    navigate("/admin/trucks/profile", {
+      state: {
+        truck,
+        listState: {
+          searchTerm,
+          selectedType,
+          selectedStatus,
+          selectedPmsStatus,
+          currentPage: safePage,
+        },
+      },
+    });
   };
 
   // Delete handler

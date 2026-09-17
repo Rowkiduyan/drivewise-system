@@ -4093,6 +4093,26 @@ function CancelledDeliveryDetails({ delivery }) {
   };
   return (
     <div className="space-y-4">
+      {/* Header showing the Request ID -- CompletedDeliveryReport shows its
+          own ID in an identical spot ("Delivery Report — {delivery.id}");
+          this view never had the equivalent, so the ID disappeared entirely
+          once a Supervisor drilled into a specific cancelled delivery (only
+          visible in the list row before clicking in). Found 2026-09-17. */}
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex rounded-full bg-rose-100 px-2.5 py-1 text-[10px] font-bold text-rose-700">
+            CANCELLED
+          </span>
+          <h3 className="text-sm font-semibold text-slate-900">
+            Cancelled Delivery — {delivery.id}
+          </h3>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <Package className="h-3.5 w-3.5" />
+          {delivery.companyName} • {delivery.deliveryAddress}
+        </div>
+      </div>
+
       <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
         <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-rose-700">
           <XCircle className="h-3.5 w-3.5" />
@@ -5677,6 +5697,38 @@ function SupDeliveries() {
     // render, not memoized; including it would fire this effect every
     // render instead of only when dbRequests/location.state actually change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dbRequests, location.state]);
+
+  // Arriving from a crew member's Trip History row (SupCrewProfile.jsx,
+  // state.openDeliveryId) opens that exact delivery in whichever module
+  // actually shows it — mirrors the openRequestId effect above (same
+  // wait-for-dbRequests-to-load, fire-once pattern) but routes by the
+  // request's real current status instead of always assuming "in transit",
+  // since a crew member's trips span Ongoing, Completed, and Cancelled.
+  const openedFromCrewTripRef = useRef(false);
+  useEffect(() => {
+    const targetId = location.state?.openDeliveryId;
+    if (
+      !targetId ||
+      openedFromCrewTripRef.current ||
+      dbRequests.length === 0
+    )
+      return;
+    const match = dbRequests.find((r) => r.id === targetId);
+    if (!match) return;
+    openedFromCrewTripRef.current = true;
+    Promise.resolve().then(() => {
+      if (match.status === "CANCELLED") {
+        setActiveModule("cancelled");
+        setSelectedReportId(`cancel-${match.id}`);
+      } else if (match.status === "COMPLETED" || match.status === "DELIVERED") {
+        setActiveModule("completed");
+        setSelectedReportId(match.id);
+      } else {
+        setActiveModule("transit");
+        setMonitoredDeliveryId(match.id);
+      }
+    });
   }, [dbRequests, location.state]);
 
   const updateRequest = (id, patch) => {
@@ -8721,9 +8773,11 @@ function SupDeliveries() {
                       <p className="text-sm font-semibold text-slate-900 text-center">
                         {row.id}
                       </p>
-                      <div>
+                      <div className="min-w-0">
                         <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-                          {row.customerName}
+                          <span className="min-w-0 truncate" title={row.customerName}>
+                            {row.customerName}
+                          </span>
                           {specializedClientIds.has(row.customerAuthId) && (
                             <span
                               className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
@@ -8734,7 +8788,7 @@ function SupDeliveries() {
                             </span>
                           )}
                         </p>
-                        <p className="text-xs text-slate-500">
+                        <p className="truncate text-xs text-slate-500">
                           {row.companyName}
                         </p>
                       </div>
@@ -8806,9 +8860,11 @@ function SupDeliveries() {
                       <p className="text-sm font-semibold text-slate-900 text-center">
                         {row.id}
                       </p>
-                      <div>
+                      <div className="min-w-0">
                         <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-                          {row.customerName}
+                          <span className="min-w-0 truncate" title={row.customerName}>
+                            {row.customerName}
+                          </span>
                           {specializedClientIds.has(row.customerAuthId) && (
                             <span
                               className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
@@ -8819,7 +8875,7 @@ function SupDeliveries() {
                             </span>
                           )}
                         </p>
-                        <p className="text-xs text-slate-500">
+                        <p className="truncate text-xs text-slate-500">
                           {row.companyName}
                         </p>
                       </div>

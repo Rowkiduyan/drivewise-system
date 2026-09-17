@@ -10,23 +10,18 @@ import {
   Info,
   MapPin,
   Package,
-  Ruler,
   Search,
   Thermometer,
+  Trash2,
   X,
 } from "lucide-react";
 import CustomerLayout from "../layout/CustomerLayout.jsx";
 import {
-  MapContainer,
-  TileLayer,
-  Marker,
-  Polygon,
-  useMapEvents,
-  useMap,
-} from "react-leaflet";
-import "leaflet/dist/leaflet.css";
-import L from "leaflet";
-import { useJsApiLoader } from "@react-google-maps/api";
+  GoogleMap,
+  Marker as GoogleMapMarker,
+  Polygon as GoogleMapPolygon,
+  useJsApiLoader,
+} from "@react-google-maps/api";
 import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
 import {
   truckTypes,
@@ -37,6 +32,7 @@ import {
   getMinDeliveryDate,
   getDropoffDateError,
   getBudgetError,
+  MIN_BUDGET_AMOUNT,
 } from "../lib/deliveryOptions.js";
 import { photonGeocode, useResolvedStopCoords } from "../lib/forwardGeocode.js";
 import { computeSuggestedRoute } from "../lib/suggestedRoute.js";
@@ -54,17 +50,6 @@ import {
 } from "../lib/serviceArea.js";
 import { weekdayOfDate } from "../lib/workingDays.js";
 import { supabase } from "../lib/supabaseClient.js";
-
-// Fix default marker icon for Leaflet in React
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl:
-    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
-  iconUrl:
-    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
-  shadowUrl:
-    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
-});
 
 const background = null;
 
@@ -88,6 +73,18 @@ const MAX_STOPS = 5;
 // road graph can't reach (e.g. an interior subdivision street), even though
 // the address itself is real. Anything else is a genuine failure.
 const RETRYABLE_DIRECTIONS_STATUSES = new Set(["ZERO_RESULTS", "NOT_FOUND"]);
+
+// Shown when a location field was only typed/searched but never actually
+// picked (a search suggestion clicked, or a point placed/dragged on the map
+// picker) -- neither of those two interactions ever leaves lat/lng null (see
+// LocationInput's onChange handlers), so a null coordinate here always means
+// "typed text only." Explicit user decision, 2026-09-17: typing alone isn't
+// enough to confirm an exact point, so this blocks submission and points the
+// customer back at the map instead of silently forward-geocoding the text
+// (the previous behavior, which could land outside Luzon with only the vague
+// bottom-of-page SERVICE_AREA_MESSAGE to explain why).
+const MAP_SELECTION_REQUIRED_MESSAGE =
+  "This location was only typed, not selected. Please tap \"Map\" (or choose a suggestion from the dropdown) to confirm the exact spot before submitting.";
 
 // `waypointAddresses`, same length/order as `waypointCoords`, is the raw
 // address text for each leg -- used as a retry (in place of the
@@ -137,82 +134,131 @@ function estimateLegDurations(waypointCoords, waypointAddresses) {
   });
 }
 
-// Photon (Komoot) geocoding — free, no API key, CORS-enabled, and not rate
-// limited like the public Nominatim endpoint. Search is scoped to the
-// Philippines bounding box to match the app's service area.
+// Google Places (New) autocomplete search + Maps JavaScript API Geocoder
+// reverse-geocoding for the map picker -- replaces the previous Leaflet/
+// Photon combination. Both already covered by this app's shared Google Maps
+// API key (Places API (New) is already enabled on it, see
+// 02_BOOKING_AND_TRIP_CREATION.md's "Google Maps Platform Setup" -- that doc
+// also flagged the booking form as still using Leaflet/Photon in practice
+// despite that setup, which this change resolves).
 
-const PH_BBOX = "116.9,4.6,126.6,21.1";
+// Google's {south,west,north,east} shape, derived from the same
+// [[south,west],[north,east]] pair serviceArea.js exports (single source of
+// truth for the service-area bbox).
+const PH_BOUNDS = {
+  south: SERVICE_AREA_MAX_BOUNDS[0][0],
+  west: SERVICE_AREA_MAX_BOUNDS[0][1],
+  north: SERVICE_AREA_MAX_BOUNDS[1][0],
+  east: SERVICE_AREA_MAX_BOUNDS[1][1],
+};
 
-// Build a human-readable address from a Photon feature's properties.
-function photonAddress(feature) {
-  const p = feature?.properties || {};
-  const street = p.housenumber
-    ? `${p.housenumber} ${p.street || ""}`.trim()
-    : p.street || "";
-  return [
-    street || p.name || "",
-    p.locality || p.district || "",
-    p.city || p.county || "",
-    p.state || "",
-    p.country || "",
-  ]
+// One AutocompleteSessionToken per distinct search "session" (typing through
+// to picking a suggestion) -- required so a single address search is billed
+// once per session rather than once per keystroke, per the setup doc above.
+function newSessionToken() {
+  return new window.google.maps.places.AutocompleteSessionToken();
+}
+
+// `locationBias` (not a hard restriction) keeps results centered on the
+// service area while still letting a query for something just outside it
+// return a real result -- `isInsideLuzon` is what actually enforces the
+// service-area boundary, same as before.
+async function placesSearch(query, sessionToken) {
+  const { suggestions } =
+    await window.google.maps.places.AutocompleteSuggestion.fetchAutocompleteSuggestions(
+      {
+        input: query,
+        sessionToken,
+        includedRegionCodes: ["ph"],
+        locationBias: PH_BOUNDS,
+      },
+    );
+  return (suggestions || [])
+    .map((s) => s.placePrediction)
     .filter(Boolean)
-    .join(", ");
+    .map((prediction) => ({
+      prediction,
+      // Short place/street name for the dropdown row -- the point of
+      // switching off Photon was to search real places by name rather than
+      // only match on a long formatted address.
+      mainText: prediction.mainText?.text || prediction.text.text,
+      secondaryText: prediction.secondaryText?.text || "",
+    }));
 }
 
-async function photonSearch(query) {
-  const res = await fetch(
-    `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&bbox=${PH_BBOX}`,
-  );
-  if (!res.ok) throw new Error(`search ${res.status}`);
-  const data = await res.json();
-  return (data?.features || []).map((feature) => ({
-    display: photonAddress(feature),
-    lat: feature.geometry.coordinates[1],
-    lon: feature.geometry.coordinates[0],
-  }));
+// Resolves a clicked suggestion into real coordinates and a full formatted
+// address -- the address is what actually gets stored as pickup/dropoff
+// location text, same shape every other consumer (Directions requests,
+// driver navigation) already expects.
+async function resolvePlacePrediction(prediction) {
+  const place = prediction.toPlace();
+  await place.fetchFields({ fields: ["location", "formattedAddress"] });
+  return {
+    display: place.formattedAddress || prediction.text.text,
+    lat: place.location.lat(),
+    lon: place.location.lng(),
+  };
 }
 
-// Reverse-geocode a coordinate to an address, with a small backoff retry in
-// case the endpoint ever rate-limits us.
-async function reverseGeocode(lat, lng, attempt = 0) {
-  const res = await fetch(
-    `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}`,
-  );
-  if (res.status === 429 && attempt < 3) {
-    await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
-    return reverseGeocode(lat, lng, attempt + 1);
-  }
-  if (!res.ok) return "";
-  const data = await res.json();
-  const feature = data?.features?.[0];
-  return feature ? photonAddress(feature) : "";
+// Reverse-geocode a coordinate to an address via the Maps JavaScript API's
+// Geocoder class -- same technique lib/reverseGeocode.js already uses
+// elsewhere in the app (browser-safe with this app's referrer-restricted
+// key, unlike the raw Geocoding REST endpoint).
+function reverseGeocode(lat, lng) {
+  return new Promise((resolve) => {
+    new window.google.maps.Geocoder().geocode(
+      { location: { lat, lng } },
+      (results, status) => {
+        resolve(
+          status === "OK" && results?.[0]?.formatted_address
+            ? results[0].formatted_address
+            : "",
+        );
+      },
+    );
+  });
 }
 
-// Map controller — handles view changes, map clicks, and draggable marker.
-// Clicking/dragging always resolves the point to a real address via reverse
-// geocoding; the coordinates are shown as an instant fallback only.
-// Every point is validated against the Luzon service-area polygons first:
-// an invalid placement never sticks — the pin snaps back to the nearest
-// valid spot inside Luzon and the UI flags the attempt.
-function MapController({
-  center,
-  zoom,
-  selectedLocation,
-  onLocationChange,
-  onResolvingChange,
-  onServiceAreaResult,
+// Location Picker Modal Component
+function LocationPickerModal({
+  isOpen,
+  onClose,
+  onSelect,
+  initialValue,
+  initialLat,
+  initialLng,
 }) {
-  const map = useMap();
+  const { isLoaded: mapsApiLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS);
+  const mapRef = useRef(null);
+  // One session token per picker session (reset whenever the modal reopens
+  // or a suggestion is picked) -- see placesSearch's comment above.
+  const sessionTokenRef = useRef(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [selectedLocation, setSelectedLocation] = useState(null);
+  const [mapCenter, setMapCenter] = useState({ lat: 14.5995, lng: 120.9842 });
+  const [mapZoom, setMapZoom] = useState(13);
+  const [resolvingAddress, setResolvingAddress] = useState(false);
+  const [showServiceAreaNotice, setShowServiceAreaNotice] = useState(false);
 
+  // Re-centers/re-zooms the live map imperatively whenever mapCenter/mapZoom
+  // change (a search pick, a suggestion click, or the initial-value effect
+  // below) -- GoogleMap's center/zoom props only apply on mount, same
+  // pattern SuggestedRouteMap.jsx already uses for its own fitBounds call.
   useEffect(() => {
-    if (center) {
-      map.setView(center, zoom || map.getZoom(), { animate: true });
+    if (mapRef.current) {
+      mapRef.current.panTo(mapCenter);
+      mapRef.current.setZoom(mapZoom);
     }
-  }, [center, zoom, map]);
+  }, [mapCenter, mapZoom]);
 
+  // Every point (click, drag, search pick) is validated against the Luzon
+  // service-area polygons first: an invalid placement never sticks -- the
+  // pin snaps back to the nearest valid spot inside Luzon and the UI flags
+  // the attempt. Clicking/dragging always resolves the point to a real
+  // address via reverse geocoding; the coordinates are shown as an instant
+  // fallback only.
   const handlePoint = (lat, lng) => {
-    // Validate against the Luzon polygons; an outside placement never sticks.
     const inside = isInsideLuzon(lat, lng);
     let finalLat = lat;
     let finalLng = lng;
@@ -225,98 +271,75 @@ function MapController({
       const snapped = snapToLuzon(lat, lng);
       finalLat = snapped.lat;
       finalLng = snapped.lng;
-      map.panTo([finalLat, finalLng], { animate: true });
+      setMapCenter({ lat: finalLat, lng: finalLng });
     }
-    onServiceAreaResult(inside);
+    setShowServiceAreaNotice(!inside);
 
-    onLocationChange(
-      `${finalLat.toFixed(6)}, ${finalLng.toFixed(6)}`,
-      finalLat,
-      finalLng,
-    );
-    onResolvingChange(true);
+    setSelectedLocation({
+      display: `${finalLat.toFixed(6)}, ${finalLng.toFixed(6)}`,
+      lat: finalLat,
+      lon: finalLng,
+    });
+    setResolvingAddress(true);
     reverseGeocode(finalLat, finalLng)
       .then((display) => {
-        if (display) onLocationChange(display, finalLat, finalLng);
+        if (display) {
+          setSelectedLocation({ display, lat: finalLat, lon: finalLng });
+        }
       })
       .catch(() => {})
-      .finally(() => onResolvingChange(false));
+      .finally(() => setResolvingAddress(false));
   };
 
-  useMapEvents({
-    click(e) {
-      const { lat, lng } = e.latlng;
-      handlePoint(lat, lng);
-    },
-  });
-
-  return (
-    <>
-      {/* Service-area boundary so users can see where selection is allowed */}
-      {LUZON_SERVICE_AREA.map((ring, index) => (
-        <Polygon
-          key={index}
-          positions={ring}
-          pathOptions={{
-            color: "#059669",
-            weight: 2,
-            fillColor: "#10b981",
-            fillOpacity: 0.08,
-          }}
-        />
-      ))}
-      {selectedLocation && (
-        <Marker
-          position={[selectedLocation.lat, selectedLocation.lon]}
-          draggable={true}
-          eventHandlers={{
-            dragend(e) {
-              const { lat, lng } = e.target.getLatLng();
-              handlePoint(lat, lng);
-            },
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-// Location Picker Modal Component
-function LocationPickerModal({
-  isOpen,
-  onClose,
-  onSelect,
-  initialValue,
-  initialLat,
-  initialLng,
-}) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [suggestions, setSuggestions] = useState([]);
-  const [selectedLocation, setSelectedLocation] = useState(null);
-  const [mapCenter, setMapCenter] = useState([14.5995, 120.9842]);
-  const [mapZoom, setMapZoom] = useState(13);
-  const [resolvingAddress, setResolvingAddress] = useState(false);
-  const [showServiceAreaNotice, setShowServiceAreaNotice] = useState(false);
-
-  // When the modal opens, prefer the exact previously-picked coordinate
-  // (initialLat/initialLng, already captured from an earlier search
-  // selection or a drag on this same field) over re-geocoding the address
-  // text. Real bug found live 2026-09-06: re-forward-geocoding the text via
-  // Photon on every reopen silently discarded a manual drag adjustment,
-  // since reverse-geocoding is coarse enough that a dragged point and its
-  // surrounding street often share the exact same display address — Photon
-  // then returns its own canonical point for that text, not the dragged
-  // one, making a careful adjustment appear to "revert" the moment the
-  // picker was reopened (e.g. to double-check the pin before submitting).
-  // Only fall back to forward-geocoding the text when no precise coordinate
-  // exists yet — a manually-typed address that was never picked/dragged.
+  // When the modal opens, always resync local state to the field's last
+  // *confirmed* value (initialValue/initialLat/initialLng, only ever updated
+  // by a Confirm click via onSelect) rather than trusting whatever's left
+  // over in `selectedLocation` from a previous visit -- the modal stays
+  // mounted between opens (LocationInput always renders it, `isOpen` only
+  // gates its own output), so a pin dragged/clicked/searched and then
+  // abandoned via Cancel/X must not linger and get treated as "selected"
+  // the next time the picker opens, or worse, get saved if Confirm is
+  // clicked on a later, unrelated visit. Explicit user decision, 2026-09-18.
+  //
+  // Prefers the exact previously-picked coordinate (initialLat/initialLng)
+  // over re-geocoding the address text. Real bug found live 2026-09-06:
+  // re-forward-geocoding the text via Photon on every reopen silently
+  // discarded a manual drag adjustment, since reverse-geocoding is coarse
+  // enough that a dragged point and its surrounding street often share the
+  // exact same display address — Photon then returns its own canonical
+  // point for that text, not the dragged one, making a careful adjustment
+  // appear to "revert" the moment the picker was reopened (e.g. to double-
+  // check the pin before submitting). Only fall back to forward-geocoding
+  // the text when no precise coordinate exists yet — a manually-typed
+  // address that was never picked/dragged.
   useEffect(() => {
     if (!isOpen) return;
 
-    const query = initialValue?.trim();
-    if (!query) return;
-
     let cancelled = false;
+    // Deferred via a microtask -- avoids calling setState synchronously in
+    // the effect body, matching this file's other geocode-effect below.
+    Promise.resolve().then(() => {
+      if (!cancelled) {
+        setSearchQuery("");
+        setSuggestions([]);
+      }
+    });
+
+    const query = initialValue?.trim();
+    if (!query) {
+      // No confirmed value yet -- discard any unconfirmed pin left over
+      // from a cancelled visit instead of leaving it selectable again.
+      Promise.resolve().then(() => {
+        if (cancelled) return;
+        setShowServiceAreaNotice(false);
+        setSelectedLocation(null);
+        setMapCenter({ lat: 14.5995, lng: 120.9842 });
+        setMapZoom(13);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
 
     if (initialLat != null && initialLng != null) {
       // Deferred via a microtask, matching this file's other geocode-effect
@@ -325,7 +348,7 @@ function LocationPickerModal({
         if (cancelled) return;
         setShowServiceAreaNotice(false);
         setSelectedLocation({ display: query, lat: initialLat, lon: initialLng });
-        setMapCenter([initialLat, initialLng]);
+        setMapCenter({ lat: initialLat, lng: initialLng });
         setMapZoom(16);
       });
       return () => {
@@ -346,7 +369,7 @@ function LocationPickerModal({
           lat: coords.lat,
           lon: coords.lng,
         });
-        setMapCenter([coords.lat, coords.lng]);
+        setMapCenter({ lat: coords.lat, lng: coords.lng });
         setMapZoom(16);
       })
       .catch(() => {});
@@ -356,17 +379,23 @@ function LocationPickerModal({
     };
   }, [isOpen, initialValue, initialLat, initialLng]);
 
+  // Fresh session token each time the modal opens -- see placesSearch's
+  // comment above on why a token must span the whole search-to-pick flow.
   useEffect(() => {
-    if (searchQuery.length <= 2) return;
+    if (isOpen && mapsApiLoaded && window.google) {
+      sessionTokenRef.current = newSessionToken();
+    }
+  }, [isOpen, mapsApiLoaded]);
+
+  useEffect(() => {
+    if (searchQuery.length <= 2 || !mapsApiLoaded || !window.google) return;
     const timer = setTimeout(() => {
-      photonSearch(searchQuery)
-        .then((data) =>
-          setSuggestions(data.filter((s) => isInsideLuzon(s.lat, s.lon))),
-        )
+      placesSearch(searchQuery, sessionTokenRef.current)
+        .then((data) => setSuggestions(data))
         .catch(() => setSuggestions([]));
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, mapsApiLoaded]);
   // Clear suggestions once the query gets too short to search, adjusted
   // during render instead of in the effect above -- `suggestions.length >
   // 0` doubles as its own guard (no extra tracking state needed), since
@@ -376,24 +405,23 @@ function LocationPickerModal({
   }
 
   const handleSuggestionClick = (suggestion) => {
-    if (!isInsideLuzon(suggestion.lat, suggestion.lon)) {
-      setShowServiceAreaNotice(true);
-      return;
-    }
-    setShowServiceAreaNotice(false);
-    setSelectedLocation({
-      display: suggestion.display,
-      lat: suggestion.lat,
-      lon: suggestion.lon,
-    });
-    setMapCenter([suggestion.lat, suggestion.lon]);
-    setMapZoom(16);
+    resolvePlacePrediction(suggestion.prediction)
+      .then(({ display, lat, lon }) => {
+        if (!isInsideLuzon(lat, lon)) {
+          setShowServiceAreaNotice(true);
+          return;
+        }
+        setShowServiceAreaNotice(false);
+        setSelectedLocation({ display, lat, lon });
+        setMapCenter({ lat, lng: lon });
+        setMapZoom(16);
+        // A place was just resolved to a real point (billable), so the
+        // session is over -- the next search starts a new one.
+        sessionTokenRef.current = newSessionToken();
+      })
+      .catch(() => {});
     setSuggestions([]);
     setSearchQuery("");
-  };
-
-  const handleLocationChange = (display, lat, lng) => {
-    setSelectedLocation({ display, lat, lon: lng });
   };
 
   const handleConfirm = () => {
@@ -452,7 +480,7 @@ function LocationPickerModal({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search for a location within Luzon..."
+              placeholder="Search by place name or address within Luzon..."
               className="w-full rounded-xl border border-emerald-200 bg-white pl-10 pr-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
             {suggestions.length > 0 && (
@@ -463,7 +491,14 @@ function LocationPickerModal({
                     onClick={() => handleSuggestionClick(suggestion)}
                     className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-emerald-50 border-b border-slate-100 last:border-b-0"
                   >
-                    {suggestion.display}
+                    <span className="block font-medium text-slate-900">
+                      {suggestion.mainText}
+                    </span>
+                    {suggestion.secondaryText && (
+                      <span className="block text-xs text-slate-500">
+                        {suggestion.secondaryText}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -481,29 +516,54 @@ function LocationPickerModal({
 
           {/* Map */}
           <div className="h-72 rounded-xl overflow-hidden border border-emerald-200">
-            <MapContainer
-              center={mapCenter}
-              zoom={mapZoom}
-              style={{ height: "100%", width: "100%" }}
-              zoomControl={true}
-              maxBounds={SERVICE_AREA_MAX_BOUNDS}
-              maxBoundsViscosity={0.7}
-            >
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              />
-              <MapController
+            {!mapsApiLoaded ? (
+              <div className="flex h-full items-center justify-center text-xs text-slate-400">
+                Loading map…
+              </div>
+            ) : (
+              <GoogleMap
+                mapContainerStyle={{ height: "100%", width: "100%" }}
                 center={mapCenter}
                 zoom={mapZoom}
-                selectedLocation={selectedLocation}
-                onLocationChange={handleLocationChange}
-                onResolvingChange={setResolvingAddress}
-                onServiceAreaResult={(inside) =>
-                  setShowServiceAreaNotice(!inside)
-                }
-              />
-            </MapContainer>
+                onLoad={(map) => {
+                  mapRef.current = map;
+                }}
+                onClick={(e) => handlePoint(e.latLng.lat(), e.latLng.lng())}
+                options={{
+                  zoomControl: true,
+                  streetViewControl: false,
+                  mapTypeControl: false,
+                  fullscreenControl: false,
+                  // Soft-restricts panning/zooming to the service area --
+                  // strictBounds false keeps this elastic (can drift out
+                  // slightly, snaps back) rather than a hard wall, matching
+                  // the Leaflet maxBoundsViscosity(0.7) behavior it replaces.
+                  restriction: { latLngBounds: PH_BOUNDS, strictBounds: false },
+                }}
+              >
+                {/* Service-area boundary so users can see where selection is allowed */}
+                {LUZON_SERVICE_AREA.map((ring, index) => (
+                  <GoogleMapPolygon
+                    key={index}
+                    paths={ring.map(([lat, lng]) => ({ lat, lng }))}
+                    options={{
+                      strokeColor: "#059669",
+                      strokeWeight: 2,
+                      fillColor: "#10b981",
+                      fillOpacity: 0.08,
+                      clickable: false,
+                    }}
+                  />
+                ))}
+                {selectedLocation && (
+                  <GoogleMapMarker
+                    position={{ lat: selectedLocation.lat, lng: selectedLocation.lon }}
+                    draggable
+                    onDragEnd={(e) => handlePoint(e.latLng.lat(), e.latLng.lng())}
+                  />
+                )}
+              </GoogleMap>
+            )}
           </div>
 
           {/* Selected Location Display */}
@@ -557,68 +617,20 @@ function LocationPickerModal({
   );
 }
 
-// Location Input with Autocomplete and Map Picker
-function LocationInput({ id, label, value, lat, lng, onChange, required }) {
-  const [suggestions, setSuggestions] = useState([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
+// Location Input, map-picker-only -- no typing allowed outside the modal.
+// Explicit user decision, 2026-09-18: a manually-typed address (even via
+// this field's old inline autocomplete) was never distinguishable from one
+// actually confirmed on the map until submit time (see
+// MAP_SELECTION_REQUIRED_MESSAGE above), which only surfaced the problem
+// after the customer had already filled out the rest of the form. Removing
+// the ability to type here at all closes that gap at the source: the only
+// way to set a value is LocationPickerModal's own search/map/drag flow,
+// every path of which already resolves a real lat/lng before calling
+// onSelect. The field itself is now `readOnly` and opens the picker on
+// focus/click, purely so the resolved address can still be displayed and
+// re-opened for adjustment.
+function LocationInput({ id, label, value, lat, lng, onChange, required, error }) {
   const [showMapPicker, setShowMapPicker] = useState(false);
-  const inputRef = useRef(null);
-  // Debounce + sequence guard so both pickup AND dropoff autocomplete stay
-  // reliable: rapid keystrokes fire at most one geocoding request, and stale
-  // responses (from a previous keystroke) are ignored.
-  const searchTimer = useRef(null);
-  const searchSeq = useRef(0);
-
-  useEffect(
-    () => () => {
-      if (searchTimer.current) clearTimeout(searchTimer.current);
-    },
-    [],
-  );
-
-  const handleInputChange = (e) => {
-    const query = e.target.value;
-    onChange(e);
-
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-
-    if (query.trim().length > 2) {
-      const seq = ++searchSeq.current;
-      searchTimer.current = setTimeout(() => {
-        photonSearch(query)
-          .then((data) => {
-            if (seq !== searchSeq.current) return;
-            setSuggestions(data.filter((s) => isInsideLuzon(s.lat, s.lon)));
-            setShowSuggestions(true);
-          })
-          .catch(() => {
-            if (seq !== searchSeq.current) return;
-            setSuggestions([]);
-            setShowSuggestions(false);
-          });
-      }, 300);
-    } else {
-      searchSeq.current++;
-      setSuggestions([]);
-      setShowSuggestions(false);
-    }
-  };
-
-  const handleSuggestionClick = (suggestion) => {
-    // Belt-and-suspenders: suggestions are already filtered to Luzon, but a
-    // stale list rendered before this guard existed can't slip through.
-    if (!isInsideLuzon(suggestion.lat, suggestion.lon)) return;
-    onChange({
-      target: {
-        name: id,
-        value: suggestion.display,
-        lat: suggestion.lat,
-        lng: suggestion.lon,
-      },
-    });
-    setShowSuggestions(false);
-    setSuggestions([]);
-  };
 
   const handleLocationSelect = (address, lat, lng) => {
     onChange({ target: { name: id, value: address, lat, lng } });
@@ -629,71 +641,69 @@ function LocationInput({ id, label, value, lat, lng, onChange, required }) {
       <label htmlFor={id} className="text-sm font-medium text-slate-700">
         {label}
       </label>
-      <div className="relative">
-        <div className="flex gap-2">
-          <input
-            ref={inputRef}
-            type="text"
-            id={id}
-            name={id}
-            value={value}
-            onChange={handleInputChange}
-            onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
-            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && suggestions.length > 0) {
-                e.preventDefault();
-                handleSuggestionClick(suggestions[0]);
-              }
-            }}
-            placeholder="Enter address or search..."
-            required={required}
-            className="flex-1 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-          />
-          <button
-            type="button"
-            onClick={() => setShowMapPicker(true)}
-            className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
-            title="Pick from map"
+      <div className="flex gap-2">
+        <input
+          type="text"
+          id={id}
+          name={id}
+          value={value}
+          // Deliberately NOT `readOnly` -- per the HTML spec, a readonly
+          // field is excluded from `required` validation entirely, which was
+          // a real bug: the browser silently stopped blocking submission of
+          // an empty address, so pressing Enter (which runs the browser's
+          // native validation before our own JS checks even run) sailed
+          // straight through. Found 2026-09-18. Typing is blocked manually
+          // instead (keydown/paste/drop all prevented, onChange is a no-op
+          // since the value can now only ever change via the map picker),
+          // which keeps `required` fully working the same native way every
+          // other field on this form already relies on.
+          onChange={() => {}}
+          onKeyDown={(e) => e.preventDefault()}
+          onPaste={(e) => e.preventDefault()}
+          onDrop={(e) => e.preventDefault()}
+          onFocus={(e) => {
+            e.target.blur();
+            setShowMapPicker(true);
+          }}
+          onClick={() => setShowMapPicker(true)}
+          placeholder="Tap “Map” to choose a location"
+          required={required}
+          className={`flex-1 cursor-pointer rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 caret-transparent placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
+            error
+              ? "border-red-400 focus:border-red-500 focus:ring-red-500/20"
+              : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
+          }`}
+        />
+        <button
+          type="button"
+          onClick={() => setShowMapPicker(true)}
+          className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+          title="Pick from map"
+        >
+          <svg
+            className="w-4 h-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
           >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-              />
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-              />
-            </svg>
-            <span className="hidden sm:inline">Map</span>
-          </button>
-        </div>
-
-        {showSuggestions && suggestions.length > 0 && (
-          <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-emerald-200 rounded-xl shadow-lg max-h-48 overflow-y-auto z-10">
-            {suggestions.map((suggestion, index) => (
-              <button
-                key={index}
-                type="button"
-                onClick={() => handleSuggestionClick(suggestion)}
-                className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-emerald-50 border-b border-slate-100 last:border-b-0"
-              >
-                {suggestion.display}
-              </button>
-            ))}
-          </div>
-        )}
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+            />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+            />
+          </svg>
+          <span className="hidden sm:inline">Map</span>
+        </button>
       </div>
+
+      {error && <p className="text-xs text-red-600">{error}</p>}
 
       <LocationPickerModal
         isOpen={showMapPicker}
@@ -784,6 +794,14 @@ function CustomerRequestDelivery() {
   const [budgetError, setBudgetError] = useState("");
   const [truckSelectionError, setTruckSelectionError] = useState("");
   const [submitError, setSubmitError] = useState("");
+  // Per-field highlighting for the two failure modes surfaced at submit time
+  // -- "typed but never selected from the map/suggestions" (see
+  // MAP_SELECTION_REQUIRED_MESSAGE) and "resolved outside the Luzon service
+  // area" -- so the customer can see exactly which field caused the
+  // rejection instead of only the generic banner near Submit.
+  const [pickupLocationError, setPickupLocationError] = useState("");
+  const [dropoffLocationError, setDropoffLocationError] = useState("");
+  const [stopLocationErrors, setStopLocationErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   // null = hidden; a simulateSchedule() result = the 13-hour-cap rejection
   // modal is shown, holding the Day1/Day2/Total breakdown for its message.
@@ -1155,6 +1173,8 @@ function CustomerRequestDelivery() {
       const prefix = name === "pickupLocation" ? "pickup" : "dropoff";
       next[`${prefix}Lat`] = lat ?? null;
       next[`${prefix}Lng`] = lng ?? null;
+      if (name === "pickupLocation") setPickupLocationError("");
+      else setDropoffLocationError("");
     }
 
     if (name === "pickupDate") {
@@ -1212,6 +1232,17 @@ function CustomerRequestDelivery() {
       ...prev,
       stops: prev.stops.filter((_, i) => i !== index),
     }));
+    // Re-key remaining errors down by one so they still line up with the
+    // shifted stop indexes after the removal.
+    setStopLocationErrors((prev) => {
+      const next = {};
+      Object.entries(prev).forEach(([key, message]) => {
+        const i = Number(key);
+        if (i < index) next[i] = message;
+        else if (i > index) next[i - 1] = message;
+      });
+      return next;
+    });
   };
 
   const handleStopChange = (index, e) => {
@@ -1229,6 +1260,12 @@ function CustomerRequestDelivery() {
           : stop,
       ),
     }));
+    setStopLocationErrors((prev) => {
+      if (!prev[index]) return prev;
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
   };
 
   const handleStopTimeChange = (index, field, value) => {
@@ -1283,42 +1320,64 @@ function CustomerRequestDelivery() {
       return;
     }
 
-    setSubmitting(true);
-
     // A customer who typed the address and submitted without ever clicking a
     // suggestion or using the map picker never had lat/lng captured (see
     // LocationInput's onChange handlers, which only pass lat/lng along from
-    // those two interactions, never from a raw keystroke) -- fall back to
-    // resolving the typed text via the same Photon geocoder those
-    // interactions already use, so the Supervisor/Driver maps aren't left
-    // showing "no parseable coordinates" for what's likely the common case.
-    let pickupLat = formData.pickupLat;
-    let pickupLng = formData.pickupLng;
-    if (pickupLat == null && formData.pickupLocation) {
-      const coords = await photonGeocode(formData.pickupLocation);
-      if (coords) {
-        pickupLat = coords.lat;
-        pickupLng = coords.lng;
-      }
-    }
-    let dropoffLat = formData.dropoffLat;
-    let dropoffLng = formData.dropoffLng;
-    if (dropoffLat == null && formData.dropoffLocation) {
-      const coords = await photonGeocode(formData.dropoffLocation);
-      if (coords) {
-        dropoffLat = coords.lat;
-        dropoffLng = coords.lng;
-      }
+    // those two interactions, never from a raw keystroke). Explicit user
+    // decision, 2026-09-17: don't silently forward-geocode typed text
+    // (the previous behavior) -- require an actual map/suggestion pick and
+    // point the customer back at the specific field(s) that need it.
+    const pickupNeedsSelection = formData.pickupLat == null;
+    const dropoffNeedsSelection = formData.dropoffLat == null;
+    const stopIndexesNeedingSelection = formData.stops
+      .map((stop, i) => (stop.location.trim() && stop.lat == null ? i : -1))
+      .filter((i) => i !== -1);
+
+    if (
+      pickupNeedsSelection ||
+      dropoffNeedsSelection ||
+      stopIndexesNeedingSelection.length > 0
+    ) {
+      setPickupLocationError(
+        pickupNeedsSelection ? MAP_SELECTION_REQUIRED_MESSAGE : "",
+      );
+      setDropoffLocationError(
+        dropoffNeedsSelection ? MAP_SELECTION_REQUIRED_MESSAGE : "",
+      );
+      setStopLocationErrors(
+        Object.fromEntries(
+          stopIndexesNeedingSelection.map((i) => [
+            i,
+            MAP_SELECTION_REQUIRED_MESSAGE,
+          ]),
+        ),
+      );
+      setSubmitError(
+        "One or more locations were only typed, not selected — please fix the field(s) highlighted in red above.",
+      );
+      return;
     }
 
-    // Last line of defense: even if a coordinate slipped past the picker,
-    // autocomplete, or a geocoder resolved typed text outside Luzon, never
-    // save an out-of-service-area location.
-    if (
-      (pickupLat != null && !isInsideLuzon(pickupLat, pickupLng)) ||
-      (dropoffLat != null && !isInsideLuzon(dropoffLat, dropoffLng))
-    ) {
+    setSubmitting(true);
+
+    const pickupLat = formData.pickupLat;
+    const pickupLng = formData.pickupLng;
+    const dropoffLat = formData.dropoffLat;
+    const dropoffLng = formData.dropoffLng;
+
+    // Last line of defense: an actual map/suggestion pick should already be
+    // inside Luzon (both filter/snap to the service area at selection time),
+    // but never save an out-of-service-area location if one somehow slips
+    // through -- and highlight exactly which field it was, per explicit user
+    // request, instead of only the generic banner near Submit.
+    const pickupOutsideArea =
+      pickupLat != null && !isInsideLuzon(pickupLat, pickupLng);
+    const dropoffOutsideArea =
+      dropoffLat != null && !isInsideLuzon(dropoffLat, dropoffLng);
+    if (pickupOutsideArea || dropoffOutsideArea) {
       setSubmitting(false);
+      setPickupLocationError(pickupOutsideArea ? SERVICE_AREA_MESSAGE : "");
+      setDropoffLocationError(dropoffOutsideArea ? SERVICE_AREA_MESSAGE : "");
       setSubmitError(SERVICE_AREA_MESSAGE);
       return;
     }
@@ -1349,24 +1408,13 @@ function CustomerRequestDelivery() {
         return;
       }
 
-      // Stops are never geocoded on entry (see LocationInput) -- resolve
-      // any without a live-captured lat/lng via Photon, same fallback
-      // pickup/dropoff already use above.
-      const resolvedStopCoords = await Promise.all(
-        activeStops.map(async (stop) => {
-          if (stop.lat != null && stop.lng != null) {
-            return { lat: stop.lat, lng: stop.lng };
-          }
-          return photonGeocode(stop.location);
-        }),
-      );
-      if (resolvedStopCoords.some((coords) => !coords)) {
-        setSubmitting(false);
-        setSubmitError(
-          "We couldn't locate one of the additional drop-off addresses. Please double-check them.",
-        );
-        return;
-      }
+      // Every active stop already has a live-captured lat/lng -- guaranteed
+      // by the map/suggestion-selection gate above, which rejects submission
+      // for any stop still missing one.
+      const resolvedStopCoords = activeStops.map((stop) => ({
+        lat: stop.lat,
+        lng: stop.lng,
+      }));
       if (
         resolvedStopCoords.some(
           (coords) => !isInsideLuzon(coords.lat, coords.lng),
@@ -1646,63 +1694,81 @@ function CustomerRequestDelivery() {
                   lng={formData.pickupLng}
                   onChange={handleChange}
                   required
+                  error={pickupLocationError}
                 />
-                <div className="space-y-1.5">
-                  <div className="flex flex-wrap items-end gap-2">
-                    <div className="min-w-[220px] flex-1">
-                      <LocationInput
-                        id="dropoffLocation"
-                        label="Drop Off Location"
-                        value={formData.dropoffLocation}
-                        lat={formData.dropoffLat}
-                        lng={formData.dropoffLng}
-                        onChange={handleChange}
-                        required
-                      />
-                    </div>
-                    <div className="w-full space-y-2 sm:w-auto sm:shrink-0">
-                      <label
-                        htmlFor="dropoffTime"
-                        className="text-sm font-medium text-slate-700"
-                      >
-                        {deliveryMode === "TWO_DAY"
-                          ? "Day 2 Start Time"
-                          : "Open From – To"}
-                      </label>
-                      <div className="flex flex-wrap items-center gap-1.5">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="min-w-[220px] flex-[3]">
+                    <LocationInput
+                      id="dropoffLocation"
+                      label="Dropoff 1"
+                      value={formData.dropoffLocation}
+                      lat={formData.dropoffLat}
+                      lng={formData.dropoffLng}
+                      onChange={handleChange}
+                      required
+                      error={dropoffLocationError}
+                    />
+                  </div>
+                  <div className="min-w-[220px] flex-[2]">
+                    {deliveryMode === "TWO_DAY" ? (
+                      <div className="space-y-2">
+                        <label
+                          htmlFor="dropoffTime"
+                          className="text-sm font-medium text-slate-700"
+                        >
+                          Day 2 Start Time
+                        </label>
                         <input
                           type="time"
                           id="dropoffTime"
                           name="dropoffTime"
-                          aria-label={
-                            deliveryMode === "TWO_DAY"
-                              ? "Day 2 Start Time"
-                              : "Drop Off Window Start"
-                          }
+                          aria-label="Day 2 Start Time"
                           value={formData.dropoffTime}
                           onChange={handleChange}
                           required
-                          className="w-full rounded-xl border border-emerald-200 bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:w-[8.5rem]"
+                          className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                         />
-                        {deliveryMode === "SAME_DAY" && (
-                          <>
-                            <span className="shrink-0 text-xs text-slate-400">
-                              to
-                            </span>
-                            <input
-                              type="time"
-                              id="dropoffTimeEnd"
-                              name="dropoffTimeEnd"
-                              aria-label="Drop Off Window End"
-                              value={formData.dropoffTimeEnd}
-                              onChange={handleChange}
-                              required
-                              className="w-full rounded-xl border border-emerald-200 bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:w-[8.5rem]"
-                            />
-                          </>
-                        )}
                       </div>
-                    </div>
+                    ) : (
+                      <div className="flex items-end gap-2">
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <label
+                            htmlFor="dropoffTime"
+                            className="text-sm font-medium text-slate-700"
+                          >
+                            From:
+                          </label>
+                          <input
+                            type="time"
+                            id="dropoffTime"
+                            name="dropoffTime"
+                            aria-label="Dropoff Window Start"
+                            value={formData.dropoffTime}
+                            onChange={handleChange}
+                            required
+                            className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                          />
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <label
+                            htmlFor="dropoffTimeEnd"
+                            className="text-sm font-medium text-slate-700"
+                          >
+                            To:
+                          </label>
+                          <input
+                            type="time"
+                            id="dropoffTimeEnd"
+                            name="dropoffTimeEnd"
+                            aria-label="Dropoff Window End"
+                            value={formData.dropoffTimeEnd}
+                            onChange={handleChange}
+                            required
+                            className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1715,9 +1781,20 @@ function CustomerRequestDelivery() {
                     nearest at each point along the trip.
                   </p>
                   {formData.stops.map((stop, index) => (
-                    <div key={index} className="space-y-1.5">
-                      <div className="flex flex-wrap items-end gap-2">
-                        <div className="min-w-[220px] flex-1">
+                    <div
+                      key={index}
+                      className="relative rounded-xl border border-slate-200 p-4"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => removeStop(index)}
+                        className="absolute right-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                        title="Remove dropoff"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                      <div className="flex flex-wrap items-end gap-3 pr-8">
+                        <div className="min-w-[220px] flex-[3]">
                           <LocationInput
                             id={`stop-${index}`}
                             label={`Dropoff ${index + 2}`}
@@ -1725,57 +1802,57 @@ function CustomerRequestDelivery() {
                             lat={stop.lat}
                             lng={stop.lng}
                             onChange={(e) => handleStopChange(index, e)}
+                            error={stopLocationErrors[index]}
                           />
                         </div>
-                        <div className="w-full space-y-2 sm:w-auto sm:shrink-0">
-                          <label
-                            htmlFor={`stop-time-${index}`}
-                            className="text-sm font-medium text-slate-700"
-                          >
-                            Open From – To
-                          </label>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <input
-                              type="time"
-                              id={`stop-time-${index}`}
-                              aria-label={`Dropoff ${index + 2} Window Start`}
-                              value={stop.dropoffTime}
-                              onChange={(e) =>
-                                handleStopTimeChange(
-                                  index,
-                                  "dropoffTime",
-                                  e.target.value,
-                                )
-                              }
-                              className="w-full rounded-xl border border-emerald-200 bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:w-[8.5rem]"
-                            />
-                            <span className="shrink-0 text-xs text-slate-400">
-                              to
-                            </span>
-                            <input
-                              type="time"
-                              id={`stop-time-end-${index}`}
-                              aria-label={`Dropoff ${index + 2} Window End`}
-                              value={stop.dropoffTimeEnd}
-                              onChange={(e) =>
-                                handleStopTimeChange(
-                                  index,
-                                  "dropoffTimeEnd",
-                                  e.target.value,
-                                )
-                              }
-                              className="w-full rounded-xl border border-emerald-200 bg-white px-2.5 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:w-[8.5rem]"
-                            />
+                        <div className="min-w-[220px] flex-[2]">
+                          <div className="flex items-end gap-2">
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <label
+                                htmlFor={`stop-time-${index}`}
+                                className="text-sm font-medium text-slate-700"
+                              >
+                                From:
+                              </label>
+                              <input
+                                type="time"
+                                id={`stop-time-${index}`}
+                                aria-label={`Dropoff ${index + 2} Window Start`}
+                                value={stop.dropoffTime}
+                                onChange={(e) =>
+                                  handleStopTimeChange(
+                                    index,
+                                    "dropoffTime",
+                                    e.target.value,
+                                  )
+                                }
+                                className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                              />
+                            </div>
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <label
+                                htmlFor={`stop-time-end-${index}`}
+                                className="text-sm font-medium text-slate-700"
+                              >
+                                To:
+                              </label>
+                              <input
+                                type="time"
+                                id={`stop-time-end-${index}`}
+                                aria-label={`Dropoff ${index + 2} Window End`}
+                                value={stop.dropoffTimeEnd}
+                                onChange={(e) =>
+                                  handleStopTimeChange(
+                                    index,
+                                    "dropoffTimeEnd",
+                                    e.target.value,
+                                  )
+                                }
+                                className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                              />
+                            </div>
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => removeStop(index)}
-                          className="mb-0.5 flex h-[42px] w-[42px] shrink-0 items-center justify-center self-end rounded-xl border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
-                          title="Remove dropoff"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
                       </div>
                     </div>
                   ))}
@@ -1905,6 +1982,7 @@ function CustomerRequestDelivery() {
                     id="cargoWeight"
                     name="cargoWeight"
                     min="1"
+                    step="10"
                     value={formData.cargoWeight}
                     onChange={handleChange}
                     placeholder="e.g. 800"
@@ -1943,7 +2021,6 @@ function CustomerRequestDelivery() {
                           <th className="px-4 py-3 font-medium">Truck</th>
                           <th className="px-4 py-3 font-medium">Type</th>
                           <th className="px-4 py-3 font-medium">Max Payload</th>
-                          <th className="px-4 py-3 font-medium">Dimensions</th>
                           <th className="px-4 py-3 font-medium">Select</th>
                         </tr>
                       </thead>
@@ -1986,8 +2063,7 @@ function CustomerRequestDelivery() {
                                 </p>
                                 {!available && (
                                   <p className="mt-1 text-[11px] font-medium text-amber-600">
-                                    {reason} — the Supervisor can still confirm
-                                    this truck when assigning.
+                                    {reason}
                                   </p>
                                 )}
                               </td>
@@ -2013,12 +2089,6 @@ function CustomerRequestDelivery() {
                                 <div className="flex items-center gap-1.5">
                                   <Package className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                                   {truck.payloadKg.toLocaleString()} kg
-                                </div>
-                              </td>
-                              <td className="px-4 py-3 align-top text-slate-700">
-                                <div className="flex items-center gap-1.5">
-                                  <Ruler className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                                  {truck.dimensions}
                                 </div>
                               </td>
                               <td className="px-4 py-3 align-top">
@@ -2056,8 +2126,9 @@ function CustomerRequestDelivery() {
                 Budget Range
               </h3>
               <p className="text-xs text-slate-500 leading-relaxed">
-                Enter your preferred budget range. The final quotation will be
-                discussed with the supervisor.
+                Enter your preferred budget range (minimum ₱
+                {MIN_BUDGET_AMOUNT.toLocaleString()}). The final quotation
+                will be discussed with the supervisor.
               </p>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
@@ -2071,7 +2142,7 @@ function CustomerRequestDelivery() {
                     type="number"
                     id="budgetMin"
                     name="budgetMin"
-                    min="0"
+                    min={MIN_BUDGET_AMOUNT}
                     value={formData.budgetMin}
                     onChange={handleChange}
                     placeholder="e.g. 5000"
@@ -2093,7 +2164,7 @@ function CustomerRequestDelivery() {
                     type="number"
                     id="budgetMax"
                     name="budgetMax"
-                    min="0"
+                    min={MIN_BUDGET_AMOUNT}
                     value={formData.budgetMax}
                     onChange={handleChange}
                     placeholder="e.g. 10000"

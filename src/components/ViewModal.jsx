@@ -1,4 +1,5 @@
 // React import removed as it is not directly used (JSX transpilation handles it)
+import { useResolvedAddress } from "../lib/reverseGeocode.js";
 
 /**
  * Reusable modal that displays the details of a delivery request.
@@ -6,6 +7,16 @@
  * The table layout mirrors the one shown on the Customer Deliveries page.
  */
 export default function ViewModal({ isOpen, onClose, trip }) {
+  // Resolves a "lat, lng"-shaped location (the rare reverse-geocode-failure
+  // fallback a picker/map click can still leave behind, or older fixture
+  // data) into a real address for display -- same useResolvedAddress hook
+  // every other portal's delivery-detail view already uses for this exact
+  // reason (CustomerDeliveries.jsx, DriverDeliveries.jsx, HelperDeliveries.jsx,
+  // SupDeliveries.jsx). Called unconditionally, before the early return
+  // below, per the Rules of Hooks.
+  const resolvedPickup = useResolvedAddress(trip?.pickup_location || "");
+  const resolvedDropoff = useResolvedAddress(trip?.dropoff_location || "");
+
   if (!isOpen || !trip) return null;
 
   // Helper to safely render a field value or a placeholder.
@@ -86,7 +97,7 @@ export default function ViewModal({ isOpen, onClose, trip }) {
               <tr className="bg-white">
                 <td className="font-medium py-2 px-2">Pick‑up Location</td>
                 <td className="py-2 px-2">
-                  {renderField(trip.pickup_location)}
+                  {renderField(resolvedPickup)}
                 </td>
               </tr>
               <tr className="bg-gray-50">
@@ -98,7 +109,7 @@ export default function ViewModal({ isOpen, onClose, trip }) {
               <tr className="bg-white">
                 <td className="font-medium py-2 px-2">Drop‑off Location</td>
                 <td className="py-2 px-2">
-                  {renderField(trip.dropoff_location)}
+                  {renderField(resolvedDropoff)}
                 </td>
               </tr>
               <tr className="bg-gray-50">

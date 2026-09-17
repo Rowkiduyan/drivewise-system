@@ -1,7 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import CustomerDeliveries from "./pages/CustomerDeliveries.jsx";
 import CustomerRequestDelivery from "./pages/CustomerRequestDelivery.jsx";
-import CustomerHome from "./pages/CustomerHome.jsx";
 import CustomerProfile from "./pages/CustomerProfile.jsx";
 import DriverDeliveries from "./pages/DriverDeliveries.jsx";
 import DriverPerformance from "./pages/DriverPerformance.jsx";
@@ -32,9 +31,14 @@ function App() {
       <Route path="/landing" element={<LandingPage />} />
       <Route
         path="/customer"
-        element={<Navigate to="/customer/home" replace />}
+        element={<Navigate to="/customer/deliveries" replace />}
       />
-      <Route path="/customer/home" element={<CustomerHome />} />
+      {/* Customer Home page removed 2026-09-18, per explicit user request --
+          Deliveries is now the customer portal's default landing page. */}
+      <Route
+        path="/customer/home"
+        element={<Navigate to="/customer/deliveries" replace />}
+      />
       <Route path="/customer/deliveries" element={<CustomerDeliveries />} />
       <Route
         path="/customer/deliveries/request"

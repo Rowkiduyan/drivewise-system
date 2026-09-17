@@ -959,6 +959,7 @@ function AdminTruckProfile() {
         <div className="shrink-0 flex items-center justify-between border-b border-slate-200/70 bg-[#F6F7FB] px-4 pt-3 pb-2 sm:px-5">
           <Link
             to="/admin/trucks"
+            state={{ restoreListState: location.state?.listState }}
             className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 transition hover:text-violet-600"
           >
             <ArrowLeft className="h-4 w-4" />
