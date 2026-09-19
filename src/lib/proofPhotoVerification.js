@@ -1,8 +1,15 @@
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
 import * as tf from "@tensorflow/tfjs";
-import { VERIFICATION_MAX_DIMENSION } from "./proofPhoto.js";
+import {
+  MAX_PROOF_PHOTO_DIMENSION,
+  VERIFICATION_MAX_DIMENSION,
+} from "./proofPhoto.js";
 
-const PERSON_SCORE_THRESHOLD = 0.25;
+// Lowered 2026-09-19 from 0.25 to 0.15 after a field false-negative report
+// (photo with a person scored below 0.25). Safe because the result is
+// advisory-only: a false positive just shows PASS on a non-blocking label,
+// while a false negative confuses the helper with FAILED.
+const PERSON_SCORE_THRESHOLD = 0.15;
 let modelPromise;
 
 function getPersonModel() {
@@ -26,12 +33,16 @@ function getPersonModel() {
   return modelPromise;
 }
 
-function toVerificationResult(predictions) {
-  const personPredictions = predictions.filter(
+function filterPersonPredictions(predictions) {
+  return predictions.filter(
     (prediction) =>
       prediction.class === "person" &&
       Number(prediction.score) >= PERSON_SCORE_THRESHOLD,
   );
+}
+
+function toVerificationResult(predictions) {
+  const personPredictions = filterPersonPredictions(predictions);
   const confidence = personPredictions.length
     ? Math.max(...personPredictions.map((prediction) => prediction.score))
     : 0;
@@ -43,6 +54,30 @@ function toVerificationResult(predictions) {
     checkedAt: new Date().toISOString(),
     method: "local-coco-ssd",
   };
+}
+
+function drawScaledCanvas(bitmap, maxDimension) {
+  const scale = Math.min(
+    1,
+    maxDimension / Math.max(bitmap.width, bitmap.height),
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Unable to prepare the photo for checking.");
+  context.drawImage(
+    bitmap,
+    0,
+    0,
+    bitmap.width,
+    bitmap.height,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+  return canvas;
 }
 
 // This is a local person-presence signal, not proof that an image came from a
@@ -57,28 +92,10 @@ export async function verifyProofPhotoHasPerson(file) {
   // drew the bitmap at full resolution.
   const bitmap = await createImageBitmap(file);
   try {
-    const scale = Math.min(
-      1,
-      VERIFICATION_MAX_DIMENSION / Math.max(bitmap.width, bitmap.height),
-    );
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Unable to prepare the photo for checking.");
-    context.drawImage(
-      bitmap,
-      0,
-      0,
-      bitmap.width,
-      bitmap.height,
-      0,
-      0,
-      canvas.width,
-      canvas.height,
-    );
+    const canvas = drawScaledCanvas(bitmap, VERIFICATION_MAX_DIMENSION);
+    const fallbackCanvas = drawScaledCanvas(bitmap, MAX_PROOF_PHOTO_DIMENSION);
 
-    return await verifyPersonOnCanvas(canvas);
+    return await verifyPersonOnCanvas(canvas, fallbackCanvas);
   } finally {
     bitmap.close();
   }
@@ -88,11 +105,35 @@ export async function verifyProofPhotoHasPerson(file) {
 // (already downscaled) canvas from prepareProofPhoto(), so the file is never
 // decoded a second time at full resolution. Throws on invalid input —
 // callers treat that as "unavailable" (still submittable), same as before.
-export async function verifyPersonOnCanvas(canvas) {
+//
+// Multiscale fallback (2026-09-19, field false-negative fix): if the small
+// canvas finds no person, retries ONCE on fallbackCanvas (the larger
+// <=1600px upload-sized copy — small/distant persons survive better there)
+// before conceding uncertain. A retry failure (e.g. old-device OOM) keeps
+// the primary result, so this can only flip uncertain→verified, never the
+// reverse, and never throws.
+export async function verifyPersonOnCanvas(canvas, fallbackCanvas = null) {
   if (!canvas || !canvas.width || !canvas.height)
     throw new Error("No photo was selected.");
 
   const model = await getPersonModel();
-  const predictions = await model.detect(canvas);
+  let predictions = await model.detect(canvas);
+
+  if (
+    filterPersonPredictions(predictions).length === 0 &&
+    fallbackCanvas &&
+    fallbackCanvas.width &&
+    fallbackCanvas.height
+  ) {
+    try {
+      const retryPredictions = await model.detect(fallbackCanvas);
+      if (filterPersonPredictions(retryPredictions).length > 0) {
+        predictions = retryPredictions;
+      }
+    } catch {
+      // Keep the primary (uncertain) result.
+    }
+  }
+
   return toVerificationResult(predictions);
 }

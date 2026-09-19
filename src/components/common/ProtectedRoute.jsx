@@ -3,7 +3,7 @@ import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient.js";
 
 const ROLE_HOME_ROUTES = {
-  Admin: "/admin/user-management",
+  Admin: "/admin/dashboard",
   Supervisor: "/supervisor/dashboard",
   Driver: "/driver/trips",
   Helper: "/helper/trips",

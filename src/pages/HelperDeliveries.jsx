@@ -39,7 +39,10 @@ import {
 import { supabase } from "../lib/supabaseClient.js";
 import { prepareProofPhoto } from "../lib/proofPhoto.js";
 import { fetchRerouteEvents, nearestDropoffOrder } from "../lib/suggestedRoute.js";
-import { verifyPersonOnCanvas } from "../lib/proofPhotoVerification.js";
+// NOTE (2026-09-19, 3s load KPI): proofPhotoVerification.js pulls in
+// @tensorflow/tfjs + coco-ssd (~1MB+ gzip), so it must NOT be statically
+// imported here — it is dynamically imported inside processChainPhoto only
+// when a dropoff photo actually needs verifying. Keep it that way.
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
 import { useResolvedStopCoords } from "../lib/forwardGeocode.js";
 import {
@@ -1483,18 +1486,25 @@ function HelperDeliveries() {
     // outputs consistent by construction).
     const needsVerification = confirmingChainItem?.type === "dropoff";
     try {
-      // Single-decode path (2026-09-19): one full-res decode produces both
-      // the upload-sized base64 and the <=1024px detection canvas. Previously
+      // Single-decode path (2026-09-19): one full-res decode produces the
+      // upload-sized base64, the <=1024px detection canvas, and the
+      // <=1600px fallback canvas for the multiscale retry. Previously
       // resize + verifyProofPhotoHasPerson each decoded full-res separately.
-      const { base64, verificationCanvas } = await prepareProofPhoto(file, {
-        includeVerificationCanvas: needsVerification,
-      });
+      const { base64, verificationCanvas, fallbackCanvas } =
+        await prepareProofPhoto(file, {
+          includeVerificationCanvas: needsVerification,
+        });
       setChainPhotoBase64(base64);
       if (needsVerification) {
         setIsVerifyingChainPhoto(true);
         try {
+          // Dynamically imported so tfjs/coco-ssd chunk downloads only on
+          // first dropoff verification, not with the Helper page itself.
+          const { verifyPersonOnCanvas } = await import(
+            "../lib/proofPhotoVerification.js"
+          );
           setChainPhotoVerification(
-            await verifyPersonOnCanvas(verificationCanvas),
+            await verifyPersonOnCanvas(verificationCanvas, fallbackCanvas),
           );
         } catch (verificationError) {
           console.warn(

@@ -70,6 +70,9 @@ export async function resizeProofPhotoToBase64(file, maxDimension = MAX_PROOF_PH
 // canvas from that same bitmap. Previously resize + verification each did
 // their own full-res createImageBitmap, doubling peak memory on old phones.
 // The returned verificationCanvas is a plain canvas (GC'd, no close needed).
+// fallbackCanvas is the upload-sized (<=1600px) canvas, returned so person
+// detection can retry on it when the small copy misses (multiscale fallback
+// in proofPhotoVerification.js) — same object, no extra decode or memory.
 export async function prepareProofPhoto(file, options = {}) {
   const {
     includeVerificationCanvas = false,
@@ -93,7 +96,7 @@ export async function prepareProofPhoto(file, options = {}) {
     }
 
     const base64 = await canvasToBase64(uploadCanvas)
-    return { base64, verificationCanvas }
+    return { base64, verificationCanvas, fallbackCanvas: uploadCanvas }
   } finally {
     bitmap.close()
   }

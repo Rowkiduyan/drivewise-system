@@ -2,17 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, Copy, Check } from 'lucide-react'
 import AdminLayout from '../layout/AdminLayout.jsx'
 import { supabase } from '../lib/supabaseClient.js'
-import {
-  getCityNamesForProvince,
-  getProvinceNames,
-  normalizeLegacyProvince
-} from '../lib/philippineLocations.js'
+// NOTE (2026-09-19, load KPI): philippineLocations.js pulls in @jobuntux/psgc
+// (~6MB dataset), so it must NOT be statically imported here — it is
+// dynamically imported via ensureLocationApi below (background preload on
+// mount + await on modal open). Keep it that way.
 import { getDeactivationStatus, formatCutoff } from '../lib/deactivation.js'
 
 const background = null
 
 const ROLE_OPTIONS = ['Supervisor', 'Admin', 'Driver', 'Helper', 'Customer']
-const PROVINCE_OPTIONS = getProvinceNames()
+// Formerly `const PROVINCE_OPTIONS = getProvinceNames()` at module scope —
+// moved into state (provinceOptions, filled by ensureLocationApi) so the PSGC
+// dataset isn't part of this page's chunk.
 
 const EMPTY_NEW_USER_FORM = {
   lastName: '',
@@ -502,6 +503,28 @@ function AdminHome() {
   const [bulkUploadResults, setBulkUploadResults] = useState([])
   const fileInputRef = useRef(null)
   const [formError, setFormError] = useState('')
+  // Lazy PSGC location data (2026-09-19, load KPI): the full province/city
+  // dataset (~6MB) lives in its own chunk via ensureLocationApi below.
+  // Dropdowns render from provinceOptions (empty = still loading).
+  const [locationApi, setLocationApi] = useState(null)
+  const [provinceOptions, setProvinceOptions] = useState([])
+  const locationApiRef = useRef(null)
+
+  // Cached dynamic import — bundler caches the chunk after first load, the
+  // ref just avoids repeat state writes. Never throws: returns null on
+  // failure so callers degrade to empty options instead of crashing.
+  const ensureLocationApi = async () => {
+    if (locationApiRef.current) return locationApiRef.current
+    try {
+      const mod = await import('../lib/philippineLocations.js')
+      locationApiRef.current = mod
+      setLocationApi(mod)
+      setProvinceOptions(mod.getProvinceNames())
+      return mod
+    } catch {
+      return null
+    }
+  }
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [tempPassword, setTempPassword] = useState('')
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
@@ -603,6 +626,11 @@ function AdminHome() {
     Promise.resolve().then(() => {
       loadUsers();
     });
+    // Background preload of the PSGC location chunk (does NOT block first
+    // paint — page is interactive before this finishes; dropdowns fill in
+    // when ready, and modal-open paths await it below). Deferred to a
+    // microtask like loadUsers above (satisfies set-state-in-effect lint).
+    Promise.resolve().then(() => ensureLocationApi());
   }, [])
 
   const selectedUser = useMemo(
@@ -613,12 +641,12 @@ function AdminHome() {
   const newUserAge = useMemo(() => calculateAge(newUserForm.birthdate), [newUserForm.birthdate])
   const newUserFullName = useMemo(() => buildFullName(newUserForm), [newUserForm])
   const newUserCityOptions = useMemo(
-    () => getCityNamesForProvince(newUserForm.province),
-    [newUserForm.province]
+    () => (locationApi ? locationApi.getCityNamesForProvince(newUserForm.province) : []),
+    [newUserForm.province, locationApi]
   )
   const manageCityOptions = useMemo(
-    () => getCityNamesForProvince(manageForm.province),
-    [manageForm.province]
+    () => (locationApi ? locationApi.getCityNamesForProvince(manageForm.province) : []),
+    [manageForm.province, locationApi]
   )
 
   const validBulkRows = useMemo(() => bulkRows.filter((row) => !row.error), [bulkRows])
@@ -721,6 +749,9 @@ function AdminHome() {
   const openAddUserModal = () => {
     setFormError('')
     setIsAddUserOpen(true)
+    // Fire-and-forget: modal opens instantly, province options stream in
+    // (background preload usually has them ready already).
+    ensureLocationApi()
   }
 
   const closeAddUserModal = () => {
@@ -990,10 +1021,14 @@ function AdminHome() {
     }
   }
 
-  const openManageDialog = (user) => {
+  const openManageDialog = async (user) => {
     setSelectedUserId(user.id)
     setManageError('')
     setIsSavingAccount(false)
+    // Awaited so legacy-HUC normalization matches the old sync behavior
+    // (instant when the background preload is done, which it is by the time
+    // an admin clicks a row). Falls back to the raw value if the chunk fails.
+    const mod = await ensureLocationApi()
     setManageForm({
       lastName: user.lastName,
       firstName: user.firstName,
@@ -1011,7 +1046,7 @@ function AdminHome() {
       // ("Metro Manila") so the edit form doesn't open with a blank
       // Province/City selection. Never writes this back unless the admin
       // saves the form.
-      province: normalizeLegacyProvince(user.province),
+      province: mod ? mod.normalizeLegacyProvince(user.province) : (user.province || ''),
       loginEmail: user.loginEmail,
       status: user.status,
       deactivatedAt: user.deactivatedAt
@@ -1532,8 +1567,8 @@ function AdminHome() {
                       onChange={handleAddInputChange}
                       className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
                     >
-                      <option value="">Select province</option>
-                      {PROVINCE_OPTIONS.map((name) => (
+                      <option value="">{provinceOptions.length ? 'Select province' : 'Loading provinces…'}</option>
+                      {provinceOptions.map((name) => (
                         <option key={name} value={name}>
                           {name}
                         </option>
@@ -1885,8 +1920,8 @@ function AdminHome() {
                       onChange={handleManageInputChange}
                       className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
                     >
-                      <option value="">Select province</option>
-                      {PROVINCE_OPTIONS.map((name) => (
+                      <option value="">{provinceOptions.length ? 'Select province' : 'Loading provinces…'}</option>
+                      {provinceOptions.map((name) => (
                         <option key={name} value={name}>
                           {name}
                         </option>
