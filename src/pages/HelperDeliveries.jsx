@@ -37,9 +37,9 @@ import {
   COMPLETED_REPORT_DATA,
 } from "../lib/driverReportData.js";
 import { supabase } from "../lib/supabaseClient.js";
-import { resizeProofPhotoToBase64 } from "../lib/proofPhoto.js";
+import { prepareProofPhoto } from "../lib/proofPhoto.js";
 import { fetchRerouteEvents, nearestDropoffOrder } from "../lib/suggestedRoute.js";
-import { verifyProofPhotoHasPerson } from "../lib/proofPhotoVerification.js";
+import { verifyPersonOnCanvas } from "../lib/proofPhotoVerification.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
 import { useResolvedStopCoords } from "../lib/forwardGeocode.js";
 import {
@@ -1478,13 +1478,24 @@ function HelperDeliveries() {
   const processChainPhoto = async (file) => {
     setChainPhotoError("");
     setChainPhotoVerification(null);
+    // Captured up front: confirmingChainItem is state, so read it before the
+    // awaits below (it can't change mid-modal, but this keeps the two derived
+    // outputs consistent by construction).
+    const needsVerification = confirmingChainItem?.type === "dropoff";
     try {
-      const base64 = await resizeProofPhotoToBase64(file);
+      // Single-decode path (2026-09-19): one full-res decode produces both
+      // the upload-sized base64 and the <=1024px detection canvas. Previously
+      // resize + verifyProofPhotoHasPerson each decoded full-res separately.
+      const { base64, verificationCanvas } = await prepareProofPhoto(file, {
+        includeVerificationCanvas: needsVerification,
+      });
       setChainPhotoBase64(base64);
-      if (confirmingChainItem?.type === "dropoff") {
+      if (needsVerification) {
         setIsVerifyingChainPhoto(true);
         try {
-          setChainPhotoVerification(await verifyProofPhotoHasPerson(file));
+          setChainPhotoVerification(
+            await verifyPersonOnCanvas(verificationCanvas),
+          );
         } catch (verificationError) {
           console.warn(
             "Dropoff photo verification unavailable:",
@@ -2605,7 +2616,11 @@ function HelperDeliveries() {
                       ? "Photo Verification: PASS (Person Detected)"
                       : chainPhotoVerification.status === "unavailable"
                         ? "Photo Verification: FAILED (Unable to Verify)"
-                        : "Photo Verification: NEEDS REVIEW (No Person Detected)"}
+                        // TEMP-DISABLED 2026-09-19: NEEDS REVIEW state hidden per team decision.
+                        // No-person-detected (uncertain) now falls through to FAILED below.
+                        // To restore, uncomment the next line and delete the FAILED line after it.
+                        // : "Photo Verification: NEEDS REVIEW (No Person Detected)"}
+                        : "Photo Verification: FAILED (No Person Detected)"}
                   </p>
                 </div>
               )}
