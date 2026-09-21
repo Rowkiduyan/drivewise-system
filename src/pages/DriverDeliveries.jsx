@@ -72,6 +72,7 @@ import {
   formatManilaTimestamp,
   formatManilaShortTime,
   manilaTodayISO,
+  isManilaDateTimePast,
   MANILA_TIMEZONE,
 } from "../lib/manilaTime.js";
 import { COMPLETED_REPORT_DATA, buildRealDriverTripReport } from "../lib/driverReportData.js";
@@ -2528,14 +2529,14 @@ export function CompletedDeliveryReport({
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
               <Route className="mx-auto h-3.5 w-3.5 text-slate-400" />
-              <p className="mt-1 text-[10px] text-slate-500">Distance</p>
+              <p className="mt-1 text-[10px] text-slate-500">Total Distance</p>
               <p className="text-xs font-bold text-slate-900">
                 {report.trip.distance}
               </p>
             </div>
             <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
               <Clock className="mx-auto h-3.5 w-3.5 text-slate-400" />
-              <p className="mt-1 text-[10px] text-slate-500">Duration</p>
+              <p className="mt-1 text-[10px] text-slate-500">Total Trip Duration</p>
               <p className="text-xs font-bold text-slate-900">
                 {report.trip.duration}
               </p>
@@ -3286,14 +3287,31 @@ function toGoogleMapEmbed(coords) {
   return `https://maps.google.com/maps?q=${coords.lat},${coords.lng}&z=15&output=embed`;
 }
 
-function StatusBadge({ status }) {
+// Late applies only once the driver has actually started the trip
+// (Assigned is still "hasn't left yet", covered separately by the
+// not-yet-started Overdue section/bucket above) and up to, but not
+// including, Delivered/Completed/Cancelled -- a finished trip's badge
+// should read as done, not late.
+const STARTED_STATUSES = new Set(["FOR_PICKUP", "OUT_FOR_DELIVERY"]);
+
+function StatusBadge({ status, dropoffDate, dropoffTime }) {
   const cfg = statusConfig[status];
   if (!cfg) return null;
+  const isLate =
+    STARTED_STATUSES.has(status) &&
+    isManilaDateTimePast(dropoffDate, dropoffTime);
   return (
-    <span
-      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${cfg.badge}`}
-    >
-      {cfg.label}
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${cfg.badge}`}
+      >
+        {cfg.label}
+      </span>
+      {isLate && (
+        <span className="inline-flex rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">
+          Late
+        </span>
+      )}
     </span>
   );
 }
@@ -3593,7 +3611,11 @@ function DeliveryDetailView({
             {delivery.customerName}
           </p>
         </div>
-        <StatusBadge status={delivery.status} />
+        <StatusBadge
+          status={delivery.status}
+          dropoffDate={delivery.dropoffDate}
+          dropoffTime={delivery.dropoffTime}
+        />
       </div>
 
       <div className="grid gap-3 lg:grid-cols-2">
@@ -5614,7 +5636,11 @@ function DriverDeliveries() {
                           <h3 className="text-xs font-bold text-slate-900">
                             Delivery Overview
                           </h3>
-                          <StatusBadge status={workspaceDelivery.status} />
+                          <StatusBadge
+                            status={workspaceDelivery.status}
+                            dropoffDate={workspaceDelivery.dropoffDate}
+                            dropoffTime={workspaceDelivery.dropoffTime}
+                          />
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
                           <div>

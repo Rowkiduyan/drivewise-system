@@ -69,6 +69,7 @@ import {
   formatManilaDateTime,
   MANILA_TIMEZONE,
   getManilaFields,
+  isManilaDateTimePast,
 } from "../lib/manilaTime.js";
 import {
   customer_deliveries,
@@ -147,6 +148,44 @@ const statusLabel = {
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
 };
+
+// Late applies only once the driver has actually started the trip (Assigned
+// is still "hasn't left yet") and up to, but not including,
+// Delivered/Completed/Cancelled -- a finished trip's badge should read as
+// done, not late. Mirrors DriverDeliveries.jsx's own STARTED_STATUSES, just
+// against this page's DB-native status values instead of the driver
+// portal's simplified FOR_PICKUP/OUT_FOR_DELIVERY mapping.
+const STARTED_STATUSES = new Set([
+  "OUT_FOR_PICKUP",
+  "ARRIVED_PICKUP",
+  "OUT_FOR_DROPOFF",
+  "ARRIVED_DROPOFF",
+]);
+
+// Shared status badge, now with an adjacent "Late" badge once a started
+// trip's scheduled dropoff date/time has passed without the trip reaching
+// Delivered/Completed (mirrors the Driver portal's own StatusBadge).
+function StatusBadge({ status, dropoffDate, dropoffTime, className = "" }) {
+  const isLate =
+    STARTED_STATUSES.has(status) &&
+    isManilaDateTimePast(dropoffDate, dropoffTime);
+  return (
+    <span className="inline-flex max-w-full items-center gap-1.5">
+      <span
+        className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center font-semibold leading-tight ${statusBadge[status]} ${className}`}
+      >
+        {statusLabel[status] ?? status.replaceAll("_", " ")}
+      </span>
+      {isLate && (
+        <span
+          className={`inline-flex shrink-0 rounded-full bg-red-100 px-2.5 py-1 text-center font-semibold leading-tight text-red-700 ${className}`}
+        >
+          Late
+        </span>
+      )}
+    </span>
+  );
+}
 
 // Numbered status → the sub-statuses that fall under it (used by the
 // toolbar status filter so "Processing" matches all quotation rounds, etc.).
@@ -6074,12 +6113,12 @@ function SupDeliveries() {
                       <h1 className="text-base font-semibold text-slate-900 sm:text-lg">
                         {selectedRequest.id} • {selectedRequest.companyName}
                       </h1>
-                      <span
-                        className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge[selectedRequest.status]}`}
-                      >
-                        {statusLabel[selectedRequest.status] ??
-                          selectedRequest.status.replaceAll("_", " ")}
-                      </span>
+                      <StatusBadge
+                        status={selectedRequest.status}
+                        dropoffDate={selectedRequest.dropoffDate}
+                        dropoffTime={selectedRequest.dropoffTime}
+                        className="shrink-0 whitespace-nowrap text-xs"
+                      />
                       {specializedClientIds.has(
                         selectedRequest.customerAuthId,
                       ) && (
@@ -8763,12 +8802,12 @@ function SupDeliveries() {
                       className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.55fr_0.3fr] lg:items-center"
                     >
                       <div className="flex justify-center">
-                        <span
-                          className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[row.status]}`}
-                        >
-                          {statusLabel[row.status] ??
-                            row.status.replaceAll("_", " ")}
-                        </span>
+                        <StatusBadge
+                          status={row.status}
+                          dropoffDate={row.dropoffDate}
+                          dropoffTime={row.dropoffTime}
+                          className="text-[10px] xl:text-[11px]"
+                        />
                       </div>
                       <p className="text-sm font-semibold text-slate-900 text-center">
                         {row.id}
@@ -8850,12 +8889,12 @@ function SupDeliveries() {
                       className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] lg:items-center"
                     >
                       <div className="flex justify-center">
-                        <span
-                          className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[row.status]}`}
-                        >
-                          {statusLabel[row.status] ??
-                            row.status.replaceAll("_", " ")}
-                        </span>
+                        <StatusBadge
+                          status={row.status}
+                          dropoffDate={row.dropoffDate}
+                          dropoffTime={row.dropoffTime}
+                          className="text-[10px] xl:text-[11px]"
+                        />
                       </div>
                       <p className="text-sm font-semibold text-slate-900 text-center">
                         {row.id}
@@ -8935,12 +8974,12 @@ function SupDeliveries() {
                         }`}
                       >
                         <div className="flex justify-center">
-                          <span
-                            className={`inline-flex max-w-full rounded-full px-2.5 py-1 text-center text-[10px] font-semibold leading-tight xl:text-[11px] ${statusBadge[delivery.status]}`}
-                          >
-                            {statusLabel[delivery.status] ??
-                              delivery.status.replaceAll("_", " ")}
-                          </span>
+                          <StatusBadge
+                            status={delivery.status}
+                            dropoffDate={delivery.dropoffDate}
+                            dropoffTime={delivery.dropoffTime}
+                            className="text-[10px] xl:text-[11px]"
+                          />
                         </div>
                         <p className="text-sm font-semibold text-slate-900 text-center">
                           {delivery.id}

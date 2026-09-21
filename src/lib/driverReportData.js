@@ -370,10 +370,6 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs, r
   const firstSession = sorted[0];
   const mainSessions = sorted.filter((s) => !s.is_return_trip);
   const lastMainSession = mainSessions[mainSessions.length - 1] || sorted[sorted.length - 1];
-  const totalDurationSec = sorted.reduce(
-    (sum, s) => sum + (s.session_duration || 0),
-    0,
-  );
 
   const bySessionId = {};
   for (const row of gpsLogs) {
@@ -410,6 +406,23 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs, r
     }
   });
   dropoffEvents.sort((a, b) => new Date(a.at) - new Date(b.at));
+
+  // "Total Trip Duration" -- wall-clock elapsed from the actual trip start
+  // until the moment delivery genuinely completed (the last real completion
+  // event), INCLUDING pause time between Sessions (unlike a plain sum of
+  // each Session's own session_duration, which would exclude pauses and
+  // reset the running figure each time a Session closes on Pause). Matches
+  // SupDeliveries.jsx's identical fix (see STATUS.md), applied here so
+  // Driver/Helper Trip Details (both built on this shared function) show a
+  // proper total instead.
+  const deliveredAt =
+    dropoffEvents.length > 0
+      ? dropoffEvents[dropoffEvents.length - 1].at
+      : delivery.completedAt || lastMainSession.end_time;
+  const totalTripDurationSec = Math.max(
+    0,
+    (new Date(deliveredAt) - new Date(firstSession.start_time)) / 1000,
+  );
 
   const timeline = [
     delivery.assignedAt && {
@@ -626,7 +639,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs, r
   return {
     trip: {
       distance: totalMeters > 0 ? `${(totalMeters / 1000).toFixed(1)} km` : "",
-      duration: formatAlertDuration(totalDurationSec),
+      duration: formatAlertDuration(totalTripDurationSec),
       stops,
       timeline,
     },

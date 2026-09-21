@@ -141,3 +141,18 @@ export function manilaTodayISO() {
   const day = String(f.day).padStart(2, '0')
   return `${f.year}-${month}-${day}`
 }
+
+// True when a calendar date + "HH:MM[:SS]" time (dropoff_date/dropoff_time,
+// entered by the customer as naive Manila wall-clock values with no
+// timezone info) has already passed the current Manila time. `now` must be
+// read as Manila wall-clock too for this to be an apples-to-apples
+// comparison -- same reasoning as manilaTodayISO() above, just carrying the
+// time-of-day instead of truncating to a date. No timeStr defaults to
+// end-of-day so a same-day due date isn't flagged late before it's over.
+export function isManilaDateTimePast(dateStr, timeStr) {
+  if (!dateStr) return false
+  const f = getManilaFields(new Date())
+  const nowKey = `${f.year}-${String(f.month).padStart(2, '0')}-${String(f.day).padStart(2, '0')}T${String(f.hour).padStart(2, '0')}:${String(f.minute).padStart(2, '0')}`
+  const dueKey = `${dateStr}T${timeStr ? timeStr.slice(0, 5) : '23:59'}`
+  return dueKey < nowKey
+}
