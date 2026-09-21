@@ -1389,7 +1389,7 @@ function CustomerRequestDelivery() {
     // trusting the live-preview state, same "never trust stale client
     // state at the final gate" pattern this check already used before.
     const activeStops = formData.stops.filter((stop) => stop.location.trim());
-    // Warehouse -> Pickup -> Dropoff -> Stops route, generated up front so
+    // Warehouse -> Pickup -> Drop-off -> Stops route, generated up front so
     // the Supervisor and Customer have something to view during
     // PENDING_REQUEST/quotation review (2026-09-06, since simplified
     // 2026-09-08 to a read-only view only -- see SuggestedRouteMap). Non-
@@ -1700,7 +1700,7 @@ function CustomerRequestDelivery() {
                   <div className="min-w-[220px] flex-[3]">
                     <LocationInput
                       id="dropoffLocation"
-                      label="Dropoff 1"
+                      label="Drop-off 1"
                       value={formData.dropoffLocation}
                       lat={formData.dropoffLat}
                       lng={formData.dropoffLng}
@@ -1742,7 +1742,7 @@ function CustomerRequestDelivery() {
                             type="time"
                             id="dropoffTime"
                             name="dropoffTime"
-                            aria-label="Dropoff Window Start"
+                            aria-label="Drop-off Window Start"
                             value={formData.dropoffTime}
                             onChange={handleChange}
                             required
@@ -1760,7 +1760,7 @@ function CustomerRequestDelivery() {
                             type="time"
                             id="dropoffTimeEnd"
                             name="dropoffTimeEnd"
-                            aria-label="Dropoff Window End"
+                            aria-label="Drop-off Window End"
                             value={formData.dropoffTimeEnd}
                             onChange={handleChange}
                             required
@@ -1789,7 +1789,7 @@ function CustomerRequestDelivery() {
                         type="button"
                         onClick={() => removeStop(index)}
                         className="absolute right-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                        title="Remove dropoff"
+                        title="Remove drop-off"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -1797,7 +1797,7 @@ function CustomerRequestDelivery() {
                         <div className="min-w-[220px] flex-[3]">
                           <LocationInput
                             id={`stop-${index}`}
-                            label={`Dropoff ${index + 2}`}
+                            label={`Drop-off ${index + 2}`}
                             value={stop.location}
                             lat={stop.lat}
                             lng={stop.lng}
@@ -1817,7 +1817,7 @@ function CustomerRequestDelivery() {
                               <input
                                 type="time"
                                 id={`stop-time-${index}`}
-                                aria-label={`Dropoff ${index + 2} Window Start`}
+                                aria-label={`Drop-off ${index + 2} Window Start`}
                                 value={stop.dropoffTime}
                                 onChange={(e) =>
                                   handleStopTimeChange(
@@ -1839,7 +1839,7 @@ function CustomerRequestDelivery() {
                               <input
                                 type="time"
                                 id={`stop-time-end-${index}`}
-                                aria-label={`Dropoff ${index + 2} Window End`}
+                                aria-label={`Drop-off ${index + 2} Window End`}
                                 value={stop.dropoffTimeEnd}
                                 onChange={(e) =>
                                   handleStopTimeChange(
@@ -1982,7 +1982,7 @@ function CustomerRequestDelivery() {
                     id="cargoWeight"
                     name="cargoWeight"
                     min="1"
-                    step="10"
+                    step="1"
                     value={formData.cargoWeight}
                     onChange={handleChange}
                     placeholder="e.g. 800"

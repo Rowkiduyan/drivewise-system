@@ -62,6 +62,7 @@ import SuggestedRouteMap from "../components/SuggestedRouteMap.jsx";
 import {
   classifyRouteDeviation,
   fetchRerouteEvents,
+  matchStopLegsToIndexes,
 } from "../lib/suggestedRoute.js";
 import { REROUTE_REASON_LABELS } from "../lib/rerouteReasons.js";
 import {
@@ -69,7 +70,7 @@ import {
   formatManilaDateTime,
   MANILA_TIMEZONE,
   getManilaFields,
-  isManilaDateTimePast,
+  isManilaDatePast,
 } from "../lib/manilaTime.js";
 import {
   customer_deliveries,
@@ -142,8 +143,8 @@ const statusLabel = {
   ASSIGNED: "Assigned",
   OUT_FOR_PICKUP: "Pickup",
   ARRIVED_PICKUP: "Pickup",
-  OUT_FOR_DROPOFF: "Dropoff",
-  ARRIVED_DROPOFF: "Dropoff",
+  OUT_FOR_DROPOFF: "Drop-off",
+  ARRIVED_DROPOFF: "Drop-off",
   DELIVERED: "Delivered",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
@@ -163,12 +164,13 @@ const STARTED_STATUSES = new Set([
 ]);
 
 // Shared status badge, now with an adjacent "Late" badge once a started
-// trip's scheduled dropoff date/time has passed without the trip reaching
+// trip's scheduled dropoff date has passed without the trip reaching
 // Delivered/Completed (mirrors the Driver portal's own StatusBadge).
-function StatusBadge({ status, dropoffDate, dropoffTime, className = "" }) {
+// Date-only, not date+time -- dropoff_time is a delivery window (like a
+// store's open hours), not a due time.
+function StatusBadge({ status, dropoffDate, className = "" }) {
   const isLate =
-    STARTED_STATUSES.has(status) &&
-    isManilaDateTimePast(dropoffDate, dropoffTime);
+    STARTED_STATUSES.has(status) && isManilaDatePast(dropoffDate);
   return (
     <span className="inline-flex max-w-full items-center gap-1.5">
       <span
@@ -997,7 +999,7 @@ const stageStatus = {
  *    index (see `stageStatus`), and "current" while it is the active one.
  * 3. DISPLAY CONTRACT: the status column / badge shows ONLY the numbered
  *    statuses (Pending Request, Processing, Approved, Assigned, Pickup,
- *    Dropoff, Delivered, Completed, Cancelled — see `statusLabel`). The a/b/c
+ *    Drop-off, Delivered, Completed, Cancelled — see `statusLabel`). The a/b/c
  *    sub-statuses are stored on `request.status` for the timeline to derive
  *    which SUBSTEPS are done, but they are NEVER shown as the column label.
  *
@@ -1229,8 +1231,8 @@ function buildProgressData(request) {
     },
     {
       key: "dropoff",
-      label: "Dropoff",
-      completedLabel: "Dropoff Completed",
+      label: "Drop-off",
+      completedLabel: "Drop-off Completed",
       substeps: [
         {
           label: "Delivery crew is out to deliver the items",
@@ -1666,12 +1668,12 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs, rer
 
   // Real per-item completion order -- dropoff_location is no longer always
   // last in the chain (02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-
-  // Dropoff Ordering"), so this sorts by each item's actual completedAt
+  // Drop-off Ordering"), so this sorts by each item's actual completedAt
   // rather than assuming dropoff always precedes the stops.
   const dropoffEvents = [];
   if (delivery.dropoffCompletedAt) {
     dropoffEvents.push({
-      label: "Dropoff Completed",
+      label: "Drop-off Completed",
       location: delivery.deliveryAddress,
       at: delivery.dropoffCompletedAt,
     });
@@ -1679,7 +1681,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs, rer
   (delivery.stops || []).forEach((s, i) => {
     if (s.completed && s.completedAt) {
       dropoffEvents.push({
-        label: `Dropoff ${i + 2} Completed`,
+        label: `Drop-off ${i + 2} Completed`,
         location: s.location,
         at: s.completedAt,
       });
@@ -1959,7 +1961,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs, rer
       path: leg.path,
       color: NAV_LEG_COLORS[i % NAV_LEG_COLORS.length],
     }));
-    // suggestedRoute now covers Warehouse -> Pickup -> Dropoff -> Stops (the
+    // suggestedRoute now covers Warehouse -> Pickup -> Drop-off -> Stops (the
     // Warehouse leg added per explicit user instruction), matching
     // `totalMeters` above (the *whole* trip's gps_logs) far more closely
     // than before that leg existed -- both now genuinely start from the same
@@ -1980,7 +1982,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs, rer
       return sum + legMeters;
     }, 0);
     // Route Deviation compares against suggested_route, which only ever
-    // covers the one-way Warehouse -> Pickup -> Dropoff/Stops trip -- the
+    // covers the one-way Warehouse -> Pickup -> Drop-off/Stops trip -- the
     // return-to-base leg's GPS must be excluded here specifically (unlike
     // totalMeters above, which stays unfiltered for the Trip tab's own
     // "distance driven today" figure), or every delivery with a return-trip
@@ -2007,7 +2009,7 @@ function buildRealTripAndBehaviorReport(delivery, sessions, alerts, gpsLogs, rer
     // always real coordinates either way (DirectionsService geocodes
     // whatever address it was given), so this works unconditionally.
     // leg[0] is now Warehouse -> Pickup (PlannedRouteMap's fixed
-    // WAREHOUSE_ADDRESS origin), not Pickup -> Dropoff -- so pickupPoint is
+    // WAREHOUSE_ADDRESS origin), not Pickup -> Drop-off -- so pickupPoint is
     // that leg's END, not its start.
     const pickupLeg = suggestedRoute.find((leg) => leg.to === "pickup");
     const pickupPoint = pickupLeg
@@ -2225,7 +2227,7 @@ function formatAlertTimestamp(value) {
 }
 
 // `plannedLegs` is an array of `{path: [[lat,lng],...], color}` -- one entry
-// per leg of the chain (Pickup -> Dropoff -> Stops for real data; a single
+// per leg of the chain (Pickup -> Drop-off -> Stops for real data; a single
 // synthetic leg for the legacy mock fixtures, see RouteDeviationTab). Each
 // leg renders as its own dashed polyline in its own color so a Supervisor
 // sees the same per-leg color language the Driver's own live-nav view uses
@@ -2467,17 +2469,17 @@ function ResolvedText({ value }) {
   return useResolvedAddress(value || "");
 }
 
-// One switchable map for the full Pickup -> Dropoff -> Stops chain, instead
+// One switchable map for the full Pickup -> Drop-off -> Stops chain, instead
 // of two side-by-side (and, for stops, map-less) blocks -- lets a
 // Supervisor step through every point in the chain, not just the first two,
 // and zooms in further per-point (z=16) since the previous z=14 read as too
 // far out for a single-address view. Each point's address is resolved via
 // useResolvedAddress so a "lat, lng"-shaped location (e.g. DR-0020's fixture
 // data) shows a real address instead of raw coordinates.
-function LocationSwitcher({ request }) {
-  const stops = request.stops || [];
+function LocationSwitcher({ request, suggestedRoute }) {
+  const stops = useMemo(() => request.stops || [], [request.stops]);
   // Stops never get a lat/lng persisted at booking time (unlike Pickup/
-  // Dropoff, which fall back to pickup_lat/lng and dropoff_lat/lng DB
+  // Drop-off, which fall back to pickup_lat/lng and dropoff_lat/lng DB
   // columns) -- parseCoords only succeeds for the rare "lat, lng"-shaped
   // fixture address, so any real street address needs the same Photon
   // forward-geocoding fallback DriverDeliveries.jsx already uses, or its map
@@ -2487,6 +2489,16 @@ function LocationSwitcher({ request }) {
     .filter((loc) => loc && !parseCoords(loc));
   const { coordsByLocation: resolvedStopCoords } = useResolvedStopCoords(
     unresolvedStopLocations,
+  );
+  // Fallback for a stop address Photon can't geocode at all (e.g. a Google
+  // Plus Code like "P2RR+73W, ..." -- found live on DR-0078, where
+  // resolvedStopCoords stayed empty for that stop and its zoom button had no
+  // coordinate to focus on). The route's own "stop" leg endpoint is a real,
+  // already-computed position independent of Photon -- same fallback
+  // SuggestedRouteMap's own stop markers use.
+  const stopLegByIndex = useMemo(
+    () => matchStopLegsToIndexes(suggestedRoute, stops, resolvedStopCoords),
+    [suggestedRoute, stops, resolvedStopCoords],
   );
 
   const points = [
@@ -2504,7 +2516,7 @@ function LocationSwitcher({ request }) {
       badge: "D",
       badgeBg: "bg-rose-100",
       badgeText: "text-rose-600",
-      label: "Drop-off Location",
+      label: "Drop-off 1 Location",
       address: request.deliveryAddress,
       coords: getDropoffCoords(request),
     },
@@ -2513,16 +2525,29 @@ function LocationSwitcher({ request }) {
       badge: String(index + 2),
       badgeBg: "bg-amber-100",
       badgeText: "text-amber-700",
-      label: `Dropoff ${index + 2}`,
+      label: `Drop-off ${index + 2}`,
       address: stop.location,
       coords:
         parseCoords(stop.location) ||
         resolvedStopCoords[stop.location] ||
-        null,
+        (stopLegByIndex[index]
+          ? {
+              lat: stopLegByIndex[index].path[
+                stopLegByIndex[index].path.length - 1
+              ][0],
+              lng: stopLegByIndex[index].path[
+                stopLegByIndex[index].path.length - 1
+              ][1],
+            }
+          : null),
     })),
   ];
 
   const [index, setIndex] = useState(0);
+  // Tracks whether the map is zoomed into `point` or showing the whole
+  // route -- clicking the already-selected badge again toggles back out to
+  // the overview instead of being a no-op, per explicit user request.
+  const [focused, setFocused] = useState(true);
   const safeIndex = Math.min(index, points.length - 1);
   const point = points[safeIndex];
   const resolvedAddress = useResolvedAddress(point.address || "");
@@ -2544,11 +2569,20 @@ function LocationSwitcher({ request }) {
           <button
             key={p.key}
             type="button"
-            onClick={() => setIndex(i)}
+            onClick={() => {
+              if (i === safeIndex) {
+                setFocused((f) => !f);
+              } else {
+                setIndex(i);
+                setFocused(true);
+              }
+            }}
             className={`flex h-6 items-center gap-1 rounded-full pl-1 pr-2 text-[11px] font-semibold transition ${
-              i === safeIndex
+              i === safeIndex && focused
                 ? "bg-slate-900 text-white"
-                : "bg-white text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-50"
+                : i === safeIndex
+                  ? "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-300"
+                  : "bg-white text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-50"
             }`}
           >
             <span
@@ -2558,7 +2592,7 @@ function LocationSwitcher({ request }) {
             </span>
             {p.label
               .replace("Pick-up Location", "Pickup")
-              .replace("Drop-off Location", "Dropoff")}
+              .replace("Drop-off 1 Location", "Drop-off 1")}
           </button>
         ))}
       </div>
@@ -2583,16 +2617,20 @@ function LocationSwitcher({ request }) {
           <div className="flex shrink-0 items-center gap-1">
             <button
               type="button"
-              onClick={() =>
-                setIndex((safeIndex - 1 + points.length) % points.length)
-              }
+              onClick={() => {
+                setIndex((safeIndex - 1 + points.length) % points.length);
+                setFocused(true);
+              }}
               className="rounded-md border border-slate-200 p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
-              onClick={() => setIndex((safeIndex + 1) % points.length)}
+              onClick={() => {
+                setIndex((safeIndex + 1) % points.length);
+                setFocused(true);
+              }}
               className="rounded-md border border-slate-200 p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
             >
               <ChevronRight className="h-3.5 w-3.5" />
@@ -2601,7 +2639,17 @@ function LocationSwitcher({ request }) {
         )}
       </div>
 
-      {point.coords ? (
+      {suggestedRoute?.length > 0 ? (
+        <SuggestedRouteMap
+          suggestedRoute={suggestedRoute}
+          stops={stops}
+          focusPos={
+            focused && point.coords
+              ? [point.coords.lat, point.coords.lng]
+              : null
+          }
+        />
+      ) : point.coords ? (
         <iframe
           key={point.key}
           title={`${point.label} - Google Map`}
@@ -2619,7 +2667,7 @@ function LocationSwitcher({ request }) {
   );
 }
 
-// Proof-of-delivery photos for a completed chain (Pickup -> Dropoff ->
+// Proof-of-delivery photos for a completed chain (Pickup -> Drop-off ->
 // Stops) — one small block per portal file rather than a shared component,
 // matching this codebase's existing per-portal convention (see
 // 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md's "On a shared component" note).
@@ -2650,7 +2698,7 @@ function ProofOfDeliverySection({ request }) {
       (stop, i) =>
         stop.completed &&
         stop.photoUrl && {
-          label: `Dropoff ${i + 2}`,
+          label: `Drop-off ${i + 2}`,
           photoUrl: stop.photoUrl,
           completedAt: stop.completedAt,
         },
@@ -2698,7 +2746,7 @@ function ProofOfDeliverySection({ request }) {
   );
 }
 
-function DeliveryRequestDetails({ request, realDistanceKm }) {
+function DeliveryRequestDetails({ request, realDistanceKm, suggestedRoute }) {
   return (
     <div>
       <div className="grid grid-cols-2 gap-3">
@@ -2859,7 +2907,7 @@ function DeliveryRequestDetails({ request, realDistanceKm }) {
             );
           })()}
         </div>
-        <LocationSwitcher request={request} />
+        <LocationSwitcher request={request} suggestedRoute={suggestedRoute} />
       </div>
     </div>
   );
@@ -3964,6 +4012,29 @@ function CompletedDeliveryReport({ delivery }) {
   // ever started) gets neither, same "Details + Quotation only" fallback as
   // before.
   const [realReport, setRealReport] = useState(null);
+  // Fetched independently of realReport (which only builds once sessions
+  // exist) so the Details tab's planned-route map/zoom still works for a
+  // completed delivery that has a saved suggested_route but no Trip
+  // sessions -- same lazy-fetch-per-request pattern as
+  // selectedRequestSuggestedRoute above.
+  const [detailsSuggestedRoute, setDetailsSuggestedRoute] = useState(null);
+  useEffect(() => {
+    let isMounted = true;
+    supabase
+      .from("delivery_requests")
+      .select("suggested_route")
+      .eq("id", delivery.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!isMounted) return;
+        setDetailsSuggestedRoute(
+          Array.isArray(data?.suggested_route) ? data.suggested_route : null,
+        );
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [delivery.id]);
   useEffect(() => {
     let isMounted = true;
     async function load() {
@@ -4103,6 +4174,7 @@ function CompletedDeliveryReport({ delivery }) {
           <DeliveryRequestDetails
             request={delivery}
             realDistanceKm={report?.trip?.distance}
+            suggestedRoute={detailsSuggestedRoute}
           />
         )}
         {reportTab === "quotation" && <QuotationTab delivery={delivery} />}
@@ -4503,7 +4575,7 @@ function mapDbRequest(row, clientName, fleet) {
     // at booking time — read-only here (02B_MULTI_STOP_DELIVERIES.md).
     stops: Array.isArray(row.stops) ? row.stops : [],
     // Proof-photo state for the first two items in the chain (Pickup,
-    // Dropoff), written by the Helper's completion actions — read-only here
+    // Drop-off), written by the Helper's completion actions — read-only here
     // (02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
     pickupPhotoUrl: row.pickup_photo_url || null,
     dropoffPhotoUrl: row.dropoff_photo_url || null,
@@ -4521,7 +4593,7 @@ function mapDbRequest(row, clientName, fleet) {
     dropoffCompletedAt: row.dropoff_completed_at || null,
     pickupArrivedAt: row.pickup_arrived_at || null,
     dropoffArrivedAt: row.dropoff_arrived_at || null,
-    // Frozen planned route (Pickup -> Dropoff -> Stops), if the Driver
+    // Frozen planned route (Pickup -> Drop-off -> Stops), if the Driver
     // app's pre-trip screen already saved one — feeds the real Route
     // Deviation Report (buildRealTripAndBehaviorReport, 11_ROUTE_COMPARISON.md).
     // Deliberately null here (2026-09-09) -- the bulk list query no longer
@@ -6116,7 +6188,6 @@ function SupDeliveries() {
                       <StatusBadge
                         status={selectedRequest.status}
                         dropoffDate={selectedRequest.dropoffDate}
-                        dropoffTime={selectedRequest.dropoffTime}
                         className="shrink-0 whitespace-nowrap text-xs"
                       />
                       {specializedClientIds.has(
@@ -6531,17 +6602,33 @@ function SupDeliveries() {
                             }
                           />
                         </div>
-                        <LocationSwitcher request={selectedRequest} />
-
-                        {selectedRequest.status === "PENDING_REQUEST" && (
-                          <div className="mt-3">
-                            <SuggestedRouteMap
-                              key={selectedRequest.id}
-                              suggestedRoute={selectedRequestSuggestedRoute}
-                              stops={selectedRequest.stops}
-                            />
-                          </div>
-                        )}
+                        <LocationSwitcher
+                          key={selectedRequest.id}
+                          request={selectedRequest}
+                          suggestedRoute={
+                            // Planned-route view: the pending review, once a
+                            // crew is Assigned, while the trip is In Transit
+                            // (OUT_FOR_PICKUP through ARRIVED_DROPOFF), and
+                            // after completion (this modal isn't the normal
+                            // path to a DELIVERED/COMPLETED request -- that's
+                            // CompletedDeliveryReport's own Details tab,
+                            // wired separately -- but covering it here too in
+                            // case this modal is ever left open through that
+                            // transition).
+                            [
+                              "PENDING_REQUEST",
+                              "ASSIGNED",
+                              "OUT_FOR_PICKUP",
+                              "ARRIVED_PICKUP",
+                              "OUT_FOR_DROPOFF",
+                              "ARRIVED_DROPOFF",
+                              "DELIVERED",
+                              "COMPLETED",
+                            ].includes(selectedRequest.status)
+                              ? selectedRequestSuggestedRoute
+                              : null
+                          }
+                        />
 
                         <div className="mt-3">
                           <ProofOfDeliverySection request={selectedRequest} />
@@ -8728,7 +8815,7 @@ function SupDeliveries() {
                     {activeModule === "transit" && (
                       <>
                         <option value="PICKUP">Pickup</option>
-                        <option value="DROPOFF">Dropoff</option>
+                        <option value="DROPOFF">Drop-off</option>
                         <option value="DELIVERED">Delivered</option>
                       </>
                     )}
@@ -8805,7 +8892,6 @@ function SupDeliveries() {
                         <StatusBadge
                           status={row.status}
                           dropoffDate={row.dropoffDate}
-                          dropoffTime={row.dropoffTime}
                           className="text-[10px] xl:text-[11px]"
                         />
                       </div>
@@ -8892,7 +8978,6 @@ function SupDeliveries() {
                         <StatusBadge
                           status={row.status}
                           dropoffDate={row.dropoffDate}
-                          dropoffTime={row.dropoffTime}
                           className="text-[10px] xl:text-[11px]"
                         />
                       </div>
@@ -8977,7 +9062,6 @@ function SupDeliveries() {
                           <StatusBadge
                             status={delivery.status}
                             dropoffDate={delivery.dropoffDate}
-                            dropoffTime={delivery.dropoffTime}
                             className="text-[10px] xl:text-[11px]"
                           />
                         </div>

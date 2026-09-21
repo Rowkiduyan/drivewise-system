@@ -2,7 +2,7 @@
 // Pure logic -- no React, no window.google -- mirrors deliveryOptions.js's
 // style. Takes pre-fetched per-leg travel durations (seconds, already
 // resolved via DirectionsService by the caller) and simulates the
-// sequential schedule: Pickup(load) -> travel -> Dropoff(unload) -> travel
+// sequential schedule: Pickup(load) -> travel -> Drop-off(unload) -> travel
 // -> each Stop(unload)..., inserting a rest every REST_INTERVAL_HOURS of
 // cumulative travel and a meal break the first time the clock crosses its
 // threshold. Single source of truth for the 13-hour cap, replacing

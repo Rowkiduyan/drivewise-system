@@ -72,7 +72,7 @@ import {
   formatManilaTimestamp,
   formatManilaShortTime,
   manilaTodayISO,
-  isManilaDateTimePast,
+  isManilaDatePast,
   MANILA_TIMEZONE,
 } from "../lib/manilaTime.js";
 import { COMPLETED_REPORT_DATA, buildRealDriverTripReport } from "../lib/driverReportData.js";
@@ -131,7 +131,7 @@ const statusConfig = {
   },
   // Confirm Pickup and Complete Delivery moved to the Helper (2026-08-12,
   // 02B_MULTI_STOP_DELIVERIES.md) — photo-required completion of the whole
-  // Pickup -> Dropoff -> Stops chain is now HelperDeliveries.jsx's job. The
+  // Pickup -> Drop-off -> Stops chain is now HelperDeliveries.jsx's job. The
   // Driver's UI just reflects these two stages read-only (no nextStage/
   // nextLabel means no action button renders — see the banner-only render
   // path below).
@@ -327,7 +327,7 @@ function formatTimeOnly(value) {
 }
 
 // `plannedLegs` is an array of `{path: [[lat,lng],...], color}` -- one entry
-// per leg of the chain (Pickup -> Dropoff -> Stops for real data; a single
+// per leg of the chain (Pickup -> Drop-off -> Stops for real data; a single
 // synthetic leg for the legacy mock fixtures, see CompletedDeliveryReport's
 // route tab). Mirrors SupDeliveries.jsx's own RouteDeviationMap extension
 // (11_ROUTE_COMPARISON.md) -- kept as a separate copy per this codebase's
@@ -777,7 +777,7 @@ function useAnimatedNavCamera({ mapRef, isMapReady, rawPosition, heading }) {
   return { animatedPosition, resumeFollowing };
 }
 
-// One color per leg of the Pickup -> Dropoff -> Stop 1 -> ... chain (cycles
+// One color per leg of the Pickup -> Drop-off -> Stop 1 -> ... chain (cycles
 // if a chain somehow has more legs than colors), per 02C_ROUTE_STYLING's
 // per-leg design -- index 0 is reserved for the to-pickup leg specifically
 // (its own separate DirectionsService call, always exactly one leg), so the
@@ -821,7 +821,7 @@ function isCurrentNavTarget(coords, legEnd) {
 }
 
 // A proper map-pin silhouette (the classic "location" teardrop glyph, 24x24
-// viewBox) for Dropoff/Stop markers, instead of a plain filled circle -- per
+// viewBox) for Drop-off/Stop markers, instead of a plain filled circle -- per
 // user feedback, a circle alone didn't read as "you're supposed to drop off
 // here" the way a pin shape immediately does. Pickup deliberately keeps the
 // plain circle (see the Pickup <Marker> above) since it isn't a "drop
@@ -844,7 +844,7 @@ function dropoffPinIcon(fillColor, isCurrent) {
   };
 }
 
-// Pickup/Dropoff markers specifically (not the numbered Stop pins above,
+// Pickup/Drop-off markers specifically (not the numbered Stop pins above,
 // which keep the plain teardrop) -- per user feedback, even the pin-vs-circle
 // distinction above still didn't read clearly enough against the rest of the
 // map's markers (numbered stop pins, the live-position arrow). These render
@@ -889,7 +889,7 @@ function dropoffMarkerIcon() {
 // The Warehouse leg's own starting point (PlannedRouteMap's new Warehouse ->
 // Pickup leg) -- a warehouse/building glyph, slate-colored so it reads as
 // "trip origin," distinct from the blue package (Pickup) and green flag
-// (Dropoff) icons above.
+// (Drop-off) icons above.
 function warehouseMarkerIcon() {
   return svgMarkerIcon(
     `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="41" viewBox="0 0 34 41">
@@ -906,10 +906,10 @@ function warehouseMarkerIcon() {
 
 // Whole-trip planned-route guide, shown before the driver taps "Start
 // Pickup" (replaces the old static single-point iframe embed at the call
-// site below). Draws every leg of Warehouse -> Pickup -> Dropoff -> Stops in
+// site below). Draws every leg of Warehouse -> Pickup -> Drop-off -> Stops in
 // one view -- the Warehouse leg is always first (fixed WAREHOUSE_ADDRESS,
 // per user instruction), matching where the driver's Trip actually starts
-// from in real life, before the Pickup-onward chain. Dropoff/Stop order is
+// from in real life, before the Pickup-onward chain. Drop-off/Stop order is
 // the same nearest-neighbor heuristic the live nav already uses for dynamic
 // dropoff ordering (`nearestDropoffOrder`), seeded from Pickup (not the
 // Warehouse) since that's genuinely where the driver will be once they
@@ -1843,7 +1843,7 @@ function LiveNavigationMap({
             {/* Only the pin for wherever the driver is actually heading
                 right now (matched by comparing coords to the current leg's
                 end point) -- same "current leg only" reasoning as the
-                polyline above, not every Pickup/Dropoff/Stop pin at once. */}
+                polyline above, not every Pickup/Drop-off/Stop pin at once. */}
             {pickupCoords && isCurrentNavTarget(pickupCoords, legEnd) && (
               <GoogleMapMarker
                 position={pickupCoords}
@@ -3102,13 +3102,13 @@ function parseCoords(value) {
 // accumulation (12_REST_STOP_RECOMMENDATIONS.md) and the live-nav dynamic
 // dropoff reordering below.
 
-// Full ordered legend -- Pickup, then every Dropoff/Stop in the same
+// Full ordered legend -- Pickup, then every Drop-off/Stop in the same
 // nearest-first order a computed `legs` route actually visits them (walks
 // `legs` directly rather than recomputing nearestDropoffOrder, so it stays
 // correct for both a freshly computed route AND an already-frozen
 // suggestedRoute). A 'stop' leg's endpoint is matched back to its address
 // by nearest coordinate against the same points (parseCoords/stopCoords)
-// that fed the route computation. Falls back to a plain Pickup/Dropoff pair
+// that fed the route computation. Falls back to a plain Pickup/Drop-off pair
 // when no route exists yet to derive an order from.
 function buildRouteLegend(
   legs,
@@ -3232,7 +3232,7 @@ function mapDelivery(d) {
     // never delivery_requests.status (02B_MULTI_STOP_DELIVERIES.md).
     stops: Array.isArray(d.stops) ? d.stops : [],
     // Proof-photo state for the first two items in the chain (Pickup,
-    // Dropoff) — read-only here, written by the Helper's completion actions
+    // Drop-off) — read-only here, written by the Helper's completion actions
     // (02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
     pickupPhotoUrl: d.pickupPhotoUrl || null,
     pickupCompletedAt: d.pickupCompletedAt || null,
@@ -3242,7 +3242,7 @@ function mapDelivery(d) {
     // to know whether the Arrived button was already tapped for this leg.
     pickupArrivedAt: d.pickupArrivedAt || null,
     dropoffArrivedAt: d.dropoffArrivedAt || null,
-    // Frozen planned route (Pickup -> Dropoff -> Stops), if the pre-trip
+    // Frozen planned route (Pickup -> Drop-off -> Stops), if the pre-trip
     // screen already computed+saved it -- see PlannedRouteMap below and
     // 11_ROUTE_COMPARISON.md. Null until the first successful save.
     suggestedRoute: Array.isArray(d.suggestedRoute) ? d.suggestedRoute : null,
@@ -3294,12 +3294,12 @@ function toGoogleMapEmbed(coords) {
 // should read as done, not late.
 const STARTED_STATUSES = new Set(["FOR_PICKUP", "OUT_FOR_DELIVERY"]);
 
-function StatusBadge({ status, dropoffDate, dropoffTime }) {
+// Date-only, not date+time -- dropoff_time is a delivery window (like a
+// store's open hours), not a due time.
+function StatusBadge({ status, dropoffDate }) {
   const cfg = statusConfig[status];
   if (!cfg) return null;
-  const isLate =
-    STARTED_STATUSES.has(status) &&
-    isManilaDateTimePast(dropoffDate, dropoffTime);
+  const isLate = STARTED_STATUSES.has(status) && isManilaDatePast(dropoffDate);
   return (
     <span className="inline-flex items-center gap-1.5">
       <span
@@ -3433,7 +3433,7 @@ function DeliveryRow({ delivery, showTime, todayISO, onSelect }) {
   );
 }
 
-// Proof-of-delivery photos for a completed chain (Pickup -> Dropoff ->
+// Proof-of-delivery photos for a completed chain (Pickup -> Drop-off ->
 // Stops) — one small block per portal file rather than a shared component,
 // matching this codebase's existing per-portal convention (see
 // 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md's "On a shared component" note).
@@ -3455,7 +3455,7 @@ function ProofOfDeliverySection({ delivery }) {
       (stop, i) =>
         stop.completed &&
         stop.photoUrl && {
-          label: `Dropoff ${i + 2}`,
+          label: `Drop-off ${i + 2}`,
           photoUrl: stop.photoUrl,
           completedAt: stop.completedAt,
         },
@@ -3614,7 +3614,6 @@ function DeliveryDetailView({
         <StatusBadge
           status={delivery.status}
           dropoffDate={delivery.dropoffDate}
-          dropoffTime={delivery.dropoffTime}
         />
       </div>
 
@@ -3835,7 +3834,7 @@ function DeliveryDetailView({
           )}
 
           {/* Route Overview — for deliveries still in progress. Whole-trip
-              guide (Pickup -> Dropoff -> Stops in one map), same
+              guide (Pickup -> Drop-off -> Stops in one map), same
               PlannedRouteMap used on the active delivery's own workspace
               view -- was a static single-point embed here (no route line at
               all), same gap that view had before its own fix. PlannedRouteMap
@@ -4115,8 +4114,8 @@ function DriverDeliveries() {
   const { coordsByLocation: activeStopCoords } =
     useResolvedStopCoords(activeStopLocations);
   // Full ordered legend for the Summary card -- Pickup, then every
-  // Dropoff/Stop in the same nearest-first order Planned Route/Live
-  // Navigation actually visit them, not just a fixed Pickup/Dropoff pair.
+  // Drop-off/Stop in the same nearest-first order Planned Route/Live
+  // Navigation actually visit them, not just a fixed Pickup/Drop-off pair.
   const statusCardLegend = workspaceDelivery
     ? buildRouteLegend(
         workspaceDelivery.suggestedRoute,
@@ -4154,7 +4153,7 @@ function DriverDeliveries() {
   // a fixed reference -- see nearestDropoffOrder's own comment in
   // lib/suggestedRoute.js -- see 02B_MULTI_STOP_DELIVERIES.md's "Dynamic
   // Nearest-Dropoff Ordering") -- completion order/permission is unchanged
-  // (the Helper can still complete Dropoff or any Stop in any order,
+  // (the Helper can still complete Drop-off or any Stop in any order,
   // enforced nowhere client-side, see admin-users/index.ts), but the DRIVER
   // is now routed to whichever still-incomplete dropoff (dropoff_location or
   // a stop) is nearest to Pickup, not whichever is next in the
@@ -4186,10 +4185,10 @@ function DriverDeliveries() {
               // "lat, lng"-text fixture convention) resolved to coords: null
               // here, which nearestDropoffOrder below can never pick as
               // "nearest" over a candidate that does have coords. Since the
-              // real Dropoff normally does have coords (destinationCoords,
+              // real Drop-off normally does have coords (destinationCoords,
               // above), every coordless stop silently lost to it every time
               // -- Dynamic Nearest-Dropoff Ordering degraded into "route to
-              // the final Dropoff first, stops after in list order" instead
+              // the final Drop-off first, stops after in list order" instead
               // of true nearest-first, for the common real-address case.
               // activeStopCoords (this component's existing Photon
               // resolution, already used for the Summary card's legend) was
@@ -5523,7 +5522,7 @@ function DriverDeliveries() {
                         deliveryRequestId={workspaceDelivery?.id}
                       />
                     ) : workspaceDelivery.pickupAddress && workspaceDelivery.deliveryAddress ? (
-                      // Whole-trip guide (Pickup -> Dropoff -> Stops in one map),
+                      // Whole-trip guide (Pickup -> Drop-off -> Stops in one map),
                       // per user request -- replaces the old single-point static
                       // embed below, which only ever showed "here's the next
                       // stop," never the whole planned trip. Works off the raw
@@ -5639,7 +5638,6 @@ function DriverDeliveries() {
                           <StatusBadge
                             status={workspaceDelivery.status}
                             dropoffDate={workspaceDelivery.dropoffDate}
-                            dropoffTime={workspaceDelivery.dropoffTime}
                           />
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-3 text-xs">

@@ -391,7 +391,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs, r
   const dropoffEvents = [];
   if (delivery.dropoffCompletedAt) {
     dropoffEvents.push({
-      label: "Dropoff Completed",
+      label: "Drop-off Completed",
       location: delivery.deliveryAddress,
       at: delivery.dropoffCompletedAt,
     });
@@ -399,7 +399,7 @@ export function buildRealDriverTripReport(delivery, sessions, alerts, gpsLogs, r
   (delivery.stops || []).forEach((s, i) => {
     if (s.completed && s.completedAt) {
       dropoffEvents.push({
-        label: `Dropoff ${i + 2} Completed`,
+        label: `Drop-off ${i + 2} Completed`,
         location: s.location,
         at: s.completedAt,
       });

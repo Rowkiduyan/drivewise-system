@@ -54,7 +54,7 @@ function mapTripStatus(status) {
 }
 
 // Route label mirrors DriverDeliveries.jsx/HelperDeliveries.jsx's own
-// Pickup → Dropoff chain wording, truncated to just the two endpoints since
+// Pickup → Drop-off chain wording, truncated to just the two endpoints since
 // this table has no room for the full stop chain.
 function formatTripRoute(row) {
   return `${row.pickup_location || "Pickup"} → ${row.dropoff_location || "Drop-off"}`;

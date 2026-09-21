@@ -271,12 +271,12 @@ function parseCoords(value) {
   return { lat, lng };
 }
 
-// Full ordered legend -- Pickup, then every Dropoff/Stop in the same
+// Full ordered legend -- Pickup, then every Drop-off/Stop in the same
 // nearest-first order a computed `legs` route actually visits them. Mirrors
 // DriverDeliveries.jsx's own buildRouteLegend exactly (not shared, per this
 // codebase's existing per-portal convention) -- see its comment for why
 // this walks `legs` rather than recomputing the ordering here. Falls back
-// to a plain Pickup/Dropoff pair when no route exists yet.
+// to a plain Pickup/Drop-off pair when no route exists yet.
 function buildRouteLegend(
   legs,
   pickupAddress,
@@ -381,7 +381,7 @@ function mapDelivery(d) {
     pickupTimeEnd: d.pickupTimeEnd ? str(d.pickupTimeEnd) : "",
     pickupAddress: str(d.pickupAddress),
     deliveryAddress: str(d.deliveryAddress),
-    // Pickup -> Dropoff -> Stops chain the Helper completes with a required
+    // Pickup -> Drop-off -> Stops chain the Helper completes with a required
     // proof photo per item — see 02B_MULTI_STOP_DELIVERIES.md.
     stops: Array.isArray(d.stops) ? d.stops : [],
     // Frozen planned route, if the Driver's pre-trip screen already
@@ -433,7 +433,7 @@ function toGoogleMapEmbed(coords) {
 const GOOGLE_MAP_CONTAINER_STYLE = { width: "100%", height: "100%" };
 // Mirrors DriverDeliveries.jsx's own NAV_LEG_COLORS exactly (not shared, per
 // this codebase's existing per-portal convention) -- one color per leg of
-// the Warehouse -> Pickup -> Dropoff -> Stop 1 -> ... chain, index 0
+// the Warehouse -> Pickup -> Drop-off -> Stop 1 -> ... chain, index 0
 // reserved for the to-pickup leg. Index 0 was red until 2026-09-09 --
 // changed to teal per explicit user request (red reserved for real
 // alerts, not routine navigation).
@@ -809,7 +809,7 @@ function CrewMemberCard({ member, badgeLabel, isHighlighted = false }) {
   );
 }
 
-// Proof-of-delivery photos for a completed chain (Pickup -> Dropoff ->
+// Proof-of-delivery photos for a completed chain (Pickup -> Drop-off ->
 // Stops) — one small block per portal file rather than a shared component,
 // matching this codebase's existing per-portal convention (see
 // 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md's "On a shared component" note).
@@ -831,7 +831,7 @@ function ProofOfDeliverySection({ delivery }) {
       (stop, i) =>
         stop.completed &&
         stop.photoUrl && {
-          label: `Dropoff ${i + 2}`,
+          label: `Drop-off ${i + 2}`,
           photoUrl: stop.photoUrl,
           completedAt: stop.completedAt,
         },
@@ -1256,7 +1256,7 @@ function HelperDeliveries() {
   // actually went through.
   const [chainSuccessNotice, setChainSuccessNotice] = useState(null);
 
-  // Photo-required chain completion (Pickup -> Dropoff -> Stops), see
+  // Photo-required chain completion (Pickup -> Drop-off -> Stops), see
   // 02B_MULTI_STOP_DELIVERIES.md. confirmingChainItem identifies which row's
   // modal is open: { type: 'pickup' } | { type: 'dropoff' } | { type: 'stop', index }.
   const [confirmingChainItem, setConfirmingChainItem] = useState(null);
@@ -1298,9 +1298,9 @@ function HelperDeliveries() {
   const { coordsByLocation: activeStopCoords } =
     useResolvedStopCoords(activeStopLocations);
   // Full ordered legend for the Summary card -- Pickup, then every
-  // Dropoff/Stop in the same nearest-first order the Driver's Planned
+  // Drop-off/Stop in the same nearest-first order the Driver's Planned
   // Route/Live Navigation actually visit them, not just a fixed
-  // Pickup/Dropoff pair.
+  // Pickup/Drop-off pair.
   const statusCardLegend = workspaceDelivery
     ? buildRouteLegend(
         workspaceDelivery.suggestedRoute,
@@ -1335,7 +1335,7 @@ function HelperDeliveries() {
     item.type === "stop" ? `stop-${item.index}` : item.type;
 
   // The full completion chain for the workspace delivery, ordered Pickup
-  // first, then every remaining Dropoff/Stop nearest-from-Pickup first (same
+  // first, then every remaining Drop-off/Stop nearest-from-Pickup first (same
   // fixed-reference nearestDropoffOrder the Driver's own Planned Route/Live
   // Navigation use -- see lib/suggestedRoute.js and
   // 02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering",
@@ -1359,7 +1359,7 @@ function HelperDeliveries() {
           // so a delivery sitting in ARRIVED_PICKUP (Driver's optional
           // "Arrived" announcement, 2026-09-08) would otherwise read as
           // "OUT_FOR_DELIVERY" here too and wrongly mark Pickup done while
-          // offering Confirm Dropoff before pickup was ever confirmed.
+          // offering Confirm Drop-off before pickup was ever confirmed.
           location: workspaceDelivery.pickupAddress,
           coords: workspaceDelivery.pickupCoords,
           done: Boolean(workspaceDelivery.pickupCompletedAt),
@@ -1370,7 +1370,7 @@ function HelperDeliveries() {
         };
         const dropoffItem = {
           type: "dropoff",
-          label: "Dropoff",
+          label: "Drop-off",
           location: workspaceDelivery.deliveryAddress,
           coords: workspaceDelivery.destinationCoords,
           done: Boolean(workspaceDelivery.dropoffCompletedAt),
@@ -1378,7 +1378,7 @@ function HelperDeliveries() {
           // Also requires pickup to actually be confirmed first (not just
           // the mapped status reading "OUT_FOR_DELIVERY", which
           // ARRIVED_PICKUP collapses into as well -- see the pickup item's
-          // comment above) so Confirm Dropoff can't appear before Confirm
+          // comment above) so Confirm Drop-off can't appear before Confirm
           // Pickup ever ran.
           actionable:
             workspaceDelivery.status === "OUT_FOR_DELIVERY" &&
@@ -1388,15 +1388,15 @@ function HelperDeliveries() {
         const stopItems = workspaceDelivery.stops.map((stop, index) => ({
           type: "stop",
           index,
-          // "Dropoff N" naming, not "Stop N" -- every point after Pickup is
-          // conceptually another dropoff (Dropoff itself is implicitly
-          // "Dropoff 1"), keeps the chain's vocabulary consistent end to end
+          // "Drop-off N" naming, not "Stop N" -- every point after Pickup is
+          // conceptually another dropoff (Drop-off itself is implicitly
+          // "Drop-off 1"), keeps the chain's vocabulary consistent end to end
           // (Delivery Chain list, confirm modal, Proof of Delivery labels).
           // This label is fixed to the ORIGINAL booking-order index, even
           // though the tab's actual POSITION below is nearest-ordered --
           // matches the Schedule panel's "Drop-off N" labels (SupDeliveries.jsx),
           // same reasoning as SuggestedRouteMap.jsx's marker numbering.
-          label: `Dropoff ${index + 2}`,
+          label: `Drop-off ${index + 2}`,
           location: stop.location,
           coords: parseCoords(stop.location) || activeStopCoords[stop.location] || null,
           done: Boolean(stop.completed),
@@ -1508,7 +1508,7 @@ function HelperDeliveries() {
           );
         } catch (verificationError) {
           console.warn(
-            "Dropoff photo verification unavailable:",
+            "Drop-off photo verification unavailable:",
             verificationError,
           );
           setChainPhotoVerification({
@@ -1656,8 +1656,8 @@ function HelperDeliveries() {
           confirmingChainItem.type === "pickup"
             ? "Pickup"
             : confirmingChainItem.type === "dropoff"
-              ? "Dropoff"
-              : `Dropoff ${confirmingChainItem.index + 2}`,
+              ? "Drop-off"
+              : `Drop-off ${confirmingChainItem.index + 2}`,
         isFinal: Boolean(result.data?.isFinal),
       });
       closeChainModal();
@@ -2115,7 +2115,7 @@ function HelperDeliveries() {
                       </div>
                     </section>
 
-                    {/* Pickup -> Dropoff -> Stops chain, each item completed with a
+                    {/* Pickup -> Drop-off -> Stops chain, each item completed with a
                   required proof photo — see 02B_MULTI_STOP_DELIVERIES.md. */}
                     {isDrivingStage && (
                       <section className="rounded-xl border border-teal-200/70 bg-white p-3 sm:p-4">
@@ -2507,8 +2507,8 @@ function HelperDeliveries() {
               {confirmingChainItem.type === "pickup"
                 ? "Pickup"
                 : confirmingChainItem.type === "dropoff"
-                  ? "Dropoff"
-                  : `Dropoff ${confirmingChainItem.index + 2}`}
+                  ? "Drop-off"
+                  : `Drop-off ${confirmingChainItem.index + 2}`}
             </h2>
             <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
               A photo is required as proof before this can be marked complete.

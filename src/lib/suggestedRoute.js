@@ -245,6 +245,74 @@ export function classifyRouteDeviation({
   };
 }
 
+// Some stop locations are stored as a "lat, lng" coordinate pair rather than
+// a street address -- parse those back into coords. Mirrors
+// DriverDeliveries.jsx's/SuggestedRouteMap.jsx's identical helper (not
+// shared, per this codebase's existing per-portal convention -- kept here
+// only because matchStopLegsToIndexes below needs it too).
+function parseCoords(value) {
+  if (!value) return null;
+  const m = String(value)
+    .trim()
+    .match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const lat = parseFloat(m[1]);
+  const lng = parseFloat(m[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+// Matches each "stop" leg back to its stops[] index, primarily by nearest
+// real coordinate (a stop leg's `to` key has no index of its own --
+// computeSuggestedRoute only tags it generically). Shared by
+// SuggestedRouteMap.jsx (its own stop markers) and SupDeliveries.jsx's
+// LocationSwitcher (the Pickup/Drop-off zoom buttons' fallback position).
+//
+// Falls back to positional order (first unmatched leg -> first unmatched
+// stop) whenever a stop's address can't be geocoded at all, e.g. a Google
+// Plus Code like "P2RR+73W, ..." that Photon (OSM-based) doesn't understand
+// -- found live on DR-0078, where the nearest-coordinate match silently
+// dropped that stop's marker and its zoom button had no fallback position
+// to focus on. Positional order is a safe fallback here specifically
+// because computeSuggestedRoute always emits "stop" legs in the same
+// booking order stops[] is in.
+export function matchStopLegsToIndexes(legs, stops, resolvedStopCoords) {
+  const stopList = stops || [];
+  const matched = new Array(stopList.length).fill(null);
+  const usedStopIndexes = new Set();
+  const unmatchedLegs = [];
+
+  (legs || []).forEach((leg) => {
+    if (leg.to !== "stop") return;
+    const [endLat, endLng] = leg.path[leg.path.length - 1];
+    let bestIndex = -1;
+    let bestDist = Infinity;
+    stopList.forEach((s, i) => {
+      if (usedStopIndexes.has(i)) return;
+      const c = parseCoords(s.location) || resolvedStopCoords[s.location];
+      if (!c) return;
+      const d = (c.lat - endLat) ** 2 + (c.lng - endLng) ** 2;
+      if (d < bestDist) {
+        bestDist = d;
+        bestIndex = i;
+      }
+    });
+    if (bestIndex !== -1) {
+      usedStopIndexes.add(bestIndex);
+      matched[bestIndex] = leg;
+    } else {
+      unmatchedLegs.push(leg);
+    }
+  });
+
+  let legPtr = 0;
+  for (let i = 0; i < stopList.length && legPtr < unmatchedLegs.length; i++) {
+    if (matched[i] == null) matched[i] = unmatchedLegs[legPtr++];
+  }
+
+  return matched;
+}
+
 // Fetches every auto-reroute LiveNavigationMap logged for a delivery
 // (DriverDeliveries.jsx's log-reroute), shaped for classifyRouteDeviation's
 // `rerouteSegments` (via `.map((r) => r.new_path)`) and for display
@@ -318,7 +386,7 @@ export function nearestDropoffOrder(referencePos, candidates) {
 // won't fix.
 const RETRYABLE_DIRECTIONS_STATUSES = new Set(["ZERO_RESULTS", "NOT_FOUND"]);
 
-// Computes the full Warehouse -> Pickup -> Dropoff/Stops (nearest-order)
+// Computes the full Warehouse -> Pickup -> Drop-off/Stops (nearest-order)
 // route via one DirectionsService request, resolving to the same
 // `[{from, to, path}]` shape persisted as delivery_requests.suggested_route
 // (see DATABASE.md). Requires window.google.maps.DirectionsService to

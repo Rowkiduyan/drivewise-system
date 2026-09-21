@@ -24,7 +24,11 @@ import {
 import CustomerLayout from "../layout/CustomerLayout.jsx";
 import { truckTypes, getItemTypeLabel } from "../lib/deliveryOptions.js";
 import { supabase } from "../lib/supabaseClient.js";
-import { manilaTodayISO, MANILA_TIMEZONE } from "../lib/manilaTime.js";
+import {
+  manilaTodayISO,
+  MANILA_TIMEZONE,
+  isManilaDatePast,
+} from "../lib/manilaTime.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
 import SuggestedRouteMap from "../components/SuggestedRouteMap.jsx";
 
@@ -131,6 +135,23 @@ const statusConfig = {
   },
   CANCELLED: { label: "Cancelled", color: "bg-red-100 text-red-800", icon: X },
 };
+
+// Late applies only once the crew has actually started the trip (For Pickup
+// is still "hasn't left yet") and up to, but not including,
+// Delivered/Completed -- a finished delivery's badge should read as done,
+// not late. Mirrors DriverDeliveries.jsx's / SupDeliveries.jsx's own
+// STARTED_STATUSES, against this page's own simplified customer status set.
+const STARTED_STATUSES = new Set(["FOR_PICKUP", "OUT_FOR_DELIVERY"]);
+
+// Date-only, not date+time -- dropoff_time is a delivery window (like a
+// store's open hours), not a due time, so lateness only kicks in once the
+// scheduled date itself has passed (see isManilaDatePast).
+function isRequestLate(request) {
+  return (
+    STARTED_STATUSES.has(request.status) &&
+    isManilaDatePast(request.dropoffDate)
+  );
+}
 
 // Statuses where cancellation is still possible — once a delivery is out for
 // delivery, delivered, completed, or already cancelled, there's nothing left
@@ -319,9 +340,9 @@ const DROPOFF_ORDINAL_WORDS = [
 // progress messages (2026-09-04, per user request — the Customer portal has
 // no live truck navigation, so this is how a customer knows the crew's
 // current pickup/drop-off status instead). Chain order is Pickup -> primary
-// Dropoff -> each of `stops` in order, matching the real chain
+// Drop-off -> each of `stops` in order, matching the real chain
 // 02B_MULTI_STOP_DELIVERIES.md's Helper-owned completion actions already
-// enforce (also ProofOfDeliverySection's existing "Dropoff N" labeling).
+// enforce (also ProofOfDeliverySection's existing "Drop-off N" labeling).
 // Purely derived from real completion fields (pickupCompletedAt/
 // dropoffCompletedAt/stops[i].completedAt) and each location's own address
 // text — no live position/ETA involved, so "on its way to X" is inferred
@@ -348,6 +369,12 @@ function buildTransitSubsteps(request) {
       location: request.dropoffLocation,
       done: Boolean(request.dropoffPhotoUrl),
       completedAt: request.dropoffCompletedAt,
+      // Driver's optional "Arrived at Drop-off" action (dropoff_arrived_at) --
+      // primary dropoff only, no per-stop equivalent (DATABASE.md's
+      // delivery_requests notes). Lets this stage show "arrived, unloading"
+      // as its own milestone instead of jumping straight from "on its way" to
+      // "completed".
+      arrivedAt: request.dropoffArrivedAt,
     },
     ...stops.map((s, i) => ({
       kind: "dropoff",
@@ -383,10 +410,17 @@ function buildTransitSubsteps(request) {
     // a sub-event once it has actually happened" rule (see the doc comment
     // above buildCustomerTimeline).
     if (item.kind !== "pickup") {
-      substeps.push({
-        label: `The delivery crew is on its way to ${item.location}${suffix}.`,
-        timestamp: null,
-      });
+      if (item.arrivedAt) {
+        substeps.push({
+          label: `The delivery crew arrived at ${item.location}${suffix} and is unloading.`,
+          timestamp: formatTimestamp(item.arrivedAt),
+        });
+      } else {
+        substeps.push({
+          label: `The delivery crew is on its way to ${item.location}${suffix}.`,
+          timestamp: null,
+        });
+      }
     }
     break;
   }
@@ -500,6 +534,19 @@ function buildCustomerTimeline(request) {
                   {
                     label: `Pickup Scheduled — ${request.confirmedPickupDate} at ${request.confirmedPickupTime}`,
                     timestamp: null,
+                  },
+                ]
+              : []),
+            // Driver's optional "Arrived at Pickup" action (pickup_arrived_at,
+            // DATABASE.md's delivery_requests notes) -- skippable, so only
+            // shown once it's actually been recorded. This is the milestone
+            // the Supervisor's Progress Details already shows (ARRIVED_PICKUP)
+            // that previously had no customer-facing equivalent.
+            ...(request.pickupArrivedAt
+              ? [
+                  {
+                    label: `The delivery crew arrived at ${request.pickupLocation}.`,
+                    timestamp: formatTimestamp(request.pickupArrivedAt),
                   },
                 ]
               : []),
@@ -1060,7 +1107,7 @@ function MobileDetailCard({ children }) {
 // to read inside a small dialog, especially on a phone. Everything the old
 // modal showed is still here, just laid out as page sections with a Back
 // action instead of dialog chrome.
-// Proof-of-delivery photos for a completed chain (Pickup -> Dropoff ->
+// Proof-of-delivery photos for a completed chain (Pickup -> Drop-off ->
 // Stops) — one small block per portal file rather than a shared component,
 // matching this codebase's existing per-portal convention (see
 // 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md's "On a shared component" note).
@@ -1087,7 +1134,7 @@ function ProofOfDeliverySection({ request }) {
       (stop, i) =>
         stop.completed &&
         stop.photoUrl && {
-          label: `Dropoff ${i + 2}`,
+          label: `Drop-off ${i + 2}`,
           photoUrl: stop.photoUrl,
           completedAt: stop.completedAt,
         },
@@ -1196,6 +1243,7 @@ function RequestDetailView({
 
   const status = statusConfig[request.status] || statusConfig.PENDING_REQUEST;
   const StatusIcon = status.icon;
+  const isLate = isRequestLate(request);
   // The eyebrow label above the ID — "request" only really fits while it's
   // still being requested/quoted; once a crew is moving on it, it's a
   // delivery, not a request anymore.
@@ -1395,11 +1443,18 @@ function RequestDetailView({
             {request.id}
           </h1>
         </div>
-        <span
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${status.color}`}
-        >
-          <StatusIcon className="h-3 w-3" />
-          {status.label}
+        <span className="flex shrink-0 items-center gap-1.5">
+          <span
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${status.color}`}
+          >
+            <StatusIcon className="h-3 w-3" />
+            {status.label}
+          </span>
+          {isLate && (
+            <span className="inline-flex shrink-0 items-center rounded-full bg-red-100 px-2.5 py-1 text-[11px] font-semibold text-red-700">
+              Late
+            </span>
+          )}
         </span>
       </div>
 
@@ -1422,6 +1477,11 @@ function RequestDetailView({
               >
                 {status.label}
               </span>
+              {isLate && (
+                <span className="inline-flex shrink-0 items-center rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
+                  Late
+                </span>
+              )}
             </div>
             <p className="mt-0.5 text-xs text-slate-500">{detailsLabel}</p>
           </div>
@@ -2941,6 +3001,7 @@ function RequestDetailView({
 // Request Card Component
 function RequestCard({ request, onViewDetails, onConfirmReceived }) {
   const status = statusConfig[request.status] || statusConfig.PENDING_REQUEST;
+  const isLate = isRequestLate(request);
   const itemLabel =
     request.itemType === "other"
       ? `Other: ${request.otherItemType}`
@@ -3046,10 +3107,17 @@ function RequestCard({ request, onViewDetails, onConfirmReceived }) {
           </div>
 
           <div className="flex shrink-0 flex-col items-end gap-2 pt-0.5">
-            <span
-              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${status.color}`}
-            >
-              {status.label}
+            <span className="flex items-center gap-1">
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${status.color}`}
+              >
+                {status.label}
+              </span>
+              {isLate && (
+                <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700">
+                  Late
+                </span>
+              )}
             </span>
             <ChevronRight className="h-4 w-4 text-slate-300" />
           </div>
@@ -3097,7 +3165,7 @@ function RequestCard({ request, onViewDetails, onConfirmReceived }) {
         onClick={() => onViewDetails(request)}
         className="hidden cursor-pointer gap-4 border-b border-emerald-100 px-5 py-4 transition [&>*]:min-w-0 last:border-b-0 hover:bg-emerald-50/40 md:grid md:grid-cols-[0.7fr_0.6fr_1.7fr_1.6fr_1.6fr_0.3fr] md:items-center"
       >
-        <div className="flex justify-center">
+        <div className="flex flex-wrap items-center justify-center gap-1">
           <span
             className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-center text-[11px] font-semibold leading-tight ${status.color}`}
           >
@@ -3109,6 +3177,11 @@ function RequestCard({ request, onViewDetails, onConfirmReceived }) {
             )}
             {status.label}
           </span>
+          {isLate && (
+            <span className="inline-flex shrink-0 rounded-full bg-red-100 px-2.5 py-1 text-center text-[11px] font-semibold leading-tight text-red-700">
+              Late
+            </span>
+          )}
         </div>
         <p className="text-center text-sm font-semibold text-slate-900">
           {request.id}
@@ -3161,14 +3234,16 @@ function mapDeliveryRow(row) {
     budgetMax: row.budget_max,
     notes: row.notes || "",
     // Reference-only intermediate stops between pickup/dropoff, plus
-    // proof-photo state for each item in the Pickup -> Dropoff -> Stops
+    // proof-photo state for each item in the Pickup -> Drop-off -> Stops
     // chain, written by the Helper's completion actions — read-only here
     // (02B_MULTI_STOP_DELIVERIES.md, 02C_ROUTE_STYLING_AND_PROOF_VISIBILITY.md).
     stops: Array.isArray(row.stops) ? row.stops : [],
     pickupPhotoUrl: row.pickup_photo_url || null,
     pickupCompletedAt: row.pickup_completed_at || null,
+    pickupArrivedAt: row.pickup_arrived_at || null,
     dropoffPhotoUrl: row.dropoff_photo_url || null,
     dropoffCompletedAt: row.dropoff_completed_at || null,
+    dropoffArrivedAt: row.dropoff_arrived_at || null,
     // The route CustomerRequestDelivery.jsx auto-generated at submission
     // time -- shown to the customer as soon as it exists (ApprovedRouteMap
     // below); the Supervisor no longer reviews/approves it before this

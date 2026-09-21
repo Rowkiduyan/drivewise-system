@@ -150,8 +150,8 @@ const IN_PROGRESS_STATUSES = ["OUT_FOR_PICKUP", "ARRIVED_PICKUP", "OUT_FOR_DROPO
 const MILESTONE_TONE = {
   OUT_FOR_PICKUP: { label: "Out for Pickup", tone: "sky" },
   ARRIVED_PICKUP: { label: "Arrived Pickup", tone: "sky" },
-  OUT_FOR_DROPOFF: { label: "Out for Dropoff", tone: "blue" },
-  ARRIVED_DROPOFF: { label: "Arrived Dropoff", tone: "blue" },
+  OUT_FOR_DROPOFF: { label: "Out for Drop-off", tone: "blue" },
+  ARRIVED_DROPOFF: { label: "Arrived Drop-off", tone: "blue" },
 };
 
 const TRIP_STATE_TONE = { Active: "emerald", Paused: "amber" };

@@ -7,22 +7,7 @@ import {
 } from "@react-google-maps/api";
 import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
 import { useResolvedStopCoords } from "../lib/forwardGeocode.js";
-
-// Some stop locations are stored as a "lat, lng" coordinate pair rather than
-// a street address -- parse those back into coords. Mirrors
-// DriverDeliveries.jsx's identical helper (not shared, per this codebase's
-// existing per-portal convention).
-function parseCoords(value) {
-  if (!value) return null;
-  const m = String(value)
-    .trim()
-    .match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
-  if (!m) return null;
-  const lat = parseFloat(m[1]);
-  const lng = parseFloat(m[2]);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  return { lat, lng };
-}
+import { matchStopLegsToIndexes } from "../lib/suggestedRoute.js";
 
 const MAP_CONTAINER_STYLE = { width: "100%", height: "100%" };
 // Index 0 was red until 2026-09-09 -- changed to teal per explicit user
@@ -45,6 +30,13 @@ export default function SuggestedRouteMap({
   suggestedRoute,
   stops,
   title = "Planned Route",
+  // Optional [lat, lng] pair -- when set, the map pans/zooms to this point
+  // instead of fitting the whole route in view (e.g. Supervisor's Pickup/
+  // Drop-off toggle buttons focusing on one leg's endpoint). Kept in sync
+  // via the effect below so switching points re-focuses an already-mounted
+  // map rather than remounting it.
+  focusPos,
+  focusZoom = 17,
 }) {
   const { isLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS);
   const mapRef = useRef(null);
@@ -65,42 +57,20 @@ export default function SuggestedRouteMap({
   // drop-off, not a conceptually separate "main" one -- so every drop-off
   // (main + stops) gets ONE consistent numbering, matching the Schedule
   // panel's "Drop-off 1/2/3..." labels (booking order), not the driving
-  // visit order Dynamic Nearest-Dropoff Ordering actually routes in. A
-  // "stop" leg's `to` key has no index of its own (computeSuggestedRoute
-  // only tags it generically), so each one is matched back to its original
-  // stops[] entry by nearest real coordinate -- same technique
-  // DriverDeliveries.jsx's buildRouteLegend already uses for its own legend.
-  const stopNumberByLegIndex = useMemo(() => {
-    const usedStopIndexes = new Set();
-    return legs.map((leg) => {
-      if (leg.to !== "stop") return null;
-      const [endLat, endLng] = leg.path[leg.path.length - 1];
-      let bestIndex = -1;
-      let bestDist = Infinity;
-      (stops || []).forEach((s, i) => {
-        if (usedStopIndexes.has(i)) return;
-        const c = parseCoords(s.location) || resolvedStopCoords[s.location];
-        if (!c) return;
-        const d = (c.lat - endLat) ** 2 + (c.lng - endLng) ** 2;
-        if (d < bestDist) {
-          bestDist = d;
-          bestIndex = i;
-        }
-      });
-      if (bestIndex === -1) return null;
-      usedStopIndexes.add(bestIndex);
-      // +2: index 0 is "Drop-off 2" (index 0 in stops[] follows the main
-      // Drop-off, which is "Drop-off 1").
-      return bestIndex + 2;
-    });
-  }, [legs, stops, resolvedStopCoords]);
+  // visit order Dynamic Nearest-Dropoff Ordering actually routes in.
+  const stopLegByIndex = useMemo(
+    () => matchStopLegsToIndexes(legs, stops, resolvedStopCoords),
+    [legs, stops, resolvedStopCoords],
+  );
 
-  const stopMarkers = legs
+  const stopMarkers = stopLegByIndex
     .map((leg, i) =>
-      leg.to === "stop" && stopNumberByLegIndex[i] != null
+      leg
         ? {
             pos: leg.path[leg.path.length - 1],
-            number: stopNumberByLegIndex[i],
+            // +2: index 0 is "Drop-off 2" (index 0 in stops[] follows the
+            // main Drop-off, which is "Drop-off 1").
+            number: i + 2,
           }
         : null,
     )
@@ -114,8 +84,14 @@ export default function SuggestedRouteMap({
   }, [isLoaded, legs]);
 
   useEffect(() => {
-    if (mapRef.current && bounds) mapRef.current.fitBounds(bounds, 16);
-  }, [bounds]);
+    if (!mapRef.current) return;
+    if (focusPos) {
+      mapRef.current.panTo({ lat: focusPos[0], lng: focusPos[1] });
+      mapRef.current.setZoom(focusZoom);
+    } else if (bounds) {
+      mapRef.current.fitBounds(bounds, 16);
+    }
+  }, [bounds, focusPos, focusZoom]);
 
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -136,7 +112,12 @@ export default function SuggestedRouteMap({
             mapContainerStyle={MAP_CONTAINER_STYLE}
             onLoad={(map) => {
               mapRef.current = map;
-              if (bounds) map.fitBounds(bounds, 16);
+              if (focusPos) {
+                map.panTo({ lat: focusPos[0], lng: focusPos[1] });
+                map.setZoom(focusZoom);
+              } else if (bounds) {
+                map.fitBounds(bounds, 16);
+              }
             }}
             options={{ disableDefaultUI: true, zoomControl: true, gestureHandling: "greedy" }}
           >
