@@ -1,7 +1,7 @@
 import AdminLayout from "../layout/AdminLayout.jsx";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, LocateFixed, Loader2, MapPin, Maximize2, Minimize2 } from "lucide-react";
+import { AlertTriangle, Info, LocateFixed, Loader2, MapPin, Maximize2, Minimize2 } from "lucide-react";
 import { GoogleMap, Marker as GoogleMapMarker, useJsApiLoader } from "@react-google-maps/api";
 import DateRangeFilter from "../components/DateRangeFilter.jsx";
 import { supabase } from "../lib/supabaseClient.js";
@@ -539,10 +539,18 @@ function useFleetOps() {
       const truck = trucks.find((t) => t.plate_number === session?.truck_plate);
       return {
         id: a.id,
+        // Groups this alert with the rest of its trip's alerts in
+        // DriverSafetyList below -- a raw session id, not display text.
+        sessionId: a.session_id || null,
         name: driverNameById[session?.driver_id] || session?.driver_id || "Unknown driver",
         truck: truck?.plate_number || session?.truck_plate || "",
         alertType: ALERT_TYPE_LABELS[a.event_type] || a.event_type,
         time: new Date(a.created_at).toLocaleTimeString("en-US", { timeZone: MANILA_TIMEZONE, hour: "2-digit", minute: "2-digit" }),
+        // Kept alongside the display-only `time` string above (which loses
+        // both the date and sort order) -- DriverSafetyList's per-trip
+        // expansion needs a real sortable/comparable instant to show alerts
+        // newest-to-oldest.
+        createdAt: a.created_at,
         severity: ALERT_SEVERITY[a.event_type] || "Medium",
         tripAlerts: runningCountById.get(a.id) || 1,
         deliveryId: session?.delivery_request_id || null,
@@ -954,32 +962,360 @@ function DriverSafetyPaginationBar({ page, setPage, totalPages }) {
   );
 }
 
-// Alerts grouped by driver -- one row per driver instead of one row per
-// alert, so a frequent offender (e.g. multiple "Jin Jin" alerts) doesn't
-// repeat the same name down the table. Each row expands (chevron toggle) to
-// reveal that driver's individual alerts.
-function groupAlertsByDriver(data) {
-  const byDriver = new Map();
+// Alerts grouped by trip (delivery) -- one row per trip instead of one row
+// per alert or one row per driver, so a frequent offender's table entry
+// doesn't repeat the same name down the table (the original bug, fixed
+// 2026-09-22 per an explicit user request/screenshot against
+// SupDashboard.jsx's identical panel) *and* doesn't conflate two genuinely
+// different trips for the same driver into one dropdown (this file's
+// original per-driver grouping's own separate gap, raised and fixed the
+// same day -- "in their specific trip" was the guiding phrase for the fix).
+// Falls back to `sessionId`, then the alert's own `id`, as the grouping key
+// whenever `deliveryId` is missing, so a legacy/malformed alert with no
+// delivery link still gets its own single-alert "trip" row instead of being
+// silently dropped or merged into the wrong group. Each row expands
+// (chevron toggle) to reveal that trip's individual alerts, newest-to-oldest.
+//
+// Keyed on `deliveryId`, not `sessionId` -- corrected 2026-09-22 same day,
+// from a real screenshot showing the same driver/truck as two separate
+// cards a few minutes apart. `driver-trip`'s `resume-trip` action always
+// mints a brand-new `session_id` on every pause/resume (`crypto.
+// randomUUID()`, same `delivery_request_id`), and `end-trip` does the same
+// again to open a Return-Trip monitoring session (14_RETURN_TRIP_
+// MONITORING.md) -- so one real delivery/trip can span several session
+// rows. Grouping by session (the original key) split that one trip's alert
+// history across each pause/resume boundary, which is exactly what "their
+// specific trip" wasn't supposed to mean. Mirrors SupDashboard.jsx's
+// identical panel (same fix applied to both).
+function groupAlertsIntoTrips(data) {
+  const byKey = new Map();
   for (const a of data) {
-    const entry = byDriver.get(a.name) || { name: a.name, truck: a.truck, alerts: [], highest: "Low" };
-    entry.alerts.push(a);
-    if (SEVERITY_RANK[a.severity] > SEVERITY_RANK[entry.highest]) entry.highest = a.severity;
-    byDriver.set(a.name, entry);
+    const key = a.deliveryId || a.sessionId || a.id;
+    const entry = byKey.get(key);
+    if (entry) {
+      entry.alerts.push(a);
+    } else {
+      byKey.set(key, { key, name: a.name, truck: a.truck, deliveryId: a.deliveryId, alerts: [a] });
+    }
   }
-  return Array.from(byDriver.values()).map((entry) => ({
-    name: entry.name,
-    truck: entry.truck,
-    severity: entry.highest,
-    count: entry.alerts.length,
-    latestTime: entry.alerts[0]?.time,
-    alerts: entry.alerts,
+  return Array.from(byKey.values()).map((entry) => {
+    // Newest-to-oldest -- `time` alone can't sort correctly (it's a
+    // formatted "02:34 PM" string with no date), so this uses the raw
+    // `createdAt` instant instead.
+    const alerts = [...entry.alerts].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    let severity = "Low";
+    for (const a of alerts) {
+      if (SEVERITY_RANK[a.severity] > SEVERITY_RANK[severity]) severity = a.severity;
+    }
+    return {
+      key: entry.key,
+      name: entry.name,
+      truck: entry.truck,
+      deliveryId: entry.deliveryId,
+      // The trip's own summary row shows the most recent alert's own
+      // type/time/severity -- all three fields describe that one same
+      // alert (2026-09-22, explicit user feedback: the badge showing the
+      // trip-wide worst severity next to a *different* alert's type/time
+      // read as inconsistent/mismatched -- "the label of the recent alert
+      // should be the one labeled not the highest"). `severity` (the worst
+      // anywhere in the trip) is kept only for sort order below, so a trip
+      // with one dangerous moment still bubbles up even once things calmed
+      // down -- it's just no longer shown as the summary row's own badge.
+      severity,
+      count: alerts.length,
+      latestTime: alerts[0]?.time,
+      latestSeverity: alerts[0]?.severity,
+      alerts,
+    };
+  });
+}
+
+// Two alerts can legitimately land in the same displayed minute -- the Pi
+// fires "Eyes Not Detected" once per continuous no-face episode and resets
+// the moment a face is seen again for even a single frame (pi/
+// drowsiness_monitor.py), so a flickery camera view can produce several
+// genuinely distinct alerts a few seconds apart. `a.time` only shows
+// hour:minute, which made these look like duplicate/spammed rows (explicit
+// user question after a screenshot: "is this a bug? ... alerts like eyes
+// not detected which both happened at 2:30"). Not a bug -- confirmed no
+// dedup/rate-limiting exists anywhere in the pipeline (alert-upload/
+// index.ts inserts whatever the Pi sends) and the Pi's own fire-once-per-
+// episode flag only resets on actual face re-detection, so each row is a
+// real, separate episode. UI-only fix (explicit user decision, over also
+// tightening the Pi's re-trigger logic): show seconds for any alert whose
+// displayed minute collides with another alert in the same trip, so they
+// read as distinct events instead of an apparent duplicate/glitch. Mirrors
+// SupDashboard.jsx's identical panel (same fix applied to both).
+function formatAlertTimesWithCollisions(alerts) {
+  const countByMinute = new Map();
+  for (const a of alerts) countByMinute.set(a.time, (countByMinute.get(a.time) || 0) + 1);
+  return alerts.map((a) => ({
+    ...a,
+    displayTime:
+      countByMinute.get(a.time) > 1
+        ? new Date(a.createdAt).toLocaleTimeString("en-US", {
+            timeZone: MANILA_TIMEZONE,
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          })
+        : a.time,
   }));
+}
+
+// A trip's individual alerts, newest-to-oldest, nested under its driver card
+// below rather than laid out as another table (2026-09-22 redesign, explicit
+// user request: the driver/header row had too much dead horizontal space
+// while this list felt cramped and repetitive). Each row is a real
+// `grid-cols-4` matching the header row below's own 4 columns exactly --
+// (1) a vertical connector line sitting where the header's Driver column
+// is, (2) Alert Type, (3) Time, (4) Severity -- per explicit follow-up user
+// feedback ("the vertical colored line should be in the first column
+// aligned to the driver name and all... align it to their headers"). The
+// trailing invisible spacer (matching the header row's `w-20` count
+// element, class-for-class) is what actually makes the two grids the same
+// width, so the columns land at the same x-position. This per-row structure
+// is deliberately kept exactly as-is (explicit user instruction: "the
+// structure is already fine, do not change it") -- only the line itself was
+// changed to close its per-row gaps, see the inline comment below. Mirrors
+// SupDashboard.jsx's identical panel (same fix applied to both).
+function AlertTimeline({ alerts }) {
+  const withDisplayTimes = formatAlertTimesWithCollisions(alerts);
+  return (
+    <div>
+      {withDisplayTimes.map((a, i) => {
+        // A trip (delivery) can span several `sessions` rows -- pause/
+        // resume and the Return-Trip leg each open a brand-new session_id
+        // under the same delivery (see groupAlertsIntoTrips' own comment).
+        // Marks where that happens within the alert history, explicit user
+        // request: "is there a way to put an indicator when lets say a trip
+        // got resumed or a session opened up." Left column deliberately
+        // empty here (no line-drawing cell) -- the connector line visibly
+        // pausing at this row is itself part of the indicator, not a
+        // rendering gap.
+        const isNewSession = i > 0 && a.sessionId !== withDisplayTimes[i - 1].sessionId;
+        return (
+          <Fragment key={a.id}>
+            {isNewSession && (
+              <div className="flex items-center gap-4 py-1">
+                <div className="grid flex-1 grid-cols-4 items-center gap-4">
+                  <div />
+                  <div className="col-span-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    <span className="h-px flex-1 bg-slate-200" />
+                    New session started
+                    <span className="h-px flex-1 bg-slate-200" />
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="flex items-center gap-4 py-1.5">
+              <div className="grid flex-1 grid-cols-4 items-center gap-4">
+                {/* Left blank -- the connector line that used to live here
+                    was removed per explicit user decision ("nevermind just
+                    remove the vertical line and leave that column blank"),
+                    after several rounds trying to make it render as one
+                    continuous line. Kept as an empty column (not collapsed
+                    out of the grid) so Alert Type/Time/Severity below still
+                    line up with the header row's own 4 columns. */}
+                <div />
+                <span className="min-w-0 truncate text-xs text-slate-600">{a.alertType}</span>
+                <span className="min-w-0 text-[11px] text-slate-400">{a.displayTime}</span>
+                {/* Local pill, not the shared <Badge> -- explicit user
+                    request was specific to this list ("remove the circle
+                    icon on the picture and center the word on the
+                    highlight"), and <Badge> is reused elsewhere on this
+                    dashboard (device/trip status, etc.) where the dot is
+                    still wanted, so this only changes severity's display
+                    here rather than every Badge on the page. */}
+                <span
+                  className={`flex w-full items-center justify-center rounded px-1.5 py-1 text-[10.5px] font-semibold ${TONE[SEVERITY_TONE[a.severity]].bg} ${TONE[SEVERITY_TONE[a.severity]].text}`}
+                >
+                  {a.severity}
+                </span>
+              </div>
+              <div className="invisible w-20 shrink-0 text-right text-xs" aria-hidden="true">
+                0 alerts
+              </div>
+            </div>
+          </Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+// One driver/trip's collapsed summary + (when expanded) its alert history --
+// a self-contained card rather than a <tr> pair, so the expanded list reads
+// as content *inside* this driver's card instead of a visually separate
+// table underneath it (2026-09-22 redesign, explicit user request). The
+// header row's data fields now sit in a true equal-width `grid-cols-4`
+// (Driver, Alert Type, Time, Severity -- Alert Type/Time split into their
+// own columns rather than stacked together, so this grid has the same 4
+// columns as the expanded AlertTimeline list below and the two visually
+// align, per explicit follow-up user feedback: "align it to their
+// headers"). The alert count is deliberately kept outside this 4-column
+// grid, as a small fixed-width trailing element -- it's a count/action, not
+// the same kind of data as the four columns. (AlertTimeline reserves an
+// identical invisible spacer for this same element, which is what keeps
+// its own grid the same width as this one.) No View Trip link here --
+// unlike SupDashboard.jsx's version, there's no /admin/deliveries page to
+// send it to.
+function DriverSafetyRow({ trip, isExpanded, onToggle }) {
+  const isMultiAlert = trip.count > 1;
+  return (
+    <div
+      className={`rounded-lg border transition-colors ${
+        isExpanded ? "border-slate-200 bg-slate-50/50" : "border-slate-100"
+      }`}
+    >
+      <div
+        className={`flex items-center gap-4 rounded-lg px-2.5 py-2 cursor-pointer ${
+          isExpanded ? "" : "hover:bg-slate-50"
+        }`}
+        onClick={onToggle}
+      >
+        <div className="grid flex-1 grid-cols-4 items-center gap-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Avatar name={trip.name} />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-slate-800">{trip.name}</p>
+              <p className="truncate text-[11px] text-slate-500">{trip.truck}</p>
+            </div>
+          </div>
+
+          <div className="min-w-0">
+            <p className="truncate text-xs text-slate-700">{trip.alerts[0]?.alertType}</p>
+            {/* Labels this row's data as the latest alert specifically --
+                explicit user request, after the header/dropdown split made
+                it worth spelling out: "add an indicator that the first row
+                is the recent alert." */}
+            <p className="text-[10px] uppercase tracking-wide text-slate-400">Most recent</p>
+          </div>
+
+          <p className="min-w-0 text-[11px] text-slate-400">{trip.latestTime}</p>
+
+          <div className="min-w-0">
+            {/* The latest alert's own severity, matching the Alert
+                Type/Time shown alongside it -- reverted 2026-09-22 from
+                showing the trip-wide worst severity here (with a "highest
+                this trip" caption), per explicit user feedback that the
+                badge should describe the same alert its row's other two
+                fields already do, not a different aggregate one. The worst
+                severity anywhere in the trip is still tracked (`trip.
+                severity`) and still drives sort order below -- it's just
+                not shown as this badge anymore.
+                Same local no-dot/centered/full-width pill as the expanded
+                list below, not the shared <Badge> -- explicit follow-up
+                user request: "apply the same design to the first row
+                should be highlight only too without the circle." */}
+            <span
+              className={`flex w-full items-center justify-center rounded px-1.5 py-1 text-[10.5px] font-semibold ${TONE[SEVERITY_TONE[trip.latestSeverity]].bg} ${TONE[SEVERITY_TONE[trip.latestSeverity]].text}`}
+            >
+              {trip.latestSeverity}
+            </span>
+          </div>
+        </div>
+
+        <div className="w-20 shrink-0 text-right text-xs text-slate-500">
+          {trip.count} {trip.count === 1 ? "alert" : "alerts"}
+          {isMultiAlert && (
+            <span className="ml-1 inline-block text-slate-400">{isExpanded ? "▲" : "▼"}</span>
+          )}
+        </div>
+      </div>
+
+      {isExpanded && isMultiAlert && (
+        <div className="px-2.5 pb-1">
+          {/* `pb-1` only, no top padding -- the gap between the header row
+              above and the dropdown's first row read as too big (explicit
+              user feedback), so this side is closed up; bottom padding
+              stays so the list doesn't hug the card's rounded corner.
+              No `border-t` here either (removed 2026-09-22, explicit user
+              feedback -- "remove the line of the first row") -- the card's
+              own
+              rounded border plus the header/list spacing already separate
+              the two sections without needing an extra divider line.
+              `.slice(1)`, not the full list -- the header row above already
+              shows the latest alert (Alert Type/Time), so the dropdown
+              continues from the 2nd-most-recent instead of repeating it as
+              its own first row. Explicit user feedback: "the purpose of the
+              dropdown is to continue the list... if the dropdown is not
+              expanded, the alert shown should be the latest." */}
+          <AlertTimeline alerts={trip.alerts.slice(1)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Explains what Low/Medium/High actually mean here -- explicit user
+// request ("can we have a clear guide for supervisor on what are these?"),
+// since the mapping (06_DROWSINESS_ALERT_PIPELINE.md's four event types ->
+// ALERT_SEVERITY above) isn't obvious from the badge alone. Click-to-toggle
+// (not hover) so it works the same on any input method, closes on blur
+// (clicking/tabbing away) since the popover itself has no interactive
+// content to worry about a focus race with. Mirrors SupDashboard.jsx's
+// identical panel (same guide added to both, per explicit user decision --
+// this dashboard has no /admin/deliveries route to build a ViewAllLink for,
+// so the icon renders alone in the action slot instead of alongside one).
+function SeverityLegend() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        onBlur={() => setOpen(false)}
+        className="flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:text-slate-600"
+        aria-label="What do these severity levels mean?"
+      >
+        <Info className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-6 z-20 w-64 rounded-lg border border-slate-200 bg-white p-3 text-left normal-case tracking-normal text-slate-600 shadow-lg">
+          <p className="mb-2 text-xs font-bold text-slate-800">What do these mean?</p>
+          <div className="space-y-2 text-[11px] leading-snug">
+            {/* Fixed-width badge column (`w-16`, enough for "Medium", the
+                widest of the three) instead of each badge sizing to its own
+                text -- otherwise "High"/"Low" being narrower than "Medium"
+                pushed their descriptions to start at a different x position
+                each row, which read as unaligned/non-uniform (explicit user
+                feedback from a screenshot). */}
+            <div className="flex items-start gap-2">
+              <div className="w-16 shrink-0">
+                <Badge tone={SEVERITY_TONE.High}>High</Badge>
+              </div>
+              <p>
+                Eyes closed continuously for 3+ seconds, or closed 1.5+ seconds three or more times within 10
+                seconds -- reads as a real microsleep.
+              </p>
+            </div>
+            <div className="flex items-start gap-2">
+              <div className="w-16 shrink-0">
+                <Badge tone={SEVERITY_TONE.Medium}>Medium</Badge>
+              </div>
+              <p>Eye closure paired with a yawn within the same 10-second window -- trending toward fatigue.</p>
+            </div>
+            <div className="flex items-start gap-2">
+              <div className="w-16 shrink-0">
+                <Badge tone={SEVERITY_TONE.Low}>Low</Badge>
+              </div>
+              <p>
+                The driver's face/eyes weren't detected for 3+ seconds. Often a false signal (camera angle,
+                sunglasses, lighting), not confirmed drowsiness.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function DriverSafetyList({ data, isLoading }) {
   const [page, setPage] = useState(1);
-  const [expandedDriver, setExpandedDriver] = useState(null);
-  const grouped = useMemo(() => groupAlertsByDriver(data), [data]);
+  const [expandedTrip, setExpandedTrip] = useState(null);
+  const grouped = useMemo(() => groupAlertsIntoTrips(data), [data]);
   const sorted = [...grouped].sort(
     (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.count - a.count
   );
@@ -988,7 +1324,7 @@ function DriverSafetyList({ data, isLoading }) {
   const pageStart = (safePage - 1) * DRIVER_SAFETY_PAGE_SIZE;
   const paged = sorted.slice(pageStart, pageStart + DRIVER_SAFETY_PAGE_SIZE);
   return (
-    <Panel title="Driver Safety — Drowsiness Alerts">
+    <Panel title="Driver Safety — Drowsiness Alerts" action={<SeverityLegend />}>
       {isLoading ? (
         <div className="flex items-center gap-2 py-6 text-xs text-slate-400">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading alerts…
@@ -997,70 +1333,15 @@ function DriverSafetyList({ data, isLoading }) {
         <p className="py-6 text-center text-xs text-slate-400">No drowsiness alerts recorded yet.</p>
       ) : (
         <>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-[10.5px] uppercase tracking-wide text-slate-400">
-                  <th className="pb-1.5 pr-3 font-medium">Driver</th>
-                  <th className="pb-1.5 pr-3 font-medium">Latest Alert</th>
-                  <th className="pb-1.5 pr-3 font-medium">Time</th>
-                  <th className="pb-1.5 pr-3 font-medium">Severity</th>
-                  <th className="pb-1.5 pr-3 font-medium">Total Alerts</th>
-                  <th className="pb-1.5 font-medium" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {paged.map((d) => {
-                  const isOpen = expandedDriver === d.name;
-                  return (
-                    <Fragment key={d.name}>
-                      <tr
-                        className="cursor-pointer hover:bg-slate-50"
-                        onClick={() => setExpandedDriver(isOpen ? null : d.name)}
-                      >
-                        <td className="py-2 pr-3">
-                          <div className="flex items-center gap-2.5">
-                            <Avatar name={d.name} />
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-slate-800">{d.name}</p>
-                              <p className="truncate text-[11px] text-slate-500">{d.truck}</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-2 pr-3 text-slate-700">{d.alerts[0]?.alertType}</td>
-                        <td className="py-2 pr-3 text-slate-400">{d.latestTime}</td>
-                        <td className="py-2 pr-3">
-                          <Badge tone={SEVERITY_TONE[d.severity]}>{d.severity}</Badge>
-                        </td>
-                        <td className="whitespace-nowrap py-2 pr-3 text-slate-500">{d.count} alerts</td>
-                        <td className="py-2 pr-1 text-right text-slate-400">
-                          {d.count > 1 ? (isOpen ? "▲" : "▼") : null}
-                        </td>
-                      </tr>
-                      {isOpen && d.count > 1 && (
-                        <tr className="bg-slate-50/70">
-                          <td colSpan={6} className="px-3 pb-2 pt-1">
-                            <table className="w-full text-[11px]">
-                              <tbody className="divide-y divide-slate-100">
-                                {d.alerts.map((a) => (
-                                  <tr key={a.id}>
-                                    <td className="py-1.5 pr-3 pl-9 text-slate-600">{a.alertType}</td>
-                                    <td className="py-1.5 pr-3 text-slate-400">{a.time}</td>
-                                    <td className="py-1.5 pr-3">
-                                      <Badge tone={SEVERITY_TONE[a.severity]}>{a.severity}</Badge>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="flex flex-col gap-1.5">
+            {paged.map((trip) => (
+              <DriverSafetyRow
+                key={trip.key}
+                trip={trip}
+                isExpanded={expandedTrip === trip.key}
+                onToggle={() => setExpandedTrip(expandedTrip === trip.key ? null : trip.key)}
+              />
+            ))}
           </div>
           <DriverSafetyPaginationBar page={safePage} setPage={setPage} totalPages={totalPages} />
         </>

@@ -2514,8 +2514,12 @@ function LocationSwitcher({ request, suggestedRoute }) {
     {
       key: "dropoff",
       badge: "D",
-      badgeBg: "bg-rose-100",
-      badgeText: "text-rose-600",
+      // Amber, same as every other drop-off chip (2026-09-22, explicit user
+      // request) -- "Drop-off 1" is just the first drop-off, not a
+      // conceptually different kind of stop, so it shouldn't stand out in a
+      // different color from "Drop-off 2"/"Drop-off 3"/etc.
+      badgeBg: "bg-amber-100",
+      badgeText: "text-amber-700",
       label: "Drop-off 1 Location",
       address: request.deliveryAddress,
       coords: getDropoffCoords(request),

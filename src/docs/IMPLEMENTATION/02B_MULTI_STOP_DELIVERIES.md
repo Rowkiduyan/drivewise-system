@@ -7,7 +7,7 @@ Let a Trip visit one or more intermediate locations between pickup and dropoff �
 ## Decisions
 
 - **Customer-entered only, at booking time.** Same as `pickup_location`/`dropoff_location` today — no Supervisor editing UI. Read-only everywhere after submission.
-- **Capped at 5 stops per delivery.** Keeps the booking form and the route/waypoints request simple; mirrors the existing bounded-list feel of `SupDeliveries.jsx`'s 2-helper cap.
+- ~~Capped at 5 stops per delivery.~~ **Raised to 20, 2026-09-22** (explicit user request: allow more than 5 dropoffs, as long as the whole delivery still fits inside the existing 13-hour cap). The 5-stop cap was never actually a business rule — it existed only to keep the booking form and the single DirectionsService `waypoints` request simple. The real per-delivery bound is `MAX_TOTAL_DELIVERY_HOURS` (`scheduleSimulator.js`, see `02_BOOKING_AND_TRIP_CREATION.md`'s "Delivery Time Planning" section), which already applies to the full leg chain regardless of stop count — both the live schedule preview and `handleSubmit` recompute travel time for every leg and reject via the same `travelTimeModalSchedule` rejection modal. `MAX_STOPS` in `CustomerRequestDelivery.jsx` now exists purely as a technical ceiling on that one `waypoints` request (Google's Directions API caps `waypoints` at 25 entries; this form's request shape sends one waypoint per stop, so 20 stops stays safely under that with room to spare) — in practice the 13-hour cap will almost always bind first, since each stop also costs a fixed 30-minute unload.
 - ~~Reference-only — no per-stop status tracking.~~ **Superseded 2026-08-12, see "Photo-Required Chain Completion" below.** Originally decided this way (no Pending/Arrived/Departed per stop, "Stop X of Y" progress purely client-side) — reopened on purpose once the user asked for photo-required completion on every waypoint.
 - Stops sit **between** `pickup_location` (first) and `dropoff_location` (second) — they apply only to the driver's dropoff leg (`OUT_FOR_DELIVERY`), never the to-pickup leg. Originally `dropoff_location` was documented as always-last; see below for why that's since changed.
 
@@ -114,7 +114,7 @@ Stop shape: `{ "location": "<display address text, or a 'lat, lng' fallback>" }`
 
 ## Booking form — `CustomerRequestDelivery.jsx`
 
-`formData.stops` (array of plain address strings while editing) renders one `LocationInput` per entry between the existing Pick Up/Drop Off fields, with a remove button per row and an "Add a stop" button (hidden once `MAX_STOPS = 5` is reached). No dynamic add/remove-row pattern existed anywhere in this codebase before this — `LocationInput` itself (autocomplete + map picker) is reused unchanged per row; only the add/remove/cap scaffolding around it is new. On submit, empty rows are dropped and the rest are shaped into `{ location }` objects for the `stops` column.
+`formData.stops` (array of plain address strings while editing) renders one `LocationInput` per entry between the existing Pick Up/Drop Off fields, with a remove button per row and an "Add a stop" button (hidden once `MAX_STOPS` is reached — 20 as of 2026-09-22, see the Decisions section above). No dynamic add/remove-row pattern existed anywhere in this codebase before this — `LocationInput` itself (autocomplete + map picker) is reused unchanged per row; only the add/remove/cap scaffolding around it is new. On submit, empty rows are dropped and the rest are shaped into `{ location }` objects for the `stops` column.
 
 ## Supervisor view — `SupDeliveries.jsx`
 

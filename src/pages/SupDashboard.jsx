@@ -1,13 +1,14 @@
 import SupLayout from "../layout/SupLayout.jsx";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, LocateFixed, Loader2, MapPin, Maximize2, Minimize2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, Info, LocateFixed, Loader2, MapPin, Maximize2, Minimize2 } from "lucide-react";
 import { GoogleMap, Marker as GoogleMapMarker, useJsApiLoader } from "@react-google-maps/api";
 import DateRangeFilter from "../components/DateRangeFilter.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { GOOGLE_MAPS_LOADER_OPTIONS } from "../lib/googleMapsLoaderOptions.js";
-import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
-import { getPmsStatus, addMaintenanceBaselines } from "../components/trucks/utils/pms.js";
+import { MANILA_TIMEZONE, manilaTodayISO } from "../lib/manilaTime.js";
+import { addMaintenanceBaselines } from "../components/trucks/utils/pms.js";
+import { CREW_ACTIVE_STATUSES } from "../lib/crewStatus.js";
 import CriticalAlertPopup from "../components/CriticalAlertPopup.jsx";
 
 const background = null;
@@ -277,9 +278,25 @@ function useFleetOps() {
   const [trucks, setTrucks] = useState([]);
   const [driverNameById, setDriverNameById] = useState({});
   const [clientNameById, setClientNameById] = useState({});
+  // Full crew roster (record_id/role/deactivated_at), not just the
+  // name-only map above -- added 2026-09-22 to back the Live Fleet panel's
+  // real crew status breakdown (Available/On Delivery/Off Duty), explicit
+  // user request ("why is this 0? ... would that be buggy? if not do it").
+  const [crewRoster, setCrewRoster] = useState([]);
   const [devices, setDevices] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [deliveries, setDeliveries] = useState([]);
+  // Delivery rows a crew member is actively committed to right now --
+  // same CREW_ACTIVE_STATUSES list (and same bug this list was originally
+  // fixed for, 2026-09-09: 'OUT_FOR_DELIVERY' is a UI-only label, never a
+  // real status, and 'ARRIVED_DROPOFF' was previously missing) that
+  // SupDeliveryCrew.jsx/SupCrewProfile.jsx/SupDeliveries.jsx already use for
+  // crew availability, reused here rather than re-deriving a second,
+  // possibly-inconsistent status list. Deliberately a separate query from
+  // `deliveries` above (IN_PROGRESS_STATUSES) -- that list is missing
+  // 'ASSIGNED', which is a real crew commitment (assigned but not yet
+  // started) even though the truck hasn't rolled yet.
+  const [crewActiveDeliveries, setCrewActiveDeliveries] = useState([]);
   const [recentAlerts, setRecentAlerts] = useState([]);
   const [pendingAssignmentsCount, setPendingAssignmentsCount] = useState(0);
   const [requestsInboxCount, setRequestsInboxCount] = useState(0);
@@ -358,6 +375,7 @@ function useFleetOps() {
         names[m.record_id.trim()] = [m.first_name, m.middle_name, m.last_name].filter(Boolean).join(" ").trim();
       }
       setDriverNameById(names);
+      setCrewRoster(crewData?.crew || []);
       const clients = {};
       for (const c of clientsData?.clients || []) clients[c.id] = c.name;
       setClientNameById(clients);
@@ -380,6 +398,7 @@ function useFleetOps() {
       { data: deliveriesData },
       { count: pendingAssignments },
       { count: requestsInbox },
+      { data: crewActiveDeliveriesData },
     ] = await Promise.all([
       // Explicit column list, not select('*') -- `authenticated`'s grant on
       // devices is column-scoped and deliberately excludes
@@ -397,12 +416,17 @@ function useFleetOps() {
       // whole live-ops pipeline (positions/movement/realtime GPS matching).
       supabase.from("delivery_requests").select("id", { count: "exact", head: true }).in("status", PENDING_ASSIGNMENT_STATUSES),
       supabase.from("delivery_requests").select("id", { count: "exact", head: true }).in("status", REQUESTS_INBOX_STATUSES),
+      // Backs the Live Fleet panel's crew status breakdown -- see
+      // crewActiveDeliveries' own state comment above for why this is a
+      // separate query/status list from `deliveries`/IN_PROGRESS_STATUSES.
+      supabase.from("delivery_requests").select("status, assigned_driver_id, assigned_helper_ids, pickup_date").in("status", CREW_ACTIVE_STATUSES),
     ]);
     setDevices(devicesData || []);
     setSessions(sessionsData || []);
     setDeliveries(deliveriesData || []);
     setPendingAssignmentsCount(pendingAssignments || 0);
     setRequestsInboxCount(requestsInbox || 0);
+    setCrewActiveDeliveries(crewActiveDeliveriesData || []);
     setIsLoading(false);
   }, []);
 
@@ -738,10 +762,18 @@ function useFleetOps() {
       const truck = trucks.find((t) => t.plate_number === session?.truck_plate);
       return {
         id: a.id,
+        // Groups this alert with the rest of its trip's alerts in
+        // DriverSafetyList below -- a raw session id, not display text.
+        sessionId: a.session_id || null,
         name: driverNameById[session?.driver_id] || session?.driver_id || "Unknown driver",
         truck: truck?.plate_number || session?.truck_plate || "",
         alertType: ALERT_TYPE_LABELS[a.event_type] || a.event_type,
         time: new Date(a.created_at).toLocaleTimeString("en-US", { timeZone: MANILA_TIMEZONE, hour: "2-digit", minute: "2-digit" }),
+        // Kept alongside the display-only `time` string above (which loses
+        // both the date and sort order) -- DriverSafetyList's per-trip
+        // expansion needs a real sortable/comparable instant to show alerts
+        // newest-to-oldest.
+        createdAt: a.created_at,
         severity: ALERT_SEVERITY[a.event_type] || "Medium",
         tripAlerts: runningCountById.get(a.id) || 1,
         deliveryId: session?.delivery_request_id || null,
@@ -779,6 +811,8 @@ function useFleetOps() {
     isLoading,
     now: nowTick,
     trucks,
+    crewRoster,
+    crewActiveDeliveries,
     criticalAlerts,
     dismissCriticalAlert,
     pendingAssignmentsCount,
@@ -1135,6 +1169,75 @@ function PausedMovementBanner({ data }) {
 
 // ----- Driver safety: drowsiness priority list (replaces the old chart) -----
 const SEVERITY_TONE = { High: "red", Medium: "amber", Low: "emerald" };
+
+// Groups the flat alertFeed (one row per alert) into one entry per trip
+// (delivery) -- fixes the confusing repeat-the-same-driver-N-times list this
+// table used to render, one row per individual alert (2026-09-22, explicit
+// user request from a screenshot). Falls back to `sessionId`, then the
+// alert's own `id`, as the grouping key whenever `deliveryId` is missing, so
+// a legacy/malformed alert with no delivery link still gets its own
+// single-alert "trip" row instead of being silently dropped or merged into
+// the wrong group.
+//
+// Keyed on `deliveryId`, not `sessionId` -- corrected 2026-09-22 same day,
+// from a real screenshot showing the same driver/truck as two separate
+// cards a few minutes apart. `driver-trip`'s `resume-trip` action always
+// mints a brand-new `session_id` on every pause/resume (`crypto.
+// randomUUID()`, same `delivery_request_id`), and `end-trip` does the same
+// again to open a Return-Trip monitoring session (14_RETURN_TRIP_
+// MONITORING.md) -- so one real delivery/trip can span several session
+// rows. Grouping by session (the original key) split that one trip's alert
+// history across each pause/resume boundary, which is exactly what "their
+// specific trip" (the user's own phrase from the original request) wasn't
+// supposed to mean.
+function groupAlertsIntoTrips(alerts) {
+  const byKey = new Map();
+  for (const a of alerts) {
+    const key = a.deliveryId || a.sessionId || a.id;
+    const entry = byKey.get(key);
+    if (entry) {
+      entry.alerts.push(a);
+    } else {
+      byKey.set(key, {
+        key,
+        name: a.name,
+        truck: a.truck,
+        deliveryId: a.deliveryId,
+        alerts: [a],
+      });
+    }
+  }
+  return Array.from(byKey.values()).map((entry) => {
+    // Newest-to-oldest, per explicit user request -- `time` alone can't
+    // sort correctly (it's a formatted "02:34 PM" string with no date), so
+    // this uses the raw `createdAt` instant instead.
+    const alerts = [...entry.alerts].sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+    );
+    let severity = "Low";
+    for (const a of alerts) {
+      if (SEVERITY_RANK[a.severity] > SEVERITY_RANK[severity]) severity = a.severity;
+    }
+    return {
+      ...entry,
+      alerts,
+      totalAlerts: alerts.length,
+      // The trip's own summary row shows the most recent alert's own
+      // type/time/severity -- all three fields describe that one same
+      // alert (2026-09-22, explicit user feedback: the badge showing the
+      // trip-wide worst severity next to a *different* alert's type/time
+      // read as inconsistent/mismatched -- "the label of the recent alert
+      // should be the one labeled not the highest"). `severity` (the worst
+      // anywhere in the trip) is kept only for sort order below, so a trip
+      // with one dangerous moment still bubbles up even once things calmed
+      // down -- it's just no longer shown as the summary row's own badge.
+      latestAlertType: alerts[0].alertType,
+      latestTime: alerts[0].time,
+      latestSeverity: alerts[0].severity,
+      severity,
+    };
+  });
+}
 const DRIVER_SAFETY_PAGE_SIZE = 15;
 
 // Same page-nav format as SupTrucks.jsx's PaginationBar, just with lighter
@@ -1221,17 +1324,345 @@ function DriverSafetyPaginationBar({ page, setPage, totalPages }) {
   );
 }
 
+// Two alerts can legitimately land in the same displayed minute -- the Pi
+// fires "Eyes Not Detected" once per continuous no-face episode and resets
+// the moment a face is seen again for even a single frame (pi/
+// drowsiness_monitor.py), so a flickery camera view can produce several
+// genuinely distinct alerts a few seconds apart. `a.time` only shows
+// hour:minute, which made these look like duplicate/spammed rows (explicit
+// user question after a screenshot: "is this a bug? ... alerts like eyes
+// not detected which both happened at 2:30"). Not a bug -- confirmed no
+// dedup/rate-limiting exists anywhere in the pipeline (alert-upload/
+// index.ts inserts whatever the Pi sends) and the Pi's own fire-once-per-
+// episode flag only resets on actual face re-detection, so each row is a
+// real, separate episode. UI-only fix (explicit user decision, over also
+// tightening the Pi's re-trigger logic): show seconds for any alert whose
+// displayed minute collides with another alert in the same trip, so they
+// read as distinct events instead of an apparent duplicate/glitch.
+function formatAlertTimesWithCollisions(alerts) {
+  const countByMinute = new Map();
+  for (const a of alerts) countByMinute.set(a.time, (countByMinute.get(a.time) || 0) + 1);
+  return alerts.map((a) => ({
+    ...a,
+    displayTime:
+      countByMinute.get(a.time) > 1
+        ? new Date(a.createdAt).toLocaleTimeString("en-US", {
+            timeZone: MANILA_TIMEZONE,
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          })
+        : a.time,
+  }));
+}
+
+// A trip's individual alerts, newest-to-oldest, nested under its driver card
+// below rather than laid out as another table (2026-09-22 redesign, explicit
+// user request: the driver/header row had too much dead horizontal space
+// while this list felt cramped and repetitive). Each row is a real
+// `grid-cols-4` matching the header row below's own 4 columns exactly --
+// (1) a vertical connector line sitting where the header's Driver column
+// is, (2) Alert Type, (3) Time, (4) Severity -- per explicit follow-up user
+// feedback ("the vertical colored line should be in the first column
+// aligned to the driver name and all... align it to their headers"). The
+// trailing invisible spacer (matching the header row's count/View Trip
+// action cluster, class-for-class) is what actually makes the two grids the
+// same width, so the columns land at the same x-position -- without it, the
+// header's flex-1 grid and this row's own full-width grid would divide
+// their 4 columns differently. This per-row structure is deliberately kept
+// exactly as-is (explicit user instruction: "the structure is already fine,
+// do not change it") -- only the line itself was changed to close its
+// per-row gaps, see the inline comment below.
+function AlertTimeline({ alerts }) {
+  const withDisplayTimes = formatAlertTimesWithCollisions(alerts);
+  return (
+    <div>
+      {withDisplayTimes.map((a, i) => {
+        // A trip (delivery) can span several `sessions` rows -- pause/
+        // resume and the Return-Trip leg each open a brand-new session_id
+        // under the same delivery (see groupAlertsIntoTrips' own comment).
+        // Marks where that happens within the alert history, explicit user
+        // request: "is there a way to put an indicator when lets say a trip
+        // got resumed or a session opened up." Left column deliberately
+        // empty here (no line-drawing cell) -- the connector line visibly
+        // pausing at this row is itself part of the indicator, not a
+        // rendering gap.
+        const isNewSession = i > 0 && a.sessionId !== withDisplayTimes[i - 1].sessionId;
+        return (
+          <Fragment key={a.id}>
+            {isNewSession && (
+              <div className="flex items-center gap-4 py-1">
+                <div className="grid flex-1 grid-cols-4 items-center gap-4">
+                  <div />
+                  <div className="col-span-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    <span className="h-px flex-1 bg-slate-200" />
+                    New session started
+                    <span className="h-px flex-1 bg-slate-200" />
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="flex items-center gap-4 py-1.5">
+              <div className="grid flex-1 grid-cols-4 items-center gap-4">
+                {/* Left blank -- the connector line that used to live here
+                    was removed per explicit user decision ("nevermind just
+                    remove the vertical line and leave that column blank"),
+                    after several rounds trying to make it render as one
+                    continuous line. Kept as an empty column (not collapsed
+                    out of the grid) so Alert Type/Time/Severity below still
+                    line up with the header row's own 4 columns. */}
+                <div />
+                <span className="min-w-0 truncate text-xs text-slate-600">{a.alertType}</span>
+                <span className="min-w-0 text-[11px] text-slate-400">{a.displayTime}</span>
+                {/* Local pill, not the shared <Badge> -- explicit user
+                    request was specific to this list ("remove the circle
+                    icon on the picture and center the word on the
+                    highlight"), and <Badge> is reused elsewhere on this
+                    dashboard (device/trip status, etc.) where the dot is
+                    still wanted, so this only changes severity's display
+                    here rather than every Badge on the page. */}
+                <span
+                  className={`flex w-full items-center justify-center rounded px-1.5 py-1 text-[10.5px] font-semibold ${TONE[SEVERITY_TONE[a.severity]].bg} ${TONE[SEVERITY_TONE[a.severity]].text}`}
+                >
+                  {a.severity}
+                </span>
+              </div>
+              <div className="invisible flex shrink-0 items-center gap-3" aria-hidden="true">
+                <div className="w-20">0 alerts</div>
+                <span className="shrink-0 whitespace-nowrap rounded-md border border-blue-100 px-2.5 py-1 text-[11px] font-semibold">
+                  View Trip
+                </span>
+              </div>
+            </div>
+          </Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+// One driver/trip's collapsed summary + (when expanded) its alert history --
+// a self-contained card rather than a <tr> pair, so the expanded list reads
+// as content *inside* this driver's card instead of a visually separate
+// table underneath it (2026-09-22 redesign, explicit user request). The
+// header row's data fields now sit in a true equal-width `grid-cols-4`
+// (Driver, Alert Type, Time, Severity -- Alert Type/Time split into their
+// own columns rather than stacked together, so this grid has the same 4
+// columns as the expanded AlertTimeline list below and the two visually
+// align, per explicit follow-up user feedback: "align it to their
+// headers"). Alerts count and View Trip are deliberately kept outside this
+// 4-column grid, as a small fixed-width action cluster -- they're
+// actions/counts, not the same kind of data as the four columns, and
+// forcing them into a 5th/6th equal column would just waste width on a
+// short "3 alerts" label and a button. (AlertTimeline reserves an identical
+// invisible spacer for this same cluster, which is what keeps its own grid
+// the same width as this one.)
+function DriverSafetyRow({ trip, isExpanded, onToggle }) {
+  const isMultiAlert = trip.totalAlerts > 1;
+  return (
+    <div
+      className={`rounded-lg border transition-colors ${
+        isExpanded ? "border-slate-200 bg-slate-50/50" : "border-slate-100"
+      }`}
+    >
+      <div
+        className={`flex items-center gap-4 rounded-lg px-2.5 py-2 ${isMultiAlert ? "cursor-pointer" : ""} ${
+          isExpanded ? "" : "hover:bg-slate-50"
+        }`}
+        onClick={isMultiAlert ? onToggle : undefined}
+      >
+        <div className="grid flex-1 grid-cols-4 items-center gap-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Avatar name={trip.name} />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-slate-800">{trip.name}</p>
+              <p className="truncate text-[11px] text-slate-500">{trip.truck}</p>
+            </div>
+          </div>
+
+          <div className="min-w-0">
+            <p className="truncate text-xs text-slate-700">{trip.latestAlertType}</p>
+            {/* Labels this row's data as the latest alert specifically --
+                explicit user request, after the header/dropdown split made
+                it worth spelling out: "add an indicator that the first row
+                is the recent alert." */}
+            <p className="text-[10px] uppercase tracking-wide text-slate-400">Most recent</p>
+          </div>
+
+          <p className="min-w-0 text-[11px] text-slate-400">{trip.latestTime}</p>
+
+          <div className="min-w-0">
+            {/* The latest alert's own severity, matching the Alert
+                Type/Time shown alongside it -- reverted 2026-09-22 from
+                showing the trip-wide worst severity here (with a "highest
+                this trip" caption), per explicit user feedback that the
+                badge should describe the same alert its row's other two
+                fields already do, not a different aggregate one. The worst
+                severity anywhere in the trip is still tracked (`trip.
+                severity`) and still drives sort order below -- it's just
+                not shown as this badge anymore.
+                Same local no-dot/centered/full-width pill as the expanded
+                list below, not the shared <Badge> -- explicit follow-up
+                user request: "apply the same design to the first row
+                should be highlight only too without the circle." */}
+            <span
+              className={`flex w-full items-center justify-center rounded px-1.5 py-1 text-[10.5px] font-semibold ${TONE[SEVERITY_TONE[trip.latestSeverity]].bg} ${TONE[SEVERITY_TONE[trip.latestSeverity]].text}`}
+            >
+              {trip.latestSeverity}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-3">
+          <div className="w-20">
+            {isMultiAlert ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggle();
+                }}
+                className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-800"
+              >
+                {trip.totalAlerts} alerts
+                <ChevronDown
+                  className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                />
+              </button>
+            ) : (
+              <span className="text-xs text-slate-400">{trip.totalAlerts} alert</span>
+            )}
+          </div>
+
+          <Link
+            to={trip.deliveryId ? `/supervisor/deliveries?deliveryId=${trip.deliveryId}` : "/supervisor/deliveries"}
+            onClick={(e) => e.stopPropagation()}
+            className="shrink-0 whitespace-nowrap rounded-md border border-blue-100 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50"
+          >
+            View Trip
+          </Link>
+        </div>
+      </div>
+
+      {isExpanded && (
+        <div className="px-2.5 pb-1">
+          {/* `pb-1` only, no top padding -- the gap between the header row
+              above and the dropdown's first row read as too big (explicit
+              user feedback), so this side is closed up; bottom padding
+              stays so the list doesn't hug the card's rounded corner.
+              No `border-t` here either (removed 2026-09-22, explicit user
+              feedback -- "remove the line of the first row") -- the card's
+              own rounded border plus the header/list spacing already
+              separate the two sections without needing an extra divider
+              line.
+              `.slice(1)`, not the full list -- the header row above already
+              shows the latest alert (Alert Type/Time), so the dropdown
+              continues from the 2nd-most-recent instead of repeating it as
+              its own first row. Explicit user feedback: "the purpose of the
+              dropdown is to continue the list... if the dropdown is not
+              expanded, the alert shown should be the latest." */}
+          <AlertTimeline alerts={trip.alerts.slice(1)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Explains what Low/Medium/High actually mean here -- explicit user
+// request ("can we have a clear guide for supervisor on what are these?"),
+// since the mapping (06_DROWSINESS_ALERT_PIPELINE.md's four event types ->
+// ALERT_SEVERITY above) isn't obvious from the badge alone. Click-to-toggle
+// (not hover) so it works the same on any input method, closes on blur
+// (clicking/tabbing away) since the popover itself has no interactive
+// content to worry about a focus race with. Mirrors AdminDashboard.jsx's
+// identical panel (same guide added to both, per explicit user decision).
+function SeverityLegend() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        onBlur={() => setOpen(false)}
+        className="flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:text-slate-600"
+        aria-label="What do these severity levels mean?"
+      >
+        <Info className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-6 z-20 w-64 rounded-lg border border-slate-200 bg-white p-3 text-left normal-case tracking-normal text-slate-600 shadow-lg">
+          <p className="mb-2 text-xs font-bold text-slate-800">What do these mean?</p>
+          <div className="space-y-2 text-[11px] leading-snug">
+            {/* Fixed-width badge column (`w-16`, enough for "Medium", the
+                widest of the three) instead of each badge sizing to its own
+                text -- otherwise "High"/"Low" being narrower than "Medium"
+                pushed their descriptions to start at a different x position
+                each row, which read as unaligned/non-uniform (explicit user
+                feedback from a screenshot). */}
+            <div className="flex items-start gap-2">
+              <div className="w-16 shrink-0">
+                <Badge tone={SEVERITY_TONE.High}>High</Badge>
+              </div>
+              <p>
+                Eyes closed continuously for 3+ seconds, or closed 1.5+ seconds three or more times within 10
+                seconds -- reads as a real microsleep.
+              </p>
+            </div>
+            <div className="flex items-start gap-2">
+              <div className="w-16 shrink-0">
+                <Badge tone={SEVERITY_TONE.Medium}>Medium</Badge>
+              </div>
+              <p>Eye closure paired with a yawn within the same 10-second window -- trending toward fatigue.</p>
+            </div>
+            <div className="flex items-start gap-2">
+              <div className="w-16 shrink-0">
+                <Badge tone={SEVERITY_TONE.Low}>Low</Badge>
+              </div>
+              <p>
+                The driver's face/eyes weren't detected for 3+ seconds. Often a false signal (camera angle,
+                sunglasses, lighting), not confirmed drowsiness.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DriverSafetyList({ data, isLoading }) {
   const [page, setPage] = useState(1);
-  const sorted = [...data].sort(
-    (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.tripAlerts - a.tripAlerts
+  // Which trip rows are expanded, showing their individual alerts -- a Set
+  // (not a single "open index") so more than one trip can be expanded at
+  // once, keyed by the trip's own grouping key (see groupAlertsIntoTrips).
+  const [expandedTrips, setExpandedTrips] = useState(() => new Set());
+  const toggleTrip = (key) => {
+    setExpandedTrips((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const trips = useMemo(() => groupAlertsIntoTrips(data), [data]);
+  const sorted = [...trips].sort(
+    (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.totalAlerts - a.totalAlerts
   );
   const totalPages = Math.max(1, Math.ceil(sorted.length / DRIVER_SAFETY_PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const pageStart = (safePage - 1) * DRIVER_SAFETY_PAGE_SIZE;
   const paged = sorted.slice(pageStart, pageStart + DRIVER_SAFETY_PAGE_SIZE);
   return (
-    <Panel title="Driver Safety — Drowsiness Alerts" action={<ViewAllLink to="/supervisor/deliveries" />}>
+    <Panel
+      title="Driver Safety — Drowsiness Alerts"
+      action={
+        <div className="flex items-center gap-2">
+          <SeverityLegend />
+          <ViewAllLink to="/supervisor/deliveries" />
+        </div>
+      }
+    >
       {isLoading ? (
         <div className="flex items-center gap-2 py-6 text-xs text-slate-400">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading alerts…
@@ -1240,48 +1671,15 @@ function DriverSafetyList({ data, isLoading }) {
         <p className="py-6 text-center text-xs text-slate-400">No drowsiness alerts recorded yet.</p>
       ) : (
         <>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-[10.5px] uppercase tracking-wide text-slate-400">
-                  <th className="pb-1.5 pr-3 font-medium">Driver</th>
-                  <th className="pb-1.5 pr-3 font-medium">Alert</th>
-                  <th className="pb-1.5 pr-3 font-medium">Time</th>
-                  <th className="pb-1.5 pr-3 font-medium">Severity</th>
-                  <th className="pb-1.5 pr-3 font-medium">This Trip</th>
-                  <th className="pb-1.5 font-medium" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {paged.map((d) => (
-                  <tr key={d.id} className="hover:bg-slate-50">
-                    <td className="py-2 pr-3">
-                      <div className="flex items-center gap-2.5">
-                        <Avatar name={d.name} />
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-slate-800">{d.name}</p>
-                          <p className="truncate text-[11px] text-slate-500">{d.truck}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-2 pr-3 text-slate-700">{d.alertType}</td>
-                    <td className="py-2 pr-3 text-slate-400">{d.time}</td>
-                    <td className="py-2 pr-3">
-                      <Badge tone={SEVERITY_TONE[d.severity]}>{d.severity}</Badge>
-                    </td>
-                    <td className="whitespace-nowrap py-2 pr-3 text-slate-500">{d.tripAlerts} alerts</td>
-                    <td className="py-2">
-                      <Link
-                        to={d.deliveryId ? `/supervisor/deliveries?deliveryId=${d.deliveryId}` : "/supervisor/deliveries"}
-                        className="whitespace-nowrap rounded-md border border-blue-100 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50"
-                      >
-                        View Trip
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex flex-col gap-1.5">
+            {paged.map((trip) => (
+              <DriverSafetyRow
+                key={trip.key}
+                trip={trip}
+                isExpanded={trip.totalAlerts > 1 && expandedTrips.has(trip.key)}
+                onToggle={() => toggleTrip(trip.key)}
+              />
+            ))}
           </div>
           <DriverSafetyPaginationBar page={safePage} setPage={setPage} totalPages={totalPages} />
         </>
@@ -1345,6 +1743,8 @@ function SupDashboard() {
     isLoading,
     now,
     trucks,
+    crewRoster,
+    crewActiveDeliveries,
     criticalAlerts,
     dismissCriticalAlert,
     pendingAssignmentsCount,
@@ -1357,16 +1757,6 @@ function SupDashboard() {
     setFocusToken((t) => t + 1);
   };
 
-  // Real (not mock) PMS-overdue count, shortcutting straight into the Trucks
-  // list pre-filtered to Overdue -- getPmsStatus/pmsFilter mirror what
-  // MaintenanceSummaryWidget/SupTrucks.jsx already use for the same
-  // computation, just surfaced here too so a Supervisor doesn't have to
-  // navigate into Trucks first to see whether anything needs attention.
-  const pmsOverdueCount = useMemo(
-    () => trucks.filter((t) => getPmsStatus(t) === "overdue").length,
-    [trucks],
-  );
-
   const highRiskDriverCount = useMemo(
     () => realDriverSafety.filter((d) => d.risk === "High Risk").length,
     [realDriverSafety],
@@ -1374,13 +1764,15 @@ function SupDashboard() {
 
   // ----- KPI strip: doubles as the "needs attention" summary — each tile
   // routes to the page that resolves it, so there's no separate task list.
-  // All real now (2026-09-17): Active Deliveries/Fleet Available/High-Risk
-  // Drivers/PMS Overdue come from useFleetOps' live queries above (same
-  // shape as AdminDashboard.jsx's own KPI strip); Pending Assignments/
-  // Requests Inbox mirror SupDeliveries.jsx's own status groups for its
-  // Assign Vehicle/Inbox tabs so these counts agree with what those tabs
-  // show; Alerts Today reuses alertFeed.length, same "last 50 alerts" feed
-  // AdminDashboard.jsx's own Alerts Today tile counts off. -----
+  // All real (2026-09-17): Active Deliveries/High-Risk Drivers come from
+  // useFleetOps' live queries above (same shape as AdminDashboard.jsx's own
+  // KPI strip); Pending Assignments/Requests Inbox mirror SupDeliveries.jsx's
+  // own status groups for its Assign Vehicle/Inbox tabs so these counts
+  // agree with what those tabs show; Alerts Today reuses alertFeed.length,
+  // same "last 50 alerts" feed AdminDashboard.jsx's own Alerts Today tile
+  // counts off. Fleet Available/PMS Overdue tiles removed 2026-09-22
+  // (explicit user request) -- `trucks` is still used below for the Live
+  // Fleet panel's real truck-status breakdown. -----
   const kpis = [
     { label: "Active Deliveries", value: fleetOps.length, to: "/supervisor/deliveries" },
     {
@@ -1392,22 +1784,60 @@ function SupDashboard() {
     { label: "Requests Inbox", value: requestsInboxCount, to: "/supervisor/deliveries" },
     { label: "Alerts Today", value: alertFeed.length, to: "/supervisor/deliveries", tone: alertFeed.length > 0 ? "amber" : undefined },
     { label: "High-Risk Drivers", value: highRiskDriverCount, to: "/supervisor/delivery-crew", tone: "red" },
-    {
-      label: "Fleet Available",
-      value: `${trucks.filter((t) => t.status === "Available").length}/${trucks.length}`,
-      to: "/supervisor/trucks",
-    },
-    {
-      label: "PMS Overdue",
-      value: pmsOverdueCount,
-      to: "/supervisor/trucks",
-      tone: pmsOverdueCount > 0 ? "red" : undefined,
-      state: { pmsFilter: "overdue" },
-    },
   ];
 
-  const fleetStatus = { available: 22, onDelivery: 18, maintenance: 5, offline: 3 };
-  const crewStatus = { available: 10, onDelivery: 16, offDuty: 4 };
+  // Truck segments are real, computed from the same live `trucks` query the
+  // KPI strip above uses -- fixed 2026-09-22 (explicit user request: "make
+  // sure it's getting the right data from the database"), previously
+  // hardcoded literal numbers with no query behind them at all. Status
+  // values/categorization mirror AdminDashboard.jsx's own (already-correct)
+  // Live Fleet panel, kept in sync between the two rather than diverging.
+  const fleetStatus = {
+    available: trucks.filter((t) => t.status === "Available").length,
+    onDelivery: trucks.filter((t) => t.status === "Active").length,
+    maintenance: trucks.filter((t) => t.status === "Maintenance").length,
+    offline: trucks.filter((t) => t.status === "Inactive").length,
+  };
+  // Crew segments, now real (2026-09-22, explicit user request: "why is
+  // this 0? ... would that be buggy? if not do it") -- replaces the earlier
+  // { 0, 0, 0 } placeholder. Off Duty = the account is deactivated
+  // (`users.deactivated_at`, returned on each crew member by `list-crew`);
+  // among the rest, On Delivery = their `record_id` is the assigned driver
+  // or one of the assigned helpers on a delivery that's EITHER (a)
+  // currently in progress (IN_PROGRESS_STATUSES -- they're literally on the
+  // trip right now, regardless of what its dates say -- a delayed trip
+  // running past its own dropoff_date still counts, since the crew member
+  // is still genuinely out on it) OR (b) `ASSIGNED` with a `pickup_date` of
+  // today (committed to start today, even though they haven't left yet).
+  // Corrected same day from an earlier, wrong version that applied a single
+  // pickup_date<=today<=dropoff_date range check uniformly to every
+  // CREW_ACTIVE_STATUSES row -- explicit user correction: "count drivers
+  // helpers that are currently on the trip and also count the drivers and
+  // helpers that are assigned to a trip today" (two distinct conditions,
+  // not one blended date range). Everyone else is Available. Mirrors
+  // SupDeliveryCrew.jsx's/SupCrewProfile.jsx's own crew-availability logic
+  // (same CREW_ACTIVE_STATUSES import) rather than re-deriving a second,
+  // possibly-diverging status list -- that list's own history
+  // (09_EDGE_CASES.md's 2026-09-09 fix) is exactly why it's imported, not
+  // retyped.
+  const today = manilaTodayISO();
+  const crewBusyRecordIds = new Set();
+  for (const d of crewActiveDeliveries) {
+    const currentlyOnTrip = IN_PROGRESS_STATUSES.includes(d.status);
+    const assignedToday = d.status === "ASSIGNED" && d.pickup_date === today;
+    if (!currentlyOnTrip && !assignedToday) continue;
+    if (d.assigned_driver_id) crewBusyRecordIds.add(d.assigned_driver_id);
+    for (const helperId of d.assigned_helper_ids || []) crewBusyRecordIds.add(helperId);
+  }
+  const crewStatus = crewRoster.reduce(
+    (acc, member) => {
+      if (member.deactivated_at) acc.offDuty += 1;
+      else if (member.record_id && crewBusyRecordIds.has(member.record_id)) acc.onDelivery += 1;
+      else acc.available += 1;
+      return acc;
+    },
+    { available: 0, onDelivery: 0, offDuty: 0 },
+  );
 
   const recentActivity = [
     { id: 1, text: "Trip to Shaw Traders marked Delivered — TR-45", time: "5m ago", tone: "emerald" },
@@ -1449,33 +1879,18 @@ function SupDashboard() {
         onDismiss={dismissCriticalAlert}
       />
       <div className="mx-auto flex max-w-[1600px] flex-col gap-4">
-        {/* Header row */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">
-              Operations Overview
-            </p>
-            <p className="text-xs text-slate-500">Live fleet, delivery &amp; driver-safety status</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <Link
-              to="/supervisor/deliveries"
-              className="rounded-md bg-blue-700 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-800"
-            >
-              Assign Vehicles
-            </Link>
-            <nav className="flex items-center gap-2 text-[11px] font-medium text-blue-600">
-              <Link to="/supervisor/deliveries" className="hover:underline">Deliveries</Link>
-              <span className="text-slate-300">·</span>
-              <Link to="/supervisor/delivery-crew" className="hover:underline">Crew</Link>
-              <span className="text-slate-300">·</span>
-              <Link to="/supervisor/trucks" className="hover:underline">Trucks</Link>
-            </nav>
-          </div>
+        {/* Header row -- the "Assign Vehicles" button and Deliveries/Crew/
+            Trucks quick-links row that used to sit here were removed
+            2026-09-22, explicit user request. */}
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">
+            Operations Overview
+          </p>
+          <p className="text-xs text-slate-500">Live fleet, delivery &amp; driver-safety status</p>
         </div>
 
         {/* Top: KPI summary */}
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-7">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
           {kpis.map((kpi) => (
             <StatTile key={kpi.label} {...kpi} />
           ))}

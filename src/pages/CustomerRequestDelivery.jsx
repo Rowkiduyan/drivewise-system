@@ -53,9 +53,24 @@ import { supabase } from "../lib/supabaseClient.js";
 
 const background = null;
 
-// Intermediate stops between Pick Up and Drop Off — capped to keep the form
-// and the driver navigation's waypoints request simple (02B_MULTI_STOP_DELIVERIES.md).
-const MAX_STOPS = 5;
+// Intermediate stops between Pick Up and Drop Off. Raised from the original
+// 5 (2026-09-22, explicit user request: "more than 5 dropoffs, still inside
+// 13 hours") -- the real limit on how many stops a delivery can hold was
+// never actually a UX/business rule, it's the MAX_TOTAL_DELIVERY_HOURS check
+// in scheduleSimulator.js, which already applies to the whole leg chain
+// regardless of stop count (both the live schedule preview and handleSubmit
+// recompute legTravelSeconds for every leg and reject via exceedsLimit --
+// see the travelTimeModalSchedule state below). MAX_STOPS now exists purely
+// as a technical ceiling on the single DirectionsService request this form
+// makes ([pickup, dropoff, ...stops] as one waypoints call,
+// 02B_MULTI_STOP_DELIVERIES.md) -- Google's Directions API caps the
+// `waypoints` field at 25 entries, and this form's request shape sends one
+// dropoff plus all but the last stop as `waypoints` entries (the last stop
+// becomes the `destination` instead, see estimateLegDurations below) -- so
+// for N stops exactly N waypoints get sent, meaning 20 stops stays safely
+// under that ceiling with room to spare. In practice the 13-hour cap will
+// almost always bind first, since each stop also costs a 30-min unload.
+const MAX_STOPS = 20;
 
 // Estimated drive time (seconds) for each leg of the ordered chain
 // [pickup, dropoff, ...stops] -- one DirectionsService request with
@@ -1214,8 +1229,11 @@ function CustomerRequestDelivery() {
   };
 
   // Stops are intermediate locations visited between Pick Up and Drop Off —
-  // reference-only (no per-stop status), capped at MAX_STOPS to keep the
-  // form and the route/waypoints request simple (02B_MULTI_STOP_DELIVERIES.md).
+  // reference-only (no per-stop status), capped at MAX_STOPS (a technical
+  // waypoints-request ceiling, see the constant's own comment above) --
+  // the real per-delivery bound is the 13-hour cap enforced by
+  // simulateSchedule() at both live preview and submit time, independent of
+  // how many stops there are.
   const addStop = () => {
     if (formData.stops.length >= MAX_STOPS) return;
     setFormData((prev) => ({

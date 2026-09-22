@@ -97,7 +97,106 @@ against a real Raspberry Pi 4 and the live deployed backend. `gps-upload`
 was being verified when this note was last updated â€” see `STATUS.md` for
 the current state of that specific test before assuming it's done.
 
-## GSM/cellular connectivity (SIM800C, confirmed working 2026-08-12)
+**Vibration motor re-confirmed live, 2026-09-22** (prompted by a report that
+it "wasn't working" on an in-progress Trip): live GPIO probing
+(`pinctrl get 4`, watched while deliberately triggering `face_not_detected`
+in front of the camera) confirmed the pin correctly drives low exactly on
+cue, and the matching `alerts` row landed as expected — this exact code
+path was never broken. The real issue that prompted the report was
+unrelated GSM connectivity (see below), not the motor/GPIO/detection chain.
+
+## GSM/cellular connectivity (SIM7600G-H, current — confirmed working 2026-09-22)
+
+**Supersedes the SIM800C/PPP setup below** — this unit's SIM800C was swapped
+for a SIMCom SIM7600G-H (2G/3G/4G-LTE) dongle, same SIM card (Smart, APN
+`internet`). The SIM800C section further down is kept for reference only
+(a different, older module using a different connection method) — do not
+follow it for this module.
+
+**This module uses NetworkManager's native `gsm` connection type over QMI,
+not PPP.** `dmesg`/`mmcli -m <index>` show this dongle exposes several
+`/dev/ttyUSB*` ports (DM/diagnostic, GPS/NMEA, AT command, audio) *plus* a
+QMI control interface (`cdc-wdm0`) that creates a `wwan0` network device —
+NetworkManager/ModemManager talk to the modem directly over
+`cdc-wdm0`/`wwan0`, skipping serial AT-dialing and the DNS-routing
+workarounds the old PPP setup needed entirely. Don't run the SIM800C
+section's `gprs-ppp.service`/PPP setup alongside this — ModemManager and a
+manually-driven `pppd`/chat-script both fighting over the same AT ports
+(`ttyUSB2`/`ttyUSB3`) causes `stty: Device or resource busy` and modem
+lockups.
+
+**Critical, easy-to-miss requirement: this dongle needs a real external
+antenna.** The board has three labelled u.FL/IPEX connectors — `LTE`
+(`J104`, required for basic signal), `DIV` (diversity, optional), `GPS`
+(unrelated to cellular). Shipped/received with none of them connected, this
+unit showed `AT+CSQ` → `99,99` (no signal at all) and `AT+CREG?` → `0,0`
+(not even searching) despite the radio being on (`AT+CFUN?` → `1`) and the
+SIM reading fine (`AT+CPIN?` → `READY`) — confirmed later via
+`mmcli -m <index>` too (`signal quality: 0%`, `registration: searching`,
+indefinitely). **A cheap flat peel-and-stick u.FL 4G/LTE antenna connected
+to the `LTE` port fixed this completely** — signal quality jumped to
+65-71%, `registration: home`, `access tech: lte`, immediately. Without an
+antenna, this modem can occasionally register anyway via accidental
+parasitic pickup (PCB traces/USB cable acting as an unintentional antenna)
+if held very close to a strong signal source — enough to pass a handful of
+pings with heavy loss/jitter, not enough to trust in a moving vehicle. If a
+SIM7600 unit won't get signal, check this before anything else.
+
+**Setup, once the antenna is connected:**
+```
+nmcli connection add type gsm ifname cdc-wdm0 con-name "Smart-4G" apn internet
+nmcli connection modify "Smart-4G" connection.autoconnect yes
+nmcli connection modify "Smart-4G" ipv4.route-metric 100
+```
+(`ifname`/`con-name` here match this unit's actual working config — adjust
+`ifname` if `mmcli -L`/`nmcli device status` shows a different `cdc-wdmN`.)
+The `ipv4.route-metric 100` is what makes GSM win the default route over
+WiFi automatically (WiFi's own default is `600`, and lower wins) —
+deliberately not done by disabling WiFi outright, so the Pi stays reachable
+over SSH for maintenance, same reasoning as the SIM800C setup's own
+"WiFi stays on" decision below.
+
+**Diagnostics** (indexes shift across reboots/replugs — always check first):
+```
+mmcli -L
+mmcli -m <index>                                 # full status: state, signal, registration, ports
+mmcli -m <index> | grep -E "state|registration|signal quality|access tech"
+sudo mmcli -m <index> --signal-setup=5           # force active polling (needs sudo)
+sudo mmcli -m <index> --signal-get
+ip route get 8.8.8.8                             # confirm which interface real traffic actually takes
+```
+`ModemManager.service` must be running for any of this to work — a
+NetworkManager `gsm` connection depends on it. If it was ever stopped for
+manual PPP debugging, `sudo systemctl enable --now ModemManager` first.
+
+**Confirmed real backend traffic actually rides the cellular link**, not
+just routed there in theory: a live `device-heartbeat` POST's
+`%{local_ip}` (via `curl -w`) matched `wwan0`'s assigned address, and a
+`curl --interface wwan0 ...` request to the same endpoint round-tripped
+successfully independent of WiFi.
+
+**Confirmed via a real cold-boot test** (`sudo reboot`, zero manual steps
+after): `Smart-4G` auto-connected on its own, `wwan0` held the default
+route at metric `100`, and `drivewise-monitor.service` came up cleanly
+(camera + GPS + heartbeat threads all started normally).
+
+**Real bug hit while retiring the old PPP path**: disabling
+`gprs-ppp.service` (`sudo systemctl disable`) didn't stick across a
+reboot — it kept coming back. Cause: `drivewise-monitor.service`'s unit
+file (see the Boot automation section below) had
+`Wants=gprs-ppp.service`/`After=gprs-ppp.service` — `Wants=` pulls in its
+target as a side effect of the *depending* unit starting, regardless of
+the target's own enabled/disabled state. Fixed by removing both lines from
+`/etc/systemd/system/drivewise-monitor.service` (and from the reference
+copy of that unit file in this doc's Boot automation section) — this
+module doesn't need `gprs-ppp.service` at all, so nothing should depend on
+it going forward.
+
+**Not yet tested over this link specifically**: `gps-upload` — same gap
+noted below for the old SIM800C/PPP setup, never actually closed either
+way.
+
+## GSM/cellular connectivity — superseded (SIM800C via PPP, confirmed working 2026-08-12, kept for reference only)
 
 For units without WiFi, a USB-to-serial SIM800C (quad-band 2G/GPRS, not
 3G/4G) module can supply the Pi's internet connection instead. Confirmed
@@ -204,21 +303,29 @@ above should apply equally once that's tested, but that combination
 (sustained 1/s uploads + heartbeat, both over real GPRS bandwidth, not
 just a single curl request) hasn't actually been observed yet.
 
-## Boot automation (confirmed working 2026-08-12)
+## Boot automation (confirmed working 2026-08-12; updated 2026-09-22)
 
 `04_DEVICE_BOOT_AND_HEARTBEAT.md`'s "Raspberry Pi Startup" section calls for
-this script to auto-launch on boot with no manual login. Two systemd units,
-both `enable`d so they persist across reboots:
+this script to auto-launch on boot with no manual login.
 
-- `gprs-ppp.service` (already covered above) â€” brings up the GSM/PPP link.
-- `drivewise-monitor.service` â€” runs this script itself, credentials supplied
-  via `EnvironmentFile=/etc/drivewise/monitor.env` (mode `600`, not committed
-  to this repo) instead of `export`ing them by hand every SSH session:
+**As of the SIM7600G-H migration above, `gprs-ppp.service` is retired** —
+GSM now comes up via NetworkManager's own `Smart-4G` connection
+(`autoconnect yes`, no systemd unit of its own needed) instead. The
+`After=`/`Wants=gprs-ppp.service` lines that used to be in
+`drivewise-monitor.service` (below) were removed for exactly this reason:
+`Wants=` pulls in its target as a side effect of this unit starting,
+regardless of the target's own enabled/disabled state — so as long as
+those lines existed, `gprs-ppp.service` kept coming back on every boot
+even after being `disable`d, fighting ModemManager for the same AT ports.
+If reusing this setup on a unit still running the old SIM800C/PPP config,
+add them back; otherwise leave them out.
+
+`drivewise-monitor.service` — runs this script itself, credentials supplied
+via `EnvironmentFile=/etc/drivewise/monitor.env` (mode `600`, not committed
+to this repo) instead of `export`ing them by hand every SSH session:
   ```ini
   [Unit]
   Description=DriveWise Pi drowsiness monitor
-  After=gprs-ppp.service
-  Wants=gprs-ppp.service
 
   [Service]
   Type=simple
@@ -266,6 +373,14 @@ resolvers (`8.8.8.8`/`1.1.1.1`) via an immutable `/etc/resolv.conf`
 which nameserver wins â€” the original version of this conflict caused
 DNS queries to route out over whichever link's nameserver they were
 pointed at, even if that link couldn't actually reach it.
+
+**Note:** the cold-boot test above was against the old SIM800C/PPP setup.
+The SIM7600G-H/NetworkManager setup (current) was independently confirmed
+via its own real cold-boot test — see the GSM section above — with GSM
+priority now set explicitly (`ipv4.route-metric 100`) rather than relying
+on pppd's implicit no-metric-beats-WiFi behavior, and no DNS-pinning
+workaround needed (NetworkManager/QMI doesn't hit the same DNS-conflict
+gotcha PPP did).
 
 ## Not done here
 

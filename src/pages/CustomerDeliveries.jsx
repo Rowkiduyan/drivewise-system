@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   AlertTriangle,
@@ -8,6 +8,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronUp,
   ClipboardList,
@@ -30,7 +31,27 @@ import {
   isManilaDatePast,
 } from "../lib/manilaTime.js";
 import { useResolvedAddress } from "../lib/reverseGeocode.js";
+import { useResolvedStopCoords } from "../lib/forwardGeocode.js";
+import { matchStopLegsToIndexes } from "../lib/suggestedRoute.js";
 import SuggestedRouteMap from "../components/SuggestedRouteMap.jsx";
+
+// Some stop locations are stored as a "lat, lng" coordinate pair rather than
+// a street address (e.g. a manually created test fixture) -- parse those
+// back into coords. Mirrors SupDeliveries.jsx's/DriverDeliveries.jsx's
+// identical helper, not shared, per this codebase's existing per-portal
+// convention.
+function parseCoords(value) {
+  if (!value) return null;
+  const m = String(value)
+    .trim()
+    .match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const lat = parseFloat(m[1]);
+  const lng = parseFloat(m[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
+}
 
 const background = null;
 
@@ -324,17 +345,27 @@ function formatTimestamp(iso) {
  * placeholder below in favor of it, exactly as noted in buildProgressData's
  * own backend guide.
  */
-// Ordinal word for the Nth drop-off in the chain (1st = the primary
-// dropoff_location, 2nd+ = each of `stops` in order) — capped at 5 stops
-// (DATABASE.md's `stops` limit), so 6 words covers every real case.
-const DROPOFF_ORDINAL_WORDS = [
-  "First",
-  "Second",
-  "Third",
-  "Fourth",
-  "Fifth",
-  "Sixth",
-];
+// Ordinal label for the Nth drop-off in the chain (1st = the primary
+// dropoff_location, 2nd+ = each of `stops` in order), n 1-indexed. Written
+// as a general suffix rule (2026-09-22) rather than a fixed word list --
+// `stops` no longer has a small fixed cap (CustomerRequestDelivery.jsx's
+// MAX_STOPS, now bounded by the DirectionsService waypoints ceiling, not a
+// short list of English ordinal words), so this needs to read correctly for
+// any count, including the 11th/12th/13th "teen" exception.
+function dropoffOrdinal(n) {
+  const remainder100 = n % 100;
+  if (remainder100 >= 11 && remainder100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
 
 // Builds the "Out for Delivery" stage's real, sequential pickup/drop-off
 // progress messages (2026-09-04, per user request — the Customer portal has
@@ -364,7 +395,7 @@ function buildTransitSubsteps(request) {
     {
       kind: "dropoff",
       ordinalLabel: hasMultipleDropoffs
-        ? `${DROPOFF_ORDINAL_WORDS[0]} Drop-Off Location`
+        ? `${dropoffOrdinal(1)} Drop-Off Location`
         : null,
       location: request.dropoffLocation,
       done: Boolean(request.dropoffPhotoUrl),
@@ -378,7 +409,7 @@ function buildTransitSubsteps(request) {
     },
     ...stops.map((s, i) => ({
       kind: "dropoff",
-      ordinalLabel: `${DROPOFF_ORDINAL_WORDS[i + 1] || `${i + 2}th`} Drop-Off Location`,
+      ordinalLabel: `${dropoffOrdinal(i + 2)} Drop-Off Location`,
       location: s.location,
       done: Boolean(s.completed),
       completedAt: s.completedAt,
@@ -799,14 +830,192 @@ function ExpandableBreakdown({ quotation, label = "View Full Breakdown" }) {
 // exists; the Supervisor no longer reviews/approves it (removed 2026-09-08
 // per explicit decision -- the Supervisor now only views the same route the
 // customer's booking form generated, same as this component).
+//
+// Pickup/Drop-off N chip buttons, address label, and card grouping added
+// 2026-09-22, mirroring SupDeliveries.jsx's LocationSwitcher (explicit user
+// request: give the customer the same "tap a location to focus the map on
+// it" feature and layout the Supervisor already has, including the
+// resolved-address label under the chips and the surrounding card). Kept as
+// its own local implementation rather than a shared component, per this
+// codebase's existing per-portal convention (see the file's other "not
+// shared" helpers) -- also because the two pages' request shapes genuinely
+// differ: CustomerDeliveries.jsx's mapDeliveryRow already resolves
+// pickupCoords/dropoffCoords straight from the DB columns, so there's no
+// need for LocationSwitcher's mock-data fallbacks (currentLocation/
+// destinationCoords) that only apply to SupDeliveries.jsx's legacy mock
+// fixtures.
 function ApprovedRouteMap({ request }) {
+  const stops = useMemo(() => request.stops || [], [request.stops]);
+  // Stops never get a lat/lng persisted at booking time (unlike Pickup/
+  // Drop-off, which come straight from pickup_lat/lng and dropoff_lat/lng) --
+  // parseCoords only succeeds for the rare "lat, lng"-shaped fixture address,
+  // so any real street address needs the same Photon forward-geocoding
+  // fallback the map itself already uses.
+  const unresolvedStopLocations = stops
+    .map((stop) => stop.location)
+    .filter((loc) => loc && !parseCoords(loc));
+  const { coordsByLocation: resolvedStopCoords } = useResolvedStopCoords(
+    unresolvedStopLocations,
+  );
+  // Fallback for a stop address that can't be geocoded at all (e.g. a
+  // Google Plus Code) -- the route's own "stop" leg endpoint is a real,
+  // already-computed position independent of Photon, same fallback
+  // SuggestedRouteMap's own stop markers and SupDeliveries.jsx's
+  // LocationSwitcher both use.
+  const stopLegByIndex = useMemo(
+    () =>
+      matchStopLegsToIndexes(request.suggestedRoute, stops, resolvedStopCoords),
+    [request.suggestedRoute, stops, resolvedStopCoords],
+  );
+
+  const points = [
+    {
+      key: "pickup",
+      badge: "P",
+      badgeBg: "bg-blue-100",
+      badgeText: "text-blue-600",
+      label: "Pick-up Location",
+      address: request.pickupLocation,
+      coords: request.pickupCoords || parseCoords(request.pickupLocation),
+    },
+    {
+      key: "dropoff",
+      badge: "D",
+      // Amber, same as every other drop-off chip (2026-09-22, explicit user
+      // request) -- "Drop-off 1" is just the first drop-off, not a
+      // conceptually different kind of stop.
+      badgeBg: "bg-amber-100",
+      badgeText: "text-amber-700",
+      label: "Drop-off 1 Location",
+      address: request.dropoffLocation,
+      coords: request.dropoffCoords || parseCoords(request.dropoffLocation),
+    },
+    ...stops.map((stop, index) => ({
+      key: `stop-${index}`,
+      badge: String(index + 2),
+      badgeBg: "bg-amber-100",
+      badgeText: "text-amber-700",
+      label: `Drop-off ${index + 2}`,
+      address: stop.location,
+      coords:
+        parseCoords(stop.location) ||
+        resolvedStopCoords[stop.location] ||
+        (stopLegByIndex[index]
+          ? {
+              lat: stopLegByIndex[index].path[
+                stopLegByIndex[index].path.length - 1
+              ][0],
+              lng: stopLegByIndex[index].path[
+                stopLegByIndex[index].path.length - 1
+              ][1],
+            }
+          : null),
+    })),
+  ];
+
+  // Tracks whether the map is zoomed into `point` or showing the whole
+  // route -- tapping the already-selected chip again toggles back out to
+  // the overview instead of being a no-op, same as LocationSwitcher.
+  const [index, setIndex] = useState(0);
+  const [focused, setFocused] = useState(true);
+  const safeIndex = Math.min(index, points.length - 1);
+  const point = points[safeIndex];
+  const resolvedAddress = useResolvedAddress(point.address || "");
+
   if (!request.suggestedRoute) return null;
+
   return (
-    <div className="mt-2 md:mt-3">
+    <div className="mt-2 space-y-2 rounded-2xl border border-slate-200 bg-white p-2.5 md:mt-3 md:p-4 md:shadow-sm">
+      {points.length > 2 && (
+        // Clarifies that chip order here isn't the driver's actual visiting
+        // order (02B_MULTI_STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff
+        // Ordering") -- the driver is routed to whichever remaining dropoff
+        // is nearest at each point, not this list's booking order.
+        <p className="text-[11px] text-slate-500">
+          Additional dropoffs, not necessarily visited in this order — the
+          driver is routed to whichever is nearest at each point.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {points.map((p, i) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => {
+              if (i === safeIndex && focused) {
+                setFocused(false);
+              } else {
+                setIndex(i);
+                setFocused(true);
+              }
+            }}
+            className={`flex h-6 items-center gap-1 rounded-full pl-1 pr-2 text-[11px] font-semibold transition ${
+              i === safeIndex && focused
+                ? "bg-slate-900 text-white"
+                : i === safeIndex
+                  ? "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-300"
+                  : "bg-white text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-50"
+            }`}
+          >
+            <span
+              className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${p.badgeBg} ${p.badgeText}`}
+            >
+              {p.badge}
+            </span>
+            {p.label
+              .replace("Pick-up Location", "Pickup")
+              .replace("Drop-off 1 Location", "Drop-off 1")}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex items-start gap-2">
+        <div
+          className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center mt-0.5 ${point.badgeBg}`}
+        >
+          <span className={`text-[10px] font-bold ${point.badgeText}`}>
+            {point.badge}
+          </span>
+        </div>
+        <div className="min-w-0 flex-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">
+            {point.label}
+          </span>
+          <span className="text-sm font-medium text-slate-900 block truncate">
+            {resolvedAddress}
+          </span>
+        </div>
+        {points.length > 1 && (
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onClick={() => {
+                setIndex((safeIndex - 1 + points.length) % points.length);
+                setFocused(true);
+              }}
+              className="rounded-md border border-slate-200 p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIndex((safeIndex + 1) % points.length);
+                setFocused(true);
+              }}
+              className="rounded-md border border-slate-200 p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+
       <SuggestedRouteMap
         key={request.id}
         suggestedRoute={request.suggestedRoute}
-        stops={request.stops}
+        stops={stops}
+        focusPos={focused && point.coords ? [point.coords.lat, point.coords.lng] : null}
       />
     </div>
   );

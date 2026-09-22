@@ -60,7 +60,8 @@ Per `12_REST_STOP_RECOMMENDATIONS.md` (supersedes `03_START_TRIP_AND_SESSION.md`
 
 ## Multi-Stop Deliveries
 
-- Booking form: stops can be added/removed, capped at 5, and unfilled rows are dropped on submit rather than stored.
+- Booking form: stops can be added/removed, capped at 20 (raised from 5, 2026-09-22 — a technical DirectionsService `waypoints` ceiling, not the real limit), and unfilled rows are dropped on submit rather than stored.
+- Adding stops beyond what fits in 13 hours still gets rejected by the existing `MAX_TOTAL_DELIVERY_HOURS` check (schedule preview live, and again at submit via `travelTimeModalSchedule`) regardless of how many stops were entered.
 - Supervisor's request detail panel shows the customer-entered stops read-only, in order; no edit UI exists.
 - Driver navigation's dropoff leg renders a route through all stops in order via `DirectionsService` `waypoints`; the to-pickup leg never includes stops.
 - The "Stop X of Y" indicator advances as the driver's GPS position reaches each stop, and reads "Heading to Drop-off" on the final leg.
