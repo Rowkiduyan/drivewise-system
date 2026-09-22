@@ -355,13 +355,13 @@ async function sendCredentialsEmail(
         <p>Sign in at the DriveWise login page with these credentials, then change your password.</p>
       `,
     }),
-  });
+  }).catch(() => null);
 
-  if (!response.ok) {
-    const message = await response.text();
+  if (!response || !response.ok) {
+    const message = response ? await response.text() : "Network error sending email";
     return {
       sent: false,
-      error: message || `Resend responded with ${response.status}`,
+      error: message || `Resend responded with ${response?.status}`,
     };
   }
 
@@ -2229,7 +2229,7 @@ Deno.serve(async (req) => {
       loginEmail,
       tempPassword,
       `A DriveWise account was created for you as ${role}.`,
-    );
+    ).catch(() => ({ sent: false, error: "Email delivery failed due to a network error" }));
 
     return json({
       ok: true,
@@ -2389,7 +2389,7 @@ Deno.serve(async (req) => {
       userRow.login_email,
       tempPassword,
       "Your DriveWise password has been reset.",
-    );
+    ).catch(() => ({ sent: false, error: "Email delivery failed due to a network error" }));
 
     return json({
       ok: true,

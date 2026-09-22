@@ -981,7 +981,14 @@ function AdminHome() {
     if (error) {
       setIsSubmitting(false)
       setIsAddUserOpen(true)
-      showStatusModal('error', 'Unable to Add User', error.message || 'Something went wrong while adding the user.')
+      let detail = error.message || 'Something went wrong while adding the user.'
+      try {
+        if (error.context) {
+          const body = await error.context.json?.()
+          if (body) detail = JSON.stringify(body)
+        }
+      } catch {}
+      showStatusModal('error', 'Unable to Add User', detail)
       return
     }
 
