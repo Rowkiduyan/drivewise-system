@@ -12,6 +12,9 @@
 //           (npx supabase secrets set ...) for credential emails to send —
 //           without them, create-user/reset-password still succeed but
 //           return tempPassword directly instead of emailing it.
+//           FRONTEND_URL (or APP_URL) is optional: the CTA buttons
+//           ("Log In to DriveWise" / "Login Now") link to it when set,
+//           otherwise they fall back to "#".
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -320,6 +323,259 @@ async function nextLoginEmail(
   return `${localPrefix}${String(lastNumber + 1).padStart(2, "0")}@${LOGIN_EMAIL_DOMAIN}`;
 }
 
+// Escapes user-controlled values before they are interpolated into the
+// transactional HTML below. Login emails / temp passwords are generated
+// server-side, but names and roles come from admin input — never inject
+// them raw or a crafted name could break the markup.
+function escapeEmailHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Absolute URL the CTA buttons point at. Set FRONTEND_URL (or APP_URL) via
+// `npx supabase secrets set FRONTEND_URL=https://app.example.com` so the
+// button lands on the real login page; when unset it falls back to "#" so
+// the email still renders instead of linking somewhere wrong.
+function loginPageUrl(): string {
+  const base = (Deno.env.get("FRONTEND_URL") || Deno.env.get("APP_URL") || "")
+    .trim()
+    .replace(/\/+$/, "");
+  return base ? `${base}/` : "#";
+}
+
+// Per-role email theme, mirroring each portal's sidebar palette
+// (AdminLayout violet-950, SupLayout blue-950, DriverLayout amber-950,
+// HelperLayout teal-950, CustomerLayout emerald-950) so the header, accent
+// bar, CTA button, and role badge match the recipient's own portal.
+type EmailTheme = {
+  header: string;
+  accent: string;
+  headerTag: string;
+  headerSub: string;
+  badgeBg: string;
+  badgeText: string;
+};
+
+const ROLE_EMAIL_THEME: Record<string, EmailTheme> = {
+  Admin: {
+    header: "#2e1065",
+    accent: "#7c3aed",
+    headerTag: "#ede9fe",
+    headerSub: "#c4b5fd",
+    badgeBg: "#ede9fe",
+    badgeText: "#5b21b6",
+  },
+  Supervisor: {
+    header: "#172554",
+    accent: "#2563eb",
+    headerTag: "#dbeafe",
+    headerSub: "#93c5fd",
+    badgeBg: "#dbeafe",
+    badgeText: "#1e40af",
+  },
+  Driver: {
+    header: "#451a03",
+    accent: "#d97706",
+    headerTag: "#fef3c7",
+    headerSub: "#fcd34d",
+    badgeBg: "#fef3c7",
+    badgeText: "#92400e",
+  },
+  Helper: {
+    header: "#042f2e",
+    accent: "#0d9488",
+    headerTag: "#ccfbf1",
+    headerSub: "#99f6e4",
+    badgeBg: "#ccfbf1",
+    badgeText: "#115e59",
+  },
+  Customer: {
+    header: "#022c22",
+    accent: "#059669",
+    headerTag: "#d1fae5",
+    headerSub: "#a7f3d0",
+    badgeBg: "#d1fae5",
+    badgeText: "#065f46",
+  },
+};
+
+// Unknown roles fall back to the Admin (violet) theme.
+function emailThemeForRole(role: string): EmailTheme {
+  return ROLE_EMAIL_THEME[role] || ROLE_EMAIL_THEME.Admin;
+}
+
+// Shared bulletproof wrapper for both transactional emails. Table-based
+// with all CSS inlined (no external stylesheets, no flexbox/grid) so it
+// renders in Outlook, Gmail, Apple Mail, and mobile clients. Colors come
+// from the recipient's role theme (see ROLE_EMAIL_THEME); body text stays
+// slate (#0f172a / #64748b) across all roles.
+function emailShell(opts: {
+  preheader: string;
+  eyebrow: string;
+  title: string;
+  introHtml: string;
+  bodyHtml: string;
+  ctaLabel: string;
+  theme: EmailTheme;
+  footerNote?: string;
+}): string {
+  const ctaUrl = loginPageUrl();
+  const theme = opts.theme;
+  const footerNote = opts.footerNote ||
+    "You received this email because a DriveWise administrator manages your fleet account.";
+  return `<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<title>${escapeEmailHtml(opts.title)} — DriveWise</title>
+<style>
+@media only screen and (max-width: 620px) {
+  .dw-container { width: 100% !important; }
+  .dw-card { border-radius: 0 !important; }
+  .dw-content { padding: 24px 20px !important; }
+  .dw-cta a { display: block !important; }
+}
+</style>
+</head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">${escapeEmailHtml(opts.preheader)}</div>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f1f5f9;">
+<tr><td align="center" style="padding:28px 12px;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" class="dw-container" style="width:600px;max-width:600px;">
+<tr><td style="background-color:${theme.header};border-radius:14px 14px 0 0;padding:26px 32px;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+<tr>
+<td style="font-family:Arial,Helvetica,sans-serif;color:#ffffff;font-size:22px;font-weight:bold;letter-spacing:2px;">DRIVEWISE</td>
+<td align="right" style="font-family:Arial,Helvetica,sans-serif;color:${theme.headerTag};font-size:11px;font-weight:bold;letter-spacing:1.5px;">FLEET&nbsp;MANAGEMENT</td>
+</tr>
+<tr><td colspan="2" style="font-family:Arial,Helvetica,sans-serif;color:${theme.headerSub};font-size:12px;padding-top:6px;">by Marvel Trucking Solutions, Inc.</td></tr>
+</table>
+</td></tr>
+<tr><td style="background-color:${theme.accent};height:4px;font-size:0;line-height:0;">&nbsp;</td></tr>
+<tr><td class="dw-card" style="background-color:#ffffff;border:1px solid #e2e8f0;border-top:0;border-radius:0 0 14px 14px;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+<tr><td class="dw-content" style="padding:32px 36px;font-family:Arial,Helvetica,sans-serif;">
+<p style="margin:0 0 10px;font-size:11px;font-weight:bold;letter-spacing:2px;color:${theme.accent};">${escapeEmailHtml(opts.eyebrow)}</p>
+<h1 style="margin:0 0 14px;font-size:24px;line-height:30px;color:#0f172a;">${escapeEmailHtml(opts.title)}</h1>
+<div style="font-size:14px;line-height:22px;color:#334155;">${opts.introHtml}</div>
+<div style="font-size:14px;line-height:22px;color:#334155;">${opts.bodyHtml}</div>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:26px 0 8px;">
+<tr><td align="center" class="dw-cta">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0">
+<tr><td align="center" bgcolor="${theme.accent}" style="border-radius:8px;background-color:${theme.accent};">
+<a href="${ctaUrl}" target="_blank" style="display:inline-block;padding:14px 38px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;border-radius:8px;">${escapeEmailHtml(opts.ctaLabel)}</a>
+</td></tr>
+</table>
+</td></tr>
+</table>
+<p style="margin:10px 0 0;font-size:12px;line-height:18px;color:#94a3b8;text-align:center;">Button not working? Copy your login email and temporary password from the box above, then sign in on the DriveWise login page.</p>
+</td></tr>
+</table>
+</td></tr>
+<tr><td align="center" style="padding:20px 24px 4px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#64748b;">
+<p style="margin:0 0 6px;">${escapeEmailHtml(footerNote)}</p>
+<p style="margin:0;">&copy; 2026 DriveWise &middot; Marvel Trucking Solutions, Inc. &middot; Fleet operations &amp; driver safety</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
+// Lightweight credential row used inside the bordered credentials box.
+function credentialRow(label: string, value: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 10px;">
+<tr>
+<td style="font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;letter-spacing:1px;color:#64748b;padding-bottom:3px;">${label}</td>
+</tr>
+<tr>
+<td style="font-family:'Courier New',Courier,monospace;font-size:15px;font-weight:bold;color:#0f172a;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;word-break:break-all;">${escapeEmailHtml(value)}</td>
+</tr>
+</table>`;
+}
+
+// Template A — new user invitation / welcome. Variables: {{name}},
+// {{role}}, {{loginEmail}}, {{tempPassword}}.
+function buildWelcomeEmail(opts: {
+  name: string;
+  role: string;
+  loginEmail: string;
+  tempPassword: string;
+}): string {
+  const displayName = opts.name.trim() || "there";
+  const theme = emailThemeForRole(opts.role.trim() || "Member");
+  const roleBadge = `<span style="display:inline-block;background-color:${theme.badgeBg};color:${theme.badgeText};font-size:12px;font-weight:bold;letter-spacing:0.5px;padding:4px 12px;border-radius:999px;">${escapeEmailHtml(opts.role)}</span>`;
+  const introHtml = `<p style="margin:0 0 12px;">Hi ${escapeEmailHtml(displayName)},</p>
+<p style="margin:0 0 12px;">An administrator created your DriveWise account with the role ${roleBadge} — you can now sign in to the fleet portal to view your trips, deliveries, and schedule.</p>`;
+  const bodyHtml = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin:18px 0;padding:18px;">
+<tr><td>
+<p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;letter-spacing:1.5px;color:${theme.accent};">YOUR LOGIN CREDENTIALS</p>
+${credentialRow("LOGIN EMAIL", opts.loginEmail)}
+${credentialRow("TEMPORARY PASSWORD", opts.tempPassword)}
+<p style="margin:4px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#64748b;">Keep these credentials private. You will be asked to change your password after signing in.</p>
+</td></tr>
+</table>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:6px 0 0;">
+<tr><td style="font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#334155;">
+<p style="margin:0 0 6px;"><strong style="color:#0f172a;">Getting started:</strong></p>
+<p style="margin:0 0 4px;">1. Tap the button below to open DriveWise.</p>
+<p style="margin:0 0 4px;">2. Sign in with the login email and temporary password above.</p>
+<p style="margin:0;">3. Change your password and complete your profile.</p>
+</td></tr>
+</table>`;
+  return emailShell({
+    preheader: "Your DriveWise account is ready — here are your login credentials.",
+    eyebrow: "WELCOME TO DRIVEWISE",
+    title: `Your fleet account is ready, ${displayName}!`,
+    introHtml,
+    bodyHtml,
+    ctaLabel: "Log In to DriveWise",
+    theme,
+  });
+}
+
+// Template B — admin-initiated password reset. Variables: {{name}},
+// {{role}}, {{loginEmail}}, {{tempPassword}}.
+function buildPasswordResetEmail(opts: {
+  name: string;
+  role: string;
+  loginEmail: string;
+  tempPassword: string;
+}): string {
+  const displayName = opts.name.trim() || "there";
+  const theme = emailThemeForRole(opts.role.trim() || "Member");
+  const introHtml = `<p style="margin:0 0 12px;">Hi ${escapeEmailHtml(displayName)},</p>
+<p style="margin:0 0 12px;">An administrator has reset your DriveWise password. Use the temporary password below to sign back in, then change it to something only you know.</p>`;
+  const bodyHtml = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin:18px 0;padding:18px;">
+<tr><td>
+<p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;letter-spacing:1.5px;color:${theme.accent};">YOUR NEW SIGN-IN DETAILS</p>
+${credentialRow("LOGIN EMAIL", opts.loginEmail)}
+${credentialRow("TEMPORARY PASSWORD", opts.tempPassword)}
+</td></tr>
+</table>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#fffbeb;border:1px solid #fcd34d;border-radius:10px;margin:0 0 6px;padding:14px 16px;">
+<tr><td style="font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#92400e;">
+<strong>Security notice:</strong> If you did not request this, please contact your fleet supervisor immediately.
+</td></tr>
+</table>`;
+  return emailShell({
+    preheader: "Your DriveWise password was reset — sign in with your temporary password.",
+    eyebrow: "PASSWORD RESET",
+    title: `Your password was reset, ${displayName}.`,
+    introHtml,
+    bodyHtml,
+    ctaLabel: "Login Now",
+    theme,
+  });
+}
+
 // Sends the login email + temp password to the account's contact email via
 // Resend. Returns { sent: false, error } instead of throwing so a delivery
 // failure never rolls back an already-created account or password reset —
@@ -329,6 +585,7 @@ async function sendCredentialsEmail(
   loginEmail: string,
   tempPassword: string,
   heading: string,
+  opts?: { name?: string; role?: string; kind?: "welcome" | "reset" },
 ) {
   if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) {
     return {
@@ -338,23 +595,38 @@ async function sendCredentialsEmail(
     };
   }
 
+  const kind = opts?.kind ?? "welcome";
+  const displayName = (opts?.name || "").trim() || "there";
+  const roleMatch = heading.match(
+    /^A DriveWise account was created for you as (.+?)\.?$/,
+  );
+  const roleName = (opts?.role || "").trim() ||
+    (roleMatch ? roleMatch[1].trim() : "") ||
+    "Member";
+  const html = kind === "reset"
+    ? buildPasswordResetEmail({
+      name: displayName,
+      role: roleName,
+      loginEmail,
+      tempPassword,
+    })
+    : buildWelcomeEmail({
+      name: displayName,
+      role: roleName,
+      loginEmail,
+      tempPassword,
+    });
+  const subject = kind === "reset"
+    ? "Your DriveWise password has been reset"
+    : "Welcome to DriveWise — your account credentials";
+
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${RESEND_API_KEY}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      from: RESEND_FROM_EMAIL,
-      to,
-      subject: "Your DriveWise account credentials",
-      html: `
-        <p>${heading}</p>
-        <p><strong>Login email:</strong> ${loginEmail}</p>
-        <p><strong>Temporary password:</strong> ${tempPassword}</p>
-        <p>Sign in at the DriveWise login page with these credentials, then change your password.</p>
-      `,
-    }),
+    body: JSON.stringify({ from: RESEND_FROM_EMAIL, to, subject, html }),
   }).catch(() => null);
 
   if (!response || !response.ok) {
@@ -2224,11 +2496,15 @@ Deno.serve(async (req) => {
       return json({ error: message }, 400);
     }
 
+    const newUserName = [profile.firstName, profile.middleName, profile.lastName]
+      .filter(Boolean)
+      .join(" ");
     const emailResult = await sendCredentialsEmail(
       profile.email,
       loginEmail,
       tempPassword,
       `A DriveWise account was created for you as ${role}.`,
+      { kind: "welcome", name: newUserName, role },
     ).catch(() => ({ sent: false, error: "Email delivery failed due to a network error" }));
 
     return json({
@@ -2374,6 +2650,30 @@ Deno.serve(async (req) => {
       return json({ error: "No contact email on file for this user" }, 400);
     }
 
+    // Look up the user's display name from their role profile table so the
+    // reset email can greet them by name. Falls back to "there" inside
+    // sendCredentialsEmail when no profile row exists.
+    let resetName = "";
+    try {
+      const resetTable = ROLE_TABLE[userRow.role as string];
+      if (resetTable) {
+        const { data: resetProfile } = await adminClient
+          .from(resetTable)
+          .select("first_name, middle_name, last_name")
+          .eq("auth_id", userId)
+          .maybeSingle();
+        if (resetProfile) {
+          resetName = [
+            resetProfile.first_name,
+            resetProfile.middle_name,
+            resetProfile.last_name,
+          ].filter(Boolean).join(" ");
+        }
+      }
+    } catch {
+      resetName = "";
+    }
+
     const tempPassword = generateTempPassword();
 
     const { error } = await adminClient.auth.admin.updateUserById(userId, {
@@ -2389,6 +2689,7 @@ Deno.serve(async (req) => {
       userRow.login_email,
       tempPassword,
       "Your DriveWise password has been reset.",
+      { kind: "reset", name: resetName, role: userRow.role },
     ).catch(() => ({ sent: false, error: "Email delivery failed due to a network error" }));
 
     return json({
