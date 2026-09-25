@@ -149,49 +149,6 @@ function MetricTile({ label, value, hint, icon: Icon, tone = 'slate' }) {
   )
 }
 
-// ---------------------------------------------------------------------------
-// Small sample fallback (frontend-only, no backend/API call) — shown only
-// when the real query below comes back with zero sessions in the last 7
-// days (a driver who hasn't completed any trips yet), so the page
-// demonstrates its layout instead of just reading "no trip data" on a fresh
-// account. Deliberately a handful of rows, not a full fabricated week, and
-// clearly labeled as sample data (see the banner below) rather than passed
-// off as real history -- misrepresenting a driver's own safety record isn't
-// the kind of thing this app should ever do, even as a placeholder.
-// Timestamps are generated relative to "now" at module load rather than
-// hardcoded dates, so they always fall inside whatever "last 7 days" window
-// is actually being queried, no matter when this is viewed.
-// ---------------------------------------------------------------------------
-
-function hoursAgoIso(hours) {
-  return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()
-}
-
-const SAMPLE_SESSIONS = [
-  {
-    session_id: 'SAMPLE-2',
-    created_at: hoursAgoIso(20),
-    start_time: hoursAgoIso(20),
-    end_time: hoursAgoIso(19.3),
-    total_alerts: 1,
-    session_duration: 2520,
-  },
-  {
-    session_id: 'SAMPLE-1',
-    created_at: hoursAgoIso(68),
-    start_time: hoursAgoIso(68),
-    end_time: hoursAgoIso(67.2),
-    total_alerts: 2,
-    session_duration: 2880,
-  },
-]
-
-const SAMPLE_ALERTS = [
-  { id: 'SAMPLE-A3', created_at: hoursAgoIso(19.6), event_type: 'prolonged_eye_closure', duration: 40, session_id: 'SAMPLE-2' },
-  { id: 'SAMPLE-A2', created_at: hoursAgoIso(67.6), event_type: 'pattern_eye_closure_yawn', duration: 35, session_id: 'SAMPLE-1' },
-  { id: 'SAMPLE-A1', created_at: hoursAgoIso(67.9), event_type: 'prolonged_eye_closure', duration: 50, session_id: 'SAMPLE-1' },
-]
-
 // Same performance data source as SupCrewProfile.jsx's Performance tab
 // (alerts + sessions from the last 7 days), but properly scoped to the
 // calling driver's own rows rather than that page's unscoped query --
@@ -206,7 +163,6 @@ function useDriverPerformanceData() {
   const [sessions, setSessions] = useState([])
   const [isPerformanceLoading, setIsPerformanceLoading] = useState(true)
   const [performanceError, setPerformanceError] = useState('')
-  const [isSampleData, setIsSampleData] = useState(false)
   // Captured once on mount (an effect, not render, so `Date.now()` here is
   // fine) -- the fixed "now" the 7-day trend chart's calendar-day buckets
   // are built from, so render itself never calls Date.now() directly.
@@ -230,22 +186,20 @@ function useDriverPerformanceData() {
 
       if (sessionsRes.error) {
         setPerformanceError(sessionsRes.error.message)
-        setSessions(SAMPLE_SESSIONS)
-        setAlerts(SAMPLE_ALERTS)
-        setIsSampleData(true)
+        setSessions([])
+        setAlerts([])
         setIsPerformanceLoading(false)
         return
       }
 
       const realSessions = sessionsRes.data || []
       if (realSessions.length === 0) {
-        // No real trips in the window at all -- show the small sample set
-        // instead of an empty page. Deliberately not done when sessions
-        // exist but have zero alerts (a genuinely clean week) -- that's
-        // real data, not something to paper over with fake alerts.
-        setSessions(SAMPLE_SESSIONS)
-        setAlerts(SAMPLE_ALERTS)
-        setIsSampleData(true)
+        // No real trips in the window at all -- every panel below already
+        // has its own "no data yet" copy for this case (see the empty-state
+        // checks throughout the JSX), so this just leaves sessions/alerts
+        // empty rather than backfilling with sample data.
+        setSessions([])
+        setAlerts([])
         setIsPerformanceLoading(false)
         return
       }
@@ -267,7 +221,6 @@ function useDriverPerformanceData() {
         setAlerts(alertsRes.data || [])
       }
       setSessions(realSessions)
-      setIsSampleData(false)
       setIsPerformanceLoading(false)
     }
 
@@ -277,11 +230,11 @@ function useDriverPerformanceData() {
     }
   }, [])
 
-  return { alerts, sessions, isPerformanceLoading, performanceError, isSampleData, nowMs }
+  return { alerts, sessions, isPerformanceLoading, performanceError, nowMs }
 }
 
 function DriverPerformance() {
-  const { alerts, sessions, isPerformanceLoading, performanceError, isSampleData, nowMs } = useDriverPerformanceData()
+  const { alerts, sessions, isPerformanceLoading, performanceError, nowMs } = useDriverPerformanceData()
 
   const {
     performanceKpis,
@@ -561,12 +514,12 @@ function DriverPerformance() {
           </div>
         ) : null}
 
-        {!isPerformanceLoading && isSampleData ? (
+        {!isPerformanceLoading && sessions.length === 0 && !performanceError ? (
           <div className="flex items-start gap-2.5 rounded-2xl border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600 sm:gap-3 sm:p-4 sm:text-sm">
             <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
             <p>
-              Showing sample data — you haven't completed any trips in the last 7 days yet. Your real performance
-              stats will appear here once you have.
+              You haven't completed any trips in the last 7 days yet. Your performance stats will appear here once
+              you have.
             </p>
           </div>
         ) : null}

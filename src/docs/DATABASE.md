@@ -55,7 +55,7 @@
     ### Key Fields
 
     - id (UUID, Primary Key) — matches the corresponding Supabase Auth user id.
-    - login_email — the actual Supabase Auth login email. Generated server-side by the `admin-users` Edge Function from the user's name (first-name initial + middle-name initial(s), if any + surname + a 2-digit sequence, e.g. `jmdoe01@marveltrucking.local`). Unique, not editable from the UI. Shown in the UI as "Work Email".
+    - login_email — the actual Supabase Auth login email. Generated server-side by the `admin-users` Edge Function from the user's name (first-name initial + middle-name initial(s), if any + surname + a 2-digit sequence, e.g. `jmdoe01@marveltrucking.com`). Unique, not editable from the UI. Shown in the UI as "Work Email".
     - role
     - created_at
     - deactivated_at (nullable, timestamptz) — set by `AdminHome.jsx`'s "Deactivate Account" (via the `admin-users` Edge Function's `deactivate` action) when an Admin deactivates an account; cleared back to `null` by "Reactivate Account" (`reactivate` action). Deactivating does **not** ban the account in Supabase Auth — Supabase has no way to schedule a ban to start in the future, and the intent is a 24-hour grace period, not an instant lockout. Instead, every login (`Login.jsx`) and every portal layout (`useDeactivationGuard`, polled every 5 minutes for already-open sessions) compares this timestamp against now: access is only actually cut off once `DEACTIVATION_GRACE_HOURS` (24, see `src/lib/deactivation.js`) have elapsed, and a warning banner is shown in the meantime.

@@ -33,7 +33,7 @@ const ASSIGNABLE_ROLES = [
   "Helper",
   "Customer",
 ];
-const LOGIN_EMAIL_DOMAIN = "marveltrucking.local";
+const LOGIN_EMAIL_DOMAIN = "marveltrucking.com";
 
 // Profile pictures are stored in this Storage bucket, keyed by the user's
 // auth id + a fixed extension (client always sends JPEG — see
