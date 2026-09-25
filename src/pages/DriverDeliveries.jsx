@@ -597,6 +597,69 @@ function snapToPolyline(point, path, maxMeters) {
   };
 }
 
+// Trims a route path down to whatever's still ahead of the driver, so the
+// drawn line progressively "gets eaten" as they move -- not just at each
+// step's endpoint (the step-advance/currentStepIndex granularity above),
+// but continuously along the current step itself. Without this, a driver
+// mid-way through a single long step (e.g. a long straight road) still saw
+// the full, un-eaten line all the way back to that step's start until they
+// got within NAV_STEP_ADVANCE_METERS of its end and the step index finally
+// advanced (user-reported 2026-09-22 live walk test: the line sat behind
+// the arrow and only caught up after a manual refresh, i.e. only once state
+// unrelated to this render -- a reroute or remount -- happened to redraw a
+// shorter path from scratch).
+//
+// Same local flat-earth projection as snapToPolyline, but instead of just
+// returning the closest point, it also keeps the projected point plus every
+// path point after it, discarding everything behind -- the drawn segment
+// the driver has already physically passed. Deliberately uses the same
+// projection math/tolerance-free search (no maxMeters cutoff) as trimming
+// should still happen even while the driver is briefly outside
+// NAV_SNAP_TO_ROUTE_METERS (that threshold only gates the marker's snap,
+// not whether the line behind it should shrink).
+function trimPathToPosition(point, path) {
+  if (!point || !path || path.length < 2) return path || [];
+  const latToMeters = 111320;
+  const lngToMeters = 111320 * Math.cos((point.lat * Math.PI) / 180);
+  const toLocalXY = (p) => {
+    const lat = typeof p.lat === "function" ? p.lat() : p.lat;
+    const lng = typeof p.lng === "function" ? p.lng() : p.lng;
+    return { x: (lng - point.lng) * lngToMeters, y: (lat - point.lat) * latToMeters };
+  };
+  let bestIndex = null;
+  let bestT = 0;
+  let bestDistSq = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    const a = toLocalXY(path[i - 1]);
+    const b = toLocalXY(path[i]);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq > 0 ? (-a.x * dx + -a.y * dy) / lenSq : 0;
+    t = Math.max(0, Math.min(1, t));
+    const cx = a.x + t * dx;
+    const cy = a.y + t * dy;
+    const distSq = cx * cx + cy * cy;
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq;
+      bestIndex = i;
+      bestT = t;
+    }
+  }
+  if (bestIndex === null) return path;
+  const a = path[bestIndex - 1];
+  const b = path[bestIndex];
+  const aLat = typeof a.lat === "function" ? a.lat() : a.lat;
+  const aLng = typeof a.lng === "function" ? a.lng() : a.lng;
+  const bLat = typeof b.lat === "function" ? b.lat() : b.lat;
+  const bLng = typeof b.lng === "function" ? b.lng() : b.lng;
+  const projected = {
+    lat: aLat + (bLat - aLat) * bestT,
+    lng: aLng + (bLng - aLng) * bestT,
+  };
+  return [projected, ...path.slice(bestIndex)];
+}
+
 // Below this speed (m/s), a phone's own fused heading reading is typically
 // noise (near-stationary jitter, not real direction of travel) -- keep
 // whatever heading is already showing instead of following it.
@@ -1279,9 +1342,16 @@ function LiveNavigationMap({
   // detection, heading derivation below) still uses the real livePosition,
   // unaffected by this.
   const navLegs = directions?.routes[0]?.legs || [];
-  const navCurrentLegPoints = (navLegs[currentLegIndex]?.steps || [])
+  const navStepPoints = (navLegs[currentLegIndex]?.steps || [])
     .slice(currentStepIndex)
     .flatMap((step) => step.path || []);
+  // Further trimmed to whatever's still ahead of the driver within the
+  // current step itself, not just from the step's own start -- see
+  // trimPathToPosition's own comment for why the step-level slice above
+  // alone wasn't enough.
+  const navCurrentLegPoints = livePosition
+    ? trimPathToPosition(livePosition, navStepPoints)
+    : navStepPoints;
   const displayPosition = livePosition
     ? snapToPolyline(livePosition, navCurrentLegPoints, NAV_SNAP_TO_ROUTE_METERS) ||
       livePosition
@@ -2039,9 +2109,14 @@ function ReturnTripNavigationMap({ livePosition }) {
   // Snap-to-route, same as LiveNavigationMap's identical derivation (see
   // NAV_SNAP_TO_ROUTE_METERS's own comment) -- single leg only here, no
   // stops/waypoints to account for.
-  const rtCurrentLegPoints = (directions?.routes[0]?.legs[0]?.steps || [])
+  const rtStepPoints = (directions?.routes[0]?.legs[0]?.steps || [])
     .slice(currentStepIndex)
     .flatMap((step) => step.path || []);
+  // Further trimmed to whatever's still ahead of the driver within the
+  // current step itself -- see trimPathToPosition's own comment.
+  const rtCurrentLegPoints = livePosition
+    ? trimPathToPosition(livePosition, rtStepPoints)
+    : rtStepPoints;
   const displayPosition = livePosition
     ? snapToPolyline(livePosition, rtCurrentLegPoints, NAV_SNAP_TO_ROUTE_METERS) ||
       livePosition

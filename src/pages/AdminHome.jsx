@@ -198,6 +198,20 @@ function normalizeBirthdate(value) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
+// Google Sheets/Excel store a typed "09171234567" as a number, silently
+// dropping the leading zero -- so a file edited/saved there can come back as
+// a 10-digit "9171234567" even though the admin typed it correctly. Same
+// class of spreadsheet quirk as normalizeBirthdate above; restore the 0
+// before validating against PH_MOBILE_PATTERN instead of only accepting the
+// already-11-digit shape.
+function normalizeContactNumber(value) {
+  const trimmed = (value || '').trim()
+  if (/^9\d{9}$/.test(trimmed)) {
+    return `0${trimmed}`
+  }
+  return trimmed
+}
+
 // Field-level checks only — duplicate-email checks (against existing users
 // and other rows in the same file) are done by the caller, which has that
 // context.
@@ -248,9 +262,11 @@ function validateBulkRow(record) {
     return { payload, error: `User must be at least ${MIN_USER_AGE} years old.` }
   }
 
-  if (!PH_MOBILE_PATTERN.test(payload.contactNumber)) {
+  const normalizedContactNumber = normalizeContactNumber(payload.contactNumber)
+  if (!PH_MOBILE_PATTERN.test(normalizedContactNumber)) {
     return { payload, error: CONTACT_NUMBER_ERROR }
   }
+  payload.contactNumber = normalizedContactNumber
 
   if (!EMAIL_PATTERN.test(payload.personalEmail)) {
     return { payload, error: 'Personal Email is not a valid email address.' }
@@ -1707,7 +1723,9 @@ function AdminHome() {
                   </p>
                   <p className="text-xs text-slate-400">
                     Client Name is only required for the Customer role. Birthdate should be
-                    YYYY-MM-DD, but the M/D/YYYY format Excel saves it as is also accepted.
+                    YYYY-MM-DD, but the M/D/YYYY format Excel saves it as is also accepted. If
+                    Sheets/Excel drops the leading 0 from Contact Number, that's fine too — it's
+                    added back automatically.
                   </p>
                 </div>
               </div>

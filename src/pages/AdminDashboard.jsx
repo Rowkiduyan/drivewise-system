@@ -1457,9 +1457,6 @@ function AdminDashboard() {
             </p>
             <p className="text-xs text-slate-500">Live fleet, delivery &amp; driver-safety status</p>
           </div>
-          <nav className="flex items-center gap-2 text-[11px] font-medium text-violet-600">
-            <Link to="/admin/trucks" className="hover:underline">Trucks</Link>
-          </nav>
         </div>
 
         {/* Top: KPI summary */}
