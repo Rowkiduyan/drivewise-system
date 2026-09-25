@@ -4823,7 +4823,6 @@ function SupDeliveries() {
   const [showProceedQuotationDialog, setShowProceedQuotationDialog] =
     useState(false);
   const [adjustingQuotation, setAdjustingQuotation] = useState(false);
-  const [bidDeclined, setBidDeclined] = useState(false);
   const [showInitialQuotation, setShowInitialQuotation] = useState(false);
   const [showDeclineCounterOfferDialog, setShowDeclineCounterOfferDialog] =
     useState(false);
@@ -6018,10 +6017,32 @@ function SupDeliveries() {
   const handleDeclineCounterOffer = () => {
     setShowDeclineCounterOfferDialog(true);
   };
-  const confirmDeclineCounterOffer = () => {
+  // Declining the counter offer is a real state change, not a local flag
+  // (the old `bidDeclined` useState vanished on refresh and let the same two
+  // buttons reappear): it hands the request back to the customer with the
+  // initial quotation still standing — status returns to QUOTATION_SUBMITTED,
+  // so the counter card (Update Quotation / Decline Counter Offer) closes for
+  // good and the customer sees the original quote with Approve/Reject. The
+  // customer_counter_min/max columns are deliberately kept as the record of
+  // the declined round — both sides derive "counter was declined" from
+  // QUOTATION_SUBMITTED + a counter range still on the row.
+  const confirmDeclineCounterOffer = async () => {
     if (!selectedRequest) return;
-    setBidDeclined(true);
+    const { error } = await supabase
+      .from("delivery_requests")
+      .update({ status: "QUOTATION_SUBMITTED" })
+      .eq("id", selectedRequest.id);
+    if (error) {
+      return alert(
+        "Failed to decline the counter offer. Please try again.",
+      );
+    }
+    updateRequest(selectedRequest.id, { status: "QUOTATION_SUBMITTED" });
     setShowDeclineCounterOfferDialog(false);
+    showToast(
+      "Counter offer declined. Sticking with the initial quotation.",
+      "success",
+    );
   };
   const closeDeclineCounterOfferDialog = () => {
     setShowDeclineCounterOfferDialog(false);
@@ -6092,7 +6113,6 @@ function SupDeliveries() {
       status: "FINAL_QUOTATION_SUBMITTED",
     });
     setAdjustingQuotation(false);
-    setBidDeclined(false);
     showToast("Quotation submitted successfully.", "success");
   };
 
@@ -7231,14 +7251,23 @@ function SupDeliveries() {
                                   </div>
                                 )}
 
-                              {/* QUOTED: Waiting message */}
+                              {/* QUOTED: Waiting message — when a counter
+                                  offer was declined (status handed back to
+                                  QUOTATION_SUBMITTED with the counter range
+                                  still on the row), say so instead of the
+                                  plain waiting line. */}
                               {selectedRequest.status ===
                                 "QUOTATION_SUBMITTED" &&
                                 !selectedRequest.customerWants && (
                                   <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 mt-4">
                                     <div className="h-2 w-2 animate-pulse rounded-full bg-sky-500" />
                                     <p className="text-sm text-sky-800">
-                                      Waiting for customer to review quotation.
+                                      {selectedRequest.customerCounterMin !=
+                                        null &&
+                                      selectedRequest.customerCounterMax !=
+                                        null
+                                        ? "Counter offer declined. Sticking with the initial quotation — waiting for the customer to review it."
+                                        : "Waiting for customer to review quotation."}
                                     </p>
                                   </div>
                                 )}
@@ -7246,64 +7275,51 @@ function SupDeliveries() {
                               {/* COUNTER_OFFER_SUBMITTED: Customer's Counter Offer section */}
                               {selectedRequest.status ===
                                 "COUNTER_OFFER_SUBMITTED" && (
-                                <>
-                                  {!bidDeclined && (
-                                    <div className="rounded-xl border-2 border-orange-200 bg-orange-50/60 p-4 space-y-3">
-                                      <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-orange-800">
-                                        <span className="h-3 w-3 rounded-full bg-orange-600" />
-                                        Customer's Counter Offer
-                                      </h4>
-                                      <div className="flex items-center justify-between py-2">
-                                        <span className="text-sm font-medium text-slate-700">
-                                          Initial Quotation
-                                        </span>
-                                        <span className="text-base font-bold text-slate-900">
-                                          ₱
-                                          {Number(
-                                            selectedRequest.quotation.amount,
-                                          ).toLocaleString("en-US", {
-                                            minimumFractionDigits: 2,
-                                          })}
-                                        </span>
-                                      </div>
-                                      <div className="flex items-center justify-between py-2 border-t border-orange-200">
-                                        <span className="text-sm font-medium text-slate-700">
-                                          Customer's Counter Offer
-                                        </span>
-                                        <span className="text-base font-bold text-orange-700">
-                                          {getCounterOfferRange(
-                                            selectedRequest,
-                                          )}
-                                        </span>
-                                      </div>
-                                      <div className="flex gap-3 pt-2">
-                                        <button
-                                          onClick={handleUpdateQuotation}
-                                          className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-700 transition"
-                                        >
-                                          <Send className="h-4 w-4" />
-                                          Update Quotation
-                                        </button>
-                                        <button
-                                          onClick={handleDeclineCounterOffer}
-                                          className="inline-flex items-center gap-2 rounded-xl border border-rose-300 px-5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 transition"
-                                        >
-                                          <XCircle className="h-4 w-4" />
-                                          Decline Counter Offer
-                                        </button>
-                                      </div>
-                                    </div>
-                                  )}
-                                  {bidDeclined && (
-                                    <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                      <XCircle className="h-4 w-4 text-slate-400" />
-                                      <p className="text-sm text-slate-600">
-                                        Counter offer declined. Sticking with
-                                        the initial quotation.
-                                      </p>
-                                    </div>
-                                  )}
-                                </>
+                                <div className="rounded-xl border-2 border-orange-200 bg-orange-50/60 p-4 space-y-3">
+                                  <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-orange-800">
+                                    <span className="h-3 w-3 rounded-full bg-orange-600" />
+                                    Customer's Counter Offer
+                                  </h4>
+                                  <div className="flex items-center justify-between py-2">
+                                    <span className="text-sm font-medium text-slate-700">
+                                      Initial Quotation
+                                    </span>
+                                    <span className="text-base font-bold text-slate-900">
+                                      ₱
+                                      {Number(
+                                        selectedRequest.quotation.amount,
+                                      ).toLocaleString("en-US", {
+                                        minimumFractionDigits: 2,
+                                      })}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center justify-between py-2 border-t border-orange-200">
+                                    <span className="text-sm font-medium text-slate-700">
+                                      Customer's Counter Offer
+                                    </span>
+                                    <span className="text-base font-bold text-orange-700">
+                                      {getCounterOfferRange(
+                                        selectedRequest,
+                                      )}
+                                    </span>
+                                  </div>
+                                  <div className="flex gap-3 pt-2">
+                                    <button
+                                      onClick={handleUpdateQuotation}
+                                      className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-700 transition"
+                                    >
+                                      <Send className="h-4 w-4" />
+                                      Update Quotation
+                                    </button>
+                                    <button
+                                      onClick={handleDeclineCounterOffer}
+                                      className="inline-flex items-center gap-2 rounded-xl border border-rose-300 px-5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 transition"
+                                    >
+                                      <XCircle className="h-4 w-4" />
+                                      Decline Counter Offer
+                                    </button>
+                                  </div>
+                                </div>
                               )}
 
                               {/* FINAL_QUOTATION_SUBMITTED: Show initial quotation + customer's counter offer record + updated quotation */}

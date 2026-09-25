@@ -7,6 +7,7 @@ import {
   DEFAULT_MAINTENANCE_INTERVAL_MONTHS,
 } from "../constants/pms.js";
 import { completeInProgressMaintenance } from "./trucks/utils/maintenance.js";
+import { MonthPicker } from "./DateTimePicker.jsx";
 
 // Duplicate options to avoid circular imports
 // Utility: today’s date in YYYY‑MM‑DD format (no time component)
@@ -548,14 +549,19 @@ export default function AddTruckModal({
           </div>
           {/* Row: Date Acquired – calendar picker */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
+            <label
+              htmlFor="truck-date-acquired"
+              className="block text-sm font-medium text-slate-700 mb-1"
+            >
               Date Acquired
             </label>
-            <input
-              type="month"
+            <MonthPicker
+              id="truck-date-acquired"
               name="date_acquired"
               value={formData.date_acquired}
-              onChange={handleChange}
+              onChange={(v) =>
+                handleChange({ target: { name: "date_acquired", value: v } })
+              }
               disabled={isSupervisor}
               required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${

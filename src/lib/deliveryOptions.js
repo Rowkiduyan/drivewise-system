@@ -1,5 +1,6 @@
 // Shared delivery-request constants and pure helpers used by both the
 // deliveries list (for display) and the request delivery form (for input options).
+import { manilaTodayISO } from "./manilaTime.js";
 
 // Philippine truck models — payloadKg is a placeholder spec for frontend mock purposes only
 export const truckTypes = [
@@ -160,10 +161,16 @@ export function getRecommendedTruckValue(itemType, cargoWeight) {
 export const MIN_SCHEDULING_DAYS = 0;
 
 // Returns the earliest selectable delivery date (today + MIN_SCHEDULING_DAYS) as YYYY-MM-DD
+// Manila time. The old implementation used `new Date().toISOString()`, which is
+// the *UTC* date -- before 8:00 AM PHT that is still yesterday (e.g. 4:11 AM
+// Sep 26 → min "2026-09-25"), so the form happily offered an already-past day.
+// manilaTodayISO() is the repo's canonical "today" for calendar-date columns.
 export function getMinDeliveryDate() {
-  const date = new Date();
-  date.setDate(date.getDate() + MIN_SCHEDULING_DAYS);
-  return date.toISOString().split("T")[0];
+  const [year, month, day] = manilaTodayISO().split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + MIN_SCHEDULING_DAYS));
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${mm}-${dd}`;
 }
 
 // Pickup Time is a customer-selected window (start + end), not a single

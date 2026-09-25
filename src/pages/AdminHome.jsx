@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, Copy, Check } from 'lucide-react'
 import AdminLayout from '../layout/AdminLayout.jsx'
+import { DatePicker } from '../components/DateTimePicker.jsx'
 import { supabase } from '../lib/supabaseClient.js'
 // NOTE (2026-09-19, load KPI): philippineLocations.js pulls in @jobuntux/psgc
 // (~6MB dataset), so it must NOT be statically imported here — it is
@@ -388,6 +389,17 @@ function FormField({
             </option>
           ))}
         </select>
+      ) : type === 'date' ? (
+        <DatePicker
+          id={fieldId}
+          name={name}
+          value={value}
+          onChange={(v) => onChange({ target: { name, value: v } })}
+          max={max}
+          required={required}
+          disabled={disabled}
+          className={`${fieldInputClassName} cursor-pointer disabled:cursor-not-allowed disabled:opacity-60`}
+        />
       ) : (
         <input
           id={fieldId}

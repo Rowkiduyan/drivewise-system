@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import SupLayout from "../layout/SupLayout.jsx";
+import { DatePicker } from "../components/DateTimePicker.jsx";
 // import AddTruckModal from "../components/AddTruckModal.jsx"; // Disabled for supervisor view
 // Icon imports for maintenance type mapping
 // Icon imports for maintenance type mapping and UI elements
@@ -1252,29 +1253,36 @@ function SupTruckProfile() {
                     className="space-y-2"
                   >
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                      <label
+                        htmlFor="maint-log-start-date"
+                        className="block text-sm font-medium text-slate-700 mb-1"
+                      >
                         Start Date
                       </label>
-                      <input
-                        type="date"
+                      <DatePicker
+                        id="maint-log-start-date"
                         name="date"
                         value={logDate}
-                        onChange={(e) => setLogDate(e.target.value)}
-                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        onChange={setLogDate}
+                        disallowPast
                         required
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                      <label
+                        htmlFor="maint-log-end-date"
+                        className="block text-sm font-medium text-slate-700 mb-1"
+                      >
                         End Date (optional)
                       </label>
-                      <input
-                        type="date"
+                      <DatePicker
+                        id="maint-log-end-date"
                         name="endDate"
                         value={logEndDate}
-                        onChange={(e) => setLogEndDate(e.target.value)}
+                        onChange={setLogEndDate}
                         min={logDate}
-                        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        disallowPast
+                        allowClear
                       />
                     </div>
                     <div>

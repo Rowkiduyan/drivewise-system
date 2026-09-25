@@ -37,6 +37,7 @@ import {
 import { photonGeocode, useResolvedStopCoords } from "../lib/forwardGeocode.js";
 import { computeSuggestedRoute } from "../lib/suggestedRoute.js";
 import SuggestedRouteMap from "../components/SuggestedRouteMap.jsx";
+import { DatePicker, TimePicker } from "../components/DateTimePicker.jsx";
 import {
   simulateSchedule,
   MAX_TOTAL_DELIVERY_HOURS,
@@ -49,6 +50,7 @@ import {
   snapToLuzon,
 } from "../lib/serviceArea.js";
 import { weekdayOfDate } from "../lib/workingDays.js";
+import { manilaTodayISO, getManilaFields } from "../lib/manilaTime.js";
 import { supabase } from "../lib/supabaseClient.js";
 
 const background = null;
@@ -71,6 +73,52 @@ const background = null;
 // under that ceiling with room to spare. In practice the 13-hour cap will
 // almost always bind first, since each stop also costs a 30-min unload.
 const MAX_STOPS = 20;
+
+// Budget range inputs (2026-09-26, explicit user request: "add a proper
+// decimal point here whenever i type and add a peso aswell on the text
+// field"): the fields display grouped thousands ("10,000" / "10,000.50")
+// with a ₱ adornment, but formData.budgetMin/budgetMax stay plain numeric
+// strings ("10000", optional single "." + max 2 decimals) -- Number("10,000")
+// is NaN, which would silently neuter getBudgetError's comparisons and could
+// push a comma-formatted string into the numeric budget_min/budget_max
+// columns on submit.
+const sanitizeBudgetInput = (raw) => {
+  let value = String(raw).replace(/[^\d.]/g, "");
+  const dot = value.indexOf(".");
+  if (dot !== -1) {
+    value = `${value.slice(0, dot + 1)}${value.slice(dot + 1).replace(/\./g, "")}`;
+    const [whole, decimals] = value.split(".");
+    value = decimals === undefined ? whole : `${whole}.${decimals.slice(0, 2)}`;
+  }
+  return value;
+};
+
+const formatBudgetForDisplay = (raw) => {
+  if (!raw) return "";
+  const [whole, decimals] = raw.split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return decimals === undefined ? grouped : `${grouped}.${decimals}`;
+};
+
+// Map PostgREST error codes to friendly messages so the user sees
+// "Please fill in the time fields" instead of raw SQL like
+// "invalid input syntax for type time: \"\"".
+const formatDbError = (error) => {
+  if (!error) return null;
+  const code = error.code || "";
+  const message = (error.message || "").toLowerCase();
+  if (code === "22P02" || message.includes("invalid input syntax for type numeric"))
+    return "Please enter a valid numeric value for Estimated Cargo Weight.";
+  if (code === "22007" || message.includes("invalid input syntax for type time"))
+    return "Please fill in all required time fields (From/To windows).";
+  if (code === "23502" || message.includes("not-null violation"))
+    return "A required field was left empty — please fill in all required fields.";
+  if (code === "23503" || message.includes("foreign key violation"))
+    return "Invalid reference data — please check your selections.";
+  if (code === "23505" || message.includes("duplicate key"))
+    return "A request with this ID already exists — please try again.";
+  return null;
+};
 
 // Estimated drive time (seconds) for each leg of the ordered chain
 // [pickup, dropoff, ...stops] -- one DirectionsService request with
@@ -886,6 +934,21 @@ function CustomerRequestDelivery() {
     budgetMax: "",
     notes: "",
   });
+  // Past-gating (2026-09-26): time slots before "now" are greyed out, but only
+  // when the field's chosen date is actually Manila-today -- a future date can
+  // legitimately start at any hour. Recomputed on every render, so an
+  // already-open form picks up the current clock on the next interaction.
+  const manilaToday = manilaTodayISO();
+  const manilaNowFields = getManilaFields(new Date());
+  const manilaNowTime = manilaNowFields
+    ? `${String(manilaNowFields.hour).padStart(2, "0")}:${String(
+        manilaNowFields.minute,
+      ).padStart(2, "0")}`
+    : undefined;
+  const pickupTimeMin =
+    formData.pickupDate === manilaToday ? manilaNowTime : undefined;
+  const dropoffTimeMin =
+    formData.dropoffDate === manilaToday ? manilaNowTime : undefined;
   // Drop Off Date auto-fills to match Pick Up Date as a same-day-delivery
   // convenience default, but stays fully editable -- once the customer picks
   // a dropoff date themselves, further pickup date edits stop overwriting it.
@@ -1179,7 +1242,14 @@ function CustomerRequestDelivery() {
 
   const handleChange = (e) => {
     const { name, value, lat, lng } = e.target;
-    const next = { ...formData, [name]: value };
+    // Budget fields store plain numeric strings; the grouped display
+    // ("10,000") only exists on the input's rendered value (see
+    // sanitizeBudgetInput/formatBudgetForDisplay at the top of this file).
+    const storedValue =
+      name === "budgetMin" || name === "budgetMax"
+        ? sanitizeBudgetInput(value)
+        : value;
+    const next = { ...formData, [name]: storedValue };
     // LocationInput passes lat/lng alongside the address text when the
     // value came from a search suggestion or the map picker (both already
     // resolve real coordinates via Photon); a manually-typed address has
@@ -1326,6 +1396,22 @@ function CustomerRequestDelivery() {
 
     if (!formData.truckType) {
       setTruckSelectionError("Please select a truck for this delivery.");
+      return;
+    }
+
+    const cargoWeightNum = Number(formData.cargoWeight);
+    if (!formData.cargoWeight || !Number.isFinite(cargoWeightNum) || cargoWeightNum < 1) {
+      setSubmitError("Please enter a valid Estimated Cargo Weight (at least 1 kg).");
+      return;
+    }
+
+    const missingTimeFields = [];
+    if (!formData.pickupTime) missingTimeFields.push("Pick Up Window Start");
+    if (!formData.pickupTimeEnd) missingTimeFields.push("Pick Up Window End");
+    if (!formData.dropoffTime) missingTimeFields.push("Drop-off Window Start");
+    if (!formData.dropoffTimeEnd) missingTimeFields.push("Drop-off Window End");
+    if (missingTimeFields.length > 0) {
+      setSubmitError(`Please fill in: ${missingTimeFields.join(", ")}.`);
       return;
     }
 
@@ -1498,10 +1584,10 @@ function CustomerRequestDelivery() {
     const newRequest = {
       customer_auth_id: user.id,
       pickup_date: formData.pickupDate,
-      pickup_time: formData.pickupTime,
-      pickup_time_end: formData.pickupTimeEnd,
+      pickup_time: formData.pickupTime || null,
+      pickup_time_end: formData.pickupTimeEnd || null,
       dropoff_date: formData.dropoffDate,
-      dropoff_time: formData.dropoffTime,
+      dropoff_time: formData.dropoffTime || null,
       // In Two-Day mode this field is hidden (dropoffTime is the Day 2
       // start instant, not a window) -- send null, not an empty string,
       // since the DB column is `time`.
@@ -1526,9 +1612,9 @@ function CustomerRequestDelivery() {
         })),
       truck_type: formData.truckType,
       item_type: formData.itemType,
-      cargo_weight: formData.cargoWeight,
-      budget_min: formData.budgetMin || null,
-      budget_max: formData.budgetMax || null,
+      cargo_weight: cargoWeightNum,
+      budget_min: formData.budgetMin.replace(/\.$/, "") || null,
+      budget_max: formData.budgetMax.replace(/\.$/, "") || null,
       notes: formData.notes || null,
       status: "PENDING_REQUEST",
       suggested_route: suggestedRoute,
@@ -1540,8 +1626,9 @@ function CustomerRequestDelivery() {
     setSubmitting(false);
 
     if (insertError) {
+      const friendly = formatDbError(insertError);
       setSubmitError(
-        "Something went wrong while submitting your request. Please try again.",
+        friendly || `Submission failed — please try again.`,
       );
       return;
     }
@@ -1622,13 +1709,15 @@ function CustomerRequestDelivery() {
                   >
                     Pick Up Date
                   </label>
-                  <input
-                    type="date"
+                  <DatePicker
                     id="pickupDate"
                     name="pickupDate"
                     value={formData.pickupDate}
-                    onChange={handleChange}
+                    onChange={(v) =>
+                      handleChange({ target: { name: "pickupDate", value: v } })
+                    }
                     min={minDeliveryDate}
+                    disallowPast
                     required
                     className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
                       dateError
@@ -1645,24 +1734,28 @@ function CustomerRequestDelivery() {
                     Pick Up Window
                   </label>
                   <div className="flex items-center gap-2">
-                    <input
-                      type="time"
+                    <TimePicker
                       id="pickupTime"
                       name="pickupTime"
-                      aria-label="Pick Up Window Start"
+                      ariaLabel="Pick Up Window Start"
                       value={formData.pickupTime}
-                      onChange={handleChange}
+                      onChange={(v) =>
+                        handleChange({ target: { name: "pickupTime", value: v } })
+                      }
+                      minTime={pickupTimeMin}
                       required
                       className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                     />
                     <span className="shrink-0 text-sm text-slate-400">to</span>
-                    <input
-                      type="time"
+                    <TimePicker
                       id="pickupTimeEnd"
                       name="pickupTimeEnd"
-                      aria-label="Pick Up Window End"
+                      ariaLabel="Pick Up Window End"
                       value={formData.pickupTimeEnd}
-                      onChange={handleChange}
+                      onChange={(v) =>
+                        handleChange({ target: { name: "pickupTimeEnd", value: v } })
+                      }
+                      minTime={pickupTimeMin}
                       required
                       className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                     />
@@ -1675,13 +1768,15 @@ function CustomerRequestDelivery() {
                   >
                     Drop Off Date
                   </label>
-                  <input
-                    type="date"
+                  <DatePicker
                     id="dropoffDate"
                     name="dropoffDate"
                     value={formData.dropoffDate}
-                    onChange={handleChange}
+                    onChange={(v) =>
+                      handleChange({ target: { name: "dropoffDate", value: v } })
+                    }
                     min={formData.pickupDate || minDeliveryDate}
+                    disallowPast
                     required
                     className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
                       dropoffDateError
@@ -1690,7 +1785,7 @@ function CustomerRequestDelivery() {
                     }`}
                   />
                   {dropoffDateError && (
-                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">
+                    <p className="text-xs text-red-600">
                       {dropoffDateError}
                     </p>
                   )}
@@ -1736,13 +1831,15 @@ function CustomerRequestDelivery() {
                         >
                           Day 2 Start Time
                         </label>
-                        <input
-                          type="time"
+                        <TimePicker
                           id="dropoffTime"
                           name="dropoffTime"
-                          aria-label="Day 2 Start Time"
+                          ariaLabel="Day 2 Start Time"
                           value={formData.dropoffTime}
-                          onChange={handleChange}
+                          onChange={(v) =>
+                            handleChange({ target: { name: "dropoffTime", value: v } })
+                          }
+                          minTime={dropoffTimeMin}
                           required
                           className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                         />
@@ -1756,13 +1853,15 @@ function CustomerRequestDelivery() {
                           >
                             From:
                           </label>
-                          <input
-                            type="time"
+                          <TimePicker
                             id="dropoffTime"
                             name="dropoffTime"
-                            aria-label="Drop-off Window Start"
+                            ariaLabel="Drop-off Window Start"
                             value={formData.dropoffTime}
-                            onChange={handleChange}
+                            onChange={(v) =>
+                              handleChange({ target: { name: "dropoffTime", value: v } })
+                            }
+                            minTime={dropoffTimeMin}
                             required
                             className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                           />
@@ -1774,13 +1873,17 @@ function CustomerRequestDelivery() {
                           >
                             To:
                           </label>
-                          <input
-                            type="time"
+                          <TimePicker
                             id="dropoffTimeEnd"
                             name="dropoffTimeEnd"
-                            aria-label="Drop-off Window End"
+                            ariaLabel="Drop-off Window End"
                             value={formData.dropoffTimeEnd}
-                            onChange={handleChange}
+                            onChange={(v) =>
+                              handleChange({
+                                target: { name: "dropoffTimeEnd", value: v },
+                              })
+                            }
+                            minTime={dropoffTimeMin}
                             required
                             className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                           />
@@ -1832,18 +1935,14 @@ function CustomerRequestDelivery() {
                               >
                                 From:
                               </label>
-                              <input
-                                type="time"
+                              <TimePicker
                                 id={`stop-time-${index}`}
-                                aria-label={`Drop-off ${index + 2} Window Start`}
+                                ariaLabel={`Drop-off ${index + 2} Window Start`}
                                 value={stop.dropoffTime}
-                                onChange={(e) =>
-                                  handleStopTimeChange(
-                                    index,
-                                    "dropoffTime",
-                                    e.target.value,
-                                  )
+                                onChange={(v) =>
+                                  handleStopTimeChange(index, "dropoffTime", v)
                                 }
+                                minTime={dropoffTimeMin}
                                 required
                                 className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                               />
@@ -1855,18 +1954,14 @@ function CustomerRequestDelivery() {
                               >
                                 To:
                               </label>
-                              <input
-                                type="time"
+                              <TimePicker
                                 id={`stop-time-end-${index}`}
-                                aria-label={`Drop-off ${index + 2} Window End`}
+                                ariaLabel={`Drop-off ${index + 2} Window End`}
                                 value={stop.dropoffTimeEnd}
-                                onChange={(e) =>
-                                  handleStopTimeChange(
-                                    index,
-                                    "dropoffTimeEnd",
-                                    e.target.value,
-                                  )
+                                onChange={(v) =>
+                                  handleStopTimeChange(index, "dropoffTimeEnd", v)
                                 }
+                                minTime={dropoffTimeMin}
                                 required
                                 className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                               />
@@ -2158,20 +2253,28 @@ function CustomerRequestDelivery() {
                   >
                     Minimum Budget (₱)
                   </label>
-                  <input
-                    type="number"
-                    id="budgetMin"
-                    name="budgetMin"
-                    min={MIN_BUDGET_AMOUNT}
-                    value={formData.budgetMin}
-                    onChange={handleChange}
-                    placeholder="e.g. 5000"
-                    className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
-                      budgetError
-                        ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
-                        : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
-                    }`}
-                  />
+                  <div className="relative">
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm text-slate-500"
+                    >
+                      ₱
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      id="budgetMin"
+                      name="budgetMin"
+                      value={formatBudgetForDisplay(formData.budgetMin)}
+                      onChange={handleChange}
+                      placeholder="e.g. 5,000"
+                      className={`w-full rounded-xl border bg-white pl-8 pr-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
+                        budgetError
+                          ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                          : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
+                      }`}
+                    />
+                  </div>
                 </div>
                 <div className="relative space-y-2">
                   <label
@@ -2180,22 +2283,30 @@ function CustomerRequestDelivery() {
                   >
                     Maximum Budget (₱)
                   </label>
-                  <input
-                    type="number"
-                    id="budgetMax"
-                    name="budgetMax"
-                    min={MIN_BUDGET_AMOUNT}
-                    value={formData.budgetMax}
-                    onChange={handleChange}
-                    placeholder="e.g. 10000"
-                    className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
-                      budgetError
-                        ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
-                        : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
-                    }`}
-                  />
+                  <div className="relative">
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm text-slate-500"
+                    >
+                      ₱
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      id="budgetMax"
+                      name="budgetMax"
+                      value={formatBudgetForDisplay(formData.budgetMax)}
+                      onChange={handleChange}
+                      placeholder="e.g. 10,000"
+                      className={`w-full rounded-xl border bg-white pl-8 pr-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
+                        budgetError
+                          ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                          : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
+                      }`}
+                    />
+                  </div>
                   {budgetError && (
-                    <p className="absolute left-0 top-full mt-1 text-xs text-red-600">
+                    <p className="text-xs text-red-600">
                       {budgetError}
                     </p>
                   )}

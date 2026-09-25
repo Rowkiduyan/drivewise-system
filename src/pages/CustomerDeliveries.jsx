@@ -107,6 +107,32 @@ function formatDisplayDateTime(dateStr, timeStr, timeEndStr) {
   return `${monthLabel} ${day}, ${year}, ${formattedTime}`;
 }
 
+// Request Price Range inputs (2026-09-26, explicit user request: same peso +
+// grouped-decimals treatment as the booking form's budget fields): the fields
+// display grouped thousands ("2,000" / "2,000.50") with a ₱ adornment while
+// priceRange.min/max stay plain numeric strings -- Number("2,000") is NaN and
+// this range goes to the numeric customer_counter_min/max columns as
+// Number(payload.priceRange.min/max). Duplicated from
+// CustomerRequestDelivery.jsx's sanitizeBudgetInput/formatBudgetForDisplay,
+// same cross-file convention as this repo's other duplicated formatters.
+const sanitizeCurrencyInput = (raw) => {
+  let value = String(raw).replace(/[^\d.]/g, "");
+  const dot = value.indexOf(".");
+  if (dot !== -1) {
+    value = `${value.slice(0, dot + 1)}${value.slice(dot + 1).replace(/\./g, "")}`;
+    const [whole, decimals] = value.split(".");
+    value = decimals === undefined ? whole : `${whole}.${decimals.slice(0, 2)}`;
+  }
+  return value;
+};
+
+const formatCurrencyForDisplay = (raw) => {
+  if (!raw) return "";
+  const [whole, decimals] = raw.split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return decimals === undefined ? grouped : `${grouped}.${decimals}`;
+};
+
 // Whole calendar days between Manila-local "today" and a delivery's
 // pickup_date (both "YYYY-MM-DD"), independent of time-of-day -- pickup
 // dates are calendar dates, not timestamps, and Date.toISOString() (UTC)
@@ -296,17 +322,37 @@ function TabPanel({ direction, children }) {
   );
 }
 
-// Maps a request's current status to a position in the shared delivery
-// lifecycle so the timeline below can mark earlier stages "done" and the
-// matching stage "current" — mirrors the stage index used on the supervisor
-// side, kept in its own customer-facing status set.
+// Maps a request's status to its position in the delivery lifecycle's eight
+// stages — a direct mirror of `stageStatus` in SupDeliveries.jsx's
+// buildProgressData, so the customer's Progress Details marks the exact same
+// stage current/completed as the supervisor's for the same trip. Keyed on the
+// raw DB status (`request.dbStatus`, what mapDeliveryRow keeps alongside the
+// customer-facing one) so both portals read identical granularity; the
+// customer-vocabulary values (`request.status`) are included as a fallback so
+// a row that somehow skips mapDeliveryRow can never silently pin the timeline
+// at stage 0.
 const CUSTOMER_TIMELINE_STAGE_INDEX = {
+  // Raw DB statuses (request.dbStatus).
   PENDING_REQUEST: 0,
+  QUOTATION_SUBMITTED: 1,
+  COUNTER_OFFER_SUBMITTED: 1,
+  FINAL_QUOTATION_SUBMITTED: 1,
+  APPROVED: 2,
+  ASSIGNED: 3,
+  OUT_FOR_PICKUP: 4,
+  ARRIVED_PICKUP: 4,
+  OUT_FOR_DROPOFF: 5,
+  ARRIVED_DROPOFF: 5,
+  DELIVERED: 6,
+  COMPLETED: 7,
+  CANCELLED: -1,
+  // Customer-vocabulary fallbacks (request.status) — same lifecycle, coarser
+  // buckets; each lands on the earliest stage its bucket covers, so the
+  // fallback can under-report progress but never over-report it.
   PROCESSING: 1,
   FOR_PICKUP: 2,
-  OUT_FOR_DELIVERY: 3,
-  DELIVERED: 4,
-  DELIVERY_COMPLETED: 5,
+  OUT_FOR_DELIVERY: 5,
+  DELIVERY_COMPLETED: 7,
 };
 
 // "2026-07-29T10:30:00" -> "Jul 29, 2026, 10:30 AM" — for the timeline's
@@ -324,26 +370,62 @@ function formatTimestamp(iso) {
   });
 }
 
+// "2026-09-26" -> "Sep 26, 2026" — the timeline's scheduled pickup/drop-off
+// milestone stamps, mirroring how the supervisor's buildProgressData renders
+// request.pickupDate/request.dropoffDate (date only, no time), so both
+// portals print the identical string for the same trip.
+function formatMilestoneDate(dateStr) {
+  if (!dateStr) return null;
+  const parts = String(dateStr).split("-");
+  if (parts.length !== 3) return dateStr;
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const [y, m, d] = parts.map(Number);
+  return `${months[m - 1] || ""} ${d}, ${y}`;
+}
+
 /**
  * ===== CUSTOMER DELIVERY TIMELINE — BACKEND GUIDE =====
  *
- * Matches the level of detail in the supervisor's Progress Details tracker
- * (buildProgressData in SupDeliveries.jsx) — every stage lists its own
- * timestamped sub-events instead of one summary line — but scoped to what a
- * customer should see: what happened to THEIR request and when. It
- * intentionally omits crew-assignment mechanics, quotation cost formulas,
- * driver/route analytics, and any other supervisor-only operational detail;
- * those stay on the supervisor side.
+ * The customer's "Progress Details" tracker is a direct mirror of the
+ * supervisor's (buildProgressData in SupDeliveries.jsx): the same eight
+ * stages — pending → processing → approved → assigned → pickup → dropoff →
+ * delivered → completed — the same stage labels/completedLabels, the same
+ * substep labels, and the same `stageStatus`-equivalent index
+ * (CUSTOMER_TIMELINE_STAGE_INDEX above) deciding which stage is
+ * "completed"/"current". Both files must stay in step: when a stage or
+ * substep is added/renamed on the supervisor side, mirror it here.
  *
- * A sub-event is only ever added to a stage's `substeps` once it has
- * actually happened (driven by real fields on the request), so nothing
- * "not yet done" is ever shown.
+ * The only deliberate differences, all decided 2026-09-26:
+ * - Customer-only sub-events the supervisor has no equivalent for are kept,
+ *   nested inside the matching stage (the pickup/drop-off chain messages
+ *   below, the "You Requested ₱…" counter-offer line, the cancel point's
+ *   reason/attribution). Nothing customer-only gets its own stage.
+ * - Substep visibility is decided here in the builder: a substep is only
+ *   ever pushed onto a stage once it has actually happened (driven by real
+ *   fields on the request), rather than pushed with a null detail and
+ *   filtered by the renderer the way buildProgressData does. The one
+ *   exception is the live "on its way to X" chain line, which is pushed
+ *   while the crew is still en route (no timestamp yet) — the builder
+ *   gates it to the dropoff stage only, so it can never appear before the
+ *   stage it belongs to is active.
  *
- * BACKEND TO-DO: the supervisor's own tracker has the same gap today — persist
- * a real timestamp for quotation-sent and crew-assigned events (currently
- * there's no dedicated field for either), and this can drop the `sentTs`
- * placeholder below in favor of it, exactly as noted in buildProgressData's
- * own backend guide.
+ * BACKEND TO-DO: same gap as the supervisor's tracker — quotation-sent and
+ * crew-assigned events still fall back to `createdAt`/`now` because no
+ * dedicated column exists for either (see buildProgressData's own backend
+ * guide); persisting real timestamps there would let both portals show them.
  */
 // Ordinal label for the Nth drop-off in the chain (1st = the primary
 // dropoff_location, 2nd+ = each of `stops` in order), n 1-indexed. Written
@@ -367,18 +449,43 @@ function dropoffOrdinal(n) {
   }
 }
 
-// Builds the "Out for Delivery" stage's real, sequential pickup/drop-off
-// progress messages (2026-09-04, per user request — the Customer portal has
-// no live truck navigation, so this is how a customer knows the crew's
-// current pickup/drop-off status instead). Chain order is Pickup -> primary
-// Drop-off -> each of `stops` in order, matching the real chain
-// 02B_MULTI_STOP_DELIVERIES.md's Helper-owned completion actions already
-// enforce (also ProofOfDeliverySection's existing "Drop-off N" labeling).
-// Purely derived from real completion fields (pickupCompletedAt/
-// dropoffCompletedAt/stops[i].completedAt) and each location's own address
-// text — no live position/ETA involved, so "on its way to X" is inferred
-// from chain progress, not a truck's actual location.
-function buildTransitSubsteps(request) {
+// The Pickup stage's customer-only chain message: once the Helper has
+// confirmed the pickup, name the actual address and completion timestamp.
+// The mirror substeps above already cover "out to pick up" / "arrived at the
+// pickup location" from the status column (same as the supervisor shows);
+// this is the extra detail line the supervisor has no equivalent for,
+// nested inside the matching stage (2026-09-26 alignment decision — the
+// Customer portal has no live truck navigation, so these chain messages are
+// how a customer sees the crew's real progress).
+function buildPickupChainSubsteps(request) {
+  const done = Boolean(request.pickupPhotoUrl || request.pickupCompletedAt);
+  if (!done || !request.pickupLocation) return [];
+  return [
+    {
+      label: `The delivery crew has completed the pickup from ${request.pickupLocation}.`,
+      detail: request.pickupCompletedAt
+        ? `· ${formatTimestamp(request.pickupCompletedAt)}`
+        : null,
+    },
+  ];
+}
+
+// The Drop-off stage's customer-only chain messages: sequential per-location
+// progress across primary Drop-off -> each of `stops` in order, matching the
+// real chain 02B_MULTI_STOP_DELIVERIES.md's Helper-owned completion actions
+// already enforce (also ProofOfDeliverySection's existing "Drop-off N"
+// labeling). Derived purely from real completion fields
+// (dropoffPhotoUrl/dropoffCompletedAt/stops[i].completedAt) and each
+// location's own address text — no live position/ETA involved, so "on its
+// way to X" is inferred from chain progress, not a truck's actual location.
+// At most one "on its way" line ever: the first not-yet-done location, so
+// the customer always sees exactly where the crew is heading next. Gated by
+// the caller to the dropoff stage only, so it can't appear while that stage
+// is still greyed out. `primaryArrivedDone` (the caller's ARRIVED_DROPOFF
+// gate) suppresses the primary's "on its way" line once the crew has
+// arrived — the mirror "arrived at the dropoff location" substep already
+// states that, and both showing at once would contradict each other.
+function buildDropoffChainSubsteps(request, primaryArrivedDone) {
   const stops = request.stops || [];
   // Only qualify drop-offs with an ordinal ("First"/"Second"/...) when more
   // than one actually exists in the chain -- for a plain single-dropoff
@@ -387,28 +494,18 @@ function buildTransitSubsteps(request) {
   const hasMultipleDropoffs = stops.length > 0;
   const chain = [
     {
-      kind: "pickup",
-      location: request.pickupLocation,
-      done: Boolean(request.pickupPhotoUrl),
-      completedAt: request.pickupCompletedAt,
-    },
-    {
-      kind: "dropoff",
       ordinalLabel: hasMultipleDropoffs
         ? `${dropoffOrdinal(1)} Drop-Off Location`
         : null,
       location: request.dropoffLocation,
       done: Boolean(request.dropoffPhotoUrl),
       completedAt: request.dropoffCompletedAt,
-      // Driver's optional "Arrived at Drop-off" action (dropoff_arrived_at) --
-      // primary dropoff only, no per-stop equivalent (DATABASE.md's
-      // delivery_requests notes). Lets this stage show "arrived, unloading"
-      // as its own milestone instead of jumping straight from "on its way" to
-      // "completed".
+      // Driver's optional "Arrived at Drop-off" action (dropoff_arrived_at,
+      // primary only, no per-stop equivalent — DATABASE.md's
+      // delivery_requests notes).
       arrivedAt: request.dropoffArrivedAt,
     },
     ...stops.map((s, i) => ({
-      kind: "dropoff",
       ordinalLabel: `${dropoffOrdinal(i + 2)} Drop-Off Location`,
       location: s.location,
       done: Boolean(s.completed),
@@ -417,203 +514,274 @@ function buildTransitSubsteps(request) {
   ];
 
   const substeps = [];
-  for (const item of chain) {
+  for (let ci = 0; ci < chain.length; ci += 1) {
+    const item = chain[ci];
     if (!item.location) continue; // no address to name in the message
     const suffix = item.ordinalLabel ? ` (${item.ordinalLabel})` : "";
     if (item.done) {
       substeps.push({
-        label:
-          item.kind === "pickup"
-            ? `The delivery crew has completed the pickup from ${item.location}.`
-            : `The delivery crew arrived at ${item.location}${suffix}.`,
-        timestamp: formatTimestamp(item.completedAt),
+        label: `The delivery crew completed the drop-off at ${item.location}${suffix}.`,
+        detail: item.completedAt
+          ? `· ${formatTimestamp(item.completedAt)}`
+          : null,
       });
       continue;
     }
-    // First not-done item in the chain: stop here, showing at most one
-    // "on its way" message. Deliberately no "on its way to pickup" message
-    // though -- this whole stage only ever becomes the customer's current
-    // status once dbStatus already reached OUT_FOR_DROPOFF
-    // (CUSTOMER_STATUS_MAP), by which point pickup is always already done,
-    // so that combination can't happen in real data. Without this guard, an
-    // in-progress pickup would show a substep here while the stage above is
-    // still greyed out/not-yet-started, violating this file's own "only add
-    // a sub-event once it has actually happened" rule (see the doc comment
-    // above buildCustomerTimeline).
-    if (item.kind !== "pickup") {
-      if (item.arrivedAt) {
-        substeps.push({
-          label: `The delivery crew arrived at ${item.location}${suffix} and is unloading.`,
-          timestamp: formatTimestamp(item.arrivedAt),
-        });
-      } else {
-        substeps.push({
-          label: `The delivery crew is on its way to ${item.location}${suffix}.`,
-          timestamp: null,
-        });
-      }
+    // First not-done drop-off: stop here, showing the crew's current target.
+    // Nothing is pushed for the primary once it has arrived — arrival is the
+    // mirror "arrived at the dropoff location" substep's milestone (see the
+    // function's own comment), and dropoff_arrived_at is only ever recorded
+    // for the primary anyway (DATABASE.md's delivery_requests notes), so
+    // there's no per-stop equivalent to mirror. Stops always get their line.
+    const primaryArrived =
+      ci === 0 && (Boolean(item.arrivedAt) || primaryArrivedDone);
+    if (!primaryArrived) {
+      substeps.push({
+        label: `The delivery crew is on its way to ${item.location}${suffix}.`,
+        detail: null,
+      });
     }
     break;
   }
   return substeps;
 }
 
+// The cancel point the supervisor's Progress Details shows on the pending
+// stage, kept here with the customer-side attribution/reason the supervisor
+// doesn't track (cancelledBy/cancelReason are customer-visible fields — the
+// detail view's Cancellation Details card shows the same data).
+function buildCancelSubsteps(request, registeredAt) {
+  return [
+    {
+      label: [
+        "Request Cancelled",
+        request.cancelledBy
+          ? `by ${request.cancelledBy === "customer" ? "you" : "the supervisor"}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      detail: `· ${formatTimestamp(request.cancelledAt) || registeredAt}`,
+      cancelPoint: true,
+      warning: true,
+      cancelReason: request.cancelReason || "Request cancelled",
+    },
+    ...(request.cancelReason
+      ? [
+          {
+            label: `Reason: ${request.cancelReason}`,
+            detail: null,
+            warning: true,
+          },
+        ]
+      : []),
+  ];
+}
+
+// Mirrors buildProgressData (SupDeliveries.jsx): the same eight stages, the
+// same label/completedLabel pairs, the same substep wording, and the same
+// status → stage-index mapping — see the backend guide above. Substeps are
+// only pushed here once they've actually happened (the builder decides
+// visibility), with the customer-only extras nested in their matching stage.
 function buildCustomerTimeline(request) {
-  if (request.status === "CANCELLED") {
-    return [
-      {
-        key: "submitted",
-        label: "Request Submitted",
-        done: true,
-        current: false,
-        substeps: [
-          {
-            label: "Request Received",
-            timestamp: formatTimestamp(request.createdAt),
-          },
-        ],
-      },
-      {
-        key: "cancelled",
-        label: "Request Cancelled",
-        done: true,
-        current: false,
-        cancelled: true,
-        substeps: [
-          {
-            label: [
-              "Request Cancelled",
-              request.cancelledBy
-                ? `by ${request.cancelledBy === "customer" ? "you" : "the supervisor"}`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(" "),
-            timestamp: formatTimestamp(request.cancelledAt),
-          },
-          ...(request.cancelReason
-            ? [{ label: `Reason: ${request.cancelReason}`, timestamp: null }]
-            : []),
-        ],
-      },
-    ];
+  const statusKey = request.dbStatus || request.status;
+  const idx = CUSTOMER_TIMELINE_STAGE_INDEX[statusKey] ?? 0;
+  const registeredAt = formatTimestamp(request.createdAt);
+  const now = formatTimestamp(new Date().toISOString());
+
+  const isCancelled = statusKey === "CANCELLED";
+  const isCompleted =
+    statusKey === "COMPLETED" || request.status === "DELIVERY_COMPLETED";
+  const isApprovedOrLater = idx >= 2;
+  const isAssignedOrLater = idx >= 3;
+
+  // Same sub-milestone gates as the supervisor's buildProgressData, written
+  // on the stage index so the customer-vocabulary fallback statuses resolve
+  // to the same answer — each is exactly the set of DB statuses the
+  // supervisor gates its own copy of that milestone on.
+  const pickupOutDone = idx >= 4;
+  const pickupArrivedDone = idx >= 5 || statusKey === "ARRIVED_PICKUP";
+  const dropoffOutDone = idx >= 5;
+  const dropoffArrivedDone = idx >= 6 || statusKey === "ARRIVED_DROPOFF";
+  const deliveredDone = idx >= 6;
+
+  const pickupDateLabel = request.pickupDate
+    ? formatMilestoneDate(request.pickupDate)
+    : registeredAt;
+  const dropoffDateLabel = request.dropoffDate
+    ? formatMilestoneDate(request.dropoffDate)
+    : registeredAt;
+
+  // Quotation rounds, reconstructed by attachQuotationState: `quotation` is
+  // the live round, `previousQuotation` the earlier one it replaced.
+  const hasQuotation = Boolean(request.quotation || request.previousQuotation);
+  const hasCounterOffer =
+    request.customerCounterMin != null || request.customerCounterMax != null;
+  const hasRevisedQuotation = Boolean(
+    request.quotation && request.previousQuotation,
+  );
+
+  const processingSubsteps = [];
+  if (hasQuotation) {
+    processingSubsteps.push({
+      label: "Quotation Submitted",
+      detail: `by Supervisor · ${registeredAt}`,
+    });
   }
-
-  const currentIdx = CUSTOMER_TIMELINE_STAGE_INDEX[request.status] ?? 0;
-  const quotationAmount = request.quotation
-    ? typeof request.quotation === "object"
-      ? request.quotation.amount
-      : request.quotation
-    : null;
-  const hasNegotiation = Boolean(request.previousQuotation);
-  // Placeholder for events the backend doesn't yet timestamp individually —
-  // see the backend guide above.
-  const sentTs = formatTimestamp(request.createdAt);
-
-  const quotationSubsteps = [];
-  if (hasNegotiation) {
-    quotationSubsteps.push({
-      label: "Initial Quotation Received",
-      timestamp: sentTs,
+  if (hasCounterOffer) {
+    processingSubsteps.push({
+      label: "Counter Offer Submitted",
+      detail: `by Customer · ${registeredAt}`,
     });
     if (request.priceRange) {
-      quotationSubsteps.push({
+      // Customer-only extra: the exact range they asked for.
+      processingSubsteps.push({
         label: `You Requested ₱${Number(request.priceRange.min).toLocaleString()}–₱${Number(request.priceRange.max).toLocaleString()}`,
-        timestamp: formatTimestamp(request.quotationRespondedAt) || sentTs,
+        detail: `· ${formatTimestamp(request.quotationRespondedAt) || registeredAt}`,
       });
     }
-    if (quotationAmount) {
-      quotationSubsteps.push({
-        label: "Revised Quotation Received",
-        timestamp: sentTs,
-      });
-    }
-  } else if (quotationAmount) {
-    quotationSubsteps.push({ label: "Quotation Received", timestamp: sentTs });
   }
-  if (request.quotationApproved) {
-    quotationSubsteps.push({
+  if (hasRevisedQuotation) {
+    processingSubsteps.push({
+      label: "Final Quotation Submitted",
+      detail: `by Supervisor · ${registeredAt}`,
+    });
+  }
+  if (isApprovedOrLater) {
+    processingSubsteps.push({
       label: "Quotation Approved",
-      timestamp: formatTimestamp(request.quotationRespondedAt) || sentTs,
+      detail: `by Customer · ${registeredAt}`,
     });
   }
 
-  const steps = [
+  const stages = [
     {
-      key: "submitted",
-      label: "Request Submitted",
+      key: "pending",
+      label: "Pending Request",
+      completedLabel: "Request Received",
       substeps: [
-        {
-          label: "Request Received",
-          timestamp: formatTimestamp(request.createdAt),
-        },
+        { label: "Request Received", detail: registeredAt },
+        ...(isCancelled ? buildCancelSubsteps(request, registeredAt) : []),
       ],
     },
     {
-      key: "quotation",
-      label: "Quotation & Approval",
-      substeps: quotationSubsteps,
+      key: "processing",
+      label: "Processing Request",
+      completedLabel: "Quotation Submitted",
+      substeps: processingSubsteps,
     },
     {
-      key: "pickup",
-      label: "Scheduled for Pickup",
-      substeps: request.crew
+      key: "approved",
+      label: "Quotation Approved",
+      completedLabel: "Quotation Approved",
+      substeps: isApprovedOrLater
         ? [
-            { label: "Delivery Crew Assigned", timestamp: sentTs },
-            ...(request.confirmedPickupDate
-              ? [
-                  {
-                    label: `Pickup Scheduled — ${request.confirmedPickupDate} at ${request.confirmedPickupTime}`,
-                    timestamp: null,
-                  },
-                ]
-              : []),
-            // Driver's optional "Arrived at Pickup" action (pickup_arrived_at,
-            // DATABASE.md's delivery_requests notes) -- skippable, so only
-            // shown once it's actually been recorded. This is the milestone
-            // the Supervisor's Progress Details already shows (ARRIVED_PICKUP)
-            // that previously had no customer-facing equivalent.
-            ...(request.pickupArrivedAt
-              ? [
-                  {
-                    label: `The delivery crew arrived at ${request.pickupLocation}.`,
-                    timestamp: formatTimestamp(request.pickupArrivedAt),
-                  },
-                ]
-              : []),
+            {
+              label: "Quotation approved — final delivery rate confirmed",
+              detail: `by Customer · ${registeredAt}`,
+            },
           ]
         : [],
     },
     {
-      key: "transit",
-      label: "Out for Delivery",
-      substeps: buildTransitSubsteps(request),
+      key: "assigned",
+      label: "Assigning Delivery Crew",
+      completedLabel: "Delivery Crew Assigned",
+      substeps: isAssignedOrLater
+        ? [
+            {
+              label: "Delivery crew and truck assigned",
+              detail: `by Supervisor · ${formatTimestamp(request.assignedAt) || now}`,
+            },
+          ]
+        : [],
     },
     {
-      key: "delivered",
-      label: "Delivered",
+      key: "pickup",
+      label: "Pickup",
+      completedLabel: "Pickup Completed",
       substeps: [
-        ...(request.receivedConfirmed
+        ...(pickupOutDone
           ? [
               {
-                label: "You Confirmed Receipt",
-                timestamp: formatTimestamp(request.receivedConfirmedAt),
+                label: "Delivery crew is out to pick up the items",
+                detail: `· ${pickupDateLabel}`,
               },
             ]
+          : []),
+        ...(pickupArrivedDone
+          ? [
+              {
+                label: "Delivery crew arrived at the pickup location",
+                detail: `· ${pickupDateLabel}`,
+              },
+            ]
+          : []),
+        ...buildPickupChainSubsteps(request),
+      ],
+    },
+    {
+      key: "dropoff",
+      label: "Drop-off",
+      completedLabel: "Drop-off Completed",
+      substeps: [
+        ...(dropoffOutDone
+          ? [
+              {
+                label: "Delivery crew is out to deliver the items",
+                detail: `· ${dropoffDateLabel}`,
+              },
+            ]
+          : []),
+        ...(dropoffArrivedDone
+          ? [
+              {
+                label: "Delivery crew arrived at the dropoff location",
+                detail: `· ${dropoffDateLabel}`,
+              },
+            ]
+          : []),
+        ...(dropoffOutDone
+          ? buildDropoffChainSubsteps(request, dropoffArrivedDone)
           : []),
       ],
     },
     {
+      key: "delivered",
+      label: "Delivered",
+      completedLabel: "Delivered",
+      substeps: deliveredDone
+        ? [
+            {
+              label: "Delivery crew confirmed delivery",
+              detail: `by Crew · ${request.dropoffDate || registeredAt}`,
+            },
+          ]
+        : [],
+    },
+    {
       key: "completed",
       label: "Completed",
-      substeps: [],
+      completedLabel: "Delivery Completed",
+      substeps: request.completedAt
+        ? [
+            {
+              label: "Delivery confirmed completed",
+              detail: `· ${formatTimestamp(request.completedAt)}`,
+            },
+          ]
+        : [],
     },
   ];
 
-  return steps.map((step, i) => ({
-    ...step,
-    done: i < currentIdx,
-    current: i === currentIdx,
+  return stages.map((stage, i) => ({
+    ...stage,
+    status:
+      i < idx || (isCompleted && i === idx)
+        ? "completed"
+        : i === idx
+          ? "current"
+          : "pending",
   }));
 }
 
@@ -1021,18 +1189,32 @@ function ApprovedRouteMap({ request }) {
   );
 }
 
-// Delivery Timeline — a compact vertical stepper summarizing where the
-// request stands in the same review → quotation → crew → transit →
-// delivered lifecycle the supervisor tracks in detail, so customers get the
-// same at-a-glance status history without any of the supervisor's internal
-// negotiation/assignment mechanics.
+// Delivery Timeline — the customer's Progress Details tracker: the same
+// eight stages, labels, and sub-steps as the supervisor's Progress Details
+// card (buildProgressData in SupDeliveries.jsx), rendered in the same
+// collapsed-summary + expandable-details pattern so both portals read
+// identically for the same trip. Shown for every trip state, completed ones
+// included (2026-09-26 alignment — previously a completed trip got a
+// one-line CompletedSummary stand-in instead, leaving the two portals'
+// history views misaligned).
 function DeliveryTimeline({ request }) {
   const steps = buildCustomerTimeline(request);
   const [showProgressDetails, setShowProgressDetails] = useState(false);
-  const currentStage = steps.find((s) => s.current) || steps[steps.length - 1];
+  const statusKey = request.dbStatus || request.status;
+  const isCancelled = statusKey === "CANCELLED";
+  const currentStage =
+    steps.find((s) => s.status === "current") || steps[steps.length - 1];
+  const allSubsteps = steps.flatMap((s) => s.substeps);
+  // Latest event overall; for a cancelled request the cancel point wins, the
+  // same way the supervisor's collapsed summary picks it.
+  const previewSubstep = isCancelled
+    ? allSubsteps.find((s) => s.cancelPoint) ||
+      allSubsteps[allSubsteps.length - 1]
+    : allSubsteps[allSubsteps.length - 1];
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-2.5 md:p-4 md:shadow-sm">
-      {/* Mobile (<md) — full stepper, always expanded, unchanged. */}
+      {/* Mobile (<md) — same eight stages, always expanded (the collapsed
+          summary + "Progress Details" toggle below is md+ only). */}
       <h3 className="text-xs font-semibold text-slate-900 md:hidden">
         Delivery Timeline
       </h3>
@@ -1042,20 +1224,16 @@ function DeliveryTimeline({ request }) {
             <div className="flex flex-col items-center self-stretch">
               <span
                 className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
-                  step.cancelled
-                    ? "bg-red-100 text-red-600"
-                    : step.done
-                      ? "bg-emerald-100 text-emerald-600"
-                      : step.current
-                        ? "bg-blue-100 text-blue-600"
-                        : "bg-slate-100 text-slate-300"
+                  step.status === "completed"
+                    ? "bg-emerald-100 text-emerald-600"
+                    : step.status === "current"
+                      ? "bg-blue-100 text-blue-600"
+                      : "bg-slate-100 text-slate-300"
                 }`}
               >
-                {step.cancelled ? (
-                  <X className="h-2.5 w-2.5" />
-                ) : step.done ? (
+                {step.status === "completed" ? (
                   <CheckCircle2 className="h-2.5 w-2.5" />
-                ) : step.current ? (
+                ) : step.status === "current" ? (
                   <Clock className="h-2.5 w-2.5" />
                 ) : (
                   <span className="h-1.5 w-1.5 rounded-full bg-slate-300" />
@@ -1068,14 +1246,12 @@ function DeliveryTimeline({ request }) {
             <div className="min-w-0 flex-1 pb-2.5">
               <p
                 className={`text-xs font-medium ${
-                  step.cancelled
-                    ? "text-red-700"
-                    : step.done || step.current
-                      ? "text-slate-900"
-                      : "text-slate-400"
+                  step.status === "pending" ? "text-slate-400" : "text-slate-900"
                 }`}
               >
-                {step.label}
+                {step.status === "completed"
+                  ? step.completedLabel || step.label
+                  : step.label}
               </p>
               {step.substeps?.length > 0 && (
                 <div className="mt-1 space-y-1">
@@ -1084,12 +1260,18 @@ function DeliveryTimeline({ request }) {
                       key={si}
                       className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5"
                     >
-                      <span className="text-[10px] text-slate-600">
+                      <span
+                        className={`text-[10px] ${
+                          sub.warning
+                            ? "font-medium text-amber-700"
+                            : "text-slate-600"
+                        }`}
+                      >
                         {sub.label}
                       </span>
-                      {sub.timestamp && (
+                      {sub.detail && (
                         <span className="shrink-0 text-[10px] text-slate-400">
-                          {sub.timestamp}
+                          {sub.detail}
                         </span>
                       )}
                     </div>
@@ -1101,22 +1283,22 @@ function DeliveryTimeline({ request }) {
         ))}
       </div>
 
-      {/* Desktop (md+) — Supervisor's collapsed pattern: a compact
+      {/* Desktop (md+) — the Supervisor's collapsed pattern: a compact
           current-stage summary by default, plus a "Progress Details"
           toggle that reveals every stage and its timestamped substeps.
-          Mobile keeps its own always-expanded stepper above, untouched. */}
+          Mobile keeps its own always-expanded stepper above. */}
       <div className="hidden md:block">
         <div className="mb-3 flex items-center gap-3">
           <span
             className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-              currentStage.cancelled
+              isCancelled
                 ? "bg-red-100 text-red-600"
-                : currentStage.done
+                : currentStage.status === "completed"
                   ? "bg-emerald-100 text-emerald-700"
                   : "bg-blue-600 text-white"
             }`}
           >
-            {currentStage.cancelled ? (
+            {isCancelled ? (
               <X className="h-4 w-4" />
             ) : (
               <Clock className="h-4 w-4" />
@@ -1124,58 +1306,51 @@ function DeliveryTimeline({ request }) {
           </span>
           <div className="flex-1">
             <p className="text-sm font-semibold text-slate-900">
-              {currentStage.label}
+              {isCancelled
+                ? "Request Cancelled"
+                : currentStage.status === "completed"
+                  ? currentStage.completedLabel || currentStage.label
+                  : currentStage.label}
             </p>
             <p className="text-xs text-slate-500">
-              {currentStage.cancelled
+              {isCancelled
                 ? "Cancelled"
-                : currentStage.done
+                : currentStage.status === "completed"
                   ? "Completed"
-                  : currentStage.current
+                  : currentStage.status === "current"
                     ? "In Progress"
                     : "Pending"}
             </p>
           </div>
         </div>
 
-        {(() => {
-          const previewSubstep = steps
-            .flatMap((s) =>
-              (s.substeps || []).map((sub) => ({
-                ...sub,
-                cancelled: s.cancelled,
-              })),
-            )
-            .pop();
-          if (!previewSubstep) return null;
-          return (
-            <div className="ml-11 space-y-2">
-              <div className="flex items-start gap-2 text-sm">
-                <span className="mt-1 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border border-emerald-500 bg-emerald-500">
-                  <Check className="h-2 w-2 text-white" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm text-slate-900">
-                    {previewSubstep.cancelled ? (
-                      <span className="font-medium text-red-600">
-                        {previewSubstep.label}
-                      </span>
-                    ) : (
-                      <>
-                        {previewSubstep.label}
-                        {previewSubstep.timestamp && (
-                          <span className="ml-1 text-slate-500">
-                            {previewSubstep.timestamp}
-                          </span>
-                        )}
-                      </>
-                    )}
-                  </p>
-                </div>
+        {previewSubstep && (
+          <div className="ml-11 space-y-2">
+            <div className="flex items-start gap-2 text-sm">
+              <span className="mt-1 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border border-emerald-500 bg-emerald-500">
+                <Check className="h-2 w-2 text-white" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-slate-900">
+                  {previewSubstep.cancelPoint && isCancelled ? (
+                    <span className="font-medium text-rose-600">
+                      {previewSubstep.cancelReason || "Cancelled"}
+                    </span>
+                  ) : (
+                    <>
+                      {previewSubstep.label}
+                      {previewSubstep.detail && (
+                        <span className="ml-1 text-slate-500">
+                          {previewSubstep.detail}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </p>
               </div>
             </div>
-          );
-        })()}
+          </div>
+        )}
 
         <button
           onClick={() => setShowProgressDetails((s) => !s)}
@@ -1197,20 +1372,16 @@ function DeliveryTimeline({ request }) {
                 <div className="mb-2 flex items-center gap-2">
                   <div
                     className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
-                      stage.cancelled
-                        ? "bg-red-100 text-red-600"
-                        : stage.done
-                          ? "bg-emerald-100 text-emerald-700"
-                          : stage.current
-                            ? "bg-blue-600 text-white"
-                            : "bg-slate-100 text-slate-400"
+                      stage.status === "completed"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : stage.status === "current"
+                          ? "bg-blue-600 text-white"
+                          : "bg-slate-100 text-slate-400"
                     }`}
                   >
-                    {stage.cancelled ? (
-                      <X className="h-3 w-3" />
-                    ) : stage.done ? (
+                    {stage.status === "completed" ? (
                       <Check className="h-3 w-3" />
-                    ) : stage.current ? (
+                    ) : stage.status === "current" ? (
                       <Clock className="h-3 w-3" />
                     ) : (
                       <div className="h-2 w-2 rounded-full bg-slate-300" />
@@ -1218,28 +1389,32 @@ function DeliveryTimeline({ request }) {
                   </div>
                   <p
                     className={`text-sm font-semibold ${
-                      stage.cancelled
-                        ? "text-red-700"
-                        : stage.done
-                          ? "text-emerald-700"
-                          : stage.current
-                            ? "text-blue-700"
-                            : "text-slate-400"
+                      stage.status === "completed"
+                        ? "text-emerald-700"
+                        : stage.status === "current"
+                          ? "text-blue-700"
+                          : "text-slate-400"
                     }`}
                   >
-                    {stage.label}
+                    {stage.status === "completed"
+                      ? stage.completedLabel || stage.label
+                      : stage.label}
                   </p>
                 </div>
                 <div className="ml-8 space-y-2">
-                  {(stage.substeps || []).map((substep, si) => (
+                  {stage.substeps.map((substep, si) => (
                     <div key={si} className="flex items-start gap-2 text-sm">
-                      <span className="mt-1.5 flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-full bg-emerald-500" />
+                      <span
+                        className={`mt-1.5 flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-full ${substep.warning ? "bg-amber-500" : "bg-emerald-500"}`}
+                      />
                       <div className="min-w-0 flex-1">
-                        <p className="text-slate-900">
+                        <p
+                          className={`${substep.warning ? "font-medium text-amber-700" : "text-slate-900"}`}
+                        >
                           {substep.label}
-                          {substep.timestamp && (
+                          {substep.detail && (
                             <span className="ml-1 text-slate-500">
-                              {substep.timestamp}
+                              {substep.detail}
                             </span>
                           )}
                         </p>
@@ -1250,40 +1425,6 @@ function DeliveryTimeline({ request }) {
               </div>
             ))}
           </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Compact stand-in for DeliveryTimeline once a delivery is DELIVERY_COMPLETED —
-// the full step-by-step stepper answers "where is my delivery right now,"
-// which stops being a relevant question once the journey is over. Showing
-// all six already-done steps at the top just pushes more useful content
-// (the final quotation, trip summary) further down the page, so a completed
-// record gets a one-line confirmation instead.
-function CompletedSummary({ request }) {
-  const completedDate = request.receivedConfirmedAt
-    ? new Date(request.receivedConfirmedAt).toLocaleDateString("en-US", {
-        timeZone: MANILA_TIMEZONE,
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      })
-    : request.trip?.actualDropoff || null;
-  return (
-    <div className="flex items-center gap-2.5 rounded-2xl border border-slate-200 bg-white p-2.5 md:p-4 md:shadow-sm">
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-        <CheckCircle2 className="h-4 w-4" />
-      </span>
-      <div className="min-w-0">
-        <p className="text-xs font-semibold text-slate-900 md:text-sm">
-          Delivery Completed
-        </p>
-        {completedDate && (
-          <p className="text-[10px] text-slate-500 md:text-xs">
-            {completedDate}
-          </p>
         )}
       </div>
     </div>
@@ -1523,8 +1664,10 @@ function RequestDetailView({
         dbStatus: "APPROVED",
         quotationApproved: true,
         quotation: request.quotation,
-        // Real timestamp for the Delivery Timeline's "Quotation Approved"
-        // entry — same pattern as receivedConfirmedAt below.
+        // Real timestamp for the Delivery Timeline's "You Requested ₱…"
+        // counter-offer entry (the shared quotation milestones still fall
+        // back to createdAt like the supervisor's do — no persisted column
+        // for them yet).
         quotationRespondedAt: new Date().toISOString(),
         customerCounterMin: null,
         customerCounterMax: null,
@@ -1533,23 +1676,27 @@ function RequestDetailView({
       onApprovalToast?.(request.id);
     } else if (quotationAction === "reject") {
       // Negotiation is capped at one round: once a revised quotation is on
-      // the table (previousQuotation exists), rejecting it is final and
-      // cancels the request — no second price-range counter.
-      if (request.previousQuotation) {
+      // the table (previousQuotation exists) — or the supervisor has already
+      // declined the only counter offer (counterDeclined) — rejecting is
+      // final and cancels the request, no second price-range counter.
+      if (request.previousQuotation || request.counterDeclined) {
+        const declineReason = request.previousQuotation
+          ? "Declined the revised quotation"
+          : "Declined the initial quotation";
         const cancelledAt = new Date().toISOString();
         const cancelledFromStatus = request.dbStatus || request.status;
         onUpdate(request.id, {
           status: "CANCELLED",
           dbStatus: "CANCELLED",
           quotationRejected: true,
-          cancelReason: "Declined the revised quotation",
+          cancelReason: declineReason,
           cancelledBy: "customer",
           cancelledAt,
           cancelledFromStatus,
         });
         onCancellation?.(request.id, {
           cancelledBy: "customer",
-          cancelReason: "Declined the revised quotation",
+          cancelReason: declineReason,
           cancelledAt,
           cancelledFromStatus,
         });
@@ -1577,10 +1724,16 @@ function RequestDetailView({
   };
 
   const handleConfirmReceived = () => {
+    const confirmedAt = new Date().toISOString();
     onUpdate(request.id, {
       status: "DELIVERY_COMPLETED",
+      // Same raw status + timestamp persistReceivedConfirmation writes, kept
+      // in the optimistic copy too so the timeline advances to its Completed
+      // stage immediately instead of waiting for a reload to re-map the row.
+      dbStatus: "COMPLETED",
+      completedAt: confirmedAt,
       receivedConfirmed: true,
-      receivedConfirmedAt: new Date().toISOString(),
+      receivedConfirmedAt: confirmedAt,
     });
     onReceivedConfirmation?.(request.id);
     setShowConfirmModal(false);
@@ -1597,6 +1750,9 @@ function RequestDetailView({
     const cancelledFromStatus = request.dbStatus || request.status;
     onUpdate(request.id, {
       status: "CANCELLED",
+      // Raw status kept in sync with what persistCancellation writes, so the
+      // timeline shows its cancel point immediately (not after a reload).
+      dbStatus: "CANCELLED",
       cancelReason: reason,
       cancelledBy: "customer",
       cancelledAt,
@@ -1720,11 +1876,9 @@ function RequestDetailView({
         </div>
       )}
 
-      {request.status === "DELIVERY_COMPLETED" ? (
-        <CompletedSummary request={request} />
-      ) : (
-        <DeliveryTimeline request={request} />
-      )}
+      {/* Same Progress Details tracker for every trip state, completed
+          records included — see DeliveryTimeline's own comment. */}
+      <DeliveryTimeline request={request} />
 
       {/* Single stacked column at every breakpoint, matching the Supervisor's
           per-request Delivery Details page (it never splits into
@@ -2491,6 +2645,17 @@ function RequestDetailView({
                       />
                       <ApprovedRouteMap request={request} />
 
+                      {/* Counter offer declined — supervisor keeps the
+                          initial quotation; the customer can approve it or
+                          cancel, but no second negotiation round opens. */}
+                      {request.counterDeclined && (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                           <p className="text-sm font-bold uppercase tracking-wider text-amber-800">
+                             Counter Offer Declined — the supervisor declined the counter offer. You can approve the initial quotation or reject/cancel.
+                           </p>
+                        </div>
+                      )}
+
                       {/* Approve/Reject — folded into the panel itself,
                           matching how the supervisor's own Update/Decline
                           actions live inside this same collapsible rather
@@ -2517,7 +2682,8 @@ function RequestDetailView({
                               className="inline-flex items-center gap-2 rounded-xl border border-rose-300 px-5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 transition"
                             >
                               <X className="h-4 w-4" />
-                              {request.previousQuotation
+                              {request.previousQuotation ||
+                              request.counterDeclined
                                 ? "Reject"
                                 : "Reject & Price Range"}
                             </button>
@@ -2531,7 +2697,9 @@ function RequestDetailView({
                               ? "Confirm Approval"
                               : request.previousQuotation
                                 ? "Decline Revised Quotation"
-                                : "Request Price Range"}
+                                : request.counterDeclined
+                                  ? "Decline Initial Quotation"
+                                  : "Request Price Range"}
                           </h4>
                           {quotationAction === "approve" ? (
                             <>
@@ -2584,6 +2752,32 @@ function RequestDetailView({
                                 </button>
                               </div>
                             </>
+                          ) : request.counterDeclined ? (
+                            <>
+                              <p className="text-sm text-slate-700">
+                                Your counter offer was declined — the
+                                initial quotation stands. Declining it is{" "}
+                                <span className="font-bold">final</span> and
+                                cancels the request — negotiation is limited
+                                to one round.
+                              </p>
+                              <div className="flex gap-3">
+                                <button
+                                  onClick={handleQuotationSubmit}
+                                  className="rounded-xl bg-rose-600 px-5 py-2 text-sm font-semibold text-white hover:bg-rose-700 transition"
+                                >
+                                  Confirm Rejection
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    setShowQuotationResponse(false)
+                                  }
+                                  className="rounded-xl border border-slate-300 px-5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </>
                           ) : (
                             <>
                               <p className="text-sm text-slate-700">
@@ -2595,35 +2789,61 @@ function RequestDetailView({
                                   <label className="text-xs text-slate-500">
                                     Min (₱)
                                   </label>
-                                  <input
-                                    type="number"
-                                    value={priceRange.min}
-                                    onChange={(e) =>
-                                      setPriceRange((prev) => ({
-                                        ...prev,
-                                        min: e.target.value,
-                                      }))
-                                    }
-                                    placeholder="0"
-                                    className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm"
-                                  />
+                                  <div className="relative">
+                                    <span
+                                      aria-hidden="true"
+                                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-500"
+                                    >
+                                      ₱
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={formatCurrencyForDisplay(
+                                        priceRange.min,
+                                      )}
+                                      onChange={(e) =>
+                                        setPriceRange((prev) => ({
+                                          ...prev,
+                                          min: sanitizeCurrencyInput(
+                                            e.target.value,
+                                          ),
+                                        }))
+                                      }
+                                      placeholder="0"
+                                      className="w-full rounded-xl border border-blue-200 bg-white pl-7 pr-3 py-2 text-sm"
+                                    />
+                                  </div>
                                 </div>
                                 <div>
                                   <label className="text-xs text-slate-500">
                                     Max (₱)
                                   </label>
-                                  <input
-                                    type="number"
-                                    value={priceRange.max}
-                                    onChange={(e) =>
-                                      setPriceRange((prev) => ({
-                                        ...prev,
-                                        max: e.target.value,
-                                      }))
-                                    }
-                                    placeholder="0"
-                                    className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm"
-                                  />
+                                  <div className="relative">
+                                    <span
+                                      aria-hidden="true"
+                                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-500"
+                                    >
+                                      ₱
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={formatCurrencyForDisplay(
+                                        priceRange.max,
+                                      )}
+                                      onChange={(e) =>
+                                        setPriceRange((prev) => ({
+                                          ...prev,
+                                          max: sanitizeCurrencyInput(
+                                            e.target.value,
+                                          ),
+                                        }))
+                                      }
+                                      placeholder="0"
+                                      className="w-full rounded-xl border border-blue-200 bg-white pl-7 pr-3 py-2 text-sm"
+                                    />
+                                  </div>
                                 </div>
                               </div>
                               <div className="flex gap-3">
@@ -2788,6 +3008,13 @@ function RequestDetailView({
                     <ExpandableBreakdown quotation={request.quotation} />
                   </div>
                   <ApprovedRouteMap request={request} />
+                  {request.counterDeclined && (
+                    <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-2.5 md:mt-3 md:p-3">
+                       <p className="text-[10px] font-bold uppercase tracking-wider text-amber-800 md:text-xs">
+                         Counter Offer Declined — the supervisor declined the counter offer. You can approve the initial quotation or reject/cancel.
+                       </p>
+                    </div>
+                  )}
                   <div className="mt-2 flex flex-col gap-2 md:mt-3 md:flex-row md:gap-3">
                     <button
                       onClick={() => {
@@ -2805,7 +3032,7 @@ function RequestDetailView({
                       }}
                       className="flex-1 rounded-xl border border-red-300 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 active:bg-red-100 md:px-4 md:py-2.5 md:text-sm"
                     >
-                      {request.previousQuotation
+                      {request.previousQuotation || request.counterDeclined
                         ? "Reject"
                         : "Reject & Price Range"}
                     </button>
@@ -2823,7 +3050,9 @@ function RequestDetailView({
                     ? "Confirm Approval"
                     : request.previousQuotation
                       ? "Decline Revised Quotation"
-                      : "Request Price Range"}
+                      : request.counterDeclined
+                        ? "Decline Initial Quotation"
+                        : "Request Price Range"}
                 </h3>
                 {quotationAction === "approve" ? (
                   <div className="mt-2 space-y-2 md:mt-3 md:space-y-3">
@@ -2871,6 +3100,29 @@ function RequestDetailView({
                       </button>
                     </div>
                   </div>
+                ) : request.counterDeclined ? (
+                  <div className="mt-2 space-y-2 md:mt-3 md:space-y-3">
+                    <p className="text-xs text-slate-600 md:text-sm">
+                      Your counter offer was declined — the initial quotation
+                      stands. Declining it is{" "}
+                      <span className="font-bold">final</span> and cancels the
+                      request — negotiation is limited to one round.
+                    </p>
+                    <div className="flex flex-col gap-2 md:flex-row md:gap-3">
+                      <button
+                        onClick={handleQuotationSubmit}
+                        className="flex-1 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 active:bg-rose-100 md:px-4 md:py-2.5 md:text-sm"
+                      >
+                        Confirm Rejection
+                      </button>
+                      <button
+                        onClick={() => setShowQuotationResponse(false)}
+                        className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 active:bg-slate-100 md:px-4 md:py-2.5 md:text-sm"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <div className="mt-2 space-y-2 md:mt-3 md:space-y-3">
                     <p className="text-xs text-slate-600 md:text-sm">
@@ -2881,35 +3133,53 @@ function RequestDetailView({
                         <label className="text-[10px] text-slate-500 md:text-xs">
                           Min (₱)
                         </label>
-                        <input
-                          type="number"
-                          value={priceRange.min}
-                          onChange={(e) =>
-                            setPriceRange((prev) => ({
-                              ...prev,
-                              min: e.target.value,
-                            }))
-                          }
-                          placeholder="0"
-                          className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs md:px-4 md:py-2.5 md:text-sm"
-                        />
+                        <div className="relative">
+                          <span
+                            aria-hidden="true"
+                            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-500"
+                          >
+                            ₱
+                          </span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={formatCurrencyForDisplay(priceRange.min)}
+                            onChange={(e) =>
+                              setPriceRange((prev) => ({
+                                ...prev,
+                                min: sanitizeCurrencyInput(e.target.value),
+                              }))
+                            }
+                            placeholder="0"
+                            className="w-full rounded-xl border border-blue-200 bg-white pl-7 pr-3 py-2 text-xs md:pl-8 md:pr-4 md:py-2.5 md:text-sm"
+                          />
+                        </div>
                       </div>
                       <div>
                         <label className="text-[10px] text-slate-500 md:text-xs">
                           Max (₱)
                         </label>
-                        <input
-                          type="number"
-                          value={priceRange.max}
-                          onChange={(e) =>
-                            setPriceRange((prev) => ({
-                              ...prev,
-                              max: e.target.value,
-                            }))
-                          }
-                          placeholder="0"
-                          className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs md:px-4 md:py-2.5 md:text-sm"
-                        />
+                        <div className="relative">
+                          <span
+                            aria-hidden="true"
+                            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-500"
+                          >
+                            ₱
+                          </span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={formatCurrencyForDisplay(priceRange.max)}
+                            onChange={(e) =>
+                              setPriceRange((prev) => ({
+                                ...prev,
+                                max: sanitizeCurrencyInput(e.target.value),
+                              }))
+                            }
+                            placeholder="0"
+                            className="w-full rounded-xl border border-blue-200 bg-white pl-7 pr-3 py-2 text-xs md:pl-8 md:pr-4 md:py-2.5 md:text-sm"
+                          />
+                        </div>
                       </div>
                     </div>
                     <div className="flex flex-col gap-2 md:flex-row md:gap-3">
@@ -3462,6 +3732,10 @@ function mapDeliveryRow(row) {
       : null,
     status: CUSTOMER_STATUS_MAP[row.status] || row.status,
     dbStatus: row.status,
+    // Raw assignment timestamp — the timeline's "Delivery crew and truck
+    // assigned" substep formats it the same way the supervisor's
+    // buildProgressData does off its own assigned_at mapping.
+    assignedAt: row.assigned_at || null,
     customerCounterMin: row.customer_counter_min,
     customerCounterMax: row.customer_counter_max,
     cancelledBy: row.cancelled_by,
@@ -3497,6 +3771,13 @@ function attachQuotationState(row, qtnsByType) {
     row.customerCounterMin != null && row.customerCounterMax != null
       ? { min: row.customerCounterMin, max: row.customerCounterMax }
       : null;
+  // The supervisor declined the customer's counter offer: the request was
+  // handed back to QUOTATION_SUBMITTED (initial quotation standing again)
+  // while the counter range stays on the row as the record of that round.
+  // The combination only means "declined" here — a fresh initial quotation
+  // always has null counter columns, and approving clears them.
+  const counterDeclined =
+    row.dbStatus === "QUOTATION_SUBMITTED" && range != null;
 
   if (row.dbStatus === "COUNTER_OFFER_SUBMITTED") {
     // The customer rejected the initial offer and is awaiting a revised one.
@@ -3507,6 +3788,7 @@ function attachQuotationState(row, qtnsByType) {
       quotationRejected: true,
       priceRange: range,
       quotationApproved: false,
+      counterDeclined: false,
     };
   }
   if (updated) {
@@ -3518,6 +3800,7 @@ function attachQuotationState(row, qtnsByType) {
       priceRange: range,
       quotationRejected: false,
       quotationApproved: APPROVED_STATUSES.includes(row.dbStatus),
+      counterDeclined: false,
     };
   }
   if (initial) {
@@ -3529,6 +3812,7 @@ function attachQuotationState(row, qtnsByType) {
       priceRange: range,
       quotationRejected: false,
       quotationApproved: APPROVED_STATUSES.includes(row.dbStatus),
+      counterDeclined,
     };
   }
   return {
@@ -3538,6 +3822,7 @@ function attachQuotationState(row, qtnsByType) {
     priceRange: range,
     quotationRejected: false,
     quotationApproved: APPROVED_STATUSES.includes(row.dbStatus),
+    counterDeclined,
   };
 }
 
@@ -3713,6 +3998,7 @@ function CustomerDeliveries() {
           quotationApproved: true,
           customerCounterMin: null,
           customerCounterMax: null,
+          counterDeclined: false,
           quotationRespondedAt: new Date().toISOString(),
         });
         showToast(`Quotation approved for ${id}.`, "success");

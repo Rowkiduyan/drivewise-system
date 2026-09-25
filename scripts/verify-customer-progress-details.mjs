@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// Disposable verification for the Customer portal's real "Progress Details"
-// sequential pickup/drop-off messages under Out for Delivery (2026-09-04),
-// built to replace the previously-dead request.trip-based substeps.
+// Disposable verification for the Customer portal's "Progress Details"
+// tracker (2026-09-26 stage-alignment rewrite): the customer's stages now
+// mirror the supervisor's buildProgressData one-for-one, with the pickup/
+// drop-off chain messages nested inside the matching Pickup/Drop-off stages
+// (previously they lived under a single "Out for Delivery" stage).
 // Uses DR-0048 (a real customer's real delivery, has a real stop with a
 // real human-readable address, unlike the coordinate-string test fixtures)
 // -- backs up and restores its exact original row afterward.
@@ -56,20 +58,26 @@ async function main() {
   }
 
   try {
-    // ---- Stage 0: pickup not yet done -- transit stage shouldn't show ANY
-    // substep yet (bug found on review: previously showed "on its way to
-    // pickup location" even while the stage above was still greyed out). ----
+    // ---- Stage 0: pickup not yet done -- no chain message may appear yet
+    // (bug found on review: previously showed "on its way to pickup
+    // location" even while the stage above was still greyed out), and the
+    // stage list itself must already read like the supervisor's: same
+    // eight-stage labels, no leftovers from the old six-step customer list.
     await admin.from('delivery_requests').update({
       status: 'OUT_FOR_PICKUP',
       pickup_photo_url: null,
       pickup_completed_at: null,
       dropoff_photo_url: null,
       dropoff_completed_at: null,
+      dropoff_arrived_at: null,
       stops: (original.stops || []).map((s) => ({ ...s, completed: false, completedAt: null, photoUrl: null })),
     }).eq('id', DELIVERY_ID)
     await openAndExpand()
     results.stage0_noPrematureOnWayToPickup = (await page.locator('text=/on its way to/').count()) === 0
-    results.stage0_noPrematureAnySubstep = (await page.locator('text=/delivery crew/').count()) === 0
+    results.stage0_noPrematurePickupChain = (await page.locator('text=/completed the pickup/').count()) === 0
+    results.stage0_pickupStageIsCurrent = await page.locator('text-is=Pickup').first().isVisible().catch(() => false)
+    results.stage0_completedStagesUseSupervisorLabels = await page.locator('text-is=Delivery Crew Assigned').first().isVisible().catch(() => false)
+    results.stage0_noOldScheduledForPickupStep = (await page.locator('text=/Scheduled for Pickup/').count()) === 0
     await page.screenshot({ path: 'scripts/verify-customer-progress-00-before-pickup.png', fullPage: true })
 
     // ---- Stage 0b: zero-stop delivery -- primary dropoff should read
@@ -81,6 +89,7 @@ async function main() {
       pickup_completed_at: new Date().toISOString(),
       dropoff_photo_url: null,
       dropoff_completed_at: null,
+      dropoff_arrived_at: null,
       stops: [],
     }).eq('id', DELIVERY_ID)
     await openAndExpand()
@@ -95,6 +104,7 @@ async function main() {
       pickup_completed_at: new Date().toISOString(),
       dropoff_photo_url: null,
       dropoff_completed_at: null,
+      dropoff_arrived_at: null,
       stops: (original.stops || []).map((s) => ({ ...s, completed: false, completedAt: null, photoUrl: null })),
     }).eq('id', DELIVERY_ID)
     await openAndExpand()
@@ -108,7 +118,7 @@ async function main() {
       dropoff_completed_at: new Date().toISOString(),
     }).eq('id', DELIVERY_ID)
     await openAndExpand()
-    results.stage2_arrivedFirstDropoff = await page.locator('text=/arrived at.*First Drop-Off/').first().isVisible().catch(() => false)
+    results.stage2_dropoffDoneLine = await page.locator('text=/completed the drop-off at.*First Drop-Off/').first().isVisible().catch(() => false)
     results.stage2_onWayToSecondDropoff = await page.locator('text=/on its way to.*Second Drop-Off/').first().isVisible().catch(() => false)
     await page.screenshot({ path: 'scripts/verify-customer-progress-02-dropoff-done.png', fullPage: true })
 
@@ -122,7 +132,7 @@ async function main() {
       })),
     }).eq('id', DELIVERY_ID)
     await openAndExpand()
-    results.stage3_arrivedSecondDropoff = await page.locator('text=/arrived at.*Second Drop-Off/').first().isVisible().catch(() => false)
+    results.stage3_dropoffDoneLine = await page.locator('text=/completed the drop-off at.*Second Drop-Off/').first().isVisible().catch(() => false)
     results.stage3_noDanglingOnWay = (await page.locator('text=/on its way to/').count()) === 0
     await page.screenshot({ path: 'scripts/verify-customer-progress-03-all-done.png', fullPage: true })
 
