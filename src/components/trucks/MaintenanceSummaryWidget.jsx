@@ -46,10 +46,6 @@ export default function MaintenanceSummaryWidget({ trucks, onSelect }) {
         <h2 className="text-lg font-semibold text-slate-800">
           Preventive Maintenance (PMS) Status
         </h2>
-        <p className="text-sm text-slate-500">
-          Monitored via 10,000 km mileage or 6-month interval threshold
-          (whichever comes first).
-        </p>
       </header>
       {/* Cards */}
       <div className="flex flex-col gap-4 md:flex-row">

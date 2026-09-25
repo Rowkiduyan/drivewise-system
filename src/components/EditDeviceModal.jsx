@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 
 /**
@@ -21,6 +21,27 @@ export default function EditDeviceModal({ device, onClose, onSave }) {
     device.plate_number ? [device.plate_number] : [],
   );
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  // Native <select> lets the browser decide whether its options open above
+  // or below the field, based on available viewport space -- inside this
+  // modal (vertically centered, so short viewports leave little room below
+  // a field near the middle) that meant the plate list sometimes opened
+  // upward. Replaced with a small custom dropdown, absolutely positioned
+  // below the trigger, so it always opens downward.
+  const [isPlateDropdownOpen, setIsPlateDropdownOpen] = useState(false);
+  const plateDropdownRef = useRef(null);
+
+  useEffect(() => {
+    if (!isPlateDropdownOpen) {
+      return;
+    }
+    const handleOutsideClick = (event) => {
+      if (!plateDropdownRef.current?.contains(event.target)) {
+        setIsPlateDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, [isPlateDropdownOpen]);
 
   // Fetch plate numbers from trucks that are not already assigned in devices
   useEffect(() => {
@@ -122,26 +143,72 @@ export default function EditDeviceModal({ device, onClose, onSave }) {
               className="w-full rounded border border-gray-300 bg-gray-100 px-3 py-2 text-sm"
             />
           </div>
-          <div>
-            <label
-              className="block text-sm font-medium mb-1"
-              htmlFor="plateNumber"
-            >
+          <div className="relative" ref={plateDropdownRef}>
+            <label className="block text-sm font-medium mb-1" htmlFor="plateNumber">
               Plate Number
             </label>
-            <select
+            <button
               id="plateNumber"
-              value={plateNumber}
-              onChange={(e) => setPlateNumber(e.target.value)}
-              className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+              type="button"
+              onClick={() => setIsPlateDropdownOpen((open) => !open)}
+              aria-haspopup="listbox"
+              aria-expanded={isPlateDropdownOpen}
+              className="flex w-full items-center justify-between rounded border border-gray-300 bg-white px-3 py-2 text-left text-sm"
             >
-              <option value="">-- Unassigned --</option>
-              {plateOptions.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
+              <span className={plateNumber ? "" : "text-gray-400"}>
+                {plateNumber || "-- Unassigned --"}
+              </span>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                strokeWidth="1.8"
+                className="h-4 w-4 shrink-0 stroke-current text-gray-400"
+                aria-hidden="true"
+              >
+                <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            {isPlateDropdownOpen && (
+              <ul
+                role="listbox"
+                className="absolute left-0 top-full z-10 mt-1 max-h-48 w-full overflow-y-auto rounded border border-gray-300 bg-white text-sm shadow-lg"
+              >
+                <li>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={plateNumber === ""}
+                    onClick={() => {
+                      setPlateNumber("");
+                      setIsPlateDropdownOpen(false);
+                    }}
+                    className={`block w-full px-3 py-2 text-left hover:bg-violet-50 ${
+                      plateNumber === "" ? "bg-violet-50 font-medium" : ""
+                    }`}
+                  >
+                    -- Unassigned --
+                  </button>
+                </li>
+                {plateOptions.map((p) => (
+                  <li key={p}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={plateNumber === p}
+                      onClick={() => {
+                        setPlateNumber(p);
+                        setIsPlateDropdownOpen(false);
+                      }}
+                      className={`block w-full px-3 py-2 text-left hover:bg-violet-50 ${
+                        plateNumber === p ? "bg-violet-50 font-medium" : ""
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium mb-1" htmlFor="status">

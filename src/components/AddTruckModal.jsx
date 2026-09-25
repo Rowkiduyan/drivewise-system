@@ -538,6 +538,7 @@ export default function AddTruckModal({
               value={formData.plate_number}
               onChange={handleChange}
               disabled={mode === "edit" || isSupervisor}
+              required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
                 mode === "edit" || isSupervisor
                   ? "bg-slate-100 text-slate-500 cursor-not-allowed"
@@ -556,6 +557,7 @@ export default function AddTruckModal({
               value={formData.date_acquired}
               onChange={handleChange}
               disabled={isSupervisor}
+              required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
                 isSupervisor
                   ? "bg-slate-100 text-slate-500 cursor-not-allowed"
@@ -573,6 +575,7 @@ export default function AddTruckModal({
               value={formData.brand}
               onChange={handleChange}
               disabled={isSupervisor}
+              required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
                 isSupervisor
                   ? "bg-slate-100 text-slate-500 cursor-not-allowed"
@@ -614,6 +617,7 @@ export default function AddTruckModal({
               value={formData.model}
               onChange={handleChange}
               disabled={isSupervisor}
+              required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
                 isSupervisor
                   ? "bg-slate-100 text-slate-500 cursor-not-allowed"
@@ -656,6 +660,7 @@ export default function AddTruckModal({
               value={formData.truck_type}
               onChange={handleChange}
               disabled={isSupervisor}
+              required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
                 isSupervisor
                   ? "bg-slate-100 text-slate-500 cursor-not-allowed"
@@ -695,6 +700,7 @@ export default function AddTruckModal({
               value={formData.year_model}
               onChange={handleChange}
               disabled={isSupervisor}
+              required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
                 isSupervisor
                   ? "bg-slate-100 text-slate-500 cursor-not-allowed"
@@ -712,6 +718,7 @@ export default function AddTruckModal({
               value={formData.commodity_type}
               onChange={handleChange}
               disabled={isSupervisor}
+              required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
                 isSupervisor
                   ? "bg-slate-100 text-slate-500 cursor-not-allowed"
@@ -732,6 +739,7 @@ export default function AddTruckModal({
                 name="status"
                 value={formData.status}
                 onChange={handleChange}
+                required
                 className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
               >
                 <option value="" disabled>
@@ -797,6 +805,7 @@ export default function AddTruckModal({
               value={formData.max_capacity}
               onChange={handleChange}
               disabled={isSupervisor}
+              required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
                 isSupervisor
                   ? "bg-slate-100 text-slate-500 cursor-not-allowed"
@@ -817,6 +826,7 @@ export default function AddTruckModal({
               placeholder="12000"
               value={formData.current_mileage}
               onChange={handleChange}
+              required
               className="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
             />
           </div>
@@ -867,6 +877,7 @@ export default function AddTruckModal({
               value={formData.maintenance_interval_km}
               onChange={handleChange}
               disabled={isSupervisor}
+              required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
                 isSupervisor
                   ? "bg-slate-100 text-slate-500 cursor-not-allowed"
@@ -888,6 +899,7 @@ export default function AddTruckModal({
               value={formData.maintenance_interval_months}
               onChange={handleChange}
               disabled={isSupervisor}
+              required
               className={`mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm ${
                 isSupervisor
                   ? "bg-slate-100 text-slate-500 cursor-not-allowed"

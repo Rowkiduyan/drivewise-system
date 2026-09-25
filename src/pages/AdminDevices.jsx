@@ -8,6 +8,12 @@ import EditDeviceModal from "../components/EditDeviceModal.jsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { MANILA_TIMEZONE } from "../lib/manilaTime.js";
 
+// The Raspberry Pi heartbeats every 10 seconds (see
+// supabase/functions/device-heartbeat/index.ts), so a few missed beats is a
+// safe cutoff before flagging a device Offline without false-flagging normal
+// network jitter between pings.
+const ONLINE_THRESHOLD_MS = 60_000;
+
 // Helper to fetch devices from Supabase
 async function fetchDevices() {
   // The devices table does not have an `updated_at` column (see Supabase error).
@@ -36,6 +42,16 @@ export default function AdminDevices() {
   const [deviceToEdit, setDeviceToEdit] = useState(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
+  // Ticks so the Online/Offline read on last_ping goes stale in real time
+  // without needing to refetch devices -- last_ping is a fixed past
+  // timestamp, so advancing `now` is enough to flip a device from Online to
+  // Offline as it crosses ONLINE_THRESHOLD_MS.
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 10000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Load devices on mount
   useEffect(() => {
@@ -226,9 +242,33 @@ export default function AdminDevices() {
                           </span>
                         </td>
                         <td className="px-5 py-2.5">
-                          {d.last_ping
-                            ? new Date(d.last_ping).toLocaleString("en-US", { timeZone: MANILA_TIMEZONE })
-                            : "Never"}
+                          {d.last_ping ? (
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                                  now - new Date(d.last_ping).getTime() < ONLINE_THRESHOLD_MS
+                                    ? "bg-green-100 text-green-700"
+                                    : "bg-gray-100 text-gray-500"
+                                }`}
+                              >
+                                <span
+                                  className={`h-1.5 w-1.5 rounded-full ${
+                                    now - new Date(d.last_ping).getTime() < ONLINE_THRESHOLD_MS
+                                      ? "bg-green-500"
+                                      : "bg-gray-400"
+                                  }`}
+                                />
+                                {now - new Date(d.last_ping).getTime() < ONLINE_THRESHOLD_MS
+                                  ? "Online"
+                                  : "Offline"}
+                              </span>
+                              <span className="text-slate-600">
+                                {new Date(d.last_ping).toLocaleString("en-US", { timeZone: MANILA_TIMEZONE })}
+                              </span>
+                            </div>
+                          ) : (
+                            "Never"
+                          )}
                         </td>
                         <td className="px-5 py-2.5 text-right flex items-center justify-end space-x-2">
                           <button

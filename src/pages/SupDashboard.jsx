@@ -100,15 +100,13 @@ function ViewAllLink({ to }) {
   );
 }
 
-// ----- KPI strip: the whole "what needs attention" summary, each tile links
-// straight to the page where it's resolved so there's no separate task list
-// duplicating the same numbers. -----
-function StatTile({ label, value, to, tone, state }) {
+// ----- KPI strip: plain, non-interactive tiles -- matches AdminDashboard.jsx's
+// own KPI strip, which never made these clickable since not all of its tiles
+// had a route to point to. -----
+function StatTile({ label, value, tone }) {
   return (
-    <Link
-      to={to}
-      state={state}
-      className={`flex flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors hover:border-blue-200 hover:bg-blue-50/40 ${
+    <div
+      className={`flex flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5 ${
         tone ? `border-l-4 ${TONE[tone].borderL}` : ""
       }`}
     >
@@ -118,7 +116,7 @@ function StatTile({ label, value, to, tone, state }) {
       <span className="mt-0.5 text-xl font-bold leading-tight text-slate-900">
         {value}
       </span>
-    </Link>
+    </div>
   );
 }
 
@@ -1774,16 +1772,15 @@ function SupDashboard() {
   // (explicit user request) -- `trucks` is still used below for the Live
   // Fleet panel's real truck-status breakdown. -----
   const kpis = [
-    { label: "Active Deliveries", value: fleetOps.length, to: "/supervisor/deliveries" },
+    { label: "Active Deliveries", value: fleetOps.length },
     {
       label: "Pending Assignments",
       value: pendingAssignmentsCount,
-      to: "/supervisor/deliveries",
       tone: pendingAssignmentsCount > 0 ? "amber" : undefined,
     },
-    { label: "Requests Inbox", value: requestsInboxCount, to: "/supervisor/deliveries" },
-    { label: "Alerts Today", value: alertFeed.length, to: "/supervisor/deliveries", tone: alertFeed.length > 0 ? "amber" : undefined },
-    { label: "High-Risk Drivers", value: highRiskDriverCount, to: "/supervisor/delivery-crew", tone: "red" },
+    { label: "Requests Inbox", value: requestsInboxCount },
+    { label: "Alerts Today", value: alertFeed.length, tone: alertFeed.length > 0 ? "amber" : undefined },
+    { label: "High-Risk Drivers", value: highRiskDriverCount, tone: "red" },
   ];
 
   // Truck segments are real, computed from the same live `trucks` query the

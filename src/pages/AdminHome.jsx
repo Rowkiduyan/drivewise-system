@@ -349,6 +349,7 @@ function FormField({
   className = '',
   maxLength,
   max,
+  disabled = false,
   // Defaults to disabling browser autofill -- these identity fields
   // (first/middle/last name, etc.) have no autoComplete attribute set
   // previously, so the browser fell back to guessing based on nearby field
@@ -377,7 +378,8 @@ function FormField({
           name={name}
           value={value}
           onChange={onChange}
-          className={fieldInputClassName}
+          disabled={disabled}
+          className={`${fieldInputClassName} disabled:cursor-not-allowed disabled:opacity-60`}
         >
           <option value="">Select {label.toLowerCase()}</option>
           {options.map((option) => (
@@ -396,8 +398,9 @@ function FormField({
           placeholder={placeholder}
           maxLength={maxLength}
           max={max}
+          disabled={disabled}
           autoComplete={autoComplete}
-          className={fieldInputClassName}
+          className={`${fieldInputClassName} disabled:cursor-not-allowed disabled:opacity-60`}
         />
       )}
     </div>
@@ -425,6 +428,14 @@ function CloseIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" className="h-4 w-4 stroke-current" aria-hidden="true">
       <path d="M6 6l12 12M6 18L18 6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" className="h-4 w-4 stroke-current" aria-hidden="true">
+      <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -517,6 +528,7 @@ function AdminHome() {
   const [bulkRows, setBulkRows] = useState([])
   const [isBulkUploading, setIsBulkUploading] = useState(false)
   const [bulkUploadResults, setBulkUploadResults] = useState([])
+  const [isBulkResultOpen, setIsBulkResultOpen] = useState(false)
   const fileInputRef = useRef(null)
   const [formError, setFormError] = useState('')
   // Lazy PSGC location data (2026-09-19, load KPI): the full province/city
@@ -561,10 +573,14 @@ function AdminHome() {
   const [selectedUserId, setSelectedUserId] = useState('')
   const [manageError, setManageError] = useState('')
   const [isSavingAccount, setIsSavingAccount] = useState(false)
+  const [isManageEditing, setIsManageEditing] = useState(false)
+  const [manageFormSnapshot, setManageFormSnapshot] = useState(null)
   const [isDeactivateConfirmOpen, setIsDeactivateConfirmOpen] = useState(false)
   const [isDeactivating, setIsDeactivating] = useState(false)
   const [isReactivateConfirmOpen, setIsReactivateConfirmOpen] = useState(false)
   const [isReactivating, setIsReactivating] = useState(false)
+  const [isResetPasswordConfirmOpen, setIsResetPasswordConfirmOpen] = useState(false)
+  const [isResettingPassword, setIsResettingPassword] = useState(false)
   const [manageForm, setManageForm] = useState({
     lastName: '',
     firstName: '',
@@ -593,10 +609,12 @@ function AdminHome() {
   const isAnyModalOpen =
     isAddUserOpen ||
     isBulkUploadOpen ||
+    isBulkResultOpen ||
     Boolean(selectedUserId) ||
     isAddConfirmOpen ||
     isDeactivateConfirmOpen ||
     isReactivateConfirmOpen ||
+    isResetPasswordConfirmOpen ||
     isPasswordModalOpen ||
     statusModal.open
 
@@ -653,6 +671,17 @@ function AdminHome() {
     () => users.find((user) => user.id === selectedUserId) || null,
     [users, selectedUserId]
   )
+
+  // Save should only be actionable once something in the editable fields has
+  // actually changed from what openManageDialog loaded -- manageFormSnapshot
+  // is that as-loaded baseline, kept separate from manageForm so edits can be
+  // compared against it without re-fetching.
+  const isManageFormDirty = useMemo(() => {
+    if (!manageFormSnapshot) {
+      return false
+    }
+    return Object.keys(manageFormSnapshot).some((key) => manageForm[key] !== manageFormSnapshot[key])
+  }, [manageForm, manageFormSnapshot])
 
   const newUserAge = useMemo(() => calculateAge(newUserForm.birthdate), [newUserForm.birthdate])
   const newUserFullName = useMemo(() => buildFullName(newUserForm), [newUserForm])
@@ -728,8 +757,26 @@ function AdminHome() {
     setSelectedUserId('')
     setManageError('')
     setIsSavingAccount(false)
+    setIsManageEditing(false)
+    setManageFormSnapshot(null)
     setIsDeactivateConfirmOpen(false)
     setIsReactivateConfirmOpen(false)
+    setIsResetPasswordConfirmOpen(false)
+  }
+
+  const startManageEditing = () => {
+    setIsManageEditing(true)
+  }
+
+  // Discards any in-progress edits and drops back to read-only view of the
+  // as-loaded values, rather than leaving stray changes in manageForm that
+  // never get submitted.
+  const cancelManageEditing = () => {
+    if (manageFormSnapshot) {
+      setManageForm(manageFormSnapshot)
+    }
+    setManageError('')
+    setIsManageEditing(false)
   }
 
   const showStatusModal = (tone, title, message, onClose = null) => {
@@ -909,6 +956,21 @@ function AdminHome() {
 
     setIsBulkUploading(false)
     await loadUsers()
+
+    // Hand off from the upload modal to a dedicated result modal once every
+    // row has been attempted -- keeps "in progress" and "done" visually
+    // distinct instead of the results list just accumulating in place under
+    // the same Upload/Close buttons.
+    setIsBulkUploadOpen(false)
+    setIsBulkResultOpen(true)
+  }
+
+  const closeBulkResultModal = () => {
+    setIsBulkResultOpen(false)
+    setBulkFileName('')
+    setBulkParseError('')
+    setBulkRows([])
+    setBulkUploadResults([])
   }
 
   const handleAddUser = (event) => {
@@ -1048,11 +1110,12 @@ function AdminHome() {
     setSelectedUserId(user.id)
     setManageError('')
     setIsSavingAccount(false)
+    setIsManageEditing(false)
     // Awaited so legacy-HUC normalization matches the old sync behavior
     // (instant when the background preload is done, which it is by the time
     // an admin clicks a row). Falls back to the raw value if the chunk fails.
     const mod = await ensureLocationApi()
-    setManageForm({
+    const form = {
       lastName: user.lastName,
       firstName: user.firstName,
       middleName: user.middleName,
@@ -1073,7 +1136,9 @@ function AdminHome() {
       loginEmail: user.loginEmail,
       status: user.status,
       deactivatedAt: user.deactivatedAt
-    })
+    }
+    setManageForm(form)
+    setManageFormSnapshot(form)
   }
 
   const handleManageInputChange = (event) => {
@@ -1091,7 +1156,7 @@ function AdminHome() {
   const handleSaveManagedAccount = async (event) => {
     event.preventDefault()
 
-    if (isSavingAccount) {
+    if (isSavingAccount || !isManageFormDirty) {
       return
     }
 
@@ -1174,7 +1239,7 @@ function AdminHome() {
     setIsDeactivateConfirmOpen(false)
 
     if (error) {
-      setManageError(error.message || 'Unable to deactivate account.')
+      showStatusModal('error', 'Unable to Deactivate Account', error.message || 'Unable to deactivate account.')
       return
     }
 
@@ -1227,14 +1292,35 @@ function AdminHome() {
     showStatusModal('success', 'Account Reactivated', `${name} has full access again.`)
   }
 
-  const handleResetPassword = async () => {
+  const openResetPasswordConfirm = () => {
     setManageError('')
+    setIsResetPasswordConfirmOpen(true)
+  }
+
+  const cancelResetPasswordConfirm = () => {
+    if (isResettingPassword) {
+      return
+    }
+    setIsResetPasswordConfirmOpen(false)
+  }
+
+  const confirmResetPassword = async () => {
+    if (isResettingPassword) {
+      return
+    }
+
+    setManageError('')
+    setIsResettingPassword(true)
+
     const { data, error } = await supabase.functions.invoke('admin-users', {
       body: { action: 'reset-password', userId: selectedUserId }
     })
 
+    setIsResettingPassword(false)
+    setIsResetPasswordConfirmOpen(false)
+
     if (error) {
-      setManageError(error.message || 'Unable to reset password.')
+      showStatusModal('error', 'Unable to Reset Password', error.message || 'Unable to reset password.')
       return
     }
 
@@ -1388,17 +1474,20 @@ function AdminHome() {
                 <table className="w-full min-w-[760px] table-fixed text-left text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                      <th className="w-1/6 px-5 py-3 font-semibold">Name</th>
-                      <th className="w-1/6 px-5 py-3 font-semibold">Role</th>
-                      <th className="w-1/6 px-5 py-3 font-semibold">Status</th>
-                      <th className="w-1/6 px-5 py-3 font-semibold">PERSONAL EMAIL</th>
-                      <th className="w-1/6 px-5 py-3 font-semibold">WORK Email</th>
-                      <th className="w-1/6 px-5 py-3 font-semibold">Manage</th>
+                      <th className="w-[18%] px-5 py-3 font-semibold">Name</th>
+                      <th className="w-[12%] px-5 py-3 font-semibold">Role</th>
+                      <th className="w-[12%] px-5 py-3 font-semibold">Status</th>
+                      <th className="w-[29%] px-5 py-3 font-semibold">PERSONAL EMAIL</th>
+                      <th className="w-[29%] px-5 py-3 font-semibold">WORK Email</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {paginatedUsers.map((user) => (
-                      <tr key={user.id} className="transition hover:bg-slate-50/80">
+                      <tr
+                        key={user.id}
+                        className="cursor-pointer transition hover:bg-slate-50/80"
+                        onClick={() => openManageDialog(user)}
+                      >
                         <td className="truncate px-5 py-2.5 font-semibold text-slate-900">{user.name}</td>
                         <td className="px-5 py-2.5">
                           <span className="inline-flex items-center rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">
@@ -1417,15 +1506,11 @@ function AdminHome() {
                           </span>
                         </td>
                         <td className="truncate px-5 py-2.5 text-slate-600">{user.email}</td>
-                        <td className="truncate px-5 py-2.5 text-slate-400">{user.loginEmail}</td>
-                        <td className="px-5 py-2.5">
-                          <button
-                            type="button"
-                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                            onClick={() => openManageDialog(user)}
-                          >
-                            Manage
-                          </button>
+                        <td className="relative truncate py-2.5 pl-5 pr-8 text-slate-400">
+                          {user.loginEmail}
+                          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-300">
+                            <ChevronRightIcon />
+                          </span>
                         </td>
                       </tr>
                     ))}
@@ -1804,6 +1889,60 @@ function AdminHome() {
         </div>
       ) : null}
 
+      {isBulkResultOpen ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-result-title"
+        >
+          <div className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+            {(() => {
+              const successCount = bulkUploadResults.filter((result) => result.status === 'success').length
+              const failureCount = bulkUploadResults.length - successCount
+              const allSucceeded = failureCount === 0 && successCount > 0
+              return (
+                <>
+                  <p
+                    className={`text-xs font-semibold uppercase tracking-[0.16em] ${
+                      allSucceeded ? 'text-emerald-600' : 'text-red-600'
+                    }`}
+                  >
+                    {allSucceeded ? 'Success' : 'Completed With Errors'}
+                  </p>
+                  <h3 id="bulk-result-title" className="mt-2 text-base font-semibold text-slate-900">
+                    Bulk Upload Complete
+                  </h3>
+                  <p className="mt-3 text-sm text-slate-500">
+                    {successCount} of {bulkUploadResults.length} user
+                    {bulkUploadResults.length === 1 ? '' : 's'} created successfully.
+                  </p>
+                  <ul className="mt-3 max-h-64 flex-1 space-y-1 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
+                    {bulkUploadResults.map((result) => (
+                      <li
+                        key={result.rowNumber}
+                        className={result.status === 'success' ? 'text-emerald-700' : 'text-red-700'}
+                      >
+                        {result.name || 'Unnamed'}: {result.message}
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    type="button"
+                    className={`mt-5 w-full rounded-xl px-5 py-3 text-sm font-semibold text-white transition ${
+                      allSucceeded ? 'bg-violet-600 hover:bg-violet-700' : 'bg-red-600 hover:bg-red-700'
+                    }`}
+                    onClick={closeBulkResultModal}
+                  >
+                    Done
+                  </button>
+                </>
+              )
+            })()}
+          </div>
+        </div>
+      ) : null}
+
       {selectedUser ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
@@ -1825,14 +1964,49 @@ function AdminHome() {
                   {selectedUser.name}
                 </h3>
               </div>
-              <button
-                type="button"
-                onClick={closeManageDialog}
-                aria-label="Close"
-                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-              >
-                <CloseIcon />
-              </button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={openResetPasswordConfirm}
+                  className="rounded-lg border border-amber-200 px-3 py-1.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+                >
+                  Reset Password
+                </button>
+                {manageForm.status === 'inactive' ? (
+                  <button
+                    type="button"
+                    onClick={openReactivateConfirm}
+                    className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                  >
+                    Reactivate Account
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={openDeactivateConfirm}
+                    className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                  >
+                    Deactivate Account
+                  </button>
+                )}
+                {!isManageEditing ? (
+                  <button
+                    type="button"
+                    onClick={startManageEditing}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Edit
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={closeManageDialog}
+                  aria-label="Close"
+                  className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                >
+                  <CloseIcon />
+                </button>
+              </div>
             </div>
 
             <form onSubmit={handleSaveManagedAccount} className="mt-5 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
@@ -1842,6 +2016,7 @@ function AdminHome() {
                   name="lastName"
                   value={manageForm.lastName}
                   onChange={handleManageInputChange}
+                  disabled={!isManageEditing}
                   required
                 />
                 <FormField
@@ -1849,6 +2024,7 @@ function AdminHome() {
                   name="firstName"
                   value={manageForm.firstName}
                   onChange={handleManageInputChange}
+                  disabled={!isManageEditing}
                   required
                 />
                 <FormField
@@ -1856,6 +2032,7 @@ function AdminHome() {
                   name="middleName"
                   value={manageForm.middleName}
                   onChange={handleManageInputChange}
+                  disabled={!isManageEditing}
                 />
                 <FormField
                   type="date"
@@ -1864,6 +2041,7 @@ function AdminHome() {
                   value={manageForm.birthdate || ''}
                   onChange={handleManageInputChange}
                   max={maxBirthdateForMinAge()}
+                  disabled={!isManageEditing}
                   required
                 />
               </div>
@@ -1879,6 +2057,7 @@ function AdminHome() {
                   value={manageForm.role}
                   onChange={handleManageInputChange}
                   options={ROLE_OPTIONS}
+                  disabled={!isManageEditing}
                   required
                 />
                 {manageForm.role === 'Customer' ? (
@@ -1888,6 +2067,7 @@ function AdminHome() {
                     placeholder="e.g. Acme Logistics Corp."
                     value={manageForm.clientName}
                     onChange={handleManageInputChange}
+                    disabled={!isManageEditing}
                     required
                   />
                 ) : null}
@@ -1900,6 +2080,7 @@ function AdminHome() {
                   name="email"
                   value={manageForm.email}
                   onChange={handleManageInputChange}
+                  disabled={!isManageEditing}
                   required
                 />
                 <FormField
@@ -1909,6 +2090,7 @@ function AdminHome() {
                   value={manageForm.contactNumber}
                   onChange={handleManageInputChange}
                   maxLength={11}
+                  disabled={!isManageEditing}
                   required
                 />
               </div>
@@ -1931,7 +2113,8 @@ function AdminHome() {
                       placeholder="e.g. 123 Main St"
                       value={manageForm.street}
                       onChange={handleManageInputChange}
-                      className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                      disabled={!isManageEditing}
+                      className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </div>
                   <div>
@@ -1943,7 +2126,8 @@ function AdminHome() {
                       name="province"
                       value={manageForm.province}
                       onChange={handleManageInputChange}
-                      className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                      disabled={!isManageEditing}
+                      className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <option value="">{provinceOptions.length ? 'Select province' : 'Loading provinces…'}</option>
                       {provinceOptions.map((name) => (
@@ -1962,7 +2146,7 @@ function AdminHome() {
                       name="city"
                       value={manageForm.city}
                       onChange={handleManageInputChange}
-                      disabled={!manageForm.province}
+                      disabled={!isManageEditing || !manageForm.province}
                       className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <option value="">
@@ -2004,41 +2188,26 @@ function AdminHome() {
                 ) : null}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleResetPassword}
-                    className="rounded-xl border border-amber-200 px-3.5 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                  >
-                    Reset Password
-                  </button>
-                  {manageForm.status === 'inactive' ? (
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                {isManageEditing ? (
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={openReactivateConfirm}
-                      className="rounded-xl border border-emerald-200 px-3.5 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-60"
+                      onClick={cancelManageEditing}
+                      disabled={isSavingAccount}
+                      className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
                     >
-                      Reactivate Account
+                      Cancel
                     </button>
-                  ) : (
                     <button
-                      type="button"
-                      onClick={openDeactivateConfirm}
-                      className="rounded-xl border border-red-200 px-3.5 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
+                      type="submit"
+                      disabled={isSavingAccount || !isManageFormDirty}
+                      className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
                     >
-                      Deactivate Account
+                      {isSavingAccount ? 'Saving...' : 'Save Changes'}
                     </button>
-                  )}
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSavingAccount}
-                  className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
-                >
-                  {isSavingAccount ? 'Saving...' : 'Save Changes'}
-                </button>
+                  </div>
+                ) : null}
               </div>
             </form>
           </div>
@@ -2116,6 +2285,44 @@ function AdminHome() {
                 className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
               >
                 {isReactivating ? 'Reactivating...' : 'Reactivate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isResetPasswordConfirmOpen ? (
+        <div
+          className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-reset-password-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+            <h3 id="confirm-reset-password-title" className="text-base font-semibold text-slate-900">
+              Reset password for {selectedUser?.name}?
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              This immediately invalidates their current password and generates a new temporary
+              one, emailed to {manageForm.email || 'their personal email'}.
+            </p>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={cancelResetPasswordConfirm}
+                disabled={isResettingPassword}
+                className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmResetPassword}
+                disabled={isResettingPassword}
+                className="rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:opacity-60"
+              >
+                {isResettingPassword ? 'Resetting...' : 'Reset Password'}
               </button>
             </div>
           </div>
