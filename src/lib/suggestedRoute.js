@@ -54,6 +54,23 @@ export function distanceMeters(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// Compass bearing in degrees [0, 360) from (lat1, lon1) to (lat2, lon2) --
+// used by nearestDropoffOrder below to sweep candidates by direction from
+// the reference point rather than pure distance. Plain-JS, no google.maps
+// dependency, same reasoning as distanceMeters above.
+function bearingDegrees(lat1, lon1, lat2, lon2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const phi1 = toRad(lat1);
+  const phi2 = toRad(lat2);
+  const dLon = toRad(lon2 - lon1);
+  const y = Math.sin(dLon) * Math.cos(phi2);
+  const x =
+    Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);
+  const theta = Math.atan2(y, x);
+  return ((theta * 180) / Math.PI + 360) % 360;
+}
+
 // Rule-based route-deviation classifier (11_ROUTE_COMPARISON.md Part D),
 // shared by SupDeliveries.jsx and DriverDeliveries.jsx -- both build an
 // identical `routeDeviation` shape from the same suggested_route/gps_logs
@@ -332,22 +349,48 @@ export async function fetchRerouteEvents(deliveryRequestId) {
   return data || [];
 }
 
-// Nearest-from-Pickup ordering for dropoff-type candidates (02B_MULTI_
-// STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering", changed 2026-09-15
-// per explicit user request from a chained greedy walk -- each pick used to
-// become the reference point for the next one -- to a single fixed-reference
-// sort: every candidate's distance is measured from `referencePos` (Pickup)
-// directly, never from a previously-picked candidate or (for the live in-
-// trip case) the driver's current position. Each candidate is
-// `{ location, coords }`; `coords` may be null for a candidate whose address
-// doesn't resolve to a coordinate pair -- such a candidate can't be ranked by
-// distance, so it sorts after every coordinate-bearing candidate, keeping its
-// original relative position among other un-rankable ones (stable sort).
+// Angular-sweep-from-Pickup ordering for dropoff-type candidates (02B_MULTI_
+// STOP_DELIVERIES.md's "Dynamic Nearest-Dropoff Ordering"). Still a single
+// fixed-reference sort -- every candidate is ranked only against
+// `referencePos` (Pickup) directly, never against a previously-picked
+// candidate or (for the live in-trip case) the driver's current position, so
+// removing/adding one candidate never reshuffles the relative order of the
+// others, same property the distance-only version (2026-09-15-2026-09-25)
+// had. Changed 2026-09-25 per explicit user request from ranking purely by
+// distance from Pickup (which ignores direction entirely, so a stop
+// due-north and a stop due-south of Pickup can rank as "equally close" and
+// end up adjacent in the order despite being on opposite sides of the route
+// -- confirmed as the cause of DR-0082's zig-zag symptom) to ranking by
+// compass bearing from Pickup instead, sweeping around the reference point
+// in one direction so stops roughly along the same line from Pickup are
+// visited together, in order. Distance from Pickup is kept only as a
+// same-bearing tiebreaker. Each candidate is `{ location, coords }`; `coords`
+// may be null for a candidate whose address doesn't resolve to a coordinate
+// pair -- such a candidate can't be ranked by bearing/distance, so it sorts
+// after every coordinate-bearing candidate, keeping its original relative
+// position among other un-rankable ones (stable sort).
 export function nearestDropoffOrder(referencePos, candidates) {
   if (!referencePos) return [...candidates];
   return [...candidates]
     .map((candidate, i) => ({ candidate, i }))
     .sort((a, b) => {
+      const ba = a.candidate.coords
+        ? bearingDegrees(
+            referencePos.lat,
+            referencePos.lng,
+            a.candidate.coords.lat,
+            a.candidate.coords.lng,
+          )
+        : Infinity;
+      const bb = b.candidate.coords
+        ? bearingDegrees(
+            referencePos.lat,
+            referencePos.lng,
+            b.candidate.coords.lat,
+            b.candidate.coords.lng,
+          )
+        : Infinity;
+      if (ba !== bb) return ba - bb;
       const da = a.candidate.coords
         ? distanceMeters(
             referencePos.lat,
@@ -365,7 +408,7 @@ export function nearestDropoffOrder(referencePos, candidates) {
           )
         : Infinity;
       // Tie-break on original index so two un-rankable (or exactly
-      // equidistant) candidates never swap -- Array.prototype.sort's
+      // same bearing+distance) candidates never swap -- Array.prototype.sort's
       // stability alone isn't guaranteed across every JS engine.
       return da !== db ? da - db : a.i - b.i;
     })

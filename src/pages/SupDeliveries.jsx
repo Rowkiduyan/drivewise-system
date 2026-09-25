@@ -2531,9 +2531,20 @@ function LocationSwitcher({ request, suggestedRoute }) {
       badgeText: "text-amber-700",
       label: `Drop-off ${index + 2}`,
       address: stop.location,
+      // Prefers the matched route leg's own endpoint (wherever
+      // DirectionsService actually geocoded/routed this stop to) over the
+      // independent Photon geocode -- Photon and Google can disagree by
+      // kilometers on an ambiguous address (a Plus Code, especially), and
+      // the focus button's whole point is to zoom to where the *drawn
+      // route* actually is, not to a separately-resolved coordinate that
+      // may sit nowhere near it. Confirmed live on DR-0082: Drop-off 6's
+      // Photon geocode landed ~3.85km from the route's real endpoint,
+      // making the focus button zoom to empty streets with no visible
+      // route. `parseCoords` stays first since that's the address text
+      // literally being a "lat, lng" pair the customer/admin entered, not
+      // a geocoder guess -- no ambiguity to prefer the route over.
       coords:
         parseCoords(stop.location) ||
-        resolvedStopCoords[stop.location] ||
         (stopLegByIndex[index]
           ? {
               lat: stopLegByIndex[index].path[
@@ -2543,7 +2554,8 @@ function LocationSwitcher({ request, suggestedRoute }) {
                 stopLegByIndex[index].path.length - 1
               ][1],
             }
-          : null),
+          : null) ||
+        resolvedStopCoords[stop.location],
     })),
   ];
 
@@ -8867,12 +8879,11 @@ function SupDeliveries() {
           {activeModule === "inbox" && (
             <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.55fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_2fr_0.55fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                   <span className="text-center">Status</span>
                   <span className="text-center">Request ID</span>
                   <span className="text-left">Customer</span>
                   <span className="text-left">Pick-up</span>
-                  <span className="text-left">Drop-off</span>
                   <span className="text-center">Product Type</span>
                   <span></span>
                 </div>
@@ -8890,7 +8901,7 @@ function SupDeliveries() {
                     <article
                       key={row.id}
                       onClick={() => openDetails(row)}
-                      className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.55fr_0.3fr] lg:items-center"
+                      className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_2fr_0.55fr_0.3fr] lg:items-center"
                     >
                       <div className="flex justify-center">
                         <StatusBadge
@@ -8917,15 +8928,9 @@ function SupDeliveries() {
                             </span>
                           )}
                         </p>
-                        <p className="truncate text-xs text-slate-500">
-                          {row.companyName}
-                        </p>
                       </div>
                       <p className="text-sm text-slate-700 line-clamp-2">
                         <ResolvedText value={row.pickupAddress} />
-                      </p>
-                      <p className="text-sm text-slate-700 line-clamp-2">
-                        <ResolvedText value={row.deliveryAddress} />
                       </p>
                       <p className="text-sm font-medium text-slate-800 text-center">
                         {row.itemType}
@@ -9002,9 +9007,6 @@ function SupDeliveries() {
                               Specialized Crew
                             </span>
                           )}
-                        </p>
-                        <p className="truncate text-xs text-slate-500">
-                          {row.companyName}
                         </p>
                       </div>
                       <p className="text-sm text-slate-700 line-clamp-2">
