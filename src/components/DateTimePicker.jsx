@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Calendar, ChevronLeft, ChevronRight, Clock } from "lucide-react";
+import { Calendar, ChevronDown, ChevronLeft, ChevronRight, Clock } from "lucide-react";
 import { manilaTodayISO } from "../lib/manilaTime.js";
 
 // Uniform date/time pickers (2026-09-26): every native <input type="date|time|month">
@@ -192,6 +192,8 @@ export function DatePicker({
   className,
   allowClear = false,
   disallowPast = false,
+  showYearSelector = false,
+  disabledDays = [],
 }) {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
@@ -237,6 +239,107 @@ export function DatePicker({
     close();
   };
 
+  const years = useMemo(() => {
+    const now = new Date().getFullYear()
+    return Array.from({ length: 110 }, (_, i) => now - i)
+  }, [])
+
+  const yearRef = useRef(null)
+  const [showYearDropdown, setShowYearDropdown] = useState(false)
+
+  const renderYearSelector = (
+    <div className="relative" ref={yearRef}>
+      <button
+        type="button"
+        aria-label="Select year"
+        aria-haspopup="listbox"
+        aria-expanded={showYearDropdown}
+        onMouseDown={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setShowYearDropdown((v) => !v)
+        }}
+        className="text-sm font-semibold text-slate-800 bg-slate-100 border border-slate-200 rounded-lg px-2 py-1 outline-none cursor-pointer hover:bg-slate-200 transition flex items-center gap-1"
+      >
+        {view.year}
+        <ChevronDown className="h-3 w-3 text-slate-500" />
+      </button>
+      {showYearDropdown && (
+        <div
+          role="listbox"
+          aria-label="Choose a year"
+          className="absolute bottom-full left-0 mb-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-2xl ring-1 ring-black/5 w-24 z-50"
+        >
+          <div className="max-h-56 overflow-y-auto">
+            {years.map((y) => {
+              const isSelected = y === view.year
+              return (
+                <button
+                  key={y}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => {
+                    setView((v) => ({ ...v, year: y }))
+                    setShowYearDropdown(false)
+                  }}
+                  className={`w-full text-left rounded-lg px-3 py-1.5 text-sm transition ${
+                    isSelected
+                      ? 'bg-emerald-600 font-semibold text-white shadow-sm shadow-emerald-600/30'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {y}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
+  const renderYearLabel = (
+    <span className="text-sm font-semibold text-slate-800">
+      {MONTH_NAMES[view.month]} {view.year}
+    </span>
+  )
+
+  const header = (
+    <div className="mb-1 flex items-center justify-between">
+      <IconHeaderButton
+        label="Previous month"
+        disabled={!canGoPrev}
+        onClick={() =>
+          setView(({ year, month }) =>
+            month === 0 ? { year: year - 1, month: 11 } : { year, month: month - 1 },
+          )
+        }
+      >
+        <ChevronLeft className="h-4 w-4" />
+      </IconHeaderButton>
+      {showYearSelector ? (
+        <>
+          {renderYearSelector}
+          <span className="mx-1 text-sm text-slate-400">{MONTH_NAMES[view.month]}</span>
+        </>
+      ) : (
+        renderYearLabel
+      )}
+      <IconHeaderButton
+        label="Next month"
+        disabled={!canGoNext}
+        onClick={() =>
+          setView(({ year, month }) =>
+            month === 11 ? { year: year + 1, month: 0 } : { year, month: month + 1 },
+          )
+        }
+      >
+        <ChevronRight className="h-4 w-4" />
+      </IconHeaderButton>
+    </div>
+  )
+
   return (
     <>
       <PickerTrigger
@@ -262,33 +365,7 @@ export function DatePicker({
             style={{ top: pos.top, left: pos.left, width: 304 }}
             className={POPOVER_SHELL}
           >
-            <div className="mb-1 flex items-center justify-between">
-              <IconHeaderButton
-                label="Previous month"
-                disabled={!canGoPrev}
-                onClick={() =>
-                  setView(({ year, month }) =>
-                    month === 0 ? { year: year - 1, month: 11 } : { year, month: month - 1 },
-                  )
-                }
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </IconHeaderButton>
-              <span className="text-sm font-semibold text-slate-800">
-                {MONTH_NAMES[view.month]} {view.year}
-              </span>
-              <IconHeaderButton
-                label="Next month"
-                disabled={!canGoNext}
-                onClick={() =>
-                  setView(({ year, month }) =>
-                    month === 11 ? { year: year + 1, month: 0 } : { year, month: month + 1 },
-                  )
-                }
-              >
-                <ChevronRight className="h-4 w-4" />
-              </IconHeaderButton>
-            </div>
+            {header}
             <div className="mb-1 grid grid-cols-7 gap-1 px-0.5">
               {WEEKDAYS.map((day) => (
                 <div
@@ -304,7 +381,7 @@ export function DatePicker({
                 if (day === null) return <div key={`blank-${index}`} />;
                 const iso = `${view.year}-${pad(view.month + 1)}-${pad(day)}`;
                 const outOfRange =
-                  (effectiveMin && iso < effectiveMin) || (max && iso > max);
+                  (effectiveMin && iso < effectiveMin) || (max && iso > max) || disabledDays.includes(iso);
                 const isSelected = iso === value;
                 const isToday = iso === today;
                 return (

@@ -173,15 +173,15 @@ export function getMinDeliveryDate() {
   return `${date.getUTCFullYear()}-${mm}-${dd}`;
 }
 
-// Pickup Time is a customer-selected window (start + end), not a single
-// instant -- returns an error if the end isn't strictly after the start.
 // Pickup/dropoff windows (and each stop's own window) are informational
 // only -- "Open from -- to --" labels describing when someone will be there,
 // not a scheduling constraint this form enforces (explicit user decision,
 // 2026-09-15: a customer can enter any times/order here; the window never
-// blocks submission). Drop-off date is the one exception below: delivering
-// before the pickup that collects the goods isn't just an unusual window,
-// it's physically impossible, so that ordering is still checked.
+// blocks submission). Two exceptions, both checked below rather than here:
+// the drop-off DATE can't be before the pick-up date, and on a same-day
+// delivery the drop-off window can't start before the pick-up window ends
+// (getDropoffTimeError) -- delivering before the goods are collected isn't
+// just an unusual window, it's physically impossible.
 //
 // deliveryMode is no longer a param here (2026-08-30 follow-up) -- it used
 // to be an explicit customer toggle needing its own date-relationship
@@ -193,6 +193,45 @@ export function getDropoffDateError({ pickupDate, dropoffDate }) {
     return "Drop-off date cannot be before the pick up date.";
   }
   return "";
+}
+
+// "16:30" -> "4:30 PM" -- only used to put a human-readable clock time in an
+// error message (the pickers themselves store 24-hour "HH:MM").
+function formatClockLabel(hhmm) {
+  const [h, m] = String(hhmm).split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return hhmm;
+  const suffix = h >= 12 ? "PM" : "AM";
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${String(m).padStart(2, "0")} ${suffix}`;
+}
+
+// A delivery can't drop the goods off before it picked them up. On a
+// two-day delivery (dropoff date after pickup date) the clock times say
+// nothing about each other, so this only applies when both dates are the
+// same (the SAME_DAY mode). The drop-off window must start at or after the
+// pick-up window ENDS -- i.e. the crew has finished collecting the goods.
+//
+// Deliberately narrower than the check this replaces: window ORDER inside
+// each window (end before start) is still not enforced anywhere (explicit
+// user decision 2026-09-15 -- the windows are informational), only this
+// cross-window "drop-off before pick-up" ordering, which is physically
+// impossible rather than merely unusual.
+export function getDropoffTimeError({
+  pickupDate,
+  dropoffDate,
+  pickupTime,
+  pickupTimeEnd,
+  dropoffTime,
+}) {
+  if (!pickupDate || !dropoffDate || pickupDate !== dropoffDate) return "";
+  if (!pickupTime || !dropoffTime) return "";
+  // Pick-up isn't finished until the later of its two window ends, so a
+  // mis-ordered window (end before start -- allowed elsewhere) can't let an
+  // obviously-too-early drop-off slip through.
+  const pickupDone =
+    pickupTimeEnd && pickupTimeEnd > pickupTime ? pickupTimeEnd : pickupTime;
+  if (dropoffTime >= pickupDone) return "";
+  return `Drop-off cannot start before pick up finishes — pick up ends at ${formatClockLabel(pickupDone)}.`;
 }
 
 // A budget range only makes sense as a floor-to-ceiling span the supervisor can negotiate within.

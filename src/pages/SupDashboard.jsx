@@ -925,7 +925,7 @@ function StatusRow({ title, total, unitLabel, segments }) {
 
 function LiveFleet({ trucks, crew }) {
   const truckTotal = trucks.available + trucks.onDelivery + trucks.maintenance + trucks.offline;
-  const crewTotal = crew.available + crew.onDelivery + crew.offDuty;
+  const crewTotal = crew.availableDrivers + crew.availableHelpers + crew.onDelivery + crew.offDuty;
   const truckSegments = [
     { label: "Available", value: trucks.available, tone: "emerald" },
     { label: "On Delivery", value: trucks.onDelivery, tone: "sky" },
@@ -933,7 +933,8 @@ function LiveFleet({ trucks, crew }) {
     { label: "Offline", value: trucks.offline, tone: "red" },
   ];
   const crewSegments = [
-    { label: "Available", value: crew.available, tone: "emerald" },
+    { label: "Drivers Avail", value: crew.availableDrivers, tone: "emerald" },
+    { label: "Helpers Avail", value: crew.availableHelpers, tone: "emerald" },
     { label: "On Delivery", value: crew.onDelivery, tone: "sky" },
     { label: "Off Duty", value: crew.offDuty, tone: "slate" },
   ];
@@ -1830,10 +1831,11 @@ function SupDashboard() {
     (acc, member) => {
       if (member.deactivated_at) acc.offDuty += 1;
       else if (member.record_id && crewBusyRecordIds.has(member.record_id)) acc.onDelivery += 1;
-      else acc.available += 1;
+      else if (member.role === "Driver") acc.availableDrivers += 1;
+      else acc.availableHelpers += 1;
       return acc;
     },
-    { available: 0, onDelivery: 0, offDuty: 0 },
+    { availableDrivers: 0, availableHelpers: 0, onDelivery: 0, offDuty: 0 },
   );
 
   const recentActivity = [

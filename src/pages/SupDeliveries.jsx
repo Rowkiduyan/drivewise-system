@@ -5546,14 +5546,8 @@ function SupDeliveries() {
   const selectedDriver = fleet.drivers.find(
     (d) => d.id === assignment.driverId,
   );
-  const selectedTruck = fleet.trucks.find(
-    (t) => t.plateNumber === assignment.plateNumber,
-  );
   const selectedHelpers = fleet.helpers.filter((h) =>
     assignment.helperIds.includes(h.id),
-  );
-  const canConfirmAssignment = Boolean(
-    selectedDriver && selectedTruck && selectedHelpers.length > 0,
   );
   const isInTransitStatus = [
     "OUT_FOR_PICKUP",
@@ -5618,11 +5612,30 @@ function SupDeliveries() {
   );
   // Trucks matching the customer's requested type only, most relevant first:
   // trucks whose current driver is available on the delivery date before
-  // trucks that would need a driver swap.
+  // trucks that would need a driver swap. When the customer requires
+  // specialized crew, only show trucks whose assigned crew meets the
+  // specialty requirement.
+  const truckMeetsSpecialty = useCallback(
+    (t) => {
+      if (!requiresSpecializedCrew) return true;
+      const crew = getCrewForPlate(t.plateNumber);
+      if (!crew) return false;
+      const driver = fleet.drivers.find((d) => d.id === crew.driverId);
+      if (!driver || !crewMeetsSpecialty(driver)) return false;
+      const helperIds = (crew.helperIds || []).map((id) =>
+        fleet.helpers.find((h) => h.id === id),
+      );
+      return helperIds.every((h) => h && crewMeetsSpecialty(h));
+    },
+    [requiresSpecializedCrew, getCrewForPlate, fleet, crewMeetsSpecialty],
+  );
   const matchingTrucks = useMemo(() => {
     const wanted = normalizeTruckType(selectedRequest?.truckType);
     return fleet.trucks
-      .filter((t) => normalizeTruckType(t.truckType) === wanted)
+      .filter(
+        (t) =>
+          normalizeTruckType(t.truckType) === wanted && truckMeetsSpecialty(t),
+      )
       .sort((a, b) => {
         const aOk = getCrewForPlate(a.plateNumber)?.driverId
           ? crewAvailableOnDate(
@@ -5641,7 +5654,26 @@ function SupDeliveries() {
         if (aOk === bOk) return 0;
         return aOk ? -1 : 1;
       });
-  }, [fleet, selectedRequest?.truckType, getCrewForPlate, crewAvailableOnDate]);
+  }, [
+    fleet,
+    selectedRequest?.truckType,
+    getCrewForPlate,
+    crewAvailableOnDate,
+    truckMeetsSpecialty,
+  ]);
+  // The truck field shows the request's saved truck after a refresh, but
+  // never one whose crew fails the client's specialty requirement — that
+  // plate is hidden so the Supervisor must pick a valid truck instead.
+  const selectedTruck = useMemo(() => {
+    if (!assignment.plateNumber) return undefined;
+    const t = fleet.trucks.find(
+      (x) => x.plateNumber === assignment.plateNumber,
+    );
+    return t && truckMeetsSpecialty(t) ? t : undefined;
+  }, [assignment.plateNumber, fleet.trucks, truckMeetsSpecialty]);
+  const canConfirmAssignment = Boolean(
+    selectedDriver && selectedTruck && selectedHelpers.length > 0,
+  );
   const eligibleDrivers = useMemo(
     () => fleet.drivers.filter(crewMeetsSpecialty),
     [fleet.drivers, crewMeetsSpecialty],
@@ -5787,6 +5819,10 @@ function SupDeliveries() {
         request.quotation?.breakdown?.indirectExpenses ||
         buildQuotationDefaults(request, quotationRules).indirectExpenses,
     });
+    // Restore the saved assignment so a confirmed trip still shows its
+    // truck/driver/helpers after a refresh. The truck only displays if
+    // it passes matchingTrucks (requested type + specialty) — see
+    // selectedTruck below — so an invalid saved truck stays hidden.
     setAssignment({
       driverId: request.crew?.driver?.id || "",
       helperIds: request.crew?.helpers?.map((h) => h.id) || [],
@@ -7823,6 +7859,20 @@ function SupDeliveries() {
                             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                               Available Vehicles
                             </p>
+                            {requiresSpecializedCrew && (
+                              <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
+                                <p className="font-semibold">
+                                  Specialized crew required
+                                </p>
+                                <p className="mt-0.5">
+                                  Only {selectedRequest.truckType} trucks with
+                                  drivers and helpers specialized for{" "}
+                                  {selectedRequest.customerName} are shown.{" "}
+                                  General-use trucks without the required
+                                  specialization are excluded.
+                                </p>
+                              </div>
+                            )}
                             <div className="relative">
                               <button
                                 type="button"
@@ -7974,8 +8024,9 @@ function SupDeliveries() {
                                   {!fleetLoading &&
                                     matchingTrucks.length === 0 && (
                                       <p className="border-t border-slate-100 px-3 py-2 text-xs font-medium text-amber-600">
-                                        No truck matches the requested type (
-                                        {selectedRequest.truckType}).
+                                        {requiresSpecializedCrew
+                                          ? `No ${selectedRequest.truckType} trucks with specialized crew available for this client.`
+                                          : `No truck matches the requested type (${selectedRequest.truckType}).`}
                                       </p>
                                     )}
                                 </div>
@@ -7989,6 +8040,11 @@ function SupDeliveries() {
                               <span className="ml-1 font-normal normal-case text-slate-400">
                                 (current driver for vehicle — change if needed)
                               </span>
+                              {requiresSpecializedCrew && (
+                                <span className="ml-2 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-semibold text-indigo-700">
+                                  Specialized only
+                                </span>
+                              )}
                             </p>
                             <div className="relative">
                               <button
@@ -8177,6 +8233,11 @@ function SupDeliveries() {
                               <span className="ml-1 font-normal normal-case text-slate-400">
                                 (current helpers for vehicle — change if needed)
                               </span>
+                              {requiresSpecializedCrew && (
+                                <span className="ml-2 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-semibold text-indigo-700">
+                                  Specialized only
+                                </span>
+                              )}
                             </p>
                             <div className="relative">
                               <button

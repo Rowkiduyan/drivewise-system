@@ -31,6 +31,7 @@ import {
   MIN_SCHEDULING_DAYS,
   getMinDeliveryDate,
   getDropoffDateError,
+  getDropoffTimeError,
   getBudgetError,
   MIN_BUDGET_AMOUNT,
 } from "../lib/deliveryOptions.js";
@@ -50,6 +51,7 @@ import {
   snapToLuzon,
 } from "../lib/serviceArea.js";
 import { weekdayOfDate } from "../lib/workingDays.js";
+import { CREW_ACTIVE_STATUSES } from "../lib/crewStatus.js";
 import { manilaTodayISO, getManilaFields } from "../lib/manilaTime.js";
 import { supabase } from "../lib/supabaseClient.js";
 
@@ -854,6 +856,9 @@ function CustomerRequestDelivery() {
   const { isLoaded: mapsApiLoaded } = useJsApiLoader(GOOGLE_MAPS_LOADER_OPTIONS);
   const [dateError, setDateError] = useState("");
   const [dropoffDateError, setDropoffDateError] = useState("");
+  // Same-day only: the drop-off window starting before the pick-up window
+  // ends (see getDropoffTimeError). Shown under the Drop-off time fields.
+  const [dropoffTimeError, setDropoffTimeError] = useState("");
   const [budgetError, setBudgetError] = useState("");
   const [truckSelectionError, setTruckSelectionError] = useState("");
   const [submitError, setSubmitError] = useState("");
@@ -894,6 +899,9 @@ function CustomerRequestDelivery() {
   // no specialized crew coverage, so booking stays unrestricted.
   const [specializedAvailableDays, setSpecializedAvailableDays] =
     useState(null);
+  const [blockedDates, setBlockedDates] = useState([]);
+  const [bookedTruckTypes, setBookedTruckTypes] = useState([]);
+  const [truckTypeBlocked, setTruckTypeBlocked] = useState(false);
   const minDeliveryDate = getMinDeliveryDate();
 
   useEffect(() => {
@@ -902,17 +910,50 @@ function CustomerRequestDelivery() {
     supabase.rpc("specialized_crew_available_days").then(({ data, error }) => {
       if (!isCurrent) return;
       if (error) {
-        // Fail open -- a broken lookup shouldn't block booking entirely.
         setSpecializedAvailableDays(null);
         return;
       }
       setSpecializedAvailableDays(data || []);
     });
 
-    return () => {
-      isCurrent = false;
-    };
+    // Blocked dates = days with no crew left to take the job: fewer than one
+    // free Driver or fewer than one free Helper (working that weekday and not
+    // committed to a trip covering it), computed server-side by the
+    // crew_capacity_blocked_days() RPC — the customer has no read access to
+    // crew_availability or the *_records tables. If that RPC isn't deployed
+    // yet, fall back to the old "any active booking's pickup date" rule so we
+    // never fail open into letting someone book a fully-committed day.
+    (async () => {
+      const { data, error } = await supabase.rpc("crew_capacity_blocked_days", {
+        p_horizon_days: 365,
+      });
+      if (!isCurrent) return;
+      if (!error) {
+        setBlockedDates(data || []);
+        return;
+      }
+      const { data: rows, error: fallbackError } = await supabase
+        .from("delivery_requests")
+        .select("pickup_date, assigned_driver_id, assigned_helper_ids, status")
+        .in("status", CREW_ACTIVE_STATUSES);
+      if (!isCurrent) return;
+      if (fallbackError) {
+        setBlockedDates([]);
+        return;
+      }
+      const today = manilaTodayISO();
+      const busyDates = new Set();
+      for (const d of rows || []) {
+        if (d.pickup_date && d.pickup_date >= today) {
+          busyDates.add(d.pickup_date);
+        }
+      }
+      setBlockedDates([...busyDates]);
+    })();
+
+    return () => { isCurrent = false; };
   }, []);
+
   const [formData, setFormData] = useState({
     pickupDate: "",
     pickupTime: "",
@@ -934,6 +975,38 @@ function CustomerRequestDelivery() {
     budgetMax: "",
     notes: "",
   });
+
+  // Truck type availability check — if a truck of the selected type
+  // is already booked on the pickup date, show a warning and
+  // grey out booked truck type rows in the selection table.
+  useEffect(() => {
+    let isCurrent = true;
+    (async () => {
+      if (!formData.pickupDate) {
+        if (isCurrent) { setTruckTypeBlocked(false); setBookedTruckTypes([]); }
+        return;
+      }
+      try {
+        const { data: bookings } = await supabase
+          .from("delivery_requests")
+          .select("truck_type")
+          .eq("pickup_date", formData.pickupDate)
+          .in("status", ["ASSIGNED", "OUT_FOR_PICKUP", "ARRIVED_PICKUP", "OUT_FOR_DROPOFF", "ARRIVED_DROPOFF"]);
+        if (!isCurrent) return;
+        const types = bookings ? [...new Set(bookings.map((b) => b.truck_type).filter(Boolean))] : [];
+        setBookedTruckTypes(types);
+        if (formData.truckType && types.includes(formData.truckType)) {
+          if (isCurrent) setTruckTypeBlocked(true);
+        } else {
+          if (isCurrent) setTruckTypeBlocked(false);
+        }
+      } catch {
+        if (isCurrent) { setTruckTypeBlocked(false); setBookedTruckTypes([]); }
+      }
+    })();
+    return () => { isCurrent = false; };
+  }, [formData.truckType, formData.pickupDate]);
+
   // Past-gating (2026-09-26): time slots before "now" are greyed out, but only
   // when the field's chosen date is actually Manila-today -- a future date can
   // legitimately start at any hour. Recomputed on every render, so an
@@ -1196,11 +1269,22 @@ function CustomerRequestDelivery() {
   // next few bookable dates their crew IS available. No-op while the lookup
   // is loading or when there's no specialized crew coverage.
   const pickupDateAvailabilityError = (dateStr) => {
-    if (
-      !dateStr ||
-      !specializedAvailableDays ||
-      specializedAvailableDays.length === 0
-    )
+    if (!dateStr) return "";
+
+    // No crew left that day (fewer than one free Driver or Helper) — the same
+    // rule that greys the date out in the picker, re-checked here so a date
+    // chosen before the lookup finished can still be caught on submit.
+    if (blockedDates.includes(dateStr)) {
+      return `There is no available delivery crew on ${new Date(
+        `${dateStr}T00:00:00`,
+      ).toLocaleDateString("en-US", {
+        month: "long",
+        day: "numeric",
+        weekday: "long",
+      })}. Please choose a different pick up date.`;
+    }
+
+    if (!specializedAvailableDays || specializedAvailableDays.length === 0)
       return "";
     if (specializedAvailableDays.includes(weekdayOfDate(dateStr))) return "";
 
@@ -1279,6 +1363,16 @@ function CustomerRequestDelivery() {
 
     if (["pickupDate", "dropoffDate"].includes(name)) {
       setDropoffDateError(getDropoffDateError(next));
+    }
+
+    // Re-check the drop-off-vs-pick-up time order whenever either side of it
+    // changes (dates too, since switching to a two-day delivery drops it).
+    if (
+      ["pickupDate", "dropoffDate", "pickupTime", "pickupTimeEnd", "dropoffTime"].includes(
+        name,
+      )
+    ) {
+      setDropoffTimeError(getDropoffTimeError(next));
     }
 
     if (name === "budgetMin" || name === "budgetMax") {
@@ -1385,6 +1479,12 @@ function CustomerRequestDelivery() {
     const dropoffDateErrorMessage = getDropoffDateError(formData);
     if (dropoffDateErrorMessage) {
       setDropoffDateError(dropoffDateErrorMessage);
+      return;
+    }
+
+    const dropoffTimeErrorMessage = getDropoffTimeError(formData);
+    if (dropoffTimeErrorMessage) {
+      setDropoffTimeError(dropoffTimeErrorMessage);
       return;
     }
 
@@ -1718,6 +1818,7 @@ function CustomerRequestDelivery() {
                     }
                     min={minDeliveryDate}
                     disallowPast
+                    disabledDays={blockedDates}
                     required
                     className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
                       dateError
@@ -1777,6 +1878,7 @@ function CustomerRequestDelivery() {
                     }
                     min={formData.pickupDate || minDeliveryDate}
                     disallowPast
+                    disabledDays={blockedDates}
                     required
                     className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
                       dropoffDateError
@@ -1846,52 +1948,73 @@ function CustomerRequestDelivery() {
                       </div>
                     ) : (
                       <div className="flex items-end gap-2">
-                        <div className="min-w-0 flex-1 space-y-2">
-                          <label
-                            htmlFor="dropoffTime"
-                            className="text-sm font-medium text-slate-700"
-                          >
-                            From:
-                          </label>
-                          <TimePicker
-                            id="dropoffTime"
-                            name="dropoffTime"
-                            ariaLabel="Drop-off Window Start"
-                            value={formData.dropoffTime}
-                            onChange={(v) =>
-                              handleChange({ target: { name: "dropoffTime", value: v } })
-                            }
-                            minTime={dropoffTimeMin}
-                            required
-                            className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                          />
-                        </div>
-                        <div className="min-w-0 flex-1 space-y-2">
-                          <label
-                            htmlFor="dropoffTimeEnd"
-                            className="text-sm font-medium text-slate-700"
-                          >
-                            To:
-                          </label>
-                          <TimePicker
-                            id="dropoffTimeEnd"
-                            name="dropoffTimeEnd"
-                            ariaLabel="Drop-off Window End"
-                            value={formData.dropoffTimeEnd}
-                            onChange={(v) =>
-                              handleChange({
-                                target: { name: "dropoffTimeEnd", value: v },
-                              })
-                            }
-                            minTime={dropoffTimeMin}
-                            required
-                            className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                          />
-                        </div>
+                          <div className="min-w-0 flex-1 space-y-2">
+                            <label
+                              htmlFor="dropoffTime"
+                              className="text-sm font-medium text-slate-700"
+                            >
+                              From:
+                            </label>
+                            <TimePicker
+                              id="dropoffTime"
+                              name="dropoffTime"
+                              ariaLabel="Drop-off Window Start"
+                              value={formData.dropoffTime}
+                              onChange={(v) =>
+                                handleChange({ target: { name: "dropoffTime", value: v } })
+                              }
+                              minTime={dropoffTimeMin}
+                              required
+                              className={`w-full rounded-xl border bg-white px-3 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
+                                dropoffTimeError
+                                  ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                                  : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
+                              }`}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1 space-y-2">
+                            <label
+                              htmlFor="dropoffTimeEnd"
+                              className="text-sm font-medium text-slate-700"
+                            >
+                              To:
+                            </label>
+                            <TimePicker
+                              id="dropoffTimeEnd"
+                              name="dropoffTimeEnd"
+                              ariaLabel="Drop-off Window End"
+                              value={formData.dropoffTimeEnd}
+                              onChange={(v) =>
+                                handleChange({
+                                  target: { name: "dropoffTimeEnd", value: v },
+                                })
+                              }
+                              minTime={dropoffTimeMin}
+                              required
+                              className={`w-full rounded-xl border bg-white px-3 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 ${
+                                dropoffTimeError
+                                  ? "border-red-300 focus:border-red-500 focus:ring-red-500/20"
+                                  : "border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500/20"
+                              }`}
+                            />
+                          </div>
                       </div>
                     )}
                   </div>
                 </div>
+                {/* Sits outside the items-end flex row above on purpose: an
+                    error inside that row would make the From/To group taller
+                    and slide the time fields upward with it. The empty
+                    flex-[3] spacer mirrors the Drop-off 1 column so the
+                    message lines up under the From/To fields instead. */}
+                {dropoffTimeError && (
+                  <div className="flex flex-wrap gap-3">
+                    <div className="min-w-[220px] flex-[3]" aria-hidden="true" />
+                    <p className="min-w-[220px] flex-[2] text-xs text-red-600">
+                      {dropoffTimeError}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {formData.stops.length > 0 && (
@@ -2129,6 +2252,17 @@ function CustomerRequestDelivery() {
                 </p>
               ) : (
                 <>
+                  {truckTypeBlocked && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 mb-3">
+                      <p className="font-semibold">
+                        All trucks of this type are already booked for the
+                        selected pickup date.
+                      </p>
+                      <p className="mt-0.5 text-xs text-amber-700">
+                        Please choose a different date or truck type.
+                      </p>
+                    </div>
+                  )}
                   <div className="overflow-x-auto rounded-xl border border-emerald-200/70">
                     <table className="w-full min-w-[720px] text-left text-sm">
                       <thead>
@@ -2150,6 +2284,8 @@ function CustomerRequestDelivery() {
                           const isRecommended =
                             recommendedTruckValue === truck.value;
 
+                          const isBooked = bookedTruckTypes.includes(truck.value);
+
                           return (
                             <tr
                               key={truck.value}
@@ -2159,7 +2295,9 @@ function CustomerRequestDelivery() {
                                   ? "bg-emerald-50"
                                   : isRecommended
                                     ? "bg-emerald-50/40 hover:bg-emerald-50"
-                                    : "bg-white hover:bg-emerald-50/50"
+                                    : isBooked
+                                      ? "bg-slate-100 opacity-60 cursor-not-allowed"
+                                      : "bg-white hover:bg-emerald-50/50"
                               }`}
                             >
                               <td className="px-4 py-3 align-top">
@@ -2176,12 +2314,17 @@ function CustomerRequestDelivery() {
                                 <p className="mt-0.5 max-w-xs text-xs text-slate-500 leading-relaxed">
                                   {truck.description}
                                 </p>
-                                {!available && (
-                                  <p className="mt-1 text-[11px] font-medium text-amber-600">
-                                    {reason}
-                                  </p>
-                                )}
-                              </td>
+{!available && (
+                                    <p className="mt-1 text-[11px] font-medium text-amber-600">
+                                      {reason}
+                                    </p>
+                                  )}
+                                  {isBooked && (
+                                    <p className="mt-1 text-[11px] font-medium text-amber-700">
+                                      Booked for this pickup date
+                                    </p>
+                                  )}
+                                </td>
                               <td className="px-4 py-3 align-top">
                                 <span
                                   className={`inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
