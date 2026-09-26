@@ -9550,14 +9550,9 @@ function SupDeliveries() {
                           <p className="text-sm font-semibold text-slate-900 text-center">
                             {delivery.id}
                           </p>
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">
-                              {delivery.customerName}
-                            </p>
-                            <p className="text-xs text-slate-500">
-                              {delivery.companyName}
-                            </p>
-                          </div>
+                          <p className="text-sm font-semibold text-slate-900">
+                            {delivery.customerName}
+                          </p>
                           <p className="text-sm text-slate-700 line-clamp-2">
                             <ResolvedText value={delivery.pickupAddress} />
                           </p>
@@ -9653,14 +9648,9 @@ function SupDeliveries() {
                           <p className="text-sm font-semibold text-slate-900 text-center">
                             {delivery.id}
                           </p>
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">
-                              {delivery.customerName}
-                            </p>
-                            <p className="text-xs text-slate-500">
-                              {delivery.companyName}
-                            </p>
-                          </div>
+                          <p className="text-sm font-semibold text-slate-900">
+                            {delivery.customerName}
+                          </p>
                           <p className="text-sm text-slate-700 line-clamp-2">
                             <ResolvedText value={delivery.pickupAddress} />
                           </p>
