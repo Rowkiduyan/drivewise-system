@@ -4727,12 +4727,13 @@ function SupDeliveries() {
   const [searchParams] = useSearchParams();
   useEffect(() => {
     const deliveryId = searchParams.get("deliveryId");
-    if (!deliveryId) return;
+    const tab = searchParams.get("tab");
+    if (!deliveryId && tab !== "transit") return;
     // Reacting to an external source (the URL), same as this file's own
     // loadInbox effect below.
     Promise.resolve().then(() => {
       setActiveModule("transit");
-      setMonitoredDeliveryId(deliveryId);
+      if (deliveryId) setMonitoredDeliveryId(deliveryId);
     });
   }, [searchParams]);
   const [search, setSearch] = useState("");
@@ -9031,12 +9032,11 @@ function SupDeliveries() {
           {activeModule === "assignment" && (
             <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_0.6fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                   <span className="text-center">Status</span>
                   <span className="text-center">Request ID</span>
                   <span className="text-left">Customer</span>
                   <span className="text-left">Pick-up</span>
-                  <span className="text-left">Drop-off</span>
                   <span className="text-center">Quotation Amount</span>
                   <span></span>
                 </div>
@@ -9058,7 +9058,7 @@ function SupDeliveries() {
                     <article
                       key={row.id}
                       onClick={() => openDetails(row)}
-                      className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_1.5fr_0.6fr_0.3fr] lg:items-center"
+                      className="grid cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50 [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.5fr_0.6fr_0.3fr] lg:items-center"
                     >
                       <div className="flex justify-center">
                         <StatusBadge
@@ -9088,9 +9088,6 @@ function SupDeliveries() {
                       </div>
                       <p className="text-sm text-slate-700 line-clamp-2">
                         <ResolvedText value={row.pickupAddress} />
-                      </p>
-                      <p className="text-sm text-slate-700 line-clamp-2">
-                        <ResolvedText value={row.deliveryAddress} />
                       </p>
                       <p className="text-sm font-semibold text-emerald-700 text-center">
                         {row.quotation
@@ -9521,12 +9518,11 @@ function SupDeliveries() {
               ) : (
                 <>
                   <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.8fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                    <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_0.8fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                       <span className="text-center">Status</span>
                       <span className="text-center">Request ID</span>
                       <span className="text-left">Customer</span>
                       <span className="text-left">Pick-up</span>
-                      <span className="text-left">Drop-off</span>
                       <span className="text-left">Crew</span>
                       <span></span>
                     </div>
@@ -9548,7 +9544,7 @@ function SupDeliveries() {
                         <article
                           key={delivery.id}
                           onClick={() => setSelectedReportId(delivery.id)}
-                          className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.8fr_0.3fr] lg:items-center hover:bg-slate-50"
+                          className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_0.8fr_0.3fr] lg:items-center hover:bg-slate-50"
                         >
                           <div className="flex justify-center">
                             <span className="inline-flex max-w-full rounded-full bg-emerald-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-emerald-700 xl:text-[11px]">
@@ -9568,9 +9564,6 @@ function SupDeliveries() {
                           </div>
                           <p className="text-sm text-slate-700 line-clamp-2">
                             <ResolvedText value={delivery.pickupAddress} />
-                          </p>
-                          <p className="text-sm text-slate-700 line-clamp-2">
-                            <ResolvedText value={delivery.deliveryAddress} />
                           </p>
                           <div className="min-w-0 text-xs text-slate-500">
                             {delivery.crew?.truck && (

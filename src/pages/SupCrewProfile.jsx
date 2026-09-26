@@ -590,11 +590,21 @@ function SupCrewProfile() {
         return;
       }
 
+      // A helper can legitimately have more than one CREW_ACTIVE_STATUSES row
+      // at once (e.g. a stale ASSIGNED trip that was never started or
+      // cancelled, sitting alongside today's real one) -- found 2026-09-26,
+      // this query's own `.limit(1)` had no `.order()`, so it surfaced
+      // whichever row Postgres happened to return first rather than the
+      // actually-current one. Newest `pickup_date` first (ties broken by
+      // `assigned_at`) so the trip that's happening now/soonest wins over an
+      // old stuck one.
       const { data: trips, error } = await supabase
         .from("delivery_requests")
         .select("id, assigned_driver_id")
         .contains("assigned_helper_ids", [crew.employeeId])
         .in("status", CREW_ACTIVE_STATUSES)
+        .order("pickup_date", { ascending: false })
+        .order("assigned_at", { ascending: false })
         .limit(1);
 
       if (!isMounted || error) {

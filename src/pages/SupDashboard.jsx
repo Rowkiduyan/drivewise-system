@@ -296,6 +296,15 @@ function useFleetOps() {
   // started) even though the truck hasn't rolled yet.
   const [crewActiveDeliveries, setCrewActiveDeliveries] = useState([]);
   const [recentAlerts, setRecentAlerts] = useState([]);
+  // Backs the Recent Activity panel -- unfiltered (unlike `deliveries`
+  // above, which is scoped to IN_PROGRESS_STATUSES) since a delivered/
+  // cancelled/newly-requested row is exactly what that panel wants to show
+  // and none of those statuses are in that list.
+  const [recentRequests, setRecentRequests] = useState([]);
+  // Raw maintenance_records rows (not just the baseline-correction use
+  // loadRefs' own fetch already makes of them) -- also backs Recent
+  // Activity's "flagged for maintenance" rows.
+  const [maintenanceLog, setMaintenanceLog] = useState([]);
   const [pendingAssignmentsCount, setPendingAssignmentsCount] = useState(0);
   const [requestsInboxCount, setRequestsInboxCount] = useState(0);
   const [positionsByDeliveryId, setPositionsByDeliveryId] = useState({});
@@ -363,8 +372,10 @@ function useFleetOps() {
         // truck's raw previous_mileage/previous_maintenance_date columns go
         // stale as soon as a newer completed maintenance_records row exists
         // for it, and this KPI tile silently disagrees with the Trucks page
-        // (a truck just serviced still reads as Overdue here).
-        supabase.from("maintenance_records").select("truck_id, status, mileage_at_service, start_date, end_date"),
+        // (a truck just serviced still reads as Overdue here). `created_at`
+        // is also pulled now, for Recent Activity's "flagged for
+        // maintenance" rows below.
+        supabase.from("maintenance_records").select("truck_id, status, mileage_at_service, start_date, end_date, created_at"),
       ]);
       if (!isMounted) return;
       const names = {};
@@ -378,6 +389,7 @@ function useFleetOps() {
       for (const c of clientsData?.clients || []) clients[c.id] = c.name;
       setClientNameById(clients);
       setTrucks(addMaintenanceBaselines(trucksData || [], maintenanceRecords || []));
+      setMaintenanceLog(maintenanceRecords || []);
     }
     loadRefs();
     return () => {
@@ -397,6 +409,7 @@ function useFleetOps() {
       { count: pendingAssignments },
       { count: requestsInbox },
       { data: crewActiveDeliveriesData },
+      { data: recentRequestsData },
     ] = await Promise.all([
       // Explicit column list, not select('*') -- `authenticated`'s grant on
       // devices is column-scoped and deliberately excludes
@@ -418,6 +431,14 @@ function useFleetOps() {
       // crewActiveDeliveries' own state comment above for why this is a
       // separate query/status list from `deliveries`/IN_PROGRESS_STATUSES.
       supabase.from("delivery_requests").select("status, assigned_driver_id, assigned_helper_ids, pickup_date").in("status", CREW_ACTIVE_STATUSES),
+      // Backs the Recent Activity panel -- unfiltered by status (unlike
+      // `deliveries` above), newest-updated first, capped since the panel
+      // only ever shows its top few rows.
+      supabase
+        .from("delivery_requests")
+        .select("id, status, customer_auth_id, assigned_driver_id, assigned_truck_plate, assigned_at, cancelled_at, created_at, updated_at")
+        .order("updated_at", { ascending: false })
+        .limit(15),
     ]);
     setDevices(devicesData || []);
     setSessions(sessionsData || []);
@@ -425,6 +446,7 @@ function useFleetOps() {
     setPendingAssignmentsCount(pendingAssignments || 0);
     setRequestsInboxCount(requestsInbox || 0);
     setCrewActiveDeliveries(crewActiveDeliveriesData || []);
+    setRecentRequests(recentRequestsData || []);
     setIsLoading(false);
   }, []);
 
@@ -767,6 +789,10 @@ function useFleetOps() {
         truck: truck?.plate_number || session?.truck_plate || "",
         alertType: ALERT_TYPE_LABELS[a.event_type] || a.event_type,
         time: new Date(a.created_at).toLocaleTimeString("en-US", { timeZone: MANILA_TIMEZONE, hour: "2-digit", minute: "2-digit" }),
+        // Date for the "Most recent" row's own alert, shown under its time
+        // (explicit user request) -- not used anywhere else, so it's only
+        // ever surfaced via `latestDate` below.
+        date: new Date(a.created_at).toLocaleDateString("en-US", { timeZone: MANILA_TIMEZONE, month: "short", day: "numeric", year: "numeric" }),
         // Kept alongside the display-only `time` string above (which loses
         // both the date and sort order) -- DriverSafetyList's per-trip
         // expansion needs a real sortable/comparable instant to show alerts
@@ -815,13 +841,17 @@ function useFleetOps() {
     dismissCriticalAlert,
     pendingAssignmentsCount,
     requestsInboxCount,
+    recentRequests,
+    maintenanceLog,
+    clientNameById,
+    driverNameById,
   };
 }
 
 // ----- Active deliveries (live ops) -----
 function ActiveDeliveries({ data, isLoading, now, focusedTruckId, onFocusTruck }) {
   return (
-    <Panel title="Active Deliveries" action={<ViewAllLink to="/supervisor/deliveries" />}>
+    <Panel title="Active Deliveries" action={<ViewAllLink to="/supervisor/deliveries?tab=transit" />}>
       {isLoading ? (
         <div className="flex items-center gap-2 py-6 text-xs text-slate-400">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading live fleet…
@@ -1189,6 +1219,21 @@ const SEVERITY_TONE = { High: "red", Medium: "amber", Low: "emerald" };
 // history across each pause/resume boundary, which is exactly what "their
 // specific trip" (the user's own phrase from the original request) wasn't
 // supposed to mean.
+// "5m ago"/"2h ago"-style label for Recent Activity, against `now` (a live
+// clock) rather than `Date.now()` directly, so labels advance only when the
+// rest of the page's own freshness indicators do.
+function formatRelativeTime(iso, now) {
+  if (!iso) return "";
+  const diffMs = now - new Date(iso).getTime();
+  if (!Number.isFinite(diffMs) || diffMs < 60000) return "just now";
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 function groupAlertsIntoTrips(alerts) {
   const byKey = new Map();
   for (const a of alerts) {
@@ -1232,6 +1277,8 @@ function groupAlertsIntoTrips(alerts) {
       // down -- it's just no longer shown as the summary row's own badge.
       latestAlertType: alerts[0].alertType,
       latestTime: alerts[0].time,
+      latestDate: alerts[0].date,
+      latestCreatedAt: alerts[0].createdAt,
       latestSeverity: alerts[0].severity,
       severity,
     };
@@ -1485,10 +1532,15 @@ function DriverSafetyRow({ trip, isExpanded, onToggle }) {
                 explicit user request, after the header/dropdown split made
                 it worth spelling out: "add an indicator that the first row
                 is the recent alert." */}
-            <p className="text-[10px] uppercase tracking-wide text-slate-400">Most recent</p>
+            <p className="text-[10px] uppercase tracking-wide text-slate-400">Last alert</p>
           </div>
 
-          <p className="min-w-0 text-[11px] text-slate-400">{trip.latestTime}</p>
+          <div className="min-w-0">
+            <p className="text-[11px] text-slate-400">{trip.latestTime}</p>
+            {trip.latestDate && (
+              <p className="text-[10px] text-slate-300">{trip.latestDate}</p>
+            )}
+          </div>
 
           <div className="min-w-0">
             {/* The latest alert's own severity, matching the Alert
@@ -1645,8 +1697,15 @@ function DriverSafetyList({ data, isLoading }) {
   };
 
   const trips = useMemo(() => groupAlertsIntoTrips(data), [data]);
+  // Newest-alert-first (explicit user request, from a screenshot showing a
+  // trip with a same-day alert sitting below older ones) -- severity/count
+  // now only break ties between trips whose most recent alert landed in the
+  // same instant.
   const sorted = [...trips].sort(
-    (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.totalAlerts - a.totalAlerts
+    (a, b) =>
+      new Date(b.latestCreatedAt) - new Date(a.latestCreatedAt) ||
+      SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] ||
+      b.totalAlerts - a.totalAlerts
   );
   const totalPages = Math.max(1, Math.ceil(sorted.length / DRIVER_SAFETY_PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -1655,12 +1714,7 @@ function DriverSafetyList({ data, isLoading }) {
   return (
     <Panel
       title="Driver Safety — Drowsiness Alerts"
-      action={
-        <div className="flex items-center gap-2">
-          <SeverityLegend />
-          <ViewAllLink to="/supervisor/deliveries" />
-        </div>
-      }
+      action={<SeverityLegend />}
     >
       {isLoading ? (
         <div className="flex items-center gap-2 py-6 text-xs text-slate-400">
@@ -1748,6 +1802,10 @@ function SupDashboard() {
     dismissCriticalAlert,
     pendingAssignmentsCount,
     requestsInboxCount,
+    recentRequests,
+    maintenanceLog,
+    clientNameById,
+    driverNameById,
   } = useFleetOps();
   const [focusedTruckId, setFocusedTruckId] = useState(null);
   const [focusToken, setFocusToken] = useState(0);
@@ -1838,38 +1896,78 @@ function SupDashboard() {
     { availableDrivers: 0, availableHelpers: 0, onDelivery: 0, offDuty: 0 },
   );
 
-  const recentActivity = [
-    { id: 1, text: "Trip to Shaw Traders marked Delivered — TR-45", time: "5m ago", tone: "emerald" },
-    { id: 2, text: "J. Doe assigned to TR-12 for SM Supply Co.", time: "22m ago", tone: "blue" },
-    { id: 3, text: "Truck TR-27 flagged for maintenance", time: "1h ago", tone: "amber" },
-    { id: 4, text: "New delivery request from Ortigas Retail", time: "1h ago", tone: "slate" },
-    { id: 5, text: "Trip cancelled — Pasig Logistics", time: "2h ago", tone: "red" },
-  ];
+  // Real feed (mock array removed, explicit user request) -- built from the
+  // same `recentRequests`/`maintenanceLog` queries useFleetOps already runs,
+  // merged and sorted newest-first, top 5. `now` (useFleetOps' live-ticking
+  // clock) keeps the "Xm ago" labels advancing the same way the rest of the
+  // page's freshness indicators already do.
+  const recentActivity = useMemo(() => {
+    const truckPlateById = {};
+    for (const t of trucks) truckPlateById[t.id] = t.plate_number;
 
-  // ----- Historical rollup, keyed by date range (mock — out of scope). -----
-  const topRiskDriversByRange = {
-    Today: [{ name: "J. Doe", alerts: 10, risk: "High Risk" }],
-    "7 Days": [
-      { name: "J. Doe", alerts: 10, risk: "High Risk" },
-      { name: "M. Lee", alerts: 8, risk: "High Risk" },
-      { name: "A. Smith", alerts: 6, risk: "High Risk" },
-    ],
-    "30 Days": [
-      { name: "J. Doe", alerts: 30, risk: "High Risk" },
-      { name: "M. Lee", alerts: 25, risk: "High Risk" },
-      { name: "A. Smith", alerts: 22, risk: "Moderate" },
-    ],
-  };
-  // Real per-driver alert data (e.g. DR-0020's driver) layered on top of the
-  // mock rollup above, not replacing it -- same "real data if present,
-  // otherwise the existing mock" precedent used elsewhere on this page.
-  // De-duped by name (a real driver already present in the mock list keeps
-  // the mock's row rather than double-counting).
-  const mockRiskDrivers = topRiskDriversByRange[dateRange];
-  const topRiskDrivers = [
-    ...realDriverSafety.filter((real) => !mockRiskDrivers.some((mock) => mock.name === real.name)),
-    ...mockRiskDrivers,
-  ].sort((a, b) => b.alerts - a.alerts);
+    const requestEvents = recentRequests
+      .map((r) => {
+        const clientName = clientNameById[r.customer_auth_id] || "a client";
+        if (r.status === "CANCELLED") {
+          return {
+            id: `req-${r.id}-cancelled`,
+            text: `Trip cancelled — ${clientName}`,
+            at: r.cancelled_at || r.updated_at,
+            tone: "red",
+          };
+        }
+        if (r.status === "DELIVERED" || r.status === "COMPLETED") {
+          return {
+            id: `req-${r.id}-delivered`,
+            text: `Trip to ${clientName} marked Delivered${r.assigned_truck_plate ? ` — ${r.assigned_truck_plate}` : ""}`,
+            at: r.updated_at,
+            tone: "emerald",
+          };
+        }
+        if (r.status === "ASSIGNED") {
+          const driverName = driverNameById[r.assigned_driver_id] || "A driver";
+          return {
+            id: `req-${r.id}-assigned`,
+            text: `${driverName} assigned to ${r.assigned_truck_plate || "a truck"} for ${clientName}`,
+            at: r.assigned_at || r.updated_at,
+            tone: "blue",
+          };
+        }
+        if (r.status === "PENDING_REQUEST") {
+          return {
+            id: `req-${r.id}-new`,
+            text: `New delivery request from ${clientName}`,
+            at: r.created_at,
+            tone: "slate",
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    // "Flagged" = a maintenance log opened for the truck (status still 'In
+    // Progress') -- a 'Completed' log is servicing finishing, not starting,
+    // so it isn't a "flagged" event.
+    const maintenanceEvents = maintenanceLog
+      .filter((m) => m.status === "In Progress")
+      .map((m) => ({
+        id: `maint-${m.truck_id}-${m.created_at}`,
+        text: `Truck ${truckPlateById[m.truck_id] || m.truck_id} flagged for maintenance`,
+        at: m.created_at,
+        tone: "amber",
+      }));
+
+    return [...requestEvents, ...maintenanceEvents]
+      .filter((e) => e.at)
+      .sort((a, b) => new Date(b.at) - new Date(a.at))
+      .slice(0, 5)
+      .map((e) => ({ ...e, time: formatRelativeTime(e.at, now) }));
+  }, [recentRequests, maintenanceLog, trucks, clientNameById, driverNameById, now]);
+
+  // Real per-driver alert data only (mock rollup removed, explicit user
+  // request) -- date-range filtering of `realDriverSafety` itself is out of
+  // scope here, so every range currently shows the same real rows.
+  const topRiskDrivers = [...realDriverSafety].sort((a, b) => b.alerts - a.alerts);
 
   return (
     <SupLayout title="Supervisor Dashboard" background={background} bg="bg-[#F6F7FB]">
