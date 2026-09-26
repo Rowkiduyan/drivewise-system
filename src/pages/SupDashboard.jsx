@@ -1438,9 +1438,9 @@ function AlertTimeline({ alerts }) {
           <Fragment key={a.id}>
             {isNewSession && (
               <div className="flex items-center gap-4 py-1">
-                <div className="grid flex-1 grid-cols-4 items-center gap-4">
+                <div className="grid flex-1 grid-cols-5 items-center gap-4">
                   <div />
-                  <div className="col-span-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                  <div className="col-span-4 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
                     <span className="h-px flex-1 bg-slate-200" />
                     New session started
                     <span className="h-px flex-1 bg-slate-200" />
@@ -1449,14 +1449,18 @@ function AlertTimeline({ alerts }) {
               </div>
             )}
             <div className="flex items-center gap-4 py-1.5">
-              <div className="grid flex-1 grid-cols-4 items-center gap-4">
+              <div className="grid flex-1 grid-cols-5 items-center gap-4">
                 {/* Left blank -- the connector line that used to live here
                     was removed per explicit user decision ("nevermind just
                     remove the vertical line and leave that column blank"),
                     after several rounds trying to make it render as one
                     continuous line. Kept as an empty column (not collapsed
                     out of the grid) so Alert Type/Time/Severity below still
-                    line up with the header row's own 4 columns. */}
+                    line up with the header row's own 5 columns. Second
+                    column also blank -- the Request ID column above is the
+                    same trip for every row in this expanded list, so
+                    repeating it here would be redundant. */}
+                <div />
                 <div />
                 <span className="min-w-0 truncate text-xs text-slate-600">{a.alertType}</span>
                 <span className="min-w-0 text-[11px] text-slate-400">{a.displayTime}</span>
@@ -1491,14 +1495,14 @@ function AlertTimeline({ alerts }) {
 // a self-contained card rather than a <tr> pair, so the expanded list reads
 // as content *inside* this driver's card instead of a visually separate
 // table underneath it (2026-09-22 redesign, explicit user request). The
-// header row's data fields now sit in a true equal-width `grid-cols-4`
-// (Driver, Alert Type, Time, Severity -- Alert Type/Time split into their
-// own columns rather than stacked together, so this grid has the same 4
-// columns as the expanded AlertTimeline list below and the two visually
-// align, per explicit follow-up user feedback: "align it to their
+// header row's data fields now sit in a true equal-width `grid-cols-5`
+// (Driver, Request ID, Alert Type, Time, Severity -- Alert Type/Time split
+// into their own columns rather than stacked together, so this grid has the
+// same 5 columns as the expanded AlertTimeline list below and the two
+// visually align, per explicit follow-up user feedback: "align it to their
 // headers"). Alerts count and View Trip are deliberately kept outside this
-// 4-column grid, as a small fixed-width action cluster -- they're
-// actions/counts, not the same kind of data as the four columns, and
+// 5-column grid, as a small fixed-width action cluster -- they're
+// actions/counts, not the same kind of data as the columns, and
 // forcing them into a 5th/6th equal column would just waste width on a
 // short "3 alerts" label and a button. (AlertTimeline reserves an identical
 // invisible spacer for this same cluster, which is what keeps its own grid
@@ -1517,7 +1521,7 @@ function DriverSafetyRow({ trip, isExpanded, onToggle }) {
         }`}
         onClick={isMultiAlert ? onToggle : undefined}
       >
-        <div className="grid flex-1 grid-cols-4 items-center gap-4">
+        <div className="grid flex-1 grid-cols-5 items-center gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
             <Avatar name={trip.name} />
             <div className="min-w-0">
@@ -1525,6 +1529,10 @@ function DriverSafetyRow({ trip, isExpanded, onToggle }) {
               <p className="truncate text-[11px] text-slate-500">{trip.truck}</p>
             </div>
           </div>
+
+          <p className="min-w-0 truncate text-center text-xs font-semibold text-slate-700">
+            {trip.deliveryId || "—"}
+          </p>
 
           <div className="min-w-0">
             <p className="truncate text-xs text-slate-700">{trip.latestAlertType}</p>

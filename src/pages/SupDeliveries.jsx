@@ -8992,20 +8992,18 @@ function SupDeliveries() {
                         {row.id}
                       </p>
                       <div className="min-w-0">
-                        <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-                          <span className="min-w-0 truncate" title={row.customerName}>
-                            {row.customerName}
-                          </span>
-                          {specializedClientIds.has(row.customerAuthId) && (
-                            <span
-                              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
-                              title="This client has crew specialized for them — assign a driver/helper with their Client Specialty"
-                            >
-                              <Users className="h-3 w-3" />
-                              Specialized Crew
-                            </span>
-                          )}
+                        <p className="min-w-0 truncate text-sm font-semibold text-slate-900" title={row.customerName}>
+                          {row.customerName}
                         </p>
+                        {specializedClientIds.has(row.customerAuthId) && (
+                          <span
+                            className="mt-1 inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
+                            title="This client has crew specialized for them — assign a driver/helper with their Client Specialty"
+                          >
+                            <Users className="h-3 w-3" />
+                            Specialized Crew
+                          </span>
+                        )}
                       </div>
                       <p className="text-sm text-slate-700 line-clamp-2">
                         <ResolvedText value={row.pickupAddress} />
@@ -9071,20 +9069,18 @@ function SupDeliveries() {
                         {row.id}
                       </p>
                       <div className="min-w-0">
-                        <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-                          <span className="min-w-0 truncate" title={row.customerName}>
-                            {row.customerName}
-                          </span>
-                          {specializedClientIds.has(row.customerAuthId) && (
-                            <span
-                              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
-                              title="This client has crew specialized for them — assign a driver/helper with their Client Specialty"
-                            >
-                              <Users className="h-3 w-3" />
-                              Specialized Crew
-                            </span>
-                          )}
+                        <p className="min-w-0 truncate text-sm font-semibold text-slate-900" title={row.customerName}>
+                          {row.customerName}
                         </p>
+                        {specializedClientIds.has(row.customerAuthId) && (
+                          <span
+                            className="mt-1 inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
+                            title="This client has crew specialized for them — assign a driver/helper with their Client Specialty"
+                          >
+                            <Users className="h-3 w-3" />
+                            Specialized Crew
+                          </span>
+                        )}
                       </div>
                       <p className="text-sm text-slate-700 line-clamp-2">
                         <ResolvedText value={row.pickupAddress} />
@@ -9619,12 +9615,11 @@ function SupDeliveries() {
               ) : (
                 <>
                   <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.9fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
+                    <div className="shrink-0 hidden grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_0.9fr_0.3fr] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 [&>*]:min-w-0 lg:grid">
                       <span className="text-center">Status</span>
                       <span className="text-center">Request ID</span>
                       <span className="text-left">Customer</span>
                       <span className="text-left">Pick-up</span>
-                      <span className="text-left">Drop-off</span>
                       <span className="text-center">Cancelled From</span>
                       <span></span>
                     </div>
@@ -9648,7 +9643,7 @@ function SupDeliveries() {
                           onClick={() =>
                             setSelectedReportId(`cancel-${delivery.id}`)
                           }
-                          className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_1.4fr_0.9fr_0.3fr] lg:items-center hover:bg-slate-50"
+                          className="grid cursor-pointer gap-4 px-5 py-4 transition [&>*]:min-w-0 lg:grid-cols-[0.85fr_0.7fr_1.1fr_1.4fr_0.9fr_0.3fr] lg:items-center hover:bg-slate-50"
                         >
                           <div className="flex justify-center">
                             <span className="inline-flex max-w-full rounded-full bg-rose-100 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-rose-700 xl:text-[11px]">
@@ -9668,9 +9663,6 @@ function SupDeliveries() {
                           </div>
                           <p className="text-sm text-slate-700 line-clamp-2">
                             <ResolvedText value={delivery.pickupAddress} />
-                          </p>
-                          <p className="text-sm text-slate-700 line-clamp-2">
-                            <ResolvedText value={delivery.deliveryAddress} />
                           </p>
                           <div className="flex justify-center">
                             {delivery.cancellation?.cancelledFromStatus ||
