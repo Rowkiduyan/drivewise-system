@@ -1,16 +1,54 @@
-# React + Vite
+# DriveWise
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+### AI-Powered Driver Drowsiness Monitoring and GPS Tracking System
 
-Currently, two official plugins are available:
+DriveWise is a web-based driver safety and fleet monitoring system developed as a capstone project for MARVEL Trucking Solutions, Inc.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+It combines a React web application with a Raspberry Pi monitoring device to detect driver drowsiness, track vehicle location, and record safety alerts.
 
-## React Compiler
+## Features
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Real-time driver drowsiness detection using facial landmarks
+- Eye Aspect Ratio (EAR) and Mouth Aspect Ratio (MAR) analysis
+- Raspberry Pi camera and vibration-based driver alerts
+- GPS-based truck and trip tracking
+- Route and trip monitoring
+- Drowsiness and route deviation alert logging
+- Driver safety performance monitoring
+- Role-based interfaces for Admin, Supervisor, Driver, and Customer
 
-## Expanding the ESLint configuration
+## Technologies
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- **Frontend:** React, JavaScript, Vite, Tailwind CSS
+- **Backend:** Supabase, PostgreSQL
+- **Computer Vision:** Python, OpenCV, dlib
+- **Hardware:** Raspberry Pi, Pi Camera, GPS Module
+- **Maps:** Google Maps API, Leaflet
+- **Testing:** Playwright
+- **Version Control:** Git, GitHub
+
+## System Overview
+
+DriveWise consists of two main components:
+
+**Web Application**
+- Fleet and trip management
+- Driver monitoring
+- GPS visualization
+- Safety alerts and reports
+
+**Raspberry Pi Monitoring Device**
+- Captures the driver's face using a camera
+- Processes facial landmarks
+- Calculates EAR and MAR
+- Detects drowsiness conditions
+- Activates a vibration alert
+- Sends monitoring data to Supabase
+
+## Project Status
+
+Academic capstone project developed for demonstration and evaluation purposes.
+
+## Disclaimer
+
+DriveWise is an academic prototype and is not intended to replace certified driver safety systems.
